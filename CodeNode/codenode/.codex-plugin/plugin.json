@@ -1,6 +1,6 @@
 {
   "name": "codenode",
-  "version": "0.2.0+codex.20260713010000",
+  "version": "0.2.1+codex.20260713010000",
   "description": "\u7b2c\u4e8c\u7248 CodeNode Codex \u63d2\u4ef6\uff1aJava/Maven \u73af\u5883\u68c0\u67e5\u3001\u793a\u4f8b\u5de5\u4f5c\u6d41\u548c\u53ef\u89c6\u5316\u8282\u70b9\u753b\u5e03\u539f\u578b\u3002",
   "author": {
     "name": "Local developer"
