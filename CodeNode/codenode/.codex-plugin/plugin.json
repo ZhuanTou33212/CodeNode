@@ -1,0 +1,18 @@
+{
+  "name": "codenode",
+  "version": "0.1.0+codex.20260712160449",
+  "description": "\u7b2c\u4e00\u6b65 CodeNode Codex \u63d2\u4ef6\uff1aJava/Maven \u73af\u5883\u68c0\u67e5\u3001\u793a\u4f8b\u5de5\u4f5c\u6d41\u548c\u8282\u70b9\u7f16\u6392\u5b9e\u65bd\u8f85\u52a9\u3002",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "CodeNode Java",
+    "shortDescription": "\u5728 Codex \u4e2d\u9a8c\u8bc1 CodeNode \u7684 Java \u7b2c\u4e00\u9636\u6bb5\u95ed\u73af\u3002",
+    "longDescription": "CodeNode \u7b2c\u4e00\u9636\u6bb5\u63d2\u4ef6\u63d0\u4f9b Java 21/Maven \u73af\u5883\u68c0\u67e5\u3001\u793a\u4f8b\u9879\u76ee\u751f\u6210\u3001\u5de5\u4f5c\u6d41\u89c4\u8303\u548c\u540e\u7eed\u8282\u70b9\u7f16\u6392\u5f00\u53d1\u8bf4\u660e\u3002",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "\u8bf7\u68c0\u67e5\u5f53\u524d Java/Maven \u73af\u5883\uff0c\u5e76\u6309 CodeNode \u7b2c\u4e00\u9636\u6bb5\u65b9\u6848\u751f\u6210\u4e00\u4e2a\u6700\u5c0f Java \u8282\u70b9\u5de5\u4f5c\u6d41\u3002"
+  }
+}
