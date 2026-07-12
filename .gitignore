@@ -1,0 +1,26 @@
+# Git metadata created for the local worktree
+/.git-codenode/
+
+# Obsidian session/cache files
+CodeNode/.obsidian/workspace.json
+CodeNode/.obsidian/cache/
+CodeNode/.obsidian/.trash/
+.obsidian/cache/
+.obsidian/.trash/
+
+# Build and dependency caches
+**/node_modules/
+**/.gradle/
+**/target/
+**/build/
+**/.mvn/wrapper/maven-wrapper.jar
+**/*.class
+**/*.log
+
+# Temporary demo output and local artifacts
+/stage0-demo/
+CodeNode/codenode/demo/
+CodeNode/codenode/.cache/
+
+# Source attachment used to prepare the plan; not a project deliverable
+/CodeNode项目大纲.docx
