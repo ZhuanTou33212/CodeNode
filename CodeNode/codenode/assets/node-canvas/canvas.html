@@ -11,6 +11,11 @@
     <strong>CodeNode Canvas</strong>
     <span class="toolbar-hint">拖拽节点，连接兼容端口；滚轮缩放，空格+拖拽平移</span>
     <button id="add-node">+ 空白节点</button>
+    <button id="board-build">打板制作</button>
+    <span id="build-switch" class="build-switch" hidden>
+      <button class="build-mode active" data-mode="node">制作成节点</button>
+      <button class="build-mode" data-mode="program">制作成程序</button>
+    </span>
     <button id="fit-view">适配视图</button>
     <button id="clear-canvas">清空</button>
   </header>
@@ -18,7 +23,7 @@
     <section id="canvas" class="canvas" aria-label="节点画布" tabindex="0">
       <svg id="edges" class="edges" aria-hidden="true"></svg>
       <div id="nodes" class="nodes"></div>
-      <div id="empty-state" class="empty-state">点击“空白节点”开始编排</div>
+      <div id="empty-state" class="empty-state" hidden></div>
     </section>
     <aside class="inspector" aria-label="节点检查器">
       <h2>检查器</h2>
