@@ -1,12 +1,13 @@
 param(
-    [string]$FolderName = 'CodeNode新建文件夹'
+    [string]$FolderName = 'CodeNodeFolder'
 )
 
-$desktop = [Environment]::GetFolderPath('Desktop')
-if ([string]::IsNullOrWhiteSpace($desktop)) {
-    throw '无法确定当前用户的桌面路径。'
+# Use USERPROFILE instead of a .NET static call for Windows PowerShell 5.1 compatibility.
+$desktop = Join-Path $env:USERPROFILE 'Desktop'
+if (-not (Test-Path -LiteralPath $desktop)) {
+    throw 'Desktop folder was not found for the current user.'
 }
 
 $target = Join-Path $desktop $FolderName
 New-Item -ItemType Directory -Path $target -Force | Out-Null
-Write-Output "已创建文件夹：$target"
+Write-Output "Created folder: $target"
