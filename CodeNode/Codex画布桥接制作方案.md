@@ -210,3 +210,15 @@ draft
 - Codex plugins：<https://developers.openai.com/codex/plugins/build>
 
 2026-07-13 本地拉取 Codex manual 时因网络不可用失败；公开文档检索未确认存在“任意 HTML 直接向当前 Codex 对话发送消息”的受支持接口。因此该能力被列为待验证项，方案不依赖它。
+
+## 阶段 A 实施记录（2026-07-13）
+
+已将节点画布切换到无崩溃的请求预览流程：
+
+- 移除浏览器原生保存对话框、文件句柄写入和 Blob 下载，避免 `file://` 页面触发宿主崩溃。
+- 工具架新增“输出路径”输入框，仅接受工作区相对路径（默认 `output/CodeNodeProgram`）。
+- “打板制作”下拉菜单保留“制作成节点/制作成程序”两种动作；动作会生成对应的 `build-node` 或 `build-program` BuildRequest。
+- 检查器展示完整 JSON，可通过“复制制作请求”复制到当前 Codex 对话，由 Codex 按请求生成 Markdown 或 Java/PowerShell 程序。
+- 请求包含 `requiresConfirmation: true`、节点和连线快照，后续本地桥接服务可直接消费；当前阶段不会自动写入磁盘。
+
+验证：`node --check codenode/assets/node-canvas/canvas.js` 通过；源码中已无 `showSaveFilePicker`、`createWritable`、`Blob`、`download` 等浏览器保存路径。

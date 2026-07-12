@@ -7,7 +7,8 @@ button { border: 1px solid #666; background: #383838; color: inherit; border-rad
 button:hover { border-color: #bbb; background: #4a4a4a; }
 .toolbar-select-label { color: #aaa; font-size: 13px; white-space: nowrap; }
 .toolbar-select { border: 1px solid #666; border-radius: 5px; background: #383838; color: #eee; padding: 8px 28px 8px 10px; white-space: nowrap; }
-.location-status { color: #999; font-size: 12px; white-space: nowrap; }
+.path-label { color: #aaa; font-size: 12px; white-space: nowrap; }
+.output-path { width: 170px; border: 1px solid #666; border-radius: 5px; background: #151515; color: #eee; padding: 8px; }
 .language-select-label { color: #aaa; font-size: 13px; margin-left: 2px; white-space: nowrap; }
 .language-select { border: 1px solid #666; border-radius: 5px; background: #383838; color: #eee; padding: 8px 28px 8px 10px; white-space: nowrap; }
 .app-shell { display: grid; grid-template-columns: 1fr 280px; height: calc(100vh - 64px); }

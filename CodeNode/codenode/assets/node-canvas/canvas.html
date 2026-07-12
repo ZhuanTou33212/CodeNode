@@ -17,8 +17,9 @@
       <option value="node">制作成节点</option>
       <option value="program">制作成程序</option>
     </select>
-    <button id="choose-location">选择保存位置</button>
-    <span id="location-status" class="location-status">未选择位置</span>
+    <label class="path-label" for="output-path">输出路径</label>
+    <input id="output-path" class="output-path" value="output/CodeNodeProgram" aria-label="工作区相对输出路径">
+    <button id="copy-request">复制制作请求</button>
     <label class="language-select-label" for="language-select">语言</label>
     <select id="language-select" class="language-select" aria-label="选择语言">
       <option value="java">Java</option>
@@ -41,6 +42,7 @@
       <p id="node-language" class="status">语言：Java</p>
       <button id="make-node" class="make-button" disabled>制作节点</button>
       <label>代码预览<textarea id="node-code" rows="8" readonly></textarea></label>
+      <label>BuildRequest<textarea id="request-preview" rows="8" readonly></textarea></label>
       <p id="node-status" class="status">状态：—</p>
       <p id="validation-message" class="validation"></p>
     </aside>
