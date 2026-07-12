@@ -9,6 +9,7 @@ CodeNode/.obsidian/.trash/
 .obsidian/.trash/
 
 # Build and dependency caches
+/tools/
 **/node_modules/
 **/.gradle/
 **/target/

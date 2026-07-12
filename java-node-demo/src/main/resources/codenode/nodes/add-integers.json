@@ -1,0 +1,12 @@
+{
+  "name": "AddIntegers",
+  "category": "transform",
+  "prompt": "将两个整数相加并输出结果",
+  "inputs": [
+    { "name": "left", "dataType": "int", "required": true },
+    { "name": "right", "dataType": "int", "required": true }
+  ],
+  "outputs": [
+    { "name": "result", "dataType": "int", "required": true }
+  ]
+}

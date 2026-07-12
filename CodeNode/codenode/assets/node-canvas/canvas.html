@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CodeNode Canvas</title>
+  <link rel="stylesheet" href="canvas.css">
+</head>
+<body>
+  <header class="toolbar">
+    <strong>CodeNode Canvas</strong>
+    <span class="toolbar-hint">拖拽节点，连接兼容端口；滚轮缩放，空格+拖拽平移</span>
+    <button id="add-node">+ 空白节点</button>
+    <button id="fit-view">适配视图</button>
+    <button id="clear-canvas">清空</button>
+  </header>
+  <main class="app-shell">
+    <section id="canvas" class="canvas" aria-label="节点画布" tabindex="0">
+      <svg id="edges" class="edges" aria-hidden="true"></svg>
+      <div id="nodes" class="nodes"></div>
+      <div id="empty-state" class="empty-state">点击“空白节点”开始编排</div>
+    </section>
+    <aside class="inspector" aria-label="节点检查器">
+      <h2>检查器</h2>
+      <p id="selection-hint">选择一个节点查看详情。</p>
+      <label>名称<input id="node-name" disabled></label>
+      <label>提示词<textarea id="node-prompt" rows="4" disabled></textarea></label>
+      <p id="node-status" class="status">状态：—</p>
+      <p id="validation-message" class="validation"></p>
+    </aside>
+  </main>
+  <script src="canvas.js"></script>
+</body>
+</html>
