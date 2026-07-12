@@ -12,11 +12,11 @@
     <span class="toolbar-hint">拖拽节点，连接兼容端口；滚轮缩放，空格+拖拽平移</span>
     <button id="add-node">+ 空白节点</button>
     <button id="board-build">打板制作</button>
-    <button id="language-toggle">语言</button>
-    <span id="language-switch" class="language-switch" aria-label="语言切换" hidden>
-      <button class="language-mode active" data-language="java">Java</button>
-      <button class="language-mode" data-language="powershell">PowerShell</button>
-    </span>
+    <label class="language-select-label" for="language-select">语言</label>
+    <select id="language-select" class="language-select" aria-label="选择语言">
+      <option value="java">Java</option>
+      <option value="powershell">PowerShell</option>
+    </select>
     <span id="build-switch" class="build-switch" hidden>
       <button class="build-mode active" data-mode="node">制作成节点</button>
       <button class="build-mode" data-mode="program">制作成程序</button>

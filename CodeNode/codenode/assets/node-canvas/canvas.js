@@ -69,8 +69,7 @@
   inspector.make.addEventListener('click', buildSelected);
   document.querySelector('#board-build').addEventListener('click', () => { const switcher = document.querySelector('#build-switch'); switcher.hidden = !switcher.hidden; });
   document.querySelectorAll('.build-mode').forEach(button => button.addEventListener('click', () => { buildMode = button.dataset.mode; document.querySelectorAll('.build-mode').forEach(item => item.classList.toggle('active', item === button)); buildSelected(); }));
-  document.querySelector('#language-toggle').addEventListener('click', () => { const menu = document.querySelector('#language-switch'); menu.hidden = !menu.hidden; });
-  document.querySelectorAll('.language-mode').forEach(button => button.addEventListener('click', () => { language = button.dataset.language; document.querySelectorAll('.language-mode').forEach(item => item.classList.toggle('active', item === button)); const node = nodeById(state.selected); if (node?.status === '草稿') node.language = language; document.querySelector('#language-switch').hidden = true; updateInspector(); render(); }));
+  document.querySelector('#language-select').addEventListener('change', event => { language = event.target.value; const node = nodeById(state.selected); if (node?.status === '草稿') node.language = language; updateInspector(); render(); });
   document.querySelector('#clear-canvas').addEventListener('click', () => { state.nodes = []; state.edges = []; state.selected = null; render(); });
   document.querySelector('#fit-view').addEventListener('click', () => { state.scale = 1; state.offset = { x: 0, y: 0 }; render(); });
   canvas.addEventListener('wheel', event => { event.preventDefault(); state.scale = Math.min(1.8, Math.max(.55, state.scale * (event.deltaY < 0 ? 1.08 : .92))); render(); }, { passive: false });
