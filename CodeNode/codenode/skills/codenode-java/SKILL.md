@@ -45,3 +45,15 @@ description: Use the CodeNode first-stage Codex plugin to check Java/Maven prere
 - 演示项目可以通过 Maven 测试；
 - 失败时能指出具体前置条件；
 - 不声称第一阶段已经完成节点画布或错误回溯。
+
+## PowerShell 兼容性规则
+
+生成 `build-program` 的 PowerShell 脚本时，必须兼容 Windows PowerShell 5.1 和 PowerShell 7：
+
+- 不要使用 `[Environment]::GetFolderPath('Desktop')` 作为桌面路径发现方式；部分 Windows PowerShell 环境会将其解析为函数参数错误。
+- 使用 `$env:USERPROFILE` 与 `Join-Path` 定位桌面，例如：`Join-Path $env:USERPROFILE 'Desktop'`。
+- 默认参数和诊断文本优先使用 ASCII；中文内容应明确保存为 UTF-8 with BOM，避免 Windows PowerShell 5.1 将 UTF-8 无 BOM 误判为 ANSI。
+- 生成后必须执行 PowerShell 解析检查，并记录目标 PowerShell 版本，不能只用 Node.js 或字符串检查代替。
+- 脚本执行前仍需用户确认，不得因为生成程序而自动修改用户桌面。
+
+已知问题记录（2026-07-13）：上述静态方法写法曾导致“函数参数列表中缺少 )”。修复方案是改用 `$env:USERPROFILE`，并使用 ASCII 默认名称。
