@@ -7,6 +7,9 @@ button:hover { border-color: #bbb; background: #4a4a4a; }
 .build-switch { display: inline-flex; gap: 4px; padding: 2px; border: 1px solid #555; border-radius: 6px; background: #292929; }
 .build-mode { border: 0; padding: 5px 8px; background: transparent; }
 .build-mode.active { background: #555; }
+.language-switch { display: inline-flex; gap: 4px; padding: 2px; border: 1px solid #555; border-radius: 6px; background: #292929; }
+.language-mode { border: 0; padding: 5px 8px; background: transparent; }
+.language-mode.active { background: #555; }
 .app-shell { display: grid; grid-template-columns: 1fr 280px; height: calc(100vh - 52px); }
 .canvas { position: relative; overflow: hidden; outline: none; background-color: #171717; background-image: linear-gradient(#292929 1px, transparent 1px), linear-gradient(90deg, #292929 1px, transparent 1px); background-size: 24px 24px; cursor: grab; }
 .canvas.is-panning { cursor: grabbing; }

@@ -3,9 +3,10 @@
   const nodesEl = document.querySelector('#nodes');
   const edgesEl = document.querySelector('#edges');
   const emptyState = document.querySelector('#empty-state');
-  const inspector = { hint: document.querySelector('#selection-hint'), name: document.querySelector('#node-name'), prompt: document.querySelector('#node-prompt'), make: document.querySelector('#make-node'), status: document.querySelector('#node-status'), validation: document.querySelector('#validation-message') };
+  const inspector = { hint: document.querySelector('#selection-hint'), name: document.querySelector('#node-name'), prompt: document.querySelector('#node-prompt'), language: document.querySelector('#node-language'), code: document.querySelector('#node-code'), make: document.querySelector('#make-node'), status: document.querySelector('#node-status'), validation: document.querySelector('#validation-message') };
   const state = { nodes: [], edges: [], selected: null, scale: 1, offset: { x: 0, y: 0 }, connecting: null, panning: null };
   let buildMode = 'node';
+  let language = 'java';
   state.nodes = [];
   state.edges = [];
 
@@ -16,7 +17,7 @@
     nodesEl.innerHTML = '';
     state.nodes.forEach(node => {
       const el = document.createElement('article'); el.className = `node ${state.selected === node.id ? 'selected' : ''}`; el.dataset.id = node.id; el.style.transform = `translate(${node.x}px, ${node.y}px)`;
-      const draftEditor = node.status === '草稿' ? `<div class="node-meta"><input class="inline-editor inline-name" value="${escapeAttr(node.name)}" aria-label="节点名称"><textarea class="inline-editor inline-prompt" aria-label="制作要求" placeholder="填写制作要求">${escapeHtml(node.prompt)}</textarea></div>` : `<div class="node-meta">${escapeHtml(node.category)} · ${escapeHtml(node.status)}</div>`;
+      const draftEditor = node.status === '草稿' ? `<div class="node-meta"><input class="inline-editor inline-name" value="${escapeAttr(node.name)}" aria-label="节点名称"><textarea class="inline-editor inline-prompt" aria-label="制作要求" placeholder="填写制作要求">${escapeHtml(node.prompt)}</textarea></div>` : `<div class="node-meta">${escapeHtml(node.category)} · ${escapeHtml(node.status)} · ${languageLabel(node.language)}</div>`;
       el.innerHTML = `<div class="node-header">${escapeHtml(node.name)}</div>${draftEditor}<div class="ports inputs">${node.inputs.map(p => portHtml('input', p)).join('')}</div><div class="ports outputs">${node.outputs.map(p => portHtml('output', p)).join('')}</div>`;
       el.querySelector('.inline-name')?.addEventListener('input', event => { node.name = event.target.value || '空白节点'; el.querySelector('.node-header').textContent = node.name; inspector.name.value = node.name; });
       el.querySelector('.inline-prompt')?.addEventListener('input', event => { node.prompt = event.target.value; inspector.prompt.value = node.prompt; });
@@ -32,6 +33,8 @@
   function portHtml(kind, p) { const direction = kind === 'input' ? '输入' : '输出'; return `<div class="port ${kind}" data-port="${kind}:${p.id}"><span>${direction}：${escapeHtml(p.name)} · 整数</span><i class="handle" data-kind="${kind}" data-port-id="${p.id}"></i></div>`; }
   function escapeHtml(value) { return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function escapeAttr(value) { return escapeHtml(value).replace(/`/g, '&#96;'); }
+  function languageLabel(value) { return value === 'powershell' ? 'PowerShell' : 'Java'; }
+  function generatedCode(node) { if (node.language === 'powershell') return `param([int]$左值, [int]$右值)\n$result = $左值 + $右值\n$result`; return `public static int 执行(int 左值, int 右值) {\n    return 左值 + 右值;\n}`; }
   function select(id) { state.selected = id; render(); }
   function startNodeDrag(event, node) {
     if (event.target.closest('.handle')) { startConnection(event, node); return; }
@@ -56,15 +59,16 @@
     edgesEl.innerHTML = ''; state.edges.forEach(edge => { const a = handlePoint(edge.source[0], 'output', edge.source[1]); const b = handlePoint(edge.target[0], 'input', edge.target[1]); if (!a || !b) return; const bend = Math.max(40, Math.abs(b.x - a.x) * .45); const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`); path.setAttribute('class', 'edge'); edgesEl.appendChild(path); });
   }
   function handlePoint(nodeId, kind, portId) { const node = nodeById(nodeId); if (!node) return null; const index = (kind === 'input' ? node.inputs : node.outputs).findIndex(p => p.id === portId); return { x: node.x + (kind === 'input' ? 0 : 210), y: node.y + 82 + index * 22 }; }
-  function updateInspector() { const node = nodeById(state.selected); inspector.hint.textContent = node ? `节点编号：${node.id}` : '选择一个节点查看详情。'; inspector.name.value = node?.name || ''; inspector.prompt.value = node?.prompt || ''; inspector.name.disabled = inspector.prompt.disabled = inspector.make.disabled = !node; inspector.status.textContent = `状态：${node?.status || '—'}`; }
-  document.querySelector('#add-node').addEventListener('click', () => { const id = `node-${Date.now()}`; state.nodes.push({ id, name: '空白节点', category: '自定义', prompt: '', status: '草稿', x: 300, y: 160, inputs: [], outputs: [] }); select(id); });
+  function updateInspector() { const node = nodeById(state.selected); inspector.hint.textContent = node ? `节点编号：${node.id}` : '选择一个节点查看详情。'; inspector.name.value = node?.name || ''; inspector.prompt.value = node?.prompt || ''; inspector.name.disabled = inspector.prompt.disabled = inspector.make.disabled = !node; inspector.status.textContent = `状态：${node?.status || '—'}`; inspector.language.textContent = `语言：${languageLabel(node?.language || language)}`; inspector.code.value = node?.code || ''; inspector.code.disabled = !node; }
+  document.querySelector('#add-node').addEventListener('click', () => { const id = `node-${Date.now()}`; state.nodes.push({ id, name: '空白节点', category: '自定义', prompt: '', language, code: '', status: '草稿', x: 300, y: 160, inputs: [], outputs: [] }); select(id); });
   inspector.name.addEventListener('input', () => { const node = nodeById(state.selected); if (node) { node.name = inspector.name.value || '空白节点'; render(); } });
   inspector.prompt.addEventListener('input', () => { const node = nodeById(state.selected); if (node) node.prompt = inspector.prompt.value; });
   [inspector.name, inspector.prompt].forEach(input => input.addEventListener('keydown', event => event.stopPropagation()));
-  function buildSelected() { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个空白节点。'; return; } const text = node.prompt || ''; if (buildMode === 'program') { node.category = '程序'; node.status = '程序草稿'; node.inputs = []; node.outputs = []; inspector.validation.textContent = '已生成程序草稿，可继续补充制作要求。'; render(); return; } if (/相加|加法|add/i.test(text)) { node.name = node.name === '空白节点' ? '整数相加' : node.name; node.category = '转换'; node.inputs = [{ id: 'left', name: '左值', dataType: 'int' }, { id: 'right', name: '右值', dataType: 'int' }]; node.outputs = [{ id: 'result', name: '结果', dataType: 'int' }]; } else { node.category = '自定义'; node.inputs = [{ id: 'input', name: '输入值', dataType: 'int' }]; node.outputs = [{ id: 'output', name: '输出值', dataType: 'int' }]; } node.status = '已制作'; inspector.validation.textContent = '节点已制作，可以连接兼容端口。'; render(); }
+  function buildSelected() { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个空白节点。'; return; } node.language = language; const text = node.prompt || ''; if (buildMode === 'program') { node.category = '程序'; node.status = '程序草稿'; node.inputs = []; node.outputs = []; node.code = generatedCode(node); inspector.validation.textContent = `已生成 ${languageLabel(language)} 程序草稿。`; render(); return; } if (/相加|加法|add/i.test(text)) { node.name = node.name === '空白节点' ? '整数相加' : node.name; node.category = '转换'; node.inputs = [{ id: 'left', name: '左值', dataType: 'int' }, { id: 'right', name: '右值', dataType: 'int' }]; node.outputs = [{ id: 'result', name: '结果', dataType: 'int' }]; } else { node.category = '自定义'; node.inputs = [{ id: 'input', name: '输入值', dataType: 'int' }]; node.outputs = [{ id: 'output', name: '输出值', dataType: 'int' }]; } node.status = '已制作'; node.code = generatedCode(node); inspector.validation.textContent = `已制作 ${languageLabel(language)} 节点，可以连接兼容端口。`; render(); }
   inspector.make.addEventListener('click', buildSelected);
   document.querySelector('#board-build').addEventListener('click', () => { const switcher = document.querySelector('#build-switch'); switcher.hidden = !switcher.hidden; });
   document.querySelectorAll('.build-mode').forEach(button => button.addEventListener('click', () => { buildMode = button.dataset.mode; document.querySelectorAll('.build-mode').forEach(item => item.classList.toggle('active', item === button)); buildSelected(); }));
+  document.querySelectorAll('.language-mode').forEach(button => button.addEventListener('click', () => { language = button.dataset.language; document.querySelectorAll('.language-mode').forEach(item => item.classList.toggle('active', item === button)); const node = nodeById(state.selected); if (node?.status === '草稿') node.language = language; updateInspector(); render(); }));
   document.querySelector('#clear-canvas').addEventListener('click', () => { state.nodes = []; state.edges = []; state.selected = null; render(); });
   document.querySelector('#fit-view').addEventListener('click', () => { state.scale = 1; state.offset = { x: 0, y: 0 }; render(); });
   canvas.addEventListener('wheel', event => { event.preventDefault(); state.scale = Math.min(1.8, Math.max(.55, state.scale * (event.deltaY < 0 ? 1.08 : .92))); render(); }, { passive: false });
