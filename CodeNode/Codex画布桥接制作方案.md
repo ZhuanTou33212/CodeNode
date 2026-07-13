@@ -222,3 +222,11 @@ draft
 - 请求包含 `requiresConfirmation: true`、节点和连线快照，后续本地桥接服务可直接消费；当前阶段不会自动写入磁盘。
 
 验证：`node --check codenode/assets/node-canvas/canvas.js` 通过；源码中已无 `showSaveFilePicker`、`createWritable`、`Blob`、`download` 等浏览器保存路径。
+
+## 阶段 B 实施记录（2026-07-13）
+
+- 新增 CodeNode STDIO MCP 服务，提供列出、读取和完成 Markdown 请求的工具。
+- MCP 进程同时在 `127.0.0.1:32145` 提供受限 HTTP 收件口，画布可将生成的 `.md` 请求写入插件数据目录。
+- 页面新增“发送 .md 到 Codex”按钮；成功后提示用户在对话中输入“处理最新 CodeNode 请求”。
+- 新增 Go 语言选项及独立 `codenode-go` Skill，语言路由保持一次只启用一个语言 Skill。
+- 官方支持 MCP 为 Codex 提供工具和上下文，但未确认任意 HTML 能向当前对话无提示注入用户消息；因此当前实现不伪造该能力，而采用 MCP 收件箱加显式对话触发。

@@ -19,6 +19,9 @@
 - `.codex-plugin/plugin.json`：插件清单；
 - `skills/codenode-java/SKILL.md`：Java 语言专用 Skill；
 - `skills/codenode-powershell/SKILL.md`：PowerShell 语言专用 Skill；仅在请求选择 PowerShell 时启用；
+- `skills/codenode-go/SKILL.md`：Go 语言专用 Skill；
+- `skills/codenode-bridge/SKILL.md`：处理画布提交的 Markdown MCP 请求；
+- `.mcp.json` 与 `mcp/server.mjs`：CodeNode MCP 收件箱及本地 HTTP 桥接；
 - `scripts/check-java-env.ps1`：环境检查；
 - `scripts/create-java-demo.ps1`：生成 Java/Maven 演示项目；
 - `assets/`：后续插件资源目录。
