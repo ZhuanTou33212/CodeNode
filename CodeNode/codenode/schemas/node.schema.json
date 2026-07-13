@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenode.local/schema/node.json",
+  "title": "CodeNode node",
+  "type": "object",
+  "required": ["id", "name", "category", "prompt", "inputs", "outputs"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:/-]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "prompt": { "type": "string" },
+    "type": { "type": "string" },
+    "scopeType": { "type": "string", "enum": ["if", "loop", "parallel", "sequence"] },
+    "language": { "type": ["string", "null"] },
+    "code": { "type": "string" },
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
+    "outputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
+    "effect": { "type": "string" },
+    "idempotent": { "type": "boolean" },
+    "timeoutMs": { "type": "integer", "minimum": 0 },
+    "errorPolicy": { "type": "string", "enum": ["stop", "continue", "fallback", "retry"] }
+  },
+  "$defs": {
+    "port": {
+      "type": "object",
+      "required": ["id", "dataType"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "dataType": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

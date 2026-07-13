@@ -20,10 +20,11 @@ description: Use the CodeNode first-stage Codex plugin to check Java/Maven prere
 ## 操作顺序
 
 1. 先确认用户选择的工作目录，不要默认扫描或修改整个项目。
-2. 运行 `scripts/check-java-env.ps1`，记录 JDK、Maven、Git 和路径检查结果。
+2. 运行 `scripts/check-java-env.ps1 -ProjectDirectory <demo-directory>`，记录 JDK 21、Maven、Git 和路径检查结果。
 3. 如果用户同意创建演示项目，运行 `scripts/create-java-demo.ps1 -OutputDirectory <目录>`。
-4. 只在用户确认后执行生成项目的 Maven 测试；不要自动安装依赖或覆盖已有文件。
-5. 汇报结果时明确区分：环境检查、项目生成、编译测试，以及尚未实现的节点画布能力。
+4. 生成项目后使用 `scripts/test-java-demo.ps1 -ProjectDirectory <demo-directory>`，通过固定 Maven Wrapper 执行测试。
+5. 只在用户确认后执行生成项目的 Maven 测试；不要自动安装依赖或覆盖已有文件。
+6. 汇报结果时明确区分：环境检查、项目生成、编译测试，以及尚未实现的节点画布能力。
 
 ## 节点输入协议（第一阶段约定）
 

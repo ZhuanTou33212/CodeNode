@@ -24,6 +24,12 @@
 - `.mcp.json` 与 `mcp/server.mjs`：CodeNode MCP 收件箱及本地 HTTP 桥接；
 - `scripts/check-java-env.ps1`：环境检查；
 - `scripts/create-java-demo.ps1`：生成 Java/Maven 演示项目；
+- `scripts/test-java-demo.ps1`：固定 JDK 21 并通过 Maven Wrapper 运行演示项目测试；
+- `scripts/classify-maven-diagnostics.mjs`：将 Maven 依赖/插件失败归类为项目级诊断；
+- `scripts/agent-schema-canary.mjs`：20 个结构化工作流请求的本地规范化验收；
+- `scripts/benchmark-workflow.mjs`：1,000 节点数据模型解析基准，不代表 React Flow UI 性能；
+- `java-node-demo/src/main/java/codenode/diagnostics/CompilerDiagnostics.java`：JDK Compiler API 结构化诊断示例；
+- `schemas/`：节点、边和工作流请求 JSON Schema；
 - `assets/`：后续插件资源目录。
 
 ## 本地检查
@@ -31,8 +37,8 @@
 在插件目录执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-java-env.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\create-java-demo.ps1 -OutputDirectory .\demo
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-java-env.ps1 -ProjectDirectory ..\..\java-node-demo
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-java-demo.ps1
 ```
 
 生成完成后进入 `demo`，使用 `./mvnw.cmd test`（Windows）或 `./mvnw test`（macOS/Linux）验证。

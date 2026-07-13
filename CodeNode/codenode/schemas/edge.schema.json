@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenode.local/schema/edge.json",
+  "title": "CodeNode edge",
+  "type": "object",
+  "required": ["source", "target"],
+  "properties": {
+    "source": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "string" },
+        { "type": "string" }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "target": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "string" },
+        { "type": "string" }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "kind": { "type": "string", "enum": ["data", "control"] }
+  },
+  "additionalProperties": true
+}

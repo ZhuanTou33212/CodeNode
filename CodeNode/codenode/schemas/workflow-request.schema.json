@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenode.local/schema/workflow-request.json",
+  "title": "CodeNode workflow request",
+  "type": "object",
+  "required": ["schemaVersion", "requestId", "action", "language", "nodes", "edges", "requiresConfirmation"],
+  "properties": {
+    "schemaVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "action": { "type": "string", "enum": ["build-node", "build-program"] },
+    "language": { "type": "string", "enum": ["java", "powershell", "go"] },
+    "entry": { "type": "string" },
+    "expression": { "type": "string", "maxLength": 1048576 },
+    "output": {
+      "type": "object",
+      "required": ["workspaceRoot", "relativePath"],
+      "properties": {
+        "workspaceRoot": { "type": "string", "minLength": 1 },
+        "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?![\\\\/]{2})(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+" }
+      },
+      "additionalProperties": true
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "variables": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Z_][A-Z0-9_]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["dataType", "source"],
+            "properties": {
+              "dataType": { "type": "string" },
+              "source": { "type": "string", "enum": ["literal", "environment", "node"] },
+              "value": {},
+              "key": { "type": "string" },
+              "nodeId": { "type": "string" },
+              "portId": { "type": "string" },
+              "secret": { "type": "boolean" },
+              "scope": { "type": "string", "enum": ["workflow", "scope", "node"] }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "nodes": { "type": "array", "maxItems": 10000, "items": { "$ref": "node.schema.json" } },
+    "edges": { "type": "array", "items": { "$ref": "edge.schema.json" } },
+    "requiresConfirmation": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}
