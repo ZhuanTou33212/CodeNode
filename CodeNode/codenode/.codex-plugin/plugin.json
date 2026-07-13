@@ -1,7 +1,7 @@
 {
   "name": "codenode",
-  "version": "0.2.1+codex.20260713151932",
-  "description": "CodeNode Codex plugin for Java, PowerShell, Go, and Markdown MCP requests.",
+  "version": "0.2.1+codex.20260713164412",
+  "description": "CodeNode Codex plugin for nested language-neutral workflows and Java, PowerShell, or Go generation.",
   "author": {
     "name": "Local developer"
   },
@@ -9,8 +9,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "CodeNode",
-    "shortDescription": "Submit multilingual node requests to Codex.",
-    "longDescription": "Build Java, PowerShell, and Go node requests on a visual canvas and submit Markdown requests through a local MCP inbox.",
+    "shortDescription": "Build nested multilingual node workflows.",
+    "longDescription": "Parse and validate nested language-neutral node workflows, then build Java, PowerShell, or Go requests from a visual canvas.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +19,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Process the latest CodeNode request.",
-      "Check the CodeNode MCP inbox."
+      "Normalize and build this CodeNode workflow.",
+      "Validate a nested CodeNode expression."
     ]
   }
 }

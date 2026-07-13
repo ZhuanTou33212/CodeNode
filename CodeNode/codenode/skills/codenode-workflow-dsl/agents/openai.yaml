@@ -1,0 +1,5 @@
+interface:
+  display_name: "CodeNode Workflow DSL"
+  short_description: "Parse nested CodeNode workflows safely"
+  default_prompt: "Use $codenode-workflow-dsl to validate and normalize this nested CodeNode request before language-specific generation."
+

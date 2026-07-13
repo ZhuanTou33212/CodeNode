@@ -11,11 +11,12 @@ description: Use the CodeNode PowerShell language skill to validate and generate
 
 ## 生成规则
 
-1. 先读取并校验 `build-program` 或 `build-node` 请求中的 `prompt`、输出路径和确认标记。
-2. 兼容 Windows PowerShell 5.1 和 PowerShell 7；桌面路径使用 `Join-Path $env:USERPROFILE 'Desktop'`，不要使用 `[Environment]::GetFolderPath('Desktop')`。
-3. 默认参数和诊断文本优先使用 ASCII；包含中文时保存为 UTF-8 with BOM，避免 Windows PowerShell 5.1 误判编码。
-4. 生成后执行 PowerShell 解析检查，并记录实际 PowerShell 版本；不能只用 Node.js 语法检查。
-5. 执行脚本、写入用户目录或覆盖文件前必须获得用户确认；默认只生成文件，不自动运行。
+1. 请求包含 `expression`、`environment` 或嵌套范围时，先使用 `codenode-workflow-dsl` 解析并校验；仅根据规范化 AST 和可达子图生成 PowerShell。
+2. 读取并校验 `build-program` 或 `build-node` 请求中的 `prompt`、输出路径和确认标记。
+3. 兼容 Windows PowerShell 5.1 和 PowerShell 7；桌面路径使用 `Join-Path $env:USERPROFILE 'Desktop'`，不要使用 `[Environment]::GetFolderPath('Desktop')`。
+4. 默认参数和诊断文本优先使用 ASCII；包含中文时保存为 UTF-8 with BOM，避免 Windows PowerShell 5.1 误判编码。
+5. 生成后执行 PowerShell 解析检查，并记录实际 PowerShell 版本；不能只用 Node.js 语法检查。
+6. 执行脚本、写入用户目录或覆盖文件前必须获得用户确认；默认只生成文件，不自动运行。
 
 ## 节点输出协议
 

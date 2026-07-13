@@ -13,6 +13,10 @@ description: Use the CodeNode first-stage Codex plugin to check Java/Maven prere
 
 本 Skill 对应 CodeNode 第一阶段：在 Codex 中验证 Java 21 + Maven 的最小执行闭环。当前实现是 Codex 插件辅助能力，不包含最终的可视化节点画布。
 
+## 全语言工作流输入
+
+请求包含 `expression`、`environment` 或嵌套范围时，先使用 `codenode-workflow-dsl` 解析并校验。仅根据其输出的 `ast`、`reachableNodeIds`、`nodes` 和 `environment` 生成 Java，不得重新解释原始表达式。
+
 ## 操作顺序
 
 1. 先确认用户选择的工作目录，不要默认扫描或修改整个项目。
