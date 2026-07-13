@@ -29,7 +29,7 @@
 - `scripts/agent-schema-canary.mjs`：20 个结构化工作流请求的本地规范化验收；
 - `scripts/benchmark-workflow.mjs`：1,000 节点数据模型解析基准，不代表 React Flow UI 性能；
 - `java-node-demo/src/main/java/codenode/diagnostics/CompilerDiagnostics.java`：JDK Compiler API 结构化诊断示例；
-- `schemas/`：节点、边和工作流请求 JSON Schema；
+- `schemas/`：节点、边、工作流请求和工作流结果 JSON Schema；
 - `assets/`：后续插件资源目录。
 
 ## 本地检查
