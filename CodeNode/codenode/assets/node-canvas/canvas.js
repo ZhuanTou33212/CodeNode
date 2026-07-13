@@ -4,6 +4,9 @@
   const edgesEl = document.querySelector('#edges');
   const emptyState = document.querySelector('#empty-state');
   const inspector = { hint: document.querySelector('#selection-hint'), name: document.querySelector('#node-name'), prompt: document.querySelector('#node-prompt'), language: document.querySelector('#node-language'), code: document.querySelector('#node-code'), request: document.querySelector('#request-preview'), make: document.querySelector('#make-node'), status: document.querySelector('#node-status'), validation: document.querySelector('#validation-message') };
+  const runOutput = document.querySelector('#run-output');
+  const inspectorPanel = document.querySelector('.inspector');
+  const runPanel = document.querySelector('#run-panel');
   const state = { nodes: [], edges: [], selected: null, scale: 1, offset: { x: 0, y: 0 }, connecting: null, panning: null };
   let language = 'java';
   state.nodes = [];
@@ -73,6 +76,13 @@
   document.querySelector('#language-select').addEventListener('change', event => { language = event.target.value; const node = nodeById(state.selected); if (node?.status === '草稿') node.language = language; updateInspector(); render(); });
   document.querySelector('#clear-canvas').addEventListener('click', () => { state.nodes = []; state.edges = []; state.selected = null; render(); });
   document.querySelector('#fit-view').addEventListener('click', () => { state.scale = 1; state.offset = { x: 0, y: 0 }; render(); });
+  let inspectorWidth = 320;
+  let runHeight = 138;
+  document.querySelector('#toggle-inspector').addEventListener('click', event => { const collapsed = inspectorPanel.classList.toggle('inspector-collapsed'); document.documentElement.style.setProperty('--inspector-width', collapsed ? '44px' : `${inspectorWidth}px`); event.currentTarget.textContent = collapsed ? '展开' : '侧栏'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
+  document.querySelector('#toggle-run-panel').addEventListener('click', event => { const collapsed = runPanel.classList.toggle('is-collapsed'); document.documentElement.style.setProperty('--run-height', collapsed ? '38px' : `${runHeight}px`); event.currentTarget.textContent = collapsed ? '展开' : '收起'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
+  document.querySelector('#inspector-resizer').addEventListener('pointerdown', event => { if (inspectorPanel.classList.contains('inspector-collapsed')) return; event.preventDefault(); event.currentTarget.classList.add('is-resizing'); const move = moveEvent => { inspectorWidth = Math.min(520, Math.max(220, window.innerWidth - moveEvent.clientX)); document.documentElement.style.setProperty('--inspector-width', `${inspectorWidth}px`); }; const stop = () => { event.currentTarget.classList.remove('is-resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); });
+  if (window.matchMedia('(max-width: 680px)').matches) { inspectorPanel.classList.add('inspector-collapsed'); document.querySelector('#toggle-inspector').textContent = '展开'; document.querySelector('#toggle-inspector').setAttribute('aria-expanded', 'false'); }
+  runOutput.textContent = '尚未运行节点。生成程序后，确认执行结果会显示在这里。';
   canvas.addEventListener('wheel', event => { event.preventDefault(); state.scale = Math.min(1.8, Math.max(.55, state.scale * (event.deltaY < 0 ? 1.08 : .92))); render(); }, { passive: false });
   canvas.addEventListener('pointerdown', event => { if (event.button !== 1 && !event.shiftKey && event.target !== canvas) return; state.panning = { x: event.clientX, y: event.clientY, ox: state.offset.x, oy: state.offset.y }; canvas.classList.add('is-panning'); });
   window.addEventListener('pointermove', event => { if (!state.panning) return; state.offset.x = state.panning.ox + event.clientX - state.panning.x; state.offset.y = state.panning.oy + event.clientY - state.panning.y; render(); });

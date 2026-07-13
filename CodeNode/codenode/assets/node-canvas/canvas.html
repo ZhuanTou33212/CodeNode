@@ -31,22 +31,43 @@
     <button id="clear-canvas">清空</button>
   </header>
   <main class="app-shell">
-    <section id="canvas" class="canvas" aria-label="节点画布" tabindex="0">
-      <svg id="edges" class="edges" aria-hidden="true"></svg>
-      <div id="nodes" class="nodes"></div>
-      <div id="empty-state" class="empty-state" hidden></div>
+    <section class="workspace-column">
+      <section id="canvas" class="canvas" aria-label="节点画布" tabindex="0">
+        <svg id="edges" class="edges" aria-hidden="true"></svg>
+        <div id="nodes" class="nodes"></div>
+        <div id="empty-state" class="empty-state" hidden></div>
+      </section>
+      <section id="run-panel" class="run-panel" aria-label="运行结果">
+        <div class="panel-titlebar">
+          <strong>运行结果</strong>
+          <button id="toggle-run-panel" class="panel-toggle" type="button" aria-expanded="true">收起</button>
+        </div>
+        <pre id="run-output">尚未运行节点。生成程序后，确认执行结果会显示在这里。</pre>
+      </section>
     </section>
     <aside class="inspector" aria-label="节点检查器">
-      <h2>检查器</h2>
-      <p id="selection-hint">选择一个节点查看详情。</p>
-      <label>名称<input id="node-name" disabled></label>
-      <label>制作要求<textarea id="node-prompt" rows="4" disabled></textarea></label>
-      <p id="node-language" class="status">语言：Java</p>
-      <button id="make-node" class="make-button" disabled>制作节点</button>
-      <label>代码预览<textarea id="node-code" rows="8" readonly></textarea></label>
-      <label>BuildRequest<textarea id="request-preview" rows="8" readonly></textarea></label>
-      <p id="node-status" class="status">状态：—</p>
-      <p id="validation-message" class="validation"></p>
+      <div class="inspector-resizer" id="inspector-resizer" title="拖动调整检查器宽度" aria-label="调整检查器宽度"></div>
+      <div class="panel-titlebar inspector-titlebar">
+        <h2>检查器</h2>
+        <button id="toggle-inspector" class="panel-toggle" type="button" aria-expanded="true">侧栏</button>
+      </div>
+      <div class="inspector-body">
+        <p id="selection-hint">选择一个节点查看详情。</p>
+        <label>名称<input id="node-name" disabled></label>
+        <label>制作要求<textarea id="node-prompt" rows="4" disabled></textarea></label>
+        <p id="node-language" class="status">语言：Java</p>
+        <button id="make-node" class="make-button" disabled>制作节点</button>
+        <details class="inspector-section" open>
+          <summary>代码审查</summary>
+          <label>代码预览<textarea id="node-code" rows="8" readonly></textarea></label>
+        </details>
+        <details class="inspector-section" open>
+          <summary>制作请求</summary>
+          <label>BuildRequest<textarea id="request-preview" rows="8" readonly></textarea></label>
+        </details>
+        <p id="node-status" class="status">状态：—</p>
+        <p id="validation-message" class="validation"></p>
+      </div>
     </aside>
   </main>
   <script src="canvas.js"></script>
