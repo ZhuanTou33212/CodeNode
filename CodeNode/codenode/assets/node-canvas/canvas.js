@@ -83,8 +83,32 @@
   document.querySelector('#toggle-code-review').addEventListener('click', event => { const collapsed = reviewPanel.classList.toggle('code-review-collapsed'); document.documentElement.style.setProperty('--review-width', collapsed ? '44px' : `${reviewWidth}px`); event.currentTarget.textContent = collapsed ? '展开' : '侧栏'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
   document.querySelector('#toggle-inspector').addEventListener('click', event => { const collapsed = inspectorPanel.classList.toggle('inspector-collapsed'); document.documentElement.style.setProperty('--inspector-width', collapsed ? '44px' : `${inspectorWidth}px`); event.currentTarget.textContent = collapsed ? '展开' : '侧栏'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
   document.querySelector('#toggle-run-panel').addEventListener('click', event => { const collapsed = runPanel.classList.toggle('is-collapsed'); document.documentElement.style.setProperty('--run-height', collapsed ? '38px' : `${runHeight}px`); event.currentTarget.textContent = collapsed ? '展开' : '收起'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
-  document.querySelector('#review-resizer').addEventListener('pointerdown', event => { if (reviewPanel.classList.contains('code-review-collapsed')) return; event.preventDefault(); event.currentTarget.classList.add('is-resizing'); const move = moveEvent => { reviewWidth = Math.min(520, Math.max(220, window.innerWidth - moveEvent.clientX - inspectorWidth)); document.documentElement.style.setProperty('--review-width', `${reviewWidth}px`); }; const stop = () => { event.currentTarget.classList.remove('is-resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); });
-  document.querySelector('#inspector-resizer').addEventListener('pointerdown', event => { if (inspectorPanel.classList.contains('inspector-collapsed')) return; event.preventDefault(); event.currentTarget.classList.add('is-resizing'); const move = moveEvent => { inspectorWidth = Math.min(520, Math.max(220, window.innerWidth - moveEvent.clientX)); document.documentElement.style.setProperty('--inspector-width', `${inspectorWidth}px`); }; const stop = () => { event.currentTarget.classList.remove('is-resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); });
+  function bindResizer(handle, isCollapsed, onMove) {
+    let dragging = false;
+    const move = event => { if (dragging) onMove(event); };
+    const stop = event => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('is-resizing');
+      if (event?.pointerId !== undefined) {
+        try { handle.releasePointerCapture(event.pointerId); } catch { /* capture may already be released */ }
+      }
+    };
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || isCollapsed()) return;
+      event.preventDefault();
+      dragging = true;
+      handle.classList.add('is-resizing');
+      try { handle.setPointerCapture(event.pointerId); } catch { /* unsupported capture is harmless */ }
+    });
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', stop);
+    handle.addEventListener('pointercancel', stop);
+    handle.addEventListener('lostpointercapture', stop);
+    window.addEventListener('blur', stop);
+  }
+  bindResizer(document.querySelector('#review-resizer'), () => reviewPanel.classList.contains('code-review-collapsed'), event => { reviewWidth = Math.min(520, Math.max(220, window.innerWidth - event.clientX - inspectorWidth)); document.documentElement.style.setProperty('--review-width', `${reviewWidth}px`); });
+  bindResizer(document.querySelector('#inspector-resizer'), () => inspectorPanel.classList.contains('inspector-collapsed'), event => { inspectorWidth = Math.min(520, Math.max(220, window.innerWidth - event.clientX)); document.documentElement.style.setProperty('--inspector-width', `${inspectorWidth}px`); });
   if (window.matchMedia('(max-width: 760px)').matches) { reviewPanel.classList.add('code-review-collapsed'); inspectorPanel.classList.add('inspector-collapsed'); document.querySelector('#toggle-code-review').textContent = '展开'; document.querySelector('#toggle-code-review').setAttribute('aria-expanded', 'false'); document.querySelector('#toggle-inspector').textContent = '展开'; document.querySelector('#toggle-inspector').setAttribute('aria-expanded', 'false'); }
   runOutput.textContent = '尚未运行节点。生成程序后，确认执行结果会显示在这里。';
   canvas.addEventListener('wheel', event => { event.preventDefault(); state.scale = Math.min(1.8, Math.max(.55, state.scale * (event.deltaY < 0 ? 1.08 : .92))); render(); }, { passive: false });

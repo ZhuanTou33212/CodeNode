@@ -36,6 +36,7 @@ button:hover { border-color: #bbb; background: #4a4a4a; }
 .panel-toggle { padding: 5px 8px; font-size: 11px; }
 .inspector-resizer { position: absolute; z-index: 2; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
 .inspector-resizer:hover, .inspector-resizer.is-resizing { background: #aaa6; }
+.inspector-resizer, .review-resizer { touch-action: none; user-select: none; }
 .code-review-panel { position: relative; min-width: 0; padding: 14px; background: #1e1e1e; border-left: 1px solid #4b4b4b; overflow: auto; }
 .code-review-panel h2 { margin: 0; font-size: 16px; }
 .review-resizer { position: absolute; z-index: 2; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
