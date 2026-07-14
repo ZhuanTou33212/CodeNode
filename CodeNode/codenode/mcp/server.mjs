@@ -35,6 +35,44 @@ async function readMarkdown(filename) {
   return { filename: safeName, content: await fs.readFile(path.join(inboxDir, safeName), 'utf8') };
 }
 
+function queueMetadataPath(filename, root = inboxDir) {
+  return path.join(root, `${safeMarkdownName(filename)}.queue.json`);
+}
+
+async function readQueueMetadata(filename) {
+  try {
+    return JSON.parse(await fs.readFile(queueMetadataPath(filename), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function initializeQueueSequence() {
+  const files = (await markdownFiles()).sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
+  const records = await Promise.all(files.map(async file => ({ file, metadata: await readQueueMetadata(file.filename) })));
+  let sequence = Math.max(0, ...records.map(record => Number(record.metadata?.sequence) || 0));
+  for (const record of records) {
+    if (record.metadata) continue;
+    sequence += 1;
+    await fs.writeFile(queueMetadataPath(record.file.filename), JSON.stringify({ sequence }), { encoding: 'utf8', flag: 'wx' });
+  }
+  return sequence;
+}
+
+let queueSequence = await initializeQueueSequence();
+
+async function markdownQueue() {
+  const requests = await Promise.all((await markdownFiles()).map(async file => {
+    const { content } = await readMarkdown(file.filename);
+    const metadata = await readQueueMetadata(file.filename);
+    const action = content.match(/^action:\s*(build-node|build-program)\s*$/m)?.[1] || 'build-program';
+    const nodeName = content.match(/^#\s+(.+)$/m)?.[1]?.trim() || file.filename;
+    return { sequence: metadata.sequence, filename: file.filename, nodeName, action, submittedAt: file.submittedAt };
+  }));
+  return requests.sort((a, b) => a.sequence - b.sequence);
+}
+
 const tools = [
   {
     name: 'codenode_list_markdown_requests',
@@ -74,6 +112,11 @@ async function callTool(name, args = {}) {
     const request = await readMarkdown(args.filename);
     const destination = path.join(processedDir, request.filename);
     await fs.rename(path.join(inboxDir, request.filename), destination);
+    try {
+      await fs.rename(queueMetadataPath(request.filename), queueMetadataPath(request.filename, processedDir));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
     await fs.writeFile(`${destination}.result.json`, JSON.stringify({ summary: String(args.summary), processedAt: new Date().toISOString() }, null, 2), 'utf8');
     return toolText({ filename: request.filename, status: 'processed' });
   }
@@ -136,6 +179,12 @@ const httpServer = http.createServer((request, response) => {
       canInjectCodexConversation: false
     }, headers);
   }
+  if (request.method === 'GET' && request.url === '/markdown') {
+    markdownQueue()
+      .then(requests => sendJson(response, 200, { requests }, headers))
+      .catch(error => sendJson(response, 500, { error: error.message }, headers));
+    return;
+  }
   if (request.method !== 'POST' || request.url !== '/markdown') return sendJson(response, 404, { error: 'not found' }, headers);
   if (request.headers['x-codenode-bridge'] !== '1') return sendJson(response, 403, { error: 'missing bridge header' }, headers);
   let body = '';
@@ -152,8 +201,16 @@ const httpServer = http.createServer((request, response) => {
       if (!content.trim()) throw new Error('content is required');
       if (Buffer.byteLength(content, 'utf8') > maxMarkdownBytes) throw new Error('Markdown file is too large');
       await fs.writeFile(path.join(inboxDir, filename), content, { encoding: 'utf8', flag: 'wx' });
+      const sequence = ++queueSequence;
+      try {
+        await fs.writeFile(queueMetadataPath(filename), JSON.stringify({ sequence }), { encoding: 'utf8', flag: 'wx' });
+      } catch (error) {
+        await fs.rm(path.join(inboxDir, filename), { force: true });
+        throw error;
+      }
       sendJson(response, 201, {
         filename,
+        sequence,
         status: 'queued',
         delivery: 'mcp-queue',
         requiresUserTurn: true,

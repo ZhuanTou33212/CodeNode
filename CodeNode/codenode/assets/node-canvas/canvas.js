@@ -8,6 +8,9 @@
   const reviewPanel = document.querySelector('.code-review-panel');
   const inspectorPanel = document.querySelector('.inspector');
   const runPanel = document.querySelector('#run-panel');
+  const queuePanel = document.querySelector('.request-queue-panel');
+  const queueList = document.querySelector('#request-queue-list');
+  const queueStatus = document.querySelector('#request-queue-status');
   const state = { nodes: [], edges: [], selected: null, scale: 1, offset: { x: 0, y: 0 }, connecting: null, panning: null };
   let language = 'java';
   state.nodes = [];
@@ -73,15 +76,38 @@
   document.querySelector('#build-select').addEventListener('change', event => { const mode = event.target.value; event.target.value = ''; if (mode) buildSelected(mode); });
   document.querySelector('#copy-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } const text = JSON.stringify(buildRequest(node), null, 2); inspector.request.value = text; inspector.request.select(); try { await navigator.clipboard.writeText(text); inspector.validation.textContent = '制作请求已复制，请粘贴到 Codex 对话。'; } catch { inspector.validation.textContent = '已选中制作请求，请按 Ctrl+C 后粘贴到 Codex 对话。'; } });
   function markdownRequest(node) { const request = buildRequest(node); return `---\ncodenodeRequest: ${request.requestId}\naction: ${request.action}\nlanguage: ${request.language}\n---\n\n# ${node.name}\n\n${node.prompt || '未填写制作要求'}\n\n## BuildRequest\n\n\`\`\`json\n${JSON.stringify(request, null, 2)}\n\`\`\`\n`; }
-  document.querySelector('#send-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } inspector.validation.textContent = '正在提交到 CodeNode MCP 队列…'; try { const response = await fetch('http://127.0.0.1:32145/markdown', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CodeNode-Bridge': '1' }, body: JSON.stringify({ filename: `${node.id}-${Date.now()}.md`, content: markdownRequest(node) }) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); node.status = '已进入 CodeNode MCP 队列'; inspector.validation.textContent = `已排队 ${result.filename}；MCP 不能主动写入当前对话，请在 Codex 中输入“${result.nextPrompt || '处理最新 CodeNode 请求'}”。`; render(); } catch (error) { inspector.validation.textContent = `MCP 队列未连接：${error.message}。请确认 CodeNode 插件已安装，并重启 Codex 后重试。`; } });
+  function queueActionLabel(action) { return action === 'build-node' ? '请求制作成节点' : '请求制作成程序'; }
+  async function refreshRequestQueue() {
+    queueStatus.textContent = '正在读取 MCP 队列…';
+    try {
+      const response = await fetch('http://127.0.0.1:32145/markdown');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      queueList.innerHTML = '';
+      result.requests.forEach(request => {
+        const item = document.createElement('li');
+        item.className = 'request-queue-item';
+        item.textContent = `[请求${request.sequence}：${request.nodeName}(${queueActionLabel(request.action)})]`;
+        queueList.appendChild(item);
+      });
+      queueStatus.textContent = result.requests.length ? `当前排队 ${result.requests.length} 个请求` : '当前没有排队请求。';
+    } catch (error) {
+      queueList.innerHTML = '';
+      queueStatus.textContent = `MCP 队列未连接：${error.message}`;
+    }
+  }
+  document.querySelector('#refresh-request-queue').addEventListener('click', refreshRequestQueue);
+  document.querySelector('#send-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } inspector.validation.textContent = '正在提交到 CodeNode MCP 队列…'; try { const response = await fetch('http://127.0.0.1:32145/markdown', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CodeNode-Bridge': '1' }, body: JSON.stringify({ filename: `${node.id}-${Date.now()}.md`, content: markdownRequest(node) }) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); node.status = '已进入 CodeNode MCP 队列'; inspector.validation.textContent = `已排队 ${result.filename}；MCP 不能主动写入当前对话，请在 Codex 中输入“${result.nextPrompt || '处理最新 CodeNode 请求'}”。`; await refreshRequestQueue(); render(); } catch (error) { inspector.validation.textContent = `MCP 队列未连接：${error.message}。请确认 CodeNode 插件已安装，并重启 Codex 后重试。`; } });
   document.querySelector('#language-select').addEventListener('change', event => { language = event.target.value; const node = nodeById(state.selected); if (node?.status === '草稿') node.language = language; updateInspector(); render(); });
   document.querySelector('#clear-canvas').addEventListener('click', () => { state.nodes = []; state.edges = []; state.selected = null; render(); });
   document.querySelector('#fit-view').addEventListener('click', () => { state.scale = 1; state.offset = { x: 0, y: 0 }; render(); });
   let reviewWidth = 320;
   let inspectorWidth = 320;
+  let queueWidth = 280;
   let runHeight = 138;
   document.querySelector('#toggle-code-review').addEventListener('click', event => { const collapsed = reviewPanel.classList.toggle('code-review-collapsed'); document.documentElement.style.setProperty('--review-width', collapsed ? '44px' : `${reviewWidth}px`); event.currentTarget.textContent = collapsed ? '展开' : '侧栏'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
   document.querySelector('#toggle-inspector').addEventListener('click', event => { const collapsed = inspectorPanel.classList.toggle('inspector-collapsed'); document.documentElement.style.setProperty('--inspector-width', collapsed ? '44px' : `${inspectorWidth}px`); event.currentTarget.textContent = collapsed ? '展开' : '侧栏'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
+  document.querySelector('#toggle-request-queue').addEventListener('click', event => { const collapsed = queuePanel.classList.toggle('request-queue-collapsed'); document.documentElement.style.setProperty('--queue-width', collapsed ? '44px' : `${queueWidth}px`); event.currentTarget.textContent = collapsed ? '展开' : '侧栏'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
   document.querySelector('#toggle-run-panel').addEventListener('click', event => { const collapsed = runPanel.classList.toggle('is-collapsed'); document.documentElement.style.setProperty('--run-height', collapsed ? '38px' : `${runHeight}px`); event.currentTarget.textContent = collapsed ? '展开' : '收起'; event.currentTarget.setAttribute('aria-expanded', String(!collapsed)); });
   function bindResizer(handle, isCollapsed, onMove) {
     let dragging = false;
@@ -109,8 +135,10 @@
   }
   bindResizer(document.querySelector('#review-resizer'), () => reviewPanel.classList.contains('code-review-collapsed'), event => { reviewWidth = Math.min(520, Math.max(220, window.innerWidth - event.clientX - inspectorWidth)); document.documentElement.style.setProperty('--review-width', `${reviewWidth}px`); });
   bindResizer(document.querySelector('#inspector-resizer'), () => inspectorPanel.classList.contains('inspector-collapsed'), event => { inspectorWidth = Math.min(520, Math.max(220, window.innerWidth - event.clientX)); document.documentElement.style.setProperty('--inspector-width', `${inspectorWidth}px`); });
-  if (window.matchMedia('(max-width: 760px)').matches) { reviewPanel.classList.add('code-review-collapsed'); inspectorPanel.classList.add('inspector-collapsed'); document.querySelector('#toggle-code-review').textContent = '展开'; document.querySelector('#toggle-code-review').setAttribute('aria-expanded', 'false'); document.querySelector('#toggle-inspector').textContent = '展开'; document.querySelector('#toggle-inspector').setAttribute('aria-expanded', 'false'); }
+  bindResizer(document.querySelector('#queue-resizer'), () => queuePanel.classList.contains('request-queue-collapsed'), event => { queueWidth = Math.min(480, Math.max(220, window.innerWidth - event.clientX - reviewWidth - inspectorWidth)); document.documentElement.style.setProperty('--queue-width', `${queueWidth}px`); });
+  if (window.matchMedia('(max-width: 900px)').matches) { queuePanel.classList.add('request-queue-collapsed'); reviewPanel.classList.add('code-review-collapsed'); inspectorPanel.classList.add('inspector-collapsed'); document.querySelector('#toggle-request-queue').textContent = '展开'; document.querySelector('#toggle-request-queue').setAttribute('aria-expanded', 'false'); document.querySelector('#toggle-code-review').textContent = '展开'; document.querySelector('#toggle-code-review').setAttribute('aria-expanded', 'false'); document.querySelector('#toggle-inspector').textContent = '展开'; document.querySelector('#toggle-inspector').setAttribute('aria-expanded', 'false'); }
   runOutput.textContent = '尚未运行节点。生成程序后，确认执行结果会显示在这里。';
+  refreshRequestQueue();
   canvas.addEventListener('wheel', event => { event.preventDefault(); state.scale = Math.min(1.8, Math.max(.55, state.scale * (event.deltaY < 0 ? 1.08 : .92))); render(); }, { passive: false });
   canvas.addEventListener('pointerdown', event => { if (event.button !== 1 && !event.shiftKey && event.target !== canvas) return; state.panning = { x: event.clientX, y: event.clientY, ox: state.offset.x, oy: state.offset.y }; canvas.classList.add('is-panning'); });
   window.addEventListener('pointermove', event => { if (!state.panning) return; state.offset.x = state.panning.ox + event.clientX - state.panning.x; state.offset.y = state.panning.oy + event.clientY - state.panning.y; render(); });

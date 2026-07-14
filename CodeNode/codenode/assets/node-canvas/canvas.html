@@ -45,6 +45,20 @@
         <pre id="run-output">尚未运行节点。生成程序后，确认执行结果会显示在这里。</pre>
       </section>
     </section>
+    <aside class="request-queue-panel" aria-label="请求队列">
+      <div class="queue-resizer" id="queue-resizer" title="拖动调整请求队列宽度" aria-label="调整请求队列宽度"></div>
+      <div class="panel-titlebar queue-titlebar">
+        <h2>请求队列</h2>
+        <div class="panel-actions">
+          <button id="refresh-request-queue" class="panel-toggle" type="button">刷新</button>
+          <button id="toggle-request-queue" class="panel-toggle" type="button" aria-expanded="true">侧栏</button>
+        </div>
+      </div>
+      <div class="request-queue-body">
+        <p id="request-queue-status" class="review-hint">正在读取 MCP 队列…</p>
+        <ol id="request-queue-list" class="request-queue-list" aria-live="polite"></ol>
+      </div>
+    </aside>
     <aside class="code-review-panel" aria-label="代码审查">
       <div class="review-resizer" id="review-resizer" title="拖动调整代码审查宽度" aria-label="调整代码审查宽度"></div>
       <div class="panel-titlebar review-titlebar">

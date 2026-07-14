@@ -16,6 +16,15 @@ tags: [CodeNode, MCP, Codex, Stage0]
 4. 用户在 Codex 中发起一个任务回合后，Codex 调用 `codenode_read_latest_markdown` 读取请求；
 5. 完成后调用 `codenode_mark_processed` 移入已处理目录。
 
+画布现已提供独立“请求队列”槽位。MCP 为每个请求持久化递增序号，页面通过 `GET /markdown` 读取 inbox，并显示为：
+
+```text
+[请求1：节点名字(请求制作成节点)]
+[请求2：节点名字(请求制作成程序)]
+```
+
+队列栏支持刷新、折叠、展开和拖动调整宽度；刷新页面后仍从 MCP inbox 恢复队列，而不是依赖浏览器内存。
+
 该链路已通过自动化冒烟测试。此前网页看起来“不能发送到 Codex”，有两个原因：个人市场实际指向的插件源仍是旧副本，缺少 `.mcp.json` 和 `mcp/server.mjs`；同时页面文案错误地把“进入 MCP 队列”说成“进入当前对话”。两项均已修正。
 
 ## 协议边界
