@@ -77,6 +77,22 @@ assert.equal(queue.requests[1].nodeName, 'Node Test');
 assert.equal(queue.requests[1].action, 'build-node');
 assert.equal(queue.requests[1].filename, 'node-request.md');
 
+const deleteResponse = await fetch(`http://127.0.0.1:${port}/markdown?filename=${encodeURIComponent('request.md')}`, {
+  method: 'DELETE',
+  headers: { 'X-CodeNode-Bridge': '1' }
+});
+assert.equal(deleteResponse.status, 200);
+assert.deepEqual(await deleteResponse.json(), { filename: 'request.md', status: 'deleted' });
+const repeatedDelete = await fetch(`http://127.0.0.1:${port}/markdown?filename=${encodeURIComponent('request.md')}`, {
+  method: 'DELETE',
+  headers: { 'X-CodeNode-Bridge': '1' }
+});
+assert.equal(repeatedDelete.status, 404);
+const queueAfterDelete = await (await fetch(`http://127.0.0.1:${port}/markdown`)).json();
+assert.equal(queueAfterDelete.requests.length, 1);
+assert.equal(queueAfterDelete.requests[0].filename, 'node-request.md');
+await assert.rejects(fs.access(path.join(dataDir, 'inbox', 'request.md.queue.json')));
+
 stdout = '';
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'codenode_read_latest_markdown', arguments: {} } })}\n`);
 await waitFor(() => stdout.includes('"id":2'));

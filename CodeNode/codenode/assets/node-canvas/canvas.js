@@ -127,6 +127,13 @@
   document.querySelector('#copy-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } const text = JSON.stringify(buildRequest(node), null, 2); inspector.request.value = text; inspector.request.select(); try { await navigator.clipboard.writeText(text); inspector.validation.textContent = '制作请求已复制，请粘贴到 Codex 对话。'; } catch { inspector.validation.textContent = '已选中制作请求，请按 Ctrl+C 后粘贴到 Codex 对话。'; } });
   function markdownRequest(node) { const request = buildRequest(node); return `---\ncodenodeRequest: ${request.requestId}\naction: ${request.action}\nlanguage: ${request.language}\n---\n\n# ${node.name}\n\n${node.prompt || '未填写制作要求'}\n\n## BuildRequest\n\n\`\`\`json\n${JSON.stringify(request, null, 2)}\n\`\`\`\n`; }
   function queueActionLabel(action) { return action === 'build-node' ? '请求制作成节点' : '请求制作成程序'; }
+  async function deleteQueuedRequest(request) {
+    if (!window.confirm(`确定从队列删除“${request.nodeName}”吗？`)) return;
+    const response = await fetch(`http://127.0.0.1:32145/markdown?filename=${encodeURIComponent(request.filename)}`, { method: 'DELETE', headers: { 'X-CodeNode-Bridge': '1' } });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    await refreshRequestQueue();
+  }
   async function refreshRequestQueue() {
     queueStatus.textContent = '正在读取 MCP 队列…';
     try {
@@ -137,7 +144,12 @@
       result.requests.forEach(request => {
         const item = document.createElement('li');
         item.className = 'request-queue-item';
-        item.textContent = `[请求${request.sequence}：${request.nodeName}(${queueActionLabel(request.action)})]`;
+        const label = document.createElement('span');
+        label.textContent = `[请求${request.sequence}：${request.nodeName}(${queueActionLabel(request.action)})]`;
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button'; deleteButton.className = 'request-delete'; deleteButton.textContent = '删除';
+        deleteButton.addEventListener('click', async () => { deleteButton.disabled = true; try { await deleteQueuedRequest(request); } catch (error) { queueStatus.textContent = `删除失败：${error.message}`; deleteButton.disabled = false; } });
+        item.append(label, deleteButton);
         queueList.appendChild(item);
       });
       queueStatus.textContent = result.requests.length ? `当前排队 ${result.requests.length} 个请求` : '当前没有排队请求。';

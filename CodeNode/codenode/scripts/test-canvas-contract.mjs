@@ -13,6 +13,8 @@ for (const id of ['node-code-editor', 'input-port-count', 'output-port-count', '
 assert.match(script, /inspector\.make\.addEventListener\('click', \(\) => buildSelected\('node'\)\)/);
 assert.match(script, /target\.dataType === 'auto'/);
 assert.match(script, /target\.dataType = sourcePort\.dataType/);
+assert.match(script, /method: 'DELETE'/);
+assert.match(script, /className = 'request-delete'/);
 assert.match(script, /\['auto', '自动'\]/);
 assert.doesNotMatch(script, /function portHtml[^\n]+· 整数/);
 

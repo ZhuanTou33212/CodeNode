@@ -35,6 +35,13 @@ async function readMarkdown(filename) {
   return { filename: safeName, content: await fs.readFile(path.join(inboxDir, safeName), 'utf8') };
 }
 
+async function deleteMarkdown(filename) {
+  const request = await readMarkdown(filename);
+  await fs.rm(path.join(inboxDir, request.filename));
+  await fs.rm(queueMetadataPath(request.filename), { force: true });
+  return { filename: request.filename, status: 'deleted' };
+}
+
 function queueMetadataPath(filename, root = inboxDir) {
   return path.join(root, `${safeMarkdownName(filename)}.queue.json`);
 }
@@ -154,7 +161,7 @@ function corsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Headers': 'Content-Type, X-CodeNode-Bridge',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Cache-Control': 'no-store'
   };
 }
@@ -166,12 +173,13 @@ function sendJson(response, status, body, headers = {}) {
 
 const httpServer = http.createServer((request, response) => {
   const headers = corsHeaders(request.headers.origin);
+  const requestUrl = new URL(request.url, 'http://127.0.0.1');
   if (!headers) return sendJson(response, 403, { error: 'origin not allowed' });
   if (request.method === 'OPTIONS') {
     response.writeHead(204, headers);
     return response.end();
   }
-  if (request.method === 'GET' && request.url === '/health') {
+  if (request.method === 'GET' && requestUrl.pathname === '/health') {
     return sendJson(response, 200, {
       status: 'ok',
       server: serverName,
@@ -179,13 +187,20 @@ const httpServer = http.createServer((request, response) => {
       canInjectCodexConversation: false
     }, headers);
   }
-  if (request.method === 'GET' && request.url === '/markdown') {
+  if (request.method === 'GET' && requestUrl.pathname === '/markdown') {
     markdownQueue()
       .then(requests => sendJson(response, 200, { requests }, headers))
       .catch(error => sendJson(response, 500, { error: error.message }, headers));
     return;
   }
-  if (request.method !== 'POST' || request.url !== '/markdown') return sendJson(response, 404, { error: 'not found' }, headers);
+  if (request.method === 'DELETE' && requestUrl.pathname === '/markdown') {
+    if (request.headers['x-codenode-bridge'] !== '1') return sendJson(response, 403, { error: 'missing bridge header' }, headers);
+    deleteMarkdown(requestUrl.searchParams.get('filename'))
+      .then(result => sendJson(response, 200, result, headers))
+      .catch(error => sendJson(response, error.code === 'ENOENT' ? 404 : 400, { error: error.message }, headers));
+    return;
+  }
+  if (request.method !== 'POST' || requestUrl.pathname !== '/markdown') return sendJson(response, 404, { error: 'not found' }, headers);
   if (request.headers['x-codenode-bridge'] !== '1') return sendJson(response, 403, { error: 'missing bridge header' }, headers);
   let body = '';
   request.setEncoding('utf8');
