@@ -81,6 +81,21 @@
         <p id="selection-hint">选择一个节点查看详情。</p>
         <label>名称<input id="node-name" disabled></label>
         <label>制作要求<textarea id="node-prompt" rows="4" disabled></textarea></label>
+        <label>内嵌代码<textarea id="node-code-editor" rows="8" disabled></textarea></label>
+        <section class="port-config-section" aria-label="输入端口配置">
+          <div class="port-config-title">
+            <strong>输入端口</strong>
+            <label>数量<input id="input-port-count" type="number" min="0" max="32" value="0" disabled></label>
+          </div>
+          <div id="input-port-config" class="port-config-list"></div>
+        </section>
+        <section class="port-config-section" aria-label="输出端口配置">
+          <div class="port-config-title">
+            <strong>输出端口</strong>
+            <label>数量<input id="output-port-count" type="number" min="0" max="32" value="0" disabled></label>
+          </div>
+          <div id="output-port-config" class="port-config-list"></div>
+        </section>
         <p id="node-language" class="status">语言：Java</p>
         <button id="make-node" class="make-button" disabled>制作节点</button>
         <p id="node-status" class="status">状态：—</p>

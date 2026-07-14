@@ -1,6 +1,6 @@
 {
   "name": "codenode",
-  "version": "0.2.1+codex.20260714040503",
+  "version": "0.2.1+codex.20260714052812",
   "description": "CodeNode Codex plugin for nested language-neutral workflows and Java, PowerShell, or Go generation.",
   "author": {
     "name": "Local developer"

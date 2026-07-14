@@ -69,6 +69,15 @@ button:hover { border-color: #bbb; background: #4a4a4a; }
 .inspector-collapsed .inspector-titlebar .panel-toggle { writing-mode: initial; }
 .inspector label { display: block; margin: 13px 0; color: #93a4ba; font-size: 12px; }
 .inspector input, .inspector textarea { display: block; width: 100%; margin-top: 6px; border: 1px solid #666; border-radius: 4px; background: #151515; color: #eee; padding: 7px; }
+.port-config-section { margin: 14px 0; padding-top: 10px; border-top: 1px solid #444; }
+.port-config-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.port-config-title strong { font-size: 13px; }
+.port-config-title label { display: flex; align-items: center; gap: 6px; margin: 0; }
+.port-config-title input { width: 62px; margin: 0; }
+.port-config-list { display: grid; gap: 8px; margin-top: 9px; }
+.port-config-row { display: grid; grid-template-columns: minmax(0, 1fr) 104px 32px; gap: 6px; align-items: center; }
+.port-config-row input, .port-config-row select { width: 100%; min-width: 0; margin: 0; border: 1px solid #666; border-radius: 4px; background: #151515; color: #eee; padding: 6px; }
+.port-config-row button { width: 32px; height: 32px; padding: 0; }
 .make-button { width: 100%; margin: 8px 0 12px; }
 .inspector input:disabled, .inspector textarea:disabled { opacity: .65; }
 .status { color: #7de0a5; font-size: 13px; }
