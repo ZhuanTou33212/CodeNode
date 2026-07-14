@@ -1,0 +1,22 @@
+:root {
+  font-family: "Segoe UI", sans-serif;
+  color: #e8e8e8;
+  background: #181818;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 86px; padding: 12px 18px; border-bottom: 1px solid #444; background: #242424; }
+header div { display: grid; gap: 6px; }
+header strong { font-size: 18px; }
+header span { color: #aaa; }
+pre { min-width: 320px; max-height: 120px; margin: 0; overflow: auto; color: #b8d8b8; font: 12px/1.35 Consolas, monospace; }
+section { min-height: 0; }
+.react-flow__node { border-color: #737373; background: #303030; color: #eee; }
+.react-flow__edge-path { stroke: #8d8d8d; }
+
+@media (max-width: 760px) {
+  header { align-items: stretch; flex-direction: column; }
+  pre { min-width: 0; }
+}

@@ -29,6 +29,15 @@ const waitFor = async predicate => {
 await waitFor(() => /listening on 127\.0\.0\.1:\d+/.test(stderr));
 const port = Number(stderr.match(/127\.0\.0\.1:(\d+)/)[1]);
 
+const health = await fetch(`http://127.0.0.1:${port}/health`);
+assert.equal(health.status, 200);
+assert.deepEqual(await health.json(), {
+  status: 'ok',
+  server: 'codenode',
+  delivery: 'mcp-queue',
+  canInjectCodexConversation: false
+});
+
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })}\n`);
 await waitFor(() => stdout.includes('"id":1'));
 assert.equal(JSON.parse(stdout.trim().split('\n')[0]).result.serverInfo.name, 'codenode');
@@ -39,6 +48,13 @@ const response = await fetch(`http://127.0.0.1:${port}/markdown`, {
   body: JSON.stringify({ filename: 'request.md', content: '# Test\n\nlanguage: go\n' })
 });
 assert.equal(response.status, 201);
+assert.deepEqual(await response.json(), {
+  filename: 'request.md',
+  status: 'queued',
+  delivery: 'mcp-queue',
+  requiresUserTurn: true,
+  nextPrompt: '处理最新 CodeNode 请求'
+});
 
 stdout = '';
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'codenode_read_latest_markdown', arguments: {} } })}\n`);

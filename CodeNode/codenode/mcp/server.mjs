@@ -5,7 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 const serverName = 'codenode';
-const serverVersion = '0.1.0';
+const serverVersion = '0.2.0';
 const httpPort = Number(process.env.CODENODE_MCP_PORT || 32145);
 const dataRoot = process.env.PLUGIN_DATA || process.env.CODENODE_DATA_DIR || path.join(os.tmpdir(), 'codenode-mcp');
 const inboxDir = path.join(dataRoot, 'inbox');
@@ -128,7 +128,14 @@ const httpServer = http.createServer((request, response) => {
     response.writeHead(204, headers);
     return response.end();
   }
-  if (request.method === 'GET' && request.url === '/health') return sendJson(response, 200, { status: 'ok', server: serverName }, headers);
+  if (request.method === 'GET' && request.url === '/health') {
+    return sendJson(response, 200, {
+      status: 'ok',
+      server: serverName,
+      delivery: 'mcp-queue',
+      canInjectCodexConversation: false
+    }, headers);
+  }
   if (request.method !== 'POST' || request.url !== '/markdown') return sendJson(response, 404, { error: 'not found' }, headers);
   if (request.headers['x-codenode-bridge'] !== '1') return sendJson(response, 403, { error: 'missing bridge header' }, headers);
   let body = '';
@@ -145,7 +152,13 @@ const httpServer = http.createServer((request, response) => {
       if (!content.trim()) throw new Error('content is required');
       if (Buffer.byteLength(content, 'utf8') > maxMarkdownBytes) throw new Error('Markdown file is too large');
       await fs.writeFile(path.join(inboxDir, filename), content, { encoding: 'utf8', flag: 'wx' });
-      sendJson(response, 201, { filename, status: 'queued' }, headers);
+      sendJson(response, 201, {
+        filename,
+        status: 'queued',
+        delivery: 'mcp-queue',
+        requiresUserTurn: true,
+        nextPrompt: '处理最新 CodeNode 请求'
+      }, headers);
     } catch (error) {
       const status = error.code === 'EEXIST' ? 409 : 400;
       sendJson(response, status, { error: error.code === 'EEXIST' ? 'request already exists' : error.message }, headers);

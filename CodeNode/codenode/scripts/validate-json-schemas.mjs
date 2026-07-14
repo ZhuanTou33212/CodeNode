@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const schemaDir = path.join(root, 'schemas');
-const requiredFiles = ['node.schema.json', 'edge.schema.json', 'workflow-request.schema.json', 'workflow-result.schema.json'];
+const requiredFiles = ['node.schema.json', 'edge.schema.json', 'workflow-request.schema.json', 'workflow-result.schema.json', 'agent-canary-output.schema.json'];
 for (const filename of requiredFiles) {
   const file = path.join(schemaDir, filename);
   const document = JSON.parse(await fs.readFile(file, 'utf8'));
