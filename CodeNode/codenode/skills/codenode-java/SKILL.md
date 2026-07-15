@@ -9,6 +9,8 @@ description: Use the CodeNode first-stage Codex plugin to check Java/Maven prere
 
 本目录只负责 Java 语言请求。检测到 `language: "java"` 或用户明确要求 Java 时才启用本 Skill；PowerShell 请求必须改用 `codenode-powershell/SKILL.md`，不要同时加载两种语言的实现规则。
 
+当 `mode: "markdown-blueprint"` 时进入 Markdown 规划模式：只为请求文档补充 Java 21、构建工具、包结构、依赖和验收要求，不创建 `.java` 文件，不调用 Maven/JDK，不运行程序。只有后续阶段的 `executable-workflow` 实现明确获准执行时，才使用下方生成与验证规则。
+
 ## 目标
 
 本 Skill 对应 CodeNode 第一阶段：在 Codex 中验证 Java 21 + Maven 的最小执行闭环。当前实现是 Codex 插件辅助能力，不包含最终的可视化节点画布。

@@ -65,6 +65,7 @@ export function validateRequest(request) {
     if (request.expression.length > MAX_MARKDOWN_BYTES) fail('expression is too large');
   } else {
     if (!['build-markdown', 'analyze-project'].includes(request.action)) fail('markdown mode requires build-markdown or analyze-project');
+    if (!LANGUAGES.has(request.language)) fail('markdown mode requires a supported target language');
     const expectedScope = request.action === 'build-markdown' ? 'selected-node' : 'project';
     if (request.scope.kind !== expectedScope) fail(`${request.action} requires ${expectedScope} scope`);
     if (request.output.artifactPolicy !== 'markdown-only') fail("markdown mode requires artifactPolicy 'markdown-only'");
@@ -72,7 +73,6 @@ export function validateRequest(request) {
       requireString(request.scope.targetNodeId, 'scope.targetNodeId');
       if (!ids.has(request.scope.targetNodeId)) fail('scope.targetNodeId is not present in nodes');
     }
-    if (request.language !== undefined) fail('markdown mode cannot select a code language');
     if (request.execution?.compile || request.execution?.run) fail('markdown mode cannot compile or run');
   }
   return request;

@@ -9,6 +9,8 @@ description: Use the CodeNode PowerShell language skill to validate and generate
 
 本 Skill 只负责 PowerShell。检测到 `language: "powershell"` 或用户明确要求 PowerShell 时启用；Java 请求只启用 `codenode-java`，不要同时加载本 Skill。
 
+当 `mode: "markdown-blueprint"` 时进入 Markdown 规划模式：只为请求文档补充 PowerShell 版本、模块结构、安全边界、参数和 Pester 验收要求，不创建 `.ps1`/`.psm1` 文件，不调用 PowerShell，不运行脚本。
+
 ## 生成规则
 
 1. 请求包含 `expression`、`environment` 或嵌套范围时，先使用 `codenode-workflow-dsl` 解析并校验；仅根据规范化 AST 和可达子图生成 PowerShell。

@@ -248,35 +248,24 @@ Java 代码生成器先对图进行以下检查：
 - Agent 的结构化输出在 20 次测试中成功率不低于 90%；
 - Java 编译错误能被程序解析为文件、行、列和诊断码；Maven 依赖错误能被归类为项目级诊断。
 
-### 阶段 0 当前落地状态（2026-07-14）
+### 阶段 0 当前落地状态（2026-07-15）
 
 已完成：
 
-- 已建立 `codenode` Codex 插件目录和 `.codex-plugin/plugin.json`；
-- 已加入 `codenode-java` Skill，明确 Java 第一阶段操作顺序、节点输入协议和安全边界；
-- 已加入 Java/Maven 环境检查脚本和最小 Java 示例项目生成脚本；
-- 已生成并登记个人插件市场条目，插件版本带有 Codex cachebuster；
-- 已完成插件清单、Skill frontmatter、脚本文件存在性和目录结构检查。
-- 已固定 JDK 21.0.9 与 Maven Wrapper 3.9.10；Java 示例通过 6 项 JUnit/Compiler API 测试。
-- 已加入节点、边、工作流请求 JSON Schema，以及嵌套 DSL 规范化和环境变量契约。
-- 已加入 JDK Compiler API 文件/行/列/诊断码输出和 Maven 项目级错误分类。
-- 已完成变量计算、条件分支、JSON 转换输出三个金丝雀用例。
-- 已安装可执行的官方 Codex CLI 0.144.3，并完成插件干净卸载与重装验收。
-- 已完成 React Flow 12.11.2 的 1,000 节点/999 边真实浏览器验证，连续视口更新平均 14.04 ms/帧且无控制台错误。
-- 已验证网页到 CodeNode MCP 本地队列、健康检查和 Codex MCP 工具读取链路。
-- 已完成真实 Codex Agent 严格 Schema 输出 20 次验收：20/20 通过，成功率 100%，覆盖 Java、PowerShell、Go。
-- 已为 MCP inbox 增加独立请求队列栏，持久化全局请求序号，并按 `[请求序号：节点名字(请求制作成节点/制作成程序)]` 展示。
-- 已完成 schema 3.0 双工作模式：可执行代码节点工作流与仅生成 Markdown 的项目蓝图严格隔离。
-- 已完成 Markdown BuildRequest 解码、模式路由、旧队列容错、结构化结果回传和按 `nodeId` 标红闭环。
-- 已将更新后的插件 `0.2.1+codex.20260714064442` 从 personal 市场重装，并在安装缓存中复测通过。
+- 已改为独立 Java 21 桌面程序与项目内 `.codenode` 本地申请槽；MCP 代理和网页运行时不再属于正式路径。
+- 桌面端、插件解码器和 JSON Schema 已统一为 schema 3.0，并支持申请的原子领取、完成、失败、取消和结果回写。
+- 两种模式复用完全相同的节点、端口、连线、类别与 Prompt，仅在输出阶段分流。
+- `markdown-blueprint` 支持导出选中节点或全部节点的 Prompt 与结构，保留目标语言选择并路由到对应语言 Skill 的 Markdown 规划模式；强制 `compile=false/run=false`。
+- `executable-workflow` 已冻结单节点/可达子图请求结构和 DSL 入口；Stage0 强制不编译、不运行，封装代码节点和完整程序转译留到后续阶段。
+- Java、PowerShell、Go Skill 已明确互斥路由和 Markdown 规划模式；插件 `0.3.1+codex.20260715052648` 已经官方 CLI 重装并从安装缓存复测。
+- 插件清单、5 个 Skill、请求解码、队列生命周期、DSL 4 项测试、5 份 JSON Schema 和桌面端 11 项测试均通过。
+- CodeNode Desktop 0.3.1 已完成 app-image 打包及隐藏启动冒烟测试。
 
-待验证/阻塞：
+Stage0 后续项（本阶段不实现）：
 
-- WindowsApps 内置 Codex 可执行文件仍受系统“拒绝访问”限制，已用项目工具目录内的官方独立 CLI 规避；
-- 插件安装/卸载/重装验收已完成；当前桌面任务不能动态获得新 MCP 工具，需重启 Codex 或新建任务；
-- 真实 Agent 结构化输出 20 次测试已完成并超过 ≥90% 验收门槛；
-- React Flow 千级节点技术验证已完成；Stage 1 应继续用真实业务节点内容建立交互性能基线；
-- Codex 页面入口、Agent 自动生成 Java 节点和错误回溯仍属于阶段 1 及以后实现。
+- UE 风格封装代码节点、连接图到完整程序的转译器、编译/运行引擎和 source map 错误定位；
+- 真实 Agent 依据 Markdown 请求制作源代码的自动化执行与上传；
+- 大型项目导入、千级业务节点性能优化及更完整的布局持久化。
 
 ## 阶段 1：节点编辑器基础（第 2～3 周）
 

@@ -15,6 +15,7 @@ class QueueServiceTest {
         assertEquals(submission.requestId(),service.entries().getFirst().requestId());assertEquals("inbox",service.entries().getFirst().status());
         Map<String,Object> request=Json.object(Files.readString(submission.inboxPath().resolve("request.json")));
         assertEquals("local-file-queue",request.get("transport"));assertEquals("build-program",request.get("action"));assertEquals(2,((List<?>)request.get("nodes")).size());assertEquals(b.id,request.get("expression"));
+        assertEquals(Map.of("compile",false,"run",false),request.get("execution"));
         assertEquals(List.of(a.id,"out"),((Map<?,?>)((List<?>)request.get("edges")).getFirst()).get("source"));
         Map<?,?> sourceNode=((List<?>)request.get("nodes")).stream().map(Map.class::cast).filter(n->a.id.equals(n.get("id"))).findFirst().orElseThrow();
         Map<?,?> targetNode=((List<?>)request.get("nodes")).stream().map(Map.class::cast).filter(n->b.id.equals(n.get("id"))).findFirst().orElseThrow();
@@ -27,9 +28,11 @@ class QueueServiceTest {
         assertEquals("java",json.get("language"));assertEquals("build-markdown",json.get("action"));assertEquals(Map.of("compile",false,"run",false),json.get("execution"));
     }
     @Test void markdownProjectIncludesEveryStructureNode() throws Exception {
-        WorkflowModel model=new WorkflowModel();var first=model.addNode(0,0);var second=model.addNode(1,1);QueueService service=new QueueService(temp);
+        WorkflowModel model=new WorkflowModel();var first=model.addNode(0,0);var second=model.addNode(1,1);first.category="input";first.prompt="读取输入";second.category="output";second.prompt="生成程序";QueueService service=new QueueService(temp);
         var request=service.submit(model,WorkflowModel.Mode.MARKDOWN,first,false,"java","output/docs");Map<String,Object> json=Json.object(Files.readString(request.inboxPath().resolve("request.json")));
         assertEquals("project",((Map<?,?>)json.get("scope")).get("kind"));assertEquals(2,((List<?>)json.get("nodes")).size());
+        assertEquals("input",((Map<?,?>)((List<?>)json.get("nodes")).getFirst()).get("category"));
+        String markdown=Files.readString(request.inboxPath().resolve("request.md"));assertTrue(markdown.contains("读取输入"));assertTrue(markdown.contains("生成程序"));assertTrue(markdown.contains("目标语言：`java`"));
     }
     @Test void rejectsPathsOutsideProject() throws Exception {WorkflowModel m=new WorkflowModel();var n=m.addNode(0,0);assertThrows(IllegalArgumentException.class,()->new QueueService(temp).submit(m,WorkflowModel.Mode.MARKDOWN,n,true,"java","../escape"));}
 }

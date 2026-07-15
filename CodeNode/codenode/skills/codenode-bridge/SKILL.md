@@ -16,14 +16,15 @@ CodeNode Desktop 不使用 MCP，也不会自动唤醒 Codex。用户会手动�
 
 ## 模式隔离
 
-- `executable-workflow`：先启用 `codenode-workflow-dsl` 规范化表达式和可达子图，再根据 `language` 只启用 Java、PowerShell、Go 中的一个 Skill。`build-node` 只制作目标节点；`build-program` 转译连接工作流、编译并按请求决定是否运行。
-- `markdown-blueprint`：只分析项目结构并生成 `.md` 文件。节点仅表示项目、模块、文件、依赖、约束或章节；禁止启用语言 Skill、生成源代码、调用编译器或运行程序。
+- 两种模式复用同一份节点与连线数据，不能因切换模式改写节点类别、端口或 Prompt；差异只发生在输出阶段。
+- `executable-workflow`：先启用 `codenode-workflow-dsl` 规范化表达式和可达子图，再根据 `language` 只启用 Java、PowerShell、Go 中的一个 Skill。Stage0 只验证、领取和回写该路径的结构化申请；封装代码节点、转译完整程序、编译和运行属于后续阶段，不得在 Stage0 冒充已经完成。
+- `markdown-blueprint`：按 `scope` 选择目标节点或全部节点，保留每个节点的 Prompt 与图结构，输出一份交给 Agent 制作代码的 `.md` 请求。根据 `language` 只启用一个语言 Skill 来补充目标语言约束，但必须使用其中的“Markdown 规划模式”；本次不得生成源代码、调用编译器或运行程序。
 
 输出路径必须是 `output.workspaceRoot` 下的 `output.relativePath`。`requiresConfirmation: true` 时，在覆盖已有文件或执行生成程序前仍需遵守用户确认边界。
 
 ## 回写结果
 
 1. 创建符合 `schemas/workflow-result.schema.json` 的 `result.draft.json`，保存到该申请的 `queue/processing/<requestId>/` 目录。
-2. 编译/运行错误必须写入 `diagnostics[]`，尽量包含 `nodeId`、`file`、`line`、`column` 和 `message`；每个节点写入 `nodeResults[]`。
+2. 每个节点写入 `nodeResults[]`。后续可执行阶段产生编译/运行错误时，必须写入 `diagnostics[]`，尽量包含 `nodeId`、`file`、`line`、`column` 和 `message`。
 3. 运行 `scripts/local-queue.mjs complete <projectRoot> <requestId> <result.draft.json>`。脚本会原子写入 `.codenode/results/<requestId>/result.json`，然后把申请移动到 `completed` 或 `failed`。
 4. 不要只在对话中汇报而遗漏结果文件；桌面程序依靠该文件把失败节点标红。

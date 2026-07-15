@@ -39,7 +39,7 @@ public final class QueueService {
         String requestId = "request-" + stamp;
         List<WorkflowModel.Node> included = selectedOnly ? List.of(selected) : (mode == WorkflowModel.Mode.MARKDOWN ? model.nodes() : reachable(model, selected));
         Set<String> ids = new LinkedHashSet<>(); included.forEach(n -> ids.add(n.id));
-        List<Map<String,Object>> nodes = included.stream().map(n -> nodeMap(n, mode)).toList();
+        List<Map<String,Object>> nodes = included.stream().map(QueueService::nodeMap).toList();
         List<Map<String,Object>> edges = model.edges().stream().filter(e -> ids.contains(e.source()) && ids.contains(e.target()))
             .map(e -> Map.<String,Object>of("id", e.id(), "source", List.of(e.source(), e.sourcePort()), "target", List.of(e.target(), e.targetPort()), "kind", "data")).toList();
 
@@ -54,7 +54,8 @@ public final class QueueService {
         if (executable) { request.put("entry", selected.id); request.put("expression", selected.id); }
         request.put("prompt", selected.prompt);
         request.put("output", Map.of("workspaceRoot", projectRoot.toString(), "relativePath", validateRelative(outputPath), "artifactPolicy", executable ? "executable" : "markdown-only"));
-        request.put("execution", Map.of("compile", executable, "run", executable));
+        // Stage0 only freezes and queues the executable path. Code generation, compilation and execution start in a later stage.
+        request.put("execution", Map.of("compile", false, "run", false));
         request.put("nodes", nodes); request.put("edges", edges); request.put("requiresConfirmation", true);
 
         Path staging = stateRoot.resolve("queue/staging").resolve(requestId);
@@ -80,14 +81,28 @@ public final class QueueService {
         return ids.stream().map(model::byId).filter(Objects::nonNull).toList();
     }
 
-    private static Map<String,Object> nodeMap(WorkflowModel.Node n, WorkflowModel.Mode mode) {
-        Map<String,Object> node = new LinkedHashMap<>(); node.put("id", n.id); node.put("name", n.name); node.put("category", mode == WorkflowModel.Mode.EXECUTABLE ? n.category : "document");
+    private static Map<String,Object> nodeMap(WorkflowModel.Node n) {
+        Map<String,Object> node = new LinkedHashMap<>(); node.put("id", n.id); node.put("name", n.name); node.put("category", n.category);
         node.put("prompt", n.prompt); node.put("artifact", n.artifact); node.put("inputs", n.inputs.stream().map(QueueService::portMap).toList());
         node.put("outputs", n.outputs.stream().map(QueueService::portMap).toList()); return node;
     }
     private static Map<String,Object> portMap(WorkflowModel.Port port) { return Map.of("id",port.id,"name",port.name,"dataType",port.dataType,"required",port.required); }
     private static String markdown(String id, WorkflowModel.Mode mode, String action, WorkflowModel.Node selected, List<WorkflowModel.Node> nodes, String output, String language) {
-        return "# CodeNode 本地申请 " + id + "\n\n- 模式：`" + mode.wireName + "`\n- 语言：`" + language + "`\n- 动作：`" + action + "`\n- 目标节点：`" + selected.id + "`\n- 输出：`" + output + "`\n\n## 需求\n\n" + selected.prompt + "\n\n## 节点\n\n" + nodes.stream().map(n -> "- `" + n.id + "` " + n.name).reduce("", (a,b) -> a + b + "\n");
+        StringBuilder content = new StringBuilder("# CodeNode 本地申请 ").append(id)
+            .append("\n\n- 模式：`").append(mode.wireName).append("`")
+            .append("\n- 目标语言：`").append(language).append("`")
+            .append("\n- 动作：`").append(action).append("`")
+            .append("\n- 目标节点：`").append(selected.id).append("`")
+            .append("\n- 输出：`").append(output).append("`")
+            .append("\n\n## Agent 制作请求\n\n")
+            .append("请依据以下节点结构与 Prompt，为目标语言制作程序。当前申请只输出 Markdown 指令，不生成、编译或运行源代码。\n");
+        for (WorkflowModel.Node node : nodes) {
+            content.append("\n### ").append(node.name).append(" (`").append(node.id).append("`)\n\n")
+                .append("- 分类：`").append(node.category).append("`\n")
+                .append("- 产物：`").append(node.artifact).append("`\n\n")
+                .append(node.prompt == null || node.prompt.isBlank() ? "_未填写 Prompt_" : node.prompt).append("\n");
+        }
+        return content.toString();
     }
     public record Submission(String requestId, Path inboxPath, String codexPrompt) {}
     public record QueueEntry(String requestId,String status,Path path) { @Override public String toString(){return requestId+"   ["+status+"]";} }

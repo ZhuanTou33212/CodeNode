@@ -9,6 +9,8 @@ description: Use the CodeNode Go language skill to generate and verify Go nodes 
 
 仅在请求包含 `language: "go"` 或用户明确选择 Go 时启用。Java 和 PowerShell 请求分别使用它们自己的 Skill，不要同时加载多个语言 Skill。
 
+当 `mode: "markdown-blueprint"` 时进入 Markdown 规划模式：只为请求文档补充 Go 版本、module/package 结构、依赖、格式化和测试验收要求，不创建 `.go` 文件，不调用 Go 工具链，不运行程序。
+
 ## 制作规则
 
 1. 请求包含 `expression`、`environment` 或嵌套范围时，先使用 `codenode-workflow-dsl` 解析并校验；仅根据规范化 AST 和可达子图生成 Go。

@@ -16,7 +16,7 @@ MCP 代理从正式链路取消。桌面程序与 Codex 通过项目内 `.codeno
 - 申请采用 `staging → inbox` 原子目录移动，Codex 采用 `inbox → processing` 原子领取。
 - 结果采用临时文件到 `result.json` 的原子移动，再进入 `completed` 或 `failed`。
 - 桌面程序轮询结果，读取 `diagnostics[].nodeId/file/line/column` 并把失败节点标红。
-- `markdown-blueprint` 不写 `language`，且强制 `compile=false/run=false`。
+- `markdown-blueprint` 写入目标 `language` 供 Agent 选择对应规划 Skill，并强制 `compile=false/run=false`。
 - 插件清单删除 `mcpServers`，MCP 服务入口和 `.mcp.json` 已删除。
 - 新增 `scripts/local-queue.mjs` 和生命周期测试。
 - 保留 Stage 0 网页/React Flow 内容为历史实验，不参与正式运行。
@@ -27,8 +27,8 @@ MCP 代理从正式链路取消。桌面程序与 Codex 通过项目内 `.codeno
 |---|---|---|
 | 单节点 | `build-node` | `build-markdown` |
 | 多节点 | `build-program` + `reachable-graph` | `analyze-project` + `project` |
-| 语言 Skill | Java / PowerShell / Go 三选一 | 禁止 |
-| 编译运行 | 按申请执行 | 永远禁止 |
+| 语言 Skill | Java / PowerShell / Go 三选一（Stage0 仅验证请求） | Java / PowerShell / Go 三选一（仅规划约束） |
+| 编译运行 | 后续阶段 | 永远禁止 |
 | 节点含义 | 可生成代码的处理单元 | 项目结构与文档章节 |
 | 结果 | 程序/节点、诊断、节点状态 | `.md`、文档诊断、节点状态 |
 

@@ -4,8 +4,8 @@ import java.util.*;
 
 public final class WorkflowModel {
     public enum Mode {
-        EXECUTABLE("executable-workflow", "代码工作流"),
-        MARKDOWN("markdown-blueprint", "Markdown 蓝图");
+        EXECUTABLE("executable-workflow", "节点程序模式"),
+        MARKDOWN("markdown-blueprint", "Markdown 请求模式");
         public final String wireName;
         public final String label;
         Mode(String wireName, String label) { this.wireName = wireName; this.label = label; }

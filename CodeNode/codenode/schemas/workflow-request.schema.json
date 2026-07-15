@@ -79,14 +79,14 @@
     {
       "if": { "properties": { "mode": { "const": "markdown-blueprint" } }, "required": ["mode"] },
       "then": {
+        "required": ["language", "execution"],
         "properties": {
           "action": { "enum": ["build-markdown", "analyze-project"] },
           "execution": {
             "properties": { "compile": { "const": false }, "run": { "const": false } }
           },
           "output": { "properties": { "artifactPolicy": { "const": "markdown-only" } } }
-        },
-        "not": { "required": ["language"] }
+        }
       }
     }
   ],

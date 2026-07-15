@@ -1,6 +1,6 @@
 {
   "name": "codenode",
-  "version": "0.3.0+codex.20260714080725",
+  "version": "0.3.1+codex.20260715052648",
   "description": "CodeNode local-file queue skills for native desktop code workflows and Markdown blueprints.",
   "author": {
     "name": "Local developer"
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "CodeNode",
     "shortDescription": "Process native CodeNode desktop requests.",
-    "longDescription": "Claim local-file requests from CodeNode Desktop, then build executable Java, PowerShell, or Go workflows or isolated Markdown-only project blueprints.",
+    "longDescription": "Claim local-file requests from CodeNode Desktop, validate reusable node graphs, and produce target-language Markdown build requests. Executable node compilation is reserved for a later stage.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [

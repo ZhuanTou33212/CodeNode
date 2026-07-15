@@ -11,8 +11,8 @@ date: 2026-07-14
 
 CodeNode 使用一个画布、一个本地 MCP/HTTP 桥接服务和两个互斥工作模式：
 
-- `executable-workflow`：制作单个代码节点，或从选中入口提取可达子图并制作完整程序；允许在确认后编译、运行，并通过结构化诊断把错误映射到节点。
-- `markdown-blueprint`：节点只负责项目、模块、文件、需求和章节结构；仅生成 Markdown，协议和服务端均禁止选择语言、携带可执行代码或启动编译/运行。
+- `executable-workflow`：Stage0 冻结单节点与可达子图的请求协议；封装代码节点、生成完整程序、编译运行与诊断映射推迟到后续阶段。
+- `markdown-blueprint`：选择单个或全部可复用节点，将其 Prompt 与连接结构输出为面向目标语言 Agent 的 Markdown 制作请求；允许选择语言以加载规划约束，但禁止携带可执行代码或启动编译/运行。
 
 工作模式与操作范围已经拆分为 `mode`、`action` 和 `scope`。工作区存在节点时切换模式必须确认并清空画布，避免两种节点对象混用。
 
@@ -21,7 +21,7 @@ CodeNode 使用一个画布、一个本地 MCP/HTTP 桥接服务和两个互斥�
 1. 画布生成 schema 3.0 请求，并将唯一的 `BuildRequest` JSON 放入 Markdown 信封。
 2. `mcp/request-codec.mjs` 解码并验证 JSON；缺少请求块、模式/动作冲突、越界路径和 Markdown 携带代码均会被拒绝。
 3. MCP 保存请求并向 Codex 暴露已解码对象。旧版或损坏请求会在队列中显示为 invalid，仍可删除，不会阻塞整个队列。
-4. `executable-workflow` 只路由到选定语言 Skill；`markdown-blueprint` 不得进入任何语言 Skill。
+4. 两种模式只路由到选定的一个语言 Skill；`markdown-blueprint` 强制使用该 Skill 的规划模式。
 5. Codex 通过 `codenode_mark_processed.result` 写回结构化结果。
 6. 画布按请求文件名读取结果；`diagnostics[].nodeId` 和 `nodeResults[]` 可更新任意相关节点，失败节点标红。
 
@@ -44,7 +44,7 @@ MCP 仍不能伪装成用户向当前 Codex 对话主动注入消息。网页提
 | 插件清单验证 | 通过 |
 | personal 市场重装及已安装缓存复测 | 通过 |
 
-已安装版本：`0.2.1+codex.20260714064442`。
+已安装版本：`0.3.1+codex.20260715052648`。
 
 ## Stage 1 边界
 
