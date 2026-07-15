@@ -13,6 +13,26 @@
     "scopeType": { "type": "string", "enum": ["if", "loop", "parallel", "sequence"] },
     "language": { "type": ["string", "null"] },
     "code": { "type": "string" },
+    "implementation": {
+      "type": "object",
+      "required": ["language", "code", "version"],
+      "properties": {
+        "language": { "type": "string", "enum": ["java", "powershell", "go"] },
+        "code": { "type": "string" },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "documentation": {
+      "type": "object",
+      "required": ["role", "summary", "markdownFragment"],
+      "properties": {
+        "role": { "type": "string", "enum": ["project", "module", "file", "requirement", "constraint", "section"] },
+        "summary": { "type": "string" },
+        "markdownFragment": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
     "inputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
     "outputs": { "type": "array", "items": { "$ref": "#/$defs/port" } },
     "effect": { "type": "string" },

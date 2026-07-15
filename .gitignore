@@ -14,12 +14,15 @@ CodeNode/.obsidian/.trash/
 **/.gradle/
 **/target/
 **/build/
+**/dist/
 **/.mvn/wrapper/maven-wrapper.jar
 **/*.class
 **/*.log
 
 # Temporary demo output and local artifacts
 /stage0-demo/
+/output/
+/CodeNode/output/
 CodeNode/codenode/demo/
 CodeNode/codenode/.cache/
 

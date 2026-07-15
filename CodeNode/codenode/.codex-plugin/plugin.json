@@ -1,16 +1,15 @@
 {
   "name": "codenode",
-  "version": "0.2.1+codex.20260714055324",
-  "description": "CodeNode Codex plugin for nested language-neutral workflows and Java, PowerShell, or Go generation.",
+  "version": "0.3.0+codex.20260714080725",
+  "description": "CodeNode local-file queue skills for native desktop code workflows and Markdown blueprints.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "CodeNode",
-    "shortDescription": "Build nested multilingual node workflows.",
-    "longDescription": "Parse and validate nested language-neutral node workflows, then build Java, PowerShell, or Go requests from a visual canvas.",
+    "shortDescription": "Process native CodeNode desktop requests.",
+    "longDescription": "Claim local-file requests from CodeNode Desktop, then build executable Java, PowerShell, or Go workflows or isolated Markdown-only project blueprints.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [
@@ -19,8 +18,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Normalize and build this CodeNode workflow.",
-      "Validate a nested CodeNode expression."
+      "Process the named CodeNode local request.",
+      "Process the latest CodeNode local request."
     ]
   }
 }

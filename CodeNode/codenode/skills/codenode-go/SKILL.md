@@ -22,3 +22,5 @@ description: Use the CodeNode Go language skill to generate and verify Go nodes 
 - 语言路由只启用本 Skill。
 - 代码通过 `gofmt` 和编译/测试检查。
 - `build-node` 与 `build-program` 的输出形态明确分离。
+
+处理本地申请槽请求后，将结构化状态、文件、诊断和节点结果写入申请的 `result.draft.json`，再由 `scripts/local-queue.mjs complete` 原子回写。格式化、编译或测试错误能定位节点时必须填写 `diagnostics[].nodeId`，供桌面画布标红。

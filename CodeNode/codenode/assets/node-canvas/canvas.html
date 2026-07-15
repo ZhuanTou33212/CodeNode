@@ -10,6 +10,11 @@
   <header class="toolbar">
     <strong>CodeNode Canvas</strong>
     <span class="toolbar-hint">拖拽节点，连接兼容端口；滚轮缩放，空格+拖拽平移</span>
+    <label class="toolbar-select-label" for="workspace-mode">工作模式</label>
+    <select id="workspace-mode" class="toolbar-select" aria-label="选择工作模式">
+      <option value="executable-workflow">可执行节点</option>
+      <option value="markdown-blueprint">Markdown 蓝图</option>
+    </select>
     <button id="add-node">+ 空白节点</button>
     <label class="toolbar-select-label" for="build-select">打板制作</label>
     <select id="build-select" class="toolbar-select" aria-label="选择打板制作方式">
@@ -66,8 +71,8 @@
         <button id="toggle-code-review" class="panel-toggle" type="button" aria-expanded="true">侧栏</button>
       </div>
       <div class="code-review-body">
-        <p class="review-hint">选择节点后查看生成代码和制作请求。</p>
-        <label>代码预览<textarea id="node-code" rows="16" readonly></textarea></label>
+        <p id="review-hint" class="review-hint">选择节点后查看生成代码和制作请求。</p>
+        <label id="artifact-preview-label">代码预览<textarea id="node-code" rows="16" readonly></textarea></label>
         <label>BuildRequest<textarea id="request-preview" rows="18" readonly></textarea></label>
       </div>
     </aside>

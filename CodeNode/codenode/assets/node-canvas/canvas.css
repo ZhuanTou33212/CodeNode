@@ -21,6 +21,8 @@ button:hover { border-color: #bbb; background: #4a4a4a; }
 .edge.invalid { stroke: #ef7d86; stroke-dasharray: 5 4; }
 .node { position: absolute; width: 210px; min-height: 118px; background: var(--panel); border: 1px solid #777; border-radius: 8px; box-shadow: 0 8px 18px #0007; user-select: none; }
 .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px #aaa6, 0 8px 18px #0009; }
+.node.error { border-color: #ef5865; box-shadow: 0 0 0 2px #ef586566, 0 8px 18px #0009; }
+.node.error .node-header { background: #5b2026; }
 .node-header { padding: 9px 12px; border-bottom: 1px solid #4a4a4a; font-weight: 600; cursor: move; }
 .node-meta { padding: 7px 12px 12px; color: #aaa; font-size: 12px; }
 .port { position: relative; display: flex; align-items: center; min-height: 22px; font-size: 12px; color: #d3deec; }

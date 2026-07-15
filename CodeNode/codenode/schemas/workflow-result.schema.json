@@ -3,16 +3,14 @@
   "$id": "https://codenode.local/schema/workflow-result.json",
   "title": "CodeNode workflow result",
   "type": "object",
-  "required": ["schemaVersion", "requestId", "status"],
+  "required": ["schemaVersion", "requestId", "mode", "action", "status", "diagnostics", "processedAt"],
   "properties": {
-    "schemaVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "schemaVersion": { "const": "3.0" },
     "requestId": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "enum": ["executable-workflow", "markdown-blueprint"] },
     "status": { "type": "string", "enum": ["queued", "processing", "succeeded", "failed", "cancelled"] },
-    "action": { "type": "string", "enum": ["build-node", "build-program"] },
-    "language": { "type": "string", "enum": ["java", "powershell", "go"] },
+    "action": { "type": "string", "enum": ["build-node", "build-program", "build-markdown", "analyze-project"] },
     "summary": { "type": "string" },
-    "error": { "type": "string" },
-    "requiresConfirmation": { "type": "boolean" },
     "output": {
       "type": "object",
       "properties": {
@@ -21,11 +19,10 @@
         "files": {
           "type": "array",
           "items": {
-            "type": "object",
-            "required": ["path"],
+            "type": "object", "required": ["path"],
             "properties": {
               "path": { "type": "string", "minLength": 1 },
-              "kind": { "type": "string", "enum": ["source", "binary", "metadata", "diagnostic"] },
+              "kind": { "type": "string", "enum": ["source", "binary", "markdown", "metadata", "diagnostic"] },
               "language": { "type": "string" }
             },
             "additionalProperties": true
@@ -37,18 +34,14 @@
     "diagnostics": {
       "type": "array",
       "items": {
-        "type": "object",
-        "required": ["severity", "message"],
+        "type": "object", "required": ["severity", "message"],
         "properties": {
           "severity": { "type": "string", "enum": ["info", "warning", "error"] },
           "message": { "type": "string", "minLength": 1 },
           "category": { "type": "string" },
-          "scope": { "type": "string", "enum": ["node", "source", "project"] },
-          "nodeId": { "type": "string" },
-          "file": { "type": "string" },
-          "line": { "type": "integer", "minimum": 1 },
-          "column": { "type": "integer", "minimum": 1 },
-          "code": { "type": "string" }
+          "scope": { "type": "string", "enum": ["node", "source", "project", "document"] },
+          "nodeId": { "type": "string" }, "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 }, "column": { "type": "integer", "minimum": 1 }, "code": { "type": "string" }
         },
         "additionalProperties": true
       }
@@ -56,12 +49,11 @@
     "nodeResults": {
       "type": "array",
       "items": {
-        "type": "object",
-        "required": ["nodeId", "status"],
+        "type": "object", "required": ["nodeId", "status"],
         "properties": {
           "nodeId": { "type": "string", "minLength": 1 },
           "status": { "type": "string", "enum": ["pending", "succeeded", "failed", "skipped"] },
-          "code": { "type": "string" }
+          "code": { "type": "string" }, "markdown": { "type": "string" }
         },
         "additionalProperties": true
       }

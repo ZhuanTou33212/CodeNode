@@ -28,3 +28,5 @@ description: Use the CodeNode PowerShell language skill to validate and generate
 - 生成的脚本能通过 Windows PowerShell 5.1 解析。
 - 输出路径限制在用户确认的工作区或目标位置。
 - 未经确认不执行脚本，不修改桌面或其他用户目录。
+
+处理本地申请槽请求后，将结构化状态、文件、诊断和节点结果写入申请的 `result.draft.json`，再由 `scripts/local-queue.mjs complete` 原子回写。解析或运行错误能定位节点时必须填写 `diagnostics[].nodeId`，供桌面画布标红。

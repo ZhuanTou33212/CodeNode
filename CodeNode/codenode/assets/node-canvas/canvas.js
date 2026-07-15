@@ -11,7 +11,7 @@
   const queuePanel = document.querySelector('.request-queue-panel');
   const queueList = document.querySelector('#request-queue-list');
   const queueStatus = document.querySelector('#request-queue-status');
-  const state = { nodes: [], edges: [], selected: null, scale: 1, offset: { x: 0, y: 0 }, connecting: null, panning: null };
+  const state = { mode: 'executable-workflow', nodes: [], edges: [], selected: null, scale: 1, offset: { x: 0, y: 0 }, connecting: null, panning: null };
   let language = 'java';
   let portSequence = 0;
   const portTypes = [
@@ -27,7 +27,7 @@
   function render() {
     nodesEl.innerHTML = '';
     state.nodes.forEach(node => {
-      const el = document.createElement('article'); el.className = `node ${state.selected === node.id ? 'selected' : ''}`; el.dataset.id = node.id; el.style.transform = `translate(${node.x}px, ${node.y}px)`;
+      const el = document.createElement('article'); el.className = `node ${state.selected === node.id ? 'selected' : ''} ${node.status === 'error' ? 'error' : ''}`; el.dataset.id = node.id; el.style.transform = `translate(${node.x}px, ${node.y}px)`;
       const draftEditor = node.status === '草稿' ? `<div class="node-meta"><input class="inline-editor inline-name" value="${escapeAttr(node.name)}" aria-label="节点名称"><textarea class="inline-editor inline-prompt" aria-label="制作要求" placeholder="填写制作要求">${escapeHtml(node.prompt)}</textarea></div>` : `<div class="node-meta">${escapeHtml(node.category)} · ${escapeHtml(node.status)} · ${languageLabel(node.language)}</div>`;
       el.innerHTML = `<div class="node-header">${escapeHtml(node.name)}</div>${draftEditor}<div class="ports inputs">${node.inputs.map(p => portHtml('input', p)).join('')}</div><div class="ports outputs">${node.outputs.map(p => portHtml('output', p)).join('')}</div>`;
       el.querySelector('.inline-name')?.addEventListener('input', event => { node.name = event.target.value || '空白节点'; el.querySelector('.node-header').textContent = node.name; inspector.name.value = node.name; });
@@ -47,7 +47,6 @@
   function escapeHtml(value) { return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function escapeAttr(value) { return escapeHtml(value).replace(/`/g, '&#96;'); }
   function languageLabel(value) { return ({ java: 'Java', powershell: 'PowerShell', go: 'Go' })[value] || 'Java'; }
-  function generatedCode(node) { if (node.language === 'powershell') return `param([int]$左值, [int]$右值)\n$result = $左值 + $右值\n$result`; if (node.language === 'go') return `func Execute(left int, right int) int {\n    return left + right\n}`; return `public static int 执行(int 左值, int 右值) {\n    return 左值 + 右值;\n}`; }
   function select(id) { state.selected = id; render(); }
   function startNodeDrag(event, node) {
     if (event.target.closest('.handle')) { startConnection(event, node); return; }
@@ -105,28 +104,62 @@
   }
   function updateInspector() {
     const node = nodeById(state.selected);
+    const markdownMode = state.mode === 'markdown-blueprint';
     inspector.hint.textContent = node ? `节点编号：${node.id}` : '选择一个节点查看详情。';
-    inspector.name.value = node?.name || ''; inspector.prompt.value = node?.prompt || ''; inspector.codeEditor.value = node?.code || '';
-    inspector.name.disabled = inspector.prompt.disabled = inspector.codeEditor.disabled = inspector.inputCount.disabled = inspector.outputCount.disabled = inspector.make.disabled = !node;
+    inspector.name.value = node?.name || ''; inspector.prompt.value = node?.prompt || ''; inspector.codeEditor.value = markdownMode ? (node?.markdownFragment || '') : (node?.code || '');
+    inspector.name.disabled = inspector.prompt.disabled = inspector.inputCount.disabled = inspector.outputCount.disabled = inspector.make.disabled = !node;
+    inspector.codeEditor.disabled = !node;
+    inspector.codeEditor.previousSibling.textContent = markdownMode ? 'Markdown 片段' : '内嵌代码';
     inspector.inputCount.value = node?.inputs.length || 0; inspector.outputCount.value = node?.outputs.length || 0;
     inspector.inputConfig.innerHTML = ''; inspector.outputConfig.innerHTML = '';
     if (node) { renderPortConfig(node, 'input'); renderPortConfig(node, 'output'); }
-    inspector.status.textContent = `状态：${node?.status || '—'}`; inspector.language.textContent = `语言：${languageLabel(node?.language || language)}`; inspector.code.value = node?.code || ''; inspector.code.disabled = !node; inspector.request.value = node ? JSON.stringify(buildRequest(node), null, 2) : '';
+    inspector.status.textContent = `状态：${node?.status || '—'}`; inspector.language.textContent = markdownMode ? '模式：仅生成 Markdown' : `语言：${languageLabel(node?.language || language)}`; inspector.code.value = markdownMode ? (node?.markdownFragment || '') : (node?.code || ''); inspector.code.disabled = !node; inspector.request.value = node ? JSON.stringify(buildRequest(node), null, 2) : '';
+    document.querySelector('#artifact-preview-label').firstChild.textContent = markdownMode ? 'Markdown 预览' : '代码预览';
+    document.querySelector('#review-hint').textContent = markdownMode ? '蓝图节点只生成 Markdown，不会进入语言 Skill 或编译器。' : '选择节点后查看生成代码和制作请求。';
   }
   document.querySelector('#add-node').addEventListener('click', () => { const id = `node-${Date.now()}`; state.nodes.push({ id, name: '空白节点', category: '自定义', prompt: '', language, code: '', status: '草稿', x: 300, y: 160, inputs: [], outputs: [] }); select(id); });
   inspector.name.addEventListener('input', () => { const node = nodeById(state.selected); if (node) { node.name = inspector.name.value || '空白节点'; const card = nodesEl.querySelector(`[data-id="${node.id}"] .node-header`); if (card) card.textContent = node.name; } });
   inspector.prompt.addEventListener('input', () => { const node = nodeById(state.selected); if (node) node.prompt = inspector.prompt.value; });
-  inspector.codeEditor.addEventListener('input', () => { const node = nodeById(state.selected); if (node) { node.code = inspector.codeEditor.value; inspector.code.value = node.code; } });
+  inspector.codeEditor.addEventListener('input', () => { const node = nodeById(state.selected); if (node) { if (state.mode === 'markdown-blueprint') node.markdownFragment = inspector.codeEditor.value; else node.code = inspector.codeEditor.value; inspector.code.value = inspector.codeEditor.value; } });
   inspector.inputCount.addEventListener('change', () => { const node = nodeById(state.selected); if (node) resizePorts(node, 'input', inspector.inputCount.value); });
   inspector.outputCount.addEventListener('change', () => { const node = nodeById(state.selected); if (node) resizePorts(node, 'output', inspector.outputCount.value); });
   [inspector.name, inspector.prompt, inspector.codeEditor, inspector.inputCount, inspector.outputCount].forEach(input => input.addEventListener('keydown', event => event.stopPropagation()));
-  function buildRequest(node, mode = node.buildMode || 'program') { return { requestId: node.id, action: mode === 'node' ? 'build-node' : 'build-program', language: node.language || language, prompt: node.prompt || '', output: { workspaceRoot: 'E:\\CodeNode', relativePath: document.querySelector('#output-path').value.trim() || 'output/CodeNodeProgram' }, nodes: state.nodes, edges: state.edges, requiresConfirmation: true }; }
-  function buildSelected(mode) { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } node.language = language; node.buildMode = mode; node.status = mode === 'program' ? '等待 Codex 制作程序' : '等待 Codex 制作节点'; const request = buildRequest(node, mode); inspector.request.value = JSON.stringify(request, null, 2); inspector.validation.textContent = mode === 'node' ? '节点制作请求已生成，可提交到 MCP 队列。' : '程序制作请求已生成，可提交到 MCP 队列。'; render(); }
+  function reachableGraph(node, scope) {
+    if (scope === 'node') return { nodes: [node], edges: [] };
+    if (state.mode === 'markdown-blueprint') return { nodes: state.nodes, edges: state.edges };
+    const ids = new Set([node.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      state.edges.forEach(edge => { if (ids.has(edge.target[0]) && !ids.has(edge.source[0])) { ids.add(edge.source[0]); changed = true; } });
+    }
+    return { nodes: state.nodes.filter(item => ids.has(item.id)), edges: state.edges.filter(edge => ids.has(edge.source[0]) && ids.has(edge.target[0])) };
+  }
+  function serializeNode(node) {
+    const shared = { id: node.id, name: node.name, category: node.category, prompt: node.prompt || '', inputs: node.inputs, outputs: node.outputs };
+    if (state.mode === 'markdown-blueprint') return { ...shared, documentation: { role: node.documentationRole || 'section', summary: node.prompt || '', markdownFragment: node.markdownFragment || '' } };
+    return { ...shared, language: node.language || language, code: node.code || '' };
+  }
+  function buildRequest(node, scope = node.buildScope || 'node', requestId = node.activeRequestId || `preview-${node.id}`) {
+    const executable = state.mode === 'executable-workflow';
+    const graph = reachableGraph(node, scope);
+    const action = executable ? (scope === 'node' ? 'build-node' : 'build-program') : (scope === 'node' ? 'build-markdown' : 'analyze-project');
+    return {
+      schemaVersion: '3.0', requestId, mode: state.mode, action,
+      scope: { kind: scope === 'node' ? 'selected-node' : (executable ? 'reachable-graph' : 'project'), targetNodeId: node.id },
+      ...(executable ? { language: node.language || language, entry: node.id, expression: node.id } : {}),
+      prompt: node.prompt || '',
+      output: { workspaceRoot: 'E:\\CodeNode', relativePath: document.querySelector('#output-path').value.trim() || 'output/CodeNodeProgram', artifactPolicy: executable ? 'executable' : 'markdown-only' },
+      execution: { compile: executable, run: executable && scope === 'program' },
+      nodes: graph.nodes.map(serializeNode), edges: graph.edges, requiresConfirmation: true
+    };
+  }
+  function buildSelected(scope) { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } node.language = language; node.buildScope = scope; node.activeRequestId = `request-${Date.now()}-${node.id}`; node.pendingRequest = buildRequest(node, scope, node.activeRequestId); node.status = 'ready'; inspector.request.value = JSON.stringify(node.pendingRequest, null, 2); const artifact = state.mode === 'markdown-blueprint' ? 'Markdown' : (scope === 'program' ? '程序' : '代码节点'); inspector.validation.textContent = `${artifact}制作请求已生成，可提交到 MCP 队列。`; render(); }
   inspector.make.addEventListener('click', () => buildSelected('node'));
   document.querySelector('#build-select').addEventListener('change', event => { const mode = event.target.value; event.target.value = ''; if (mode) buildSelected(mode); });
   document.querySelector('#copy-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } const text = JSON.stringify(buildRequest(node), null, 2); inspector.request.value = text; inspector.request.select(); try { await navigator.clipboard.writeText(text); inspector.validation.textContent = '制作请求已复制，请粘贴到 Codex 对话。'; } catch { inspector.validation.textContent = '已选中制作请求，请按 Ctrl+C 后粘贴到 Codex 对话。'; } });
-  function markdownRequest(node) { const request = buildRequest(node); return `---\ncodenodeRequest: ${request.requestId}\naction: ${request.action}\nlanguage: ${request.language}\n---\n\n# ${node.name}\n\n${node.prompt || '未填写制作要求'}\n\n## BuildRequest\n\n\`\`\`json\n${JSON.stringify(request, null, 2)}\n\`\`\`\n`; }
-  function queueActionLabel(action) { return action === 'build-node' ? '请求制作成节点' : '请求制作成程序'; }
+  function markdownRequest(node) { const request = node.pendingRequest || buildRequest(node); return `---\ncodenodeRequest: ${request.requestId}\nmode: ${request.mode}\naction: ${request.action}\n---\n\n# ${node.name}\n\n${node.prompt || '未填写制作要求'}\n\n## BuildRequest\n\n\`\`\`json\n${JSON.stringify(request, null, 2)}\n\`\`\`\n`; }
+  function queueActionLabel(action) { return ({ 'build-node': '制作代码节点', 'build-program': '制作完整程序', 'build-markdown': '制作 Markdown 节点', 'analyze-project': '分析项目并生成 Markdown' })[action] || action; }
   async function deleteQueuedRequest(request) {
     if (!window.confirm(`确定从队列删除“${request.nodeName}”吗？`)) return;
     const response = await fetch(`http://127.0.0.1:32145/markdown?filename=${encodeURIComponent(request.filename)}`, { method: 'DELETE', headers: { 'X-CodeNode-Bridge': '1' } });
@@ -158,8 +191,30 @@
       queueStatus.textContent = `MCP 队列未连接：${error.message}`;
     }
   }
-  document.querySelector('#refresh-request-queue').addEventListener('click', refreshRequestQueue);
-  document.querySelector('#send-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } inspector.validation.textContent = '正在提交到 CodeNode MCP 队列…'; try { const response = await fetch('http://127.0.0.1:32145/markdown', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CodeNode-Bridge': '1' }, body: JSON.stringify({ filename: `${node.id}-${Date.now()}.md`, content: markdownRequest(node) }) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); node.status = '已进入 CodeNode MCP 队列'; inspector.validation.textContent = `已排队 ${result.filename}；MCP 不能主动写入当前对话，请在 Codex 中输入“${result.nextPrompt || '处理最新 CodeNode 请求'}”。`; await refreshRequestQueue(); render(); } catch (error) { inspector.validation.textContent = `MCP 队列未连接：${error.message}。请确认 CodeNode 插件已安装，并重启 Codex 后重试。`; } });
+  async function refreshResults() {
+    for (const requestNode of state.nodes.filter(item => item.requestFilename && !item.resultApplied)) {
+      const response = await fetch(`http://127.0.0.1:32145/result?filename=${encodeURIComponent(requestNode.requestFilename)}`);
+      if (response.status === 404) continue;
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      requestNode.resultApplied = true;
+      const globalError = result.diagnostics?.find(item => item.severity === 'error' && !item.nodeId);
+      state.nodes.forEach(node => {
+        const nodeError = result.diagnostics?.find(item => item.severity === 'error' && item.nodeId === node.id);
+        const ownResult = result.nodeResults?.find(item => item.nodeId === node.id);
+        if (nodeError || ownResult?.status === 'failed') { node.status = 'error'; node.diagnostic = nodeError?.message || ''; }
+        else if (ownResult?.status === 'succeeded') node.status = 'success';
+        if (state.mode === 'markdown-blueprint' && ownResult?.markdown) node.markdownFragment = ownResult.markdown;
+        if (state.mode === 'executable-workflow' && ownResult?.code) node.code = ownResult.code;
+      });
+      if (result.status === 'failed' && globalError) { requestNode.status = 'error'; requestNode.diagnostic = globalError.message; }
+      else if (result.status === 'succeeded' && requestNode.status !== 'error') requestNode.status = 'success';
+      runOutput.textContent = [result.summary, ...(result.diagnostics || []).map(item => `[${item.severity}] ${item.nodeId ? `${item.nodeId}: ` : ''}${item.message}`)].filter(Boolean).join('\n') || '请求已处理。';
+    }
+  }
+  document.querySelector('#refresh-request-queue').addEventListener('click', async () => { await refreshRequestQueue(); await refreshResults(); render(); });
+  document.querySelector('#send-request').addEventListener('click', async () => { const node = nodeById(state.selected); if (!node) { inspector.validation.textContent = '请先选择一个节点。'; return; } if (!node.pendingRequest) buildSelected(node.buildScope || 'node'); inspector.validation.textContent = '正在提交到 CodeNode MCP 队列…'; try { const filename = `${node.id}-${Date.now()}.md`; const response = await fetch('http://127.0.0.1:32145/markdown', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CodeNode-Bridge': '1' }, body: JSON.stringify({ filename, content: markdownRequest(node) }) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); node.requestFilename = result.filename; node.resultApplied = false; node.status = 'queued'; inspector.validation.textContent = `已排队 ${result.filename}；请在 Codex 中输入“${result.nextPrompt || '处理最新 CodeNode 请求'}”。`; await refreshRequestQueue(); render(); } catch (error) { inspector.validation.textContent = `MCP 队列未连接：${error.message}。请确认 CodeNode 插件已安装，并重启 Codex 后重试。`; } });
+  document.querySelector('#workspace-mode').addEventListener('change', event => { const next = event.target.value; if (state.nodes.length && !window.confirm('切换工作模式会清空当前画布，是否继续？')) { event.target.value = state.mode; return; } state.mode = next; state.nodes = []; state.edges = []; state.selected = null; const options = document.querySelector('#build-select').options; options[1].textContent = next === 'markdown-blueprint' ? '制作 Markdown 节点' : '制作成节点'; options[2].textContent = next === 'markdown-blueprint' ? '分析项目并生成 Markdown' : '制作成程序'; document.querySelector('#language-select').disabled = next === 'markdown-blueprint'; runOutput.textContent = next === 'markdown-blueprint' ? 'Markdown 蓝图模式不会编译或运行代码。' : '尚未运行节点。生成程序后，确认执行结果会显示在这里。'; render(); });
   document.querySelector('#language-select').addEventListener('change', event => { language = event.target.value; const node = nodeById(state.selected); if (node) node.language = language; updateInspector(); render(); });
   document.querySelector('#clear-canvas').addEventListener('click', () => { state.nodes = []; state.edges = []; state.selected = null; render(); });
   document.querySelector('#fit-view').addEventListener('click', () => { state.scale = 1; state.offset = { x: 0, y: 0 }; render(); });

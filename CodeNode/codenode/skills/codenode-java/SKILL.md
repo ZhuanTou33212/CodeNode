@@ -55,6 +55,10 @@ description: Use the CodeNode first-stage Codex plugin to check Java/Maven prere
 - 失败时能指出具体前置条件；
 - 不声称第一阶段已经完成节点画布或错误回溯。
 
+## 画布结果回传
+
+处理本地申请槽请求时，编译诊断必须保留文件、行、列和 `nodeId`。将 `status`、`summary`、`output.files`、`diagnostics` 与 `nodeResults` 写入申请的 `result.draft.json`，再由 `scripts/local-queue.mjs complete` 原子回写；失败节点使用 `status: "failed"`，不得只返回一段自由文本摘要。
+
 ## PowerShell 兼容性规则
 
 生成 `build-program` 的 PowerShell 脚本时，必须兼容 Windows PowerShell 5.1 和 PowerShell 7：

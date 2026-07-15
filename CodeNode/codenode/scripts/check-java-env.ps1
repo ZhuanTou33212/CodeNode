@@ -65,7 +65,8 @@ if ($mavenCommand) {
         Where-Object { $_.Name -match '^apache-maven-' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($localMaven -and (Test-Path (Join-Path $localMaven.FullName 'bin\mvn.cmd'))) { $result.maven = Join-Path $localMaven.FullName 'bin\mvn.cmd' }
 }
-if (-not $result.maven) { $result.issues += 'Maven was not found; use the pinned Maven Wrapper or install Maven.' }
+if (-not $result.maven -and $result.mavenWrapper) { $result.maven = $wrapper }
+if (-not $result.maven) { $result.issues += 'Maven and Maven Wrapper were not found.' }
 
 if (Get-Command git) {
     $result.git = (Get-Command git).Source

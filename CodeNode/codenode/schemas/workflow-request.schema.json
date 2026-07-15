@@ -3,22 +3,42 @@
   "$id": "https://codenode.local/schema/workflow-request.json",
   "title": "CodeNode workflow request",
   "type": "object",
-  "required": ["schemaVersion", "requestId", "action", "language", "nodes", "edges", "requiresConfirmation"],
+  "required": ["schemaVersion", "requestId", "mode", "action", "scope", "output", "nodes", "edges", "requiresConfirmation"],
   "properties": {
-    "schemaVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "schemaVersion": { "const": "3.0" },
     "requestId": { "type": "string", "minLength": 1 },
-    "action": { "type": "string", "enum": ["build-node", "build-program"] },
+    "mode": { "type": "string", "enum": ["executable-workflow", "markdown-blueprint"] },
+    "action": { "type": "string", "enum": ["build-node", "build-program", "build-markdown", "analyze-project"] },
+    "scope": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["selected-node", "reachable-graph", "project"] },
+        "targetNodeId": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "language": { "type": "string", "enum": ["java", "powershell", "go"] },
     "entry": { "type": "string" },
     "expression": { "type": "string", "maxLength": 1048576 },
+    "prompt": { "type": "string" },
     "output": {
       "type": "object",
       "required": ["workspaceRoot", "relativePath"],
       "properties": {
         "workspaceRoot": { "type": "string", "minLength": 1 },
-        "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?![\\\\/]{2})(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+" }
+        "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?![\\\\/]{2})(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+" },
+        "artifactPolicy": { "type": "string", "enum": ["executable", "markdown-only"] }
       },
       "additionalProperties": true
+    },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "compile": { "type": "boolean" },
+        "run": { "type": "boolean" }
+      },
+      "additionalProperties": false
     },
     "environment": {
       "type": "object",
@@ -32,12 +52,8 @@
             "properties": {
               "dataType": { "type": "string" },
               "source": { "type": "string", "enum": ["literal", "environment", "node"] },
-              "value": {},
-              "key": { "type": "string" },
-              "nodeId": { "type": "string" },
-              "portId": { "type": "string" },
-              "secret": { "type": "boolean" },
-              "scope": { "type": "string", "enum": ["workflow", "scope", "node"] }
+              "value": {}, "key": { "type": "string" }, "nodeId": { "type": "string" }, "portId": { "type": "string" },
+              "secret": { "type": "boolean" }, "scope": { "type": "string", "enum": ["workflow", "scope", "node"] }
             },
             "additionalProperties": true
           }
@@ -49,5 +65,30 @@
     "edges": { "type": "array", "items": { "$ref": "edge.schema.json" } },
     "requiresConfirmation": { "type": "boolean" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "executable-workflow" } }, "required": ["mode"] },
+      "then": {
+        "required": ["language", "expression", "execution"],
+        "properties": {
+          "action": { "enum": ["build-node", "build-program"] },
+          "output": { "properties": { "artifactPolicy": { "const": "executable" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "markdown-blueprint" } }, "required": ["mode"] },
+      "then": {
+        "properties": {
+          "action": { "enum": ["build-markdown", "analyze-project"] },
+          "execution": {
+            "properties": { "compile": { "const": false }, "run": { "const": false } }
+          },
+          "output": { "properties": { "artifactPolicy": { "const": "markdown-only" } } }
+        },
+        "not": { "required": ["language"] }
+      }
+    }
+  ],
   "additionalProperties": true
 }

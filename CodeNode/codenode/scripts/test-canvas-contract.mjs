@@ -15,6 +15,13 @@ assert.match(script, /target\.dataType === 'auto'/);
 assert.match(script, /target\.dataType = sourcePort\.dataType/);
 assert.match(script, /method: 'DELETE'/);
 assert.match(script, /className = 'request-delete'/);
+assert.match(html, /id="workspace-mode"/);
+assert.match(script, /mode: state\.mode/);
+assert.match(script, /artifactPolicy: executable \? 'executable' : 'markdown-only'/);
+assert.match(script, /\/result\?filename=/);
+assert.match(script, /item\.nodeId === node\.id/);
+assert.match(script, /ownResult\?\.status === 'failed'/);
+assert.match(script, /markdown-blueprint/);
 assert.match(script, /\['auto', '自动'\]/);
 assert.doesNotMatch(script, /function portHtml[^\n]+· 整数/);
 
