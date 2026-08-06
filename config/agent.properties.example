@@ -1,0 +1,7 @@
+# CodeNode Agent 本地配置示例
+# 使用方式：复制本文件为 config/agent.properties 并填写 api_key（api_key 仅存本地，禁止提交到仓库）。
+api_base=https://api.deepseek.com/v1
+api_key=
+model=deepseek-v4-flash
+models=deepseek-v4-flash,deepseek-v4-pro
+default_project_path=

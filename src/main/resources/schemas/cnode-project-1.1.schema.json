@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenode.local/schema/project-1.1.json",
+  "title": "CodeNode Project Format 1.1",
+  "description": "Schema for .cnode 1.1 project files",
+  "type": "object",
+  "required": ["mimetype", "manifest.json", "graph.json", "workspace.json", "output-profiles.json", "integrity.json"],
+  "properties": {
+    "mimetype": {
+      "type": "string",
+      "const": "application/vnd.codenode.project+zip"
+    },
+    "manifest.json": {
+      "type": "object",
+      "required": ["format", "formatVersion", "documentId", "createdAt"],
+      "properties": {
+        "format": { "type": "string", "const": "codenode-project" },
+        "formatVersion": { "type": "string", "pattern": "^1\\.\\d+$" },
+        "documentId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "modifiedAt": { "type": "string", "format": "date-time" },
+        "generator": {
+          "type": "object",
+          "properties": {
+            "application": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        },
+        "minimumReaderVersion": { "type": "string" }
+      }
+    },
+    "graph.json": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "revision": { "type": "integer" },
+        "nodes": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "category", "inputs", "outputs"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,200}$" },
+              "name": { "type": "string" },
+              "category": { "type": "string" },
+              "prompt": { "type": "string" },
+              "artifact": { "type": "string" },
+              "nodeKind": { "type": "string", "enum": ["regular", "condition", "calculation", "scope", "group", "file", "asset", "asset_bundle"] },
+              "valueType": { "type": "string" },
+              "operation": { "type": "string" },
+              "classificationKey": { "type": "string" },
+              "codeBearing": { "type": "boolean" },
+              "scope": {
+                "type": "object",
+                "properties": {
+                  "parentId": { "type": "string" },
+                  "region": { "type": "string" },
+                  "width": { "type": "integer" },
+                  "height": { "type": "integer" }
+                }
+              },
+              "file": {
+                "type": "object",
+                "properties": {
+                  "ownerId": { "type": "string" },
+                  "relativePath": { "type": "string" },
+                  "role": { "type": "string" }
+                }
+              },
+              "template": {
+                "type": "object",
+                "properties": {
+                  "library": { "type": "string" },
+                  "id": { "type": "string" },
+                  "version": { "type": "string" },
+                  "language": { "type": "string" }
+                }
+              },
+              "flags": {
+                "type": "object",
+                "properties": {
+                  "muted": { "type": "boolean" },
+                  "collapsed": { "type": "boolean" }
+                }
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "name", "declaredType"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "declaredType": { "type": "string" },
+                    "required": { "type": "boolean" },
+                    "cardinality": { "type": "string", "enum": ["single"] }
+                  }
+                }
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "name", "declaredType"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "declaredType": { "type": "string" },
+                    "required": { "type": "boolean" },
+                    "cardinality": { "type": "string", "enum": ["multiple"] }
+                  }
+                }
+              },
+              "nodeColor": { "type": "string" },
+              "rangeMode": { "type": "boolean" },
+              "assetType": { "type": "string" },
+              "bundleData": { "type": "string" },
+              "bundleCollapsed": { "type": "boolean" },
+              "groupInputNodeId": { "type": "string" },
+              "nodeWidth": { "type": "integer" },
+              "nodeHeight": { "type": "integer" }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 50000,
+          "items": {
+            "type": "object",
+            "required": ["id", "source", "target"],
+            "properties": {
+              "id": { "type": "string" },
+              "source": {
+                "type": "object",
+                "required": ["nodeId", "portId"],
+                "properties": {
+                  "nodeId": { "type": "string" },
+                  "portId": { "type": "string" }
+                }
+              },
+              "target": {
+                "type": "object",
+                "required": ["nodeId", "portId"],
+                "properties": {
+                  "nodeId": { "type": "string" },
+                  "portId": { "type": "string" }
+                }
+              },
+              "kind": { "type": "string" },
+              "reroutes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "codeSlots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "ownerKind", "ownerId"],
+            "properties": {
+              "id": { "type": "string" },
+              "ownerKind": { "type": "string" },
+              "ownerId": { "type": "string" },
+              "language": { "type": "string" },
+              "activeRevision": { "type": "integer" },
+              "activeCode": { "type": "string" },
+              "previousCode": { "type": "string" },
+              "previousSourceRevision": { "type": "integer" },
+              "lastAppliedRequestId": { "type": "string" },
+              "draft": {
+                "type": "object",
+                "properties": {
+                  "requestId": { "type": "string" },
+                  "baseRevision": { "type": "integer" },
+                  "code": { "type": "string" },
+                  "classificationKey": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "workspace.json": {
+      "type": "object",
+      "required": ["viewport", "activeMode", "activeLanguage"],
+      "properties": {
+        "viewport": {
+          "type": "object",
+          "required": ["x", "y", "zoom"],
+          "properties": {
+            "x": { "type": "integer" },
+            "y": { "type": "integer" },
+            "zoom": { "type": "number", "minimum": 0.25, "maximum": 2.5 }
+          }
+        },
+        "nodeViews": { "type": "object", "additionalProperties": { "type": "object", "properties": { "x": { "type": "integer" }, "y": { "type": "integer" } } } },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "nodeIds": { "type": "array", "items": { "type": "string" } },
+            "edgeIds": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "activeMode": { "type": "string", "enum": ["codeWorkflow", "markdownBlueprint"] },
+        "activeLanguage": { "type": "string", "enum": ["java", "powershell", "go"] }
+      }
+    },
+    "output-profiles.json": {
+      "type": "object",
+      "properties": {
+        "executableWorkflow": {
+          "type": "object",
+          "properties": {
+            "entryNodeId": { "type": "string" },
+            "relativePath": { "type": "string" },
+            "language": { "type": "string" },
+            "compile": { "type": "boolean" },
+            "run": { "type": "boolean" }
+          }
+        },
+        "markdownBlueprint": {
+          "type": "object",
+          "properties": {
+            "scope": { "type": "string" },
+            "targetNodeId": { "type": "string" },
+            "relativePath": { "type": "string" },
+            "language": { "type": "string" },
+            "includeGraphSummary": { "type": "boolean" },
+            "includeNodePrompts": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "integrity.json": {
+      "type": "object",
+      "required": ["algorithm", "files"],
+      "properties": {
+        "algorithm": { "type": "string", "const": "SHA-256" },
+        "files": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+      }
+    }
+  }
+}
