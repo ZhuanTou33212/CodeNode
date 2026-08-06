@@ -10,22 +10,33 @@ public final class FileContentAnalyzer {
     public static final class FileSummary {
         public final String language;
         public final int lineCount;
+        public final FileTypeDetector.FileKind kind;
+        public final String typeDescription;
         public final List<String> imports = new ArrayList<>();
         public final List<String> classes = new ArrayList<>();
         public final List<String> functions = new ArrayList<>();
         public final List<String> variables = new ArrayList<>();
         public final List<String> annotations = new ArrayList<>();
-        public final String rawSummary;
+        public String rawSummary;
 
         FileSummary(String language, int lineCount, String rawSummary) {
+            this(language, lineCount, rawSummary, FileTypeDetector.FileKind.SOURCE, language);
+        }
+
+        FileSummary(String language, int lineCount, String rawSummary,
+                    FileTypeDetector.FileKind kind, String typeDescription) {
             this.language = language;
             this.lineCount = lineCount;
+            this.kind = kind;
+            this.typeDescription = typeDescription;
             this.rawSummary = rawSummary;
         }
 
         public String toPrompt() {
             StringBuilder sb = new StringBuilder();
-            sb.append("语言: ").append(language).append(", 行数: ").append(lineCount).append("\n");
+            sb.append("类型: ").append(typeDescription)
+              .append(kind == FileTypeDetector.FileKind.BINARY ? "（二进制，不可 read_file）" : "")
+              .append(", 行数: ").append(lineCount).append("\n");
             if (!imports.isEmpty()) sb.append("导入/引用: ").append(String.join(", ", imports)).append("\n");
             if (!classes.isEmpty()) sb.append("类/结构体: ").append(String.join(", ", classes)).append("\n");
             if (!functions.isEmpty()) sb.append("函数/方法: ").append(String.join(", ", functions)).append("\n");
@@ -141,6 +152,79 @@ public final class FileContentAnalyzer {
         return summary;
     }
 
+    /**
+     * 统一文件分析入口（固定分析程序）：先做类型检测再决定解析策略。
+     * <ul>
+     *   <li>二进制：不读内容，返回 magic bytes 判定结果与解析建议；</li>
+     *   <li>文本：按语言解析，超过 maxSummaryLines 只分析前部并标注截断；</li>
+     *   <li>无法识别：返回文本/二进制判定与大小。</li>
+     * </ul>
+     */
+    public static FileSummary analyzeFile(Path filePath, int maxSummaryLines) throws IOException {
+        FileTypeDetector.TypeInfo info = FileTypeDetector.detect(filePath);
+        String name = filePath.getFileName() == null ? "" : filePath.getFileName().toString();
+
+        // 二进制 / 资产：不读内容
+        if (!info.text()) {
+            FileSummary binary = new FileSummary(info.extension().isBlank() ? "binary" : info.extension(),
+                    (int) Math.min(Integer.MAX_VALUE, Files.size(filePath)), "",
+                    FileTypeDetector.FileKind.BINARY, info.description());
+            binary.variables.add("文件大小: " + Files.size(filePath) + " 字节");
+            binary.variables.add("解析建议: 该文件为二进制格式，不能 read_file；"
+                + suggestionFor(info));
+            return binary;
+        }
+
+        // 文本：行数统计 + 按上限截断分析
+        List<String> lines;
+        try (var reader = Files.newBufferedReader(filePath, java.nio.charset.StandardCharsets.UTF_8)) {
+            lines = new ArrayList<>();
+            String l;
+            while ((l = reader.readLine()) != null) lines.add(l);
+        }
+        int total = lines.size();
+        String language = info.extension().isBlank() ? "unknown" : FileContentAnalyzer.detectLanguage(name);
+        FileSummary summary = new FileSummary(language, total, "", info.kind(), info.description());
+        int analyzed = Math.min(total, Math.max(1, maxSummaryLines));
+        String content = String.join("\n", lines.subList(0, analyzed));
+        boolean truncated = total > analyzed;
+
+        switch (language) {
+            case "java" -> { for (String line : lines.subList(0, analyzed)) analyzeJavaLine(line.trim(), summary); }
+            case "python" -> { for (String line : lines.subList(0, analyzed)) analyzePythonLine(line.trim(), summary); }
+            case "javascript", "typescript" -> { for (String line : lines.subList(0, analyzed)) analyzeJsLine(line.trim(), summary); }
+            case "cpp", "c" -> { for (String line : lines.subList(0, analyzed)) analyzeCppLine(line.trim(), summary); }
+            case "go" -> { for (String line : lines.subList(0, analyzed)) analyzeGoLine(line.trim(), summary); }
+            case "rust" -> { for (String line : lines.subList(0, analyzed)) analyzeRustLine(line.trim(), summary); }
+            case "csharp" -> { for (String line : lines.subList(0, analyzed)) analyzeCSharpLine(line.trim(), summary); }
+            case "json" -> analyzeJsonContent(content, summary);
+            case "xml", "html" -> analyzeXmlContent(content, summary);
+            case "yaml" -> analyzeYamlContent(content, summary);
+            case "markdown" -> analyzeMarkdownContent(content, summary);
+            case "properties" -> analyzePropertiesContent(content, summary);
+            default -> summary.rawSummary = truncated
+                    ? content + "\n…（截断，共 " + total + " 行）"
+                    : content;
+        }
+        if (truncated) {
+            summary.annotations.add("文件共 " + total + " 行，仅分析了前 " + analyzed + " 行");
+            summary.rawSummary = (summary.rawSummary == null || summary.rawSummary.isBlank() ? "" : summary.rawSummary)
+                    + "\n…（截断，共 " + total + " 行）";
+        }
+        return summary;
+    }
+
+    private static String suggestionFor(FileTypeDetector.TypeInfo info) {
+        String ext = info.extension().toLowerCase(java.util.Locale.ROOT);
+        return switch (ext) {
+            case "class" -> "可用 execute_shell 执行 javap -p <文件> 反汇编，或 scan_project 由工具处理";
+            case "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico" -> "图片文件，需用图像工具查看，read_file 无效";
+            case "jar", "zip", "cnode" -> "归档文件，需先解压后分析内部条目";
+            case "pdf", "docx", "xlsx", "pptx" -> "文档格式，需专用解析器，read_file 无效";
+            default -> "需专用工具解析";
+        };
+    }
+
     public static List<Map<String, Object>> generateNodesForExpansion(WorkflowModel model, FileSummary summary, int baseX, int baseY) {
         List<Map<String, Object>> nodes = new ArrayList<>();
         int y = baseY + 60;
@@ -159,13 +243,59 @@ public final class FileContentAnalyzer {
         return nodes;
     }
 
+    // ---------- Java 结构化解析（固定正则，先整行匹配、再部分匹配） ----------
+
+    private static final java.util.regex.Pattern JAVA_TYPE_DECL = java.util.regex.Pattern.compile(
+        "(?<![.\\w])(?:class|interface|enum|record|@interface)\\s+([A-Za-z_$][\\w$]*)");
+    private static final java.util.regex.Pattern JAVA_METHOD_DECL = java.util.regex.Pattern.compile(
+        "\\b(?:public|private|protected|static|final|abstract|synchronized|native|default)\\s+"
+        + "[\\w<>\\[\\].,?]+\\s+([a-zA-Z_$][\\w$]*)\\s*\\([^)]*\\)");
+    private static final java.util.regex.Pattern JAVA_CTOR_DECL = java.util.regex.Pattern.compile(
+        "\\b(?:public|private|protected)\\s+([A-Z][\\w$]*)\\s*\\([^)]*\\)");
+    private static final java.util.regex.Pattern JAVA_FIELD_DECL = java.util.regex.Pattern.compile(
+        "\\b(?:public|private|protected|static|final|volatile|transient)\\s+[\\w<>\\[\\].,?]+\\s+([a-zA-Z_$][\\w$]*)\\s*(?:=|;)");
+    private static final java.util.Set<String> JAVA_KEYWORDS = java.util.Set.of(
+        "if", "for", "while", "switch", "catch", "return", "new", "do", "try", "else", "case", "synchronized");
+
     private static void analyzeJavaLine(String line, FileSummary s) {
         if (line.startsWith("import ")) s.imports.add(extractWord(line.replace("import ", "").replace(";", "").trim()));
         else if (line.startsWith("package ")) s.annotations.add(line.trim());
-        else if (line.matches("(public|private|protected|static|abstract|final)*\\s*class\\s+\\w+")) s.classes.add(extractClass(line));
-        else if (line.matches("(public|private|protected|static|abstract|final)*\\s*(interface|enum)\\s+\\w+")) s.classes.add(extractClass(line));
-        else if (line.matches("(public|private|protected|static|abstract|final)*\\s+\\w+\\s+\\w+\\s*\\(.*\\)") && !line.contains("=")) s.functions.add(extractFunction(line));
         else if (line.startsWith("@")) s.annotations.add(line.trim());
+        else if (isJavaTypeDecl(line)) {
+            s.classes.add(extractClass(line));
+            // 单行紧凑声明（class X { void m() {} int f = 1; }）继续提取方法/字段
+            int brace = line.indexOf('{');
+            if (brace >= 0 && brace < line.length() - 1) {
+                String rest = line.substring(brace + 1).trim();
+                if (!rest.isEmpty() && isJavaMethodDecl(rest, s.classes)) s.functions.add(extractFunction(rest));
+                else if (!rest.isEmpty() && isJavaFieldDecl(rest)) s.variables.add(extractJavaField(rest));
+            }
+        }
+        else if (isJavaMethodDecl(line, s.classes)) s.functions.add(extractFunction(line));
+        else if (isJavaFieldDecl(line)) s.variables.add(extractJavaField(line));
+    }
+
+    private static boolean isJavaTypeDecl(String line) {
+        var m = JAVA_TYPE_DECL.matcher(line);
+        return m.find();
+    }
+
+    private static boolean isJavaMethodDecl(String line, List<String> knownClasses) {
+        var m = JAVA_METHOD_DECL.matcher(line);
+        if (m.find() && !JAVA_KEYWORDS.contains(m.group(1))) return true;
+        var c = JAVA_CTOR_DECL.matcher(line);
+        return c.find() && (knownClasses.contains(c.group(1)) || line.contains("("));
+    }
+
+    private static boolean isJavaFieldDecl(String line) {
+        if (line.contains("(") && line.contains(")")) return false; // 方法/调用行不算字段
+        var m = JAVA_FIELD_DECL.matcher(line);
+        return m.find() && !JAVA_KEYWORDS.contains(m.group(1));
+    }
+
+    private static String extractJavaField(String line) {
+        var m = JAVA_FIELD_DECL.matcher(line);
+        return m.find() ? m.group(1) : line;
     }
 
     private static void analyzePythonLine(String line, FileSummary s) {
@@ -240,6 +370,41 @@ public final class FileContentAnalyzer {
         if (count > 20) s.classes.add("... 共 " + count + " 个标签");
     }
 
+    private static void analyzeYamlContent(String content, FileSummary s) {
+        // 顶层键：行首非缩进、非注释的 key: 或 - key:
+        int keys = 0;
+        for (String line : content.split("\\R")) {
+            String t = line.trim();
+            if (t.isBlank() || t.startsWith("#")) continue;
+            if (!line.startsWith(" ") && !line.startsWith("\t") && t.contains(":") && !t.startsWith("-")) {
+                s.variables.add(t.split(":")[0].trim());
+                keys++;
+                if (keys > 20) break;
+            }
+        }
+        s.variables.add("顶层键 " + keys + " 个");
+    }
+
+    private static void analyzeMarkdownContent(String content, FileSummary s) {
+        for (String line : content.split("\\R")) {
+            String t = line.trim();
+            if (t.startsWith("#")) s.classes.add(t.replaceAll("#+\\s*", "").trim());
+            else if (t.startsWith("- ") || t.startsWith("* ")) s.variables.add(t.substring(2).trim());
+            else if (t.matches("\\|.*\\|")) s.annotations.add("表格行: " + t);
+        }
+    }
+
+    private static void analyzePropertiesContent(String content, FileSummary s) {
+        for (String line : content.split("\\R")) {
+            String t = line.trim();
+            if (t.isBlank() || t.startsWith("#") || t.startsWith("!")) continue;
+            int eq = t.indexOf('=');
+            int colon = t.indexOf(':');
+            int sep = eq >= 0 && (colon < 0 || eq < colon) ? eq : colon;
+            if (sep > 0) s.variables.add(t.substring(0, sep).trim());
+        }
+    }
+
     private static String extractWord(String line) {
         return line.split("[^\\w.]")[0].trim();
     }
@@ -249,7 +414,14 @@ public final class FileContentAnalyzer {
     }
 
     private static String extractFunction(String line) {
-        return line.replaceAll("(public|private|protected|static|abstract|final|export|async|def|fn|func|function)\\s+", "").split("\\(")[0].split("\\s")[0].trim();
+        String s = line.trim();
+        int paren = s.indexOf('(');
+        if (paren > 0) {
+            String before = s.substring(0, paren).trim();
+            String[] words = before.split("\\s+");
+            return words[words.length - 1].replaceAll("[{};=]", "").trim(); // 最后一个词是函数名
+        }
+        return s.replaceAll("[{};]", "").trim();
     }
 
     public static String detectLanguage(String fileName) {
@@ -268,6 +440,7 @@ public final class FileContentAnalyzer {
             case "xml", "html", "htm" -> "xml";
             case "yaml", "yml" -> "yaml";
             case "md", "markdown" -> "markdown";
+            case "properties", "ini", "cfg", "toml", "conf" -> "properties";
             case "ps1", "psm1" -> "powershell";
             case "sh", "bash" -> "shell";
             case "sql" -> "sql";

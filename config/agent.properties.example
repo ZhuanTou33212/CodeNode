@@ -5,3 +5,15 @@ api_key=
 model=deepseek-v4-flash
 models=deepseek-v4-flash,deepseek-v4-pro
 default_project_path=
+
+# ---- harness 与工具设置（Stage6）----
+# 仅启用的工具（逗号分隔；空=全部启用）
+# tools.enabled=read_file,find_files,search_files,list_directory
+# 禁用的工具（逗号分隔；优先级高于 tools.enabled）
+# tools.disabled=execute_shell,write_file,edit_file,fetch_url
+# 追加到系统提示末尾的自定义规则（\n 换行）
+# harness.extra_prompt=不要修改 config/ 目录下的任何文件。\n遇到看不懂的类型先问用户。
+# read_file 默认最大行数（超过截断）
+# read_file.max_lines=200
+# analyze 模式结构摘要的最大分析行数
+# file_analysis.max_lines=200

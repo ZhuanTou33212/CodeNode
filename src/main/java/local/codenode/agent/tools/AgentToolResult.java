@@ -22,6 +22,10 @@ public record AgentToolResult(boolean ok, String text, Map<String, Object> data)
         return new AgentToolResult(false, text, Map.of());
     }
 
+    public static AgentToolResult error(String text, Map<String, Object> data) {
+        return new AgentToolResult(false, text, data);
+    }
+
     public String toJson() {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("ok", ok);

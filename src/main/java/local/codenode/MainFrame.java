@@ -163,7 +163,7 @@ public final class MainFrame extends JFrame {
             } catch (Exception ignored) {}
             return result[0];
         });
-        agentTools = AgentToolkit.buildDefaultRegistry(agentToolContext);
+        agentTools = AgentToolkit.buildDefaultRegistry(agentToolContext, agentConfig);
         agentChatController = new AgentChatController(agentConfig, agentTools, agentToolContext);
         add(toolbar(), BorderLayout.NORTH);
         add(workbench(), BorderLayout.CENTER);

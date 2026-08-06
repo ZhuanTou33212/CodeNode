@@ -103,6 +103,14 @@ public final class AgentChatController {
         sb.append("6. 运行环境是 Windows：禁止使用 ls/find/cat/~/head 等 Unix 命令（不可用），不要用 execute_shell 探索目录，请改用 list_directory/find_files/search_files/scan_project。\n");
         sb.append("7. 工具参数缺省时使用当前项目目录。\n");
         sb.append("8. 仅当请求不涉及上述能力（如闲聊）时才直接文字回复。\n");
+        sb.append("文件类型解析规则：\n");
+        sb.append("9. read_file 只能读取文本文件，且自动检测类型：二进制文件（.class/.png/.jar/.zip/.pdf/.docx/图片/音视频等）会被拒绝并返回类型与解析建议，不要强行读取。\n");
+        sb.append("10. .class 字节码文件用 execute_shell 执行 javap -p <路径> 反汇编；归档（.jar/.zip/.cnode）需先解压再分析；图片/文档需专用工具，read_file 无效。\n");
+        sb.append("11. 大文件（超过 ").append(config.readFileMaxLines()).append(" 行）默认截断读取；想快速了解结构时用 read_file 的 analyze=true 获取导入/类/函数/变量摘要，比读全文更高效。\n");
+        sb.append("12. 无法判断文件类型时，先 list_directory 或 find_files 看扩展名与大小，再决定解析方式。\n");
+        if (config.extraHarnessPrompt() != null && !config.extraHarnessPrompt().isBlank()) {
+            sb.append("\n【用户自定义附加规则】\n").append(config.extraHarnessPrompt()).append("\n");
+        }
         return Map.of("role", "system", "content", sb.toString());
     }
 

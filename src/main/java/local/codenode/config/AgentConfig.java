@@ -85,6 +85,58 @@ public final class AgentConfig {
         return !apiBase().isBlank() && !apiKey().isBlank();
     }
 
+    // ---------- harness 与工具设置（Stage6） ----------
+
+    /** 禁用的工具名列表（逗号分隔；空=全部启用）。禁用优先级高于 {@link #enabledTools()}。 */
+    public List<String> disabledTools() {
+        return parseList(properties.getProperty("tools.disabled", ""));
+    }
+
+    /** 仅启用的工具名列表（逗号分隔；空=不限制）。 */
+    public List<String> enabledTools() {
+        return parseList(properties.getProperty("tools.enabled", ""));
+    }
+
+    /** 追加到系统提示末尾的自定义提示（多行可用 \n 转义）。 */
+    public String extraHarnessPrompt() {
+        String value = properties.getProperty("harness.extra_prompt", "");
+        return value.replace("\\n", "\n").trim();
+    }
+
+    /** read_file 默认最大行数。 */
+    public int readFileMaxLines() {
+        return parseInt(properties.getProperty("read_file.max_lines", "200"), 200);
+    }
+
+    /** analyze 模式默认分析行数上限。 */
+    public int fileAnalysisMaxLines() {
+        return parseInt(properties.getProperty("file_analysis.max_lines", "200"), 200);
+    }
+
+    /** 工具是否允许注册：不在 disabled 且（enabled 为空或在 enabled 内）。 */
+    public boolean isToolAllowed(String toolName) {
+        if (toolName == null || toolName.isBlank()) return false;
+        if (disabledTools().contains(toolName)) return false;
+        List<String> enabled = enabledTools();
+        return enabled.isEmpty() || enabled.contains(toolName);
+    }
+
+    private static List<String> parseList(String value) {
+        if (value == null || value.isBlank()) return List.of();
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private static int parseInt(String value, int fallback) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
     public void setApiBase(String value) { properties.setProperty("api_base", value == null ? "" : value.trim()); }
     public void setApiKey(String value) { properties.setProperty("api_key", value == null ? "" : value.trim()); }
     public void setModel(String value) { properties.setProperty("model", value == null || value.isBlank() ? DEFAULT_MODEL : value.trim()); }
