@@ -1,80 +1,46 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
 package local.codenode.agent.tools;
 
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
+import local.codenode.WorkflowModel;
 
-/**
- * 工具执行上下文：提供项目根目录、当前工作台模型、高危操作确认回调与审计日志。
- * write_file / execute_shell 每次执行前必须经 confirmation 确认。
- */
 public final class AgentToolContext {
     private final Supplier<Path> projectRootSupplier;
-    private final Supplier<local.codenode.WorkflowModel> modelSupplier;
+    private final Supplier<WorkflowModel> modelSupplier;
     private final ConfirmationHandler confirmation;
     private final AuditLogger audit;
     private final WorkbenchApplier workbenchApplier;
-    private final java.util.function.Consumer<WorkbenchMutator> workbenchMutator;
+    private final Consumer<WorkbenchMutator> workbenchMutator;
     private final Runnable saveAction;
     private final Runnable undoAction;
     private final Runnable redoAction;
+    private final UiAction uiAction;
     private QuestionHandler questionHandler;
 
-    @FunctionalInterface
-    public interface ConfirmationHandler {
-        boolean confirm(String message);
-    }
-
-    @FunctionalInterface
-    public interface AuditLogger {
-        void log(String entry);
-    }
-
-    /** 将符合项目结构的生成图原生写入工作台（必须由调用方切到 Swing EDT 后再变更模型）。 */
-    @FunctionalInterface
-    public interface WorkbenchApplier {
-        void applyToWorkbench(local.codenode.WorkflowModel generated);
-    }
-
-    /** 在当前工作台模型上执行一次变更（增删节点/连线等），由调用方保证 EDT 线程安全。 */
-    @FunctionalInterface
-    public interface WorkbenchMutator {
-        void mutate(local.codenode.WorkflowModel model);
-    }
-
-    /** 向用户提问（ask_user 工具）：返回用户回答文本，取消返回 null/空。 */
-    @FunctionalInterface
-    public interface QuestionHandler {
-        String ask(String question, java.util.List<String> options);
-    }
-
-    public AgentToolContext(Supplier<Path> projectRootSupplier,
-                            Supplier<local.codenode.WorkflowModel> modelSupplier,
-                            ConfirmationHandler confirmation, AuditLogger audit) {
+    public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, null, null, null, null, null);
     }
 
-    public AgentToolContext(Supplier<Path> projectRootSupplier,
-                            Supplier<local.codenode.WorkflowModel> modelSupplier,
-                            ConfirmationHandler confirmation, AuditLogger audit,
-                            WorkbenchApplier workbenchApplier) {
+    public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit, WorkbenchApplier workbenchApplier) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, workbenchApplier, null, null, null, null);
     }
 
-    public AgentToolContext(Supplier<Path> projectRootSupplier,
-                            Supplier<local.codenode.WorkflowModel> modelSupplier,
-                            ConfirmationHandler confirmation, AuditLogger audit,
-                            WorkbenchApplier workbenchApplier,
-                            java.util.function.Consumer<WorkbenchMutator> workbenchMutator) {
+    public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit, WorkbenchApplier workbenchApplier, Consumer<WorkbenchMutator> workbenchMutator) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, workbenchApplier, workbenchMutator, null, null, null);
     }
 
-    public AgentToolContext(Supplier<Path> projectRootSupplier,
-                            Supplier<local.codenode.WorkflowModel> modelSupplier,
-                            ConfirmationHandler confirmation, AuditLogger audit,
-                            WorkbenchApplier workbenchApplier,
-                            java.util.function.Consumer<WorkbenchMutator> workbenchMutator,
-                            Runnable saveAction, Runnable undoAction, Runnable redoAction) {
-        this.projectRootSupplier = projectRootSupplier == null ? () -> Path.of(".") : projectRootSupplier;
+    public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit, WorkbenchApplier workbenchApplier, Consumer<WorkbenchMutator> workbenchMutator, Runnable saveAction, Runnable undoAction, Runnable redoAction) {
+        this(projectRootSupplier, modelSupplier, confirmation, audit, workbenchApplier, workbenchMutator, saveAction, undoAction, redoAction, null);
+    }
+
+    public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit, WorkbenchApplier workbenchApplier, Consumer<WorkbenchMutator> workbenchMutator, Runnable saveAction, Runnable undoAction, Runnable redoAction, UiAction uiAction) {
+        this.projectRootSupplier = projectRootSupplier == null ? () -> Path.of(".", new String[0]) : projectRootSupplier;
         this.modelSupplier = modelSupplier == null ? () -> null : modelSupplier;
         this.confirmation = confirmation;
         this.audit = audit;
@@ -83,57 +49,102 @@ public final class AgentToolContext {
         this.saveAction = saveAction;
         this.undoAction = undoAction;
         this.redoAction = redoAction;
+        this.uiAction = uiAction;
     }
 
     public Path projectRoot() {
-        Path root = projectRootSupplier.get();
-        return root == null ? Path.of(".") : root;
+        Path root = this.projectRootSupplier.get();
+        return root == null ? Path.of(".", new String[0]) : root;
     }
 
-    public local.codenode.WorkflowModel model() {
-        return modelSupplier.get();
+    public WorkflowModel model() {
+        return this.modelSupplier.get();
     }
 
     public boolean confirm(String message) {
-        return confirmation == null || confirmation.confirm(message);
+        return this.confirmation == null || this.confirmation.confirm(message);
     }
 
     public void audit(String entry) {
-        if (audit != null) audit.log(entry);
+        if (this.audit != null) {
+            this.audit.log(entry);
+        }
     }
 
     public WorkbenchApplier workbenchApplier() {
-        return workbenchApplier;
+        return this.workbenchApplier;
     }
 
-    /** 在工作台上执行一次变更（增删节点等），无变更器时静默跳过。 */
     public void mutateWorkbench(WorkbenchMutator mutator) {
-        if (workbenchMutator != null && mutator != null) workbenchMutator.accept(mutator);
+        if (this.workbenchMutator != null && mutator != null) {
+            this.workbenchMutator.accept(mutator);
+        }
     }
 
-    /** 保存当前工程（无保存动作时静默）。 */
     public void saveProject() {
-        if (saveAction != null) saveAction.run();
+        if (this.saveAction != null) {
+            this.saveAction.run();
+        }
     }
 
-    /** 撤销（无动作时静默）。 */
     public void undo() {
-        if (undoAction != null) undoAction.run();
+        if (this.undoAction != null) {
+            this.undoAction.run();
+        }
     }
 
-    /** 重做（无动作时静默）。 */
     public void redo() {
-        if (redoAction != null) redoAction.run();
+        if (this.redoAction != null) {
+            this.redoAction.run();
+        }
     }
 
-    /** 注册向用户提问的回调（ask_user 工具使用）。 */
     public void setQuestionHandler(QuestionHandler handler) {
         this.questionHandler = handler;
     }
 
-    /** 向用户提问；无回调或用户取消时返回空字符串。 */
-    public String askUser(String question, java.util.List<String> options) {
-        if (questionHandler == null) return "";
-        return questionHandler.ask(question, options);
+    public String askUser(String question, List<String> options) {
+        if (this.questionHandler == null) {
+            return "";
+        }
+        return this.questionHandler.ask(question, options);
+    }
+
+    public boolean ui(String action, Map<String, Object> arguments) {
+        if (this.uiAction == null || action == null || action.isBlank()) {
+            return false;
+        }
+        this.uiAction.perform(action, arguments);
+        return true;
+    }
+
+    @FunctionalInterface
+    public static interface ConfirmationHandler {
+        public boolean confirm(String var1);
+    }
+
+    @FunctionalInterface
+    public static interface AuditLogger {
+        public void log(String var1);
+    }
+
+    @FunctionalInterface
+    public static interface WorkbenchApplier {
+        public void applyToWorkbench(WorkflowModel var1);
+    }
+
+    @FunctionalInterface
+    public static interface UiAction {
+        public void perform(String var1, Map<String, Object> var2);
+    }
+
+    @FunctionalInterface
+    public static interface QuestionHandler {
+        public String ask(String var1, List<String> var2);
+    }
+
+    @FunctionalInterface
+    public static interface WorkbenchMutator {
+        public void mutate(WorkflowModel var1);
     }
 }

@@ -1,33 +1,55 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
 package local.codenode.agent.tools.impl;
 
 import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.AgentToolSpec;
+import local.codenode.agent.tools.impl.AskUserTool;
+import local.codenode.agent.tools.impl.CodeReviewTool;
+import local.codenode.agent.tools.impl.CompileRunTool;
+import local.codenode.agent.tools.impl.CreateNodesTool;
+import local.codenode.agent.tools.impl.EditFileTool;
+import local.codenode.agent.tools.impl.ExecuteShellTool;
+import local.codenode.agent.tools.impl.FetchUrlTool;
+import local.codenode.agent.tools.impl.FindFilesTool;
+import local.codenode.agent.tools.impl.GetWorkbenchModelTool;
+import local.codenode.agent.tools.impl.ListDirectoryTool;
+import local.codenode.agent.tools.impl.ReadFileTool;
+import local.codenode.agent.tools.impl.RuntimeTraceTool;
+import local.codenode.agent.tools.impl.SaveProjectTool;
+import local.codenode.agent.tools.impl.ScanProjectTool;
+import local.codenode.agent.tools.impl.SearchFilesTool;
+import local.codenode.agent.tools.impl.UiControlTool;
+import local.codenode.agent.tools.impl.WorkbenchConnectTool;
+import local.codenode.agent.tools.impl.WorkbenchEditTool;
+import local.codenode.agent.tools.impl.WorkbenchStructureTool;
+import local.codenode.agent.tools.impl.WriteAnalysisMdTool;
+import local.codenode.agent.tools.impl.WriteFileTool;
 import local.codenode.config.AgentConfig;
 
-/** 装配内嵌 Agent 的 17 个内置工具；可选按 {@link AgentConfig} 的工具设置过滤（tools.enabled / tools.disabled）。 */
 public final class AgentToolkit {
-    private AgentToolkit() {}
-
-    /** 全量注册（无过滤）。 */
-    public static AgentToolRegistry buildDefaultRegistry(AgentToolContext context) {
-        return buildDefaultRegistry(context, null);
+    private AgentToolkit() {
     }
 
-    /** 按配置注册：config 非空时，tools.enabled / tools.disabled 决定哪些工具保留。 */
+    public static AgentToolRegistry buildDefaultRegistry(AgentToolContext context) {
+        return AgentToolkit.buildDefaultRegistry(context, null);
+    }
+
     public static AgentToolRegistry buildDefaultRegistry(AgentToolContext context, AgentConfig config) {
         AgentToolRegistry registry = new AgentToolRegistry();
-        registerAll(registry);
-        return filterByConfig(registry, config);
+        AgentToolkit.registerAll(registry);
+        return AgentToolkit.filterByConfig(registry, config);
     }
 
-    /** 注册后按配置移除被禁用的工具（保持注册顺序稳定）。 */
     public static AgentToolRegistry filterByConfig(AgentToolRegistry registry, AgentConfig config) {
-        if (config == null) return registry;
+        if (config == null) {
+            return registry;
+        }
         for (AgentToolSpec spec : registry.listTools()) {
-            if (!config.isToolAllowed(spec.name())) {
-                registry.unregister(spec.name());
-            }
+            if (config.isToolAllowed(spec.name())) continue;
+            registry.unregister(spec.name());
         }
         return registry;
     }
@@ -50,5 +72,9 @@ public final class AgentToolkit {
         AskUserTool.register(registry);
         FetchUrlTool.register(registry);
         SaveProjectTool.register(registry);
+        CompileRunTool.register(registry);
+        RuntimeTraceTool.register(registry);
+        WriteAnalysisMdTool.register(registry);
+        UiControlTool.register(registry);
     }
 }
