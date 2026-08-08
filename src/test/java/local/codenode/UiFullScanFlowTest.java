@@ -28,9 +28,17 @@ public class UiFullScanFlowTest {
 
     @Test
     void fullScanUiFlowStepsCompleteWithinBudget() throws Exception {
-        Path root = Path.of(System.getProperty("codenode.scanRoot", "")).toAbsolutePath();
-        boolean synthetic = !Files.isDirectory(root);
-        if (synthetic) root = syntheticProject();
+        String scanRoot = System.getProperty("codenode.scanRoot", "");
+        Path root;
+        boolean synthetic;
+        if (!scanRoot.isBlank()) {
+            root = Path.of(scanRoot).toAbsolutePath().normalize();
+            assertTrue(Files.isDirectory(root), "codenode.scanRoot 必须指向存在的目录: " + root);
+            synthetic = false;
+        } else {
+            root = syntheticProject();
+            synthetic = true;
+        }
         try {
             // 1. 扫描建图（含进度回调模拟）
             WorkflowModel result = new WorkflowModel();
