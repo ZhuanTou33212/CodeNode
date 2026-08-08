@@ -569,7 +569,7 @@ extends JPanel {
             n.muted = !n.muted;
         }));
         this.bind("HOME", this::frameAll);
-        this.bind("Z", this::frameSelection);
+        this.bind("Z", this::centerOnBounds);
         this.bind("G", this::startGrab);
         this.bind("ENTER", () -> this.finishGrab(true));
         this.bind("control X", this::deleteWithReconnect);
@@ -746,7 +746,7 @@ extends JPanel {
         menu.add(this.menuItem("详细模式  M", () -> this.toggleSelected(n -> {
             n.detailMode = !n.detailMode;
         })));
-        menu.add(this.menuItem("聚焦选择  Z", this::frameSelection));
+        menu.add(this.menuItem("定位画面中心  Z", this::centerOnBounds));
         menu.add(this.menuItem("查看全部  Home", this::frameAll));
         menu.add(this.menuItem("删除并重连  Ctrl+X", this::deleteWithReconnect));
         menu.add(this.menuItem("清理未连接节点  Alt+X", this::deleteUnused));
@@ -1211,6 +1211,29 @@ extends JPanel {
         this.frameNodes(this.selectedNodes);
     }
 
+    /** 定位画面最中心：计算全部可见节点包围盒（最上/最左/最右/最下）的中心点，平移到画面正中（保持当前缩放）。 */
+    public void centerOnBounds() {
+        List<WorkflowModel.Node> visible = this.model.nodes().stream()
+                .filter(this::visibleNode)
+                .toList();
+        if (visible.isEmpty()) {
+            visible = this.model.nodes();
+        }
+        if (visible.isEmpty()) {
+            this.setView(0, 0, this.zoom);
+            return;
+        }
+        int minX = visible.stream().mapToInt(n -> n.x).min().orElse(0);
+        int minY = visible.stream().mapToInt(n -> n.y).min().orElse(0);
+        int maxX = visible.stream().mapToInt(n -> n.x + this.nodeWidth(n)).max().orElse(215);
+        int maxY = visible.stream().mapToInt(n -> n.y + this.nodeHeight(n)).max().orElse(100);
+        int centerX = (minX + maxX) / 2;
+        int centerY = (minY + maxY) / 2;
+        this.panX = (int)Math.round((double)this.getWidth() / 2.0 - (double)centerX * this.zoom);
+        this.panY = (int)Math.round((double)this.getHeight() / 2.0 - (double)centerY * this.zoom);
+        this.repaint();
+    }
+
     private void frameNodes(Collection<WorkflowModel.Node> nodes) {
         if (nodes.isEmpty()) {
             this.setView(0, 0, 1.0);
@@ -1225,7 +1248,6 @@ extends JPanel {
         this.zoom = CanvasPanel.clamp(Math.min(availableW / (double)Math.max(1, maxX - minX), availableH / (double)Math.max(1, maxY - minY)), 0.25, 2.5);
         this.panX = (int)Math.round((double)this.getWidth() / 2.0 - (double)(minX + maxX) / 2.0 * this.zoom);
         this.panY = (int)Math.round((double)this.getHeight() / 2.0 - (double)(minY + maxY) / 2.0 * this.zoom);
-        this.changeListener.run();
         this.repaint();
     }
 

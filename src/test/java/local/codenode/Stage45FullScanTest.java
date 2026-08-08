@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class Stage45FullScanTest {
 
     @Test
-    void assetOnlyLeafDirBecomesAssetBundleWithMembers() throws Exception {
+    void assetLeafDirBecomesGroupWithAssetNodes() throws Exception {
         Path root = Files.createTempDirectory("fs-bundle");
         Files.createDirectories(root.resolve("assets/minecraft/textures/block"));
         Files.writeString(root.resolve("assets/minecraft/textures/block/stone.png"), "x", StandardCharsets.UTF_8);
@@ -32,12 +32,28 @@ public class Stage45FullScanTest {
         try {
             WorkflowModel model = new WorkflowModel();
             DirectoryGraphBuilder.build(model, root);
-            WorkflowModel.Node bundle = model.nodes().stream()
-                    .filter(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE).findFirst().orElseThrow();
-            assertEquals("folder", bundle.role);
-            BundleDataUtil.BundleView view = BundleDataUtil.parseV2(bundle.bundleData);
-            assertEquals(2, view.memberCount());
-            assertTrue(view.members().stream().anyMatch(m -> m.relativePath().endsWith("stone.png")));
+            // 资产叶子目录现在也成普通组，不再生成 ASSET_BUNDLE
+            assertEquals(0, model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE).count());
+            WorkflowModel.Node group = model.nodes().stream()
+                    .filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP && "block".equals(n.name)).findFirst().orElseThrow();
+            assertEquals("folder", group.role);
+            assertTrue(group.outputs.stream().anyMatch(p -> p.id.equals("grp_out_value")));
+            WorkflowModel.Node gi = model.nodes().stream()
+                    .filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP_INPUT && group.id.equals(n.parentScopeId))
+                    .findFirst().orElseThrow();
+            WorkflowModel.Node go = model.nodes().stream()
+                    .filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP_OUTPUT && group.id.equals(n.parentScopeId))
+                    .findFirst().orElseThrow();
+            assertNotNull(gi);
+            assertNotNull(go);
+            // 资产文件 → ASSET 节点，接入组输出
+            List<WorkflowModel.Node> assets = model.nodes().stream()
+                    .filter(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET && group.id.equals(n.parentScopeId)).toList();
+            assertEquals(2, assets.size());
+            for (WorkflowModel.Node asset : assets) {
+                assertTrue(model.edges().stream()
+                        .anyMatch(e -> e.source().equals(asset.id) && e.target().equals(go.id)));
+            }
         } finally {
             deleteRecursive(root);
         }

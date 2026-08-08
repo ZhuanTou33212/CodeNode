@@ -1496,7 +1496,7 @@ extends JFrame {
         String color = this.nodeColor.getText().trim();
         boolean wasRange = node.rangeMode;
         boolean nextRange = this.rangeMode.isSelected();
-        boolean changed = !node.name.equals(name) || !node.prompt.equals(responsibility) || !node.artifact.equals(path) || !node.fileNodeId.equals(fileId) || !node.parentScopeId.equals(scopeId) || !node.operation.equals(nextOperation) || !node.nodeColor.equals(color) || node.rangeMode != nextRange || !node.assetType.equals(Objects.toString(this.assetTypeCombo.getSelectedItem(), node.assetType)) || !node.bundleData.equals(Objects.toString(this.bundleData.getText(), ""));
+        boolean changed = !node.name.equals(name) || !Objects.toString(node.prompt, "").equals(responsibility) || !Objects.toString(node.artifact, "").equals(path) || !node.fileNodeId.equals(fileId) || !node.parentScopeId.equals(scopeId) || !node.operation.equals(nextOperation) || !node.nodeColor.equals(color) || node.rangeMode != nextRange || !node.assetType.equals(Objects.toString(this.assetTypeCombo.getSelectedItem(), node.assetType)) || !node.bundleData.equals(Objects.toString(this.bundleData.getText(), ""));
         node.name = name;
         node.prompt = responsibility;
         node.artifact = path;
@@ -1670,13 +1670,17 @@ extends JFrame {
                 diag.end("嵌套组布局 (HierarchyLayout)");
                 diag.begin("写入工作台 (replaceFrom)");
                 final WorkflowModel finalResult = result;
-                SwingUtilities.invokeAndWait(() -> {
-                    this.saveInspector();
-                    this.storeActiveOutput();
-                    this.model.replaceFrom(finalResult);
-                    this.canvas.frameAll();
-                    this.canvas.repaint();
-                });
+                try {
+                    SwingUtilities.invokeAndWait(() -> {
+                        this.saveInspector();
+                        this.storeActiveOutput();
+                        this.model.replaceFrom(finalResult);
+                        this.canvas.frameAll();
+                        this.canvas.repaint();
+                    });
+                } catch (java.lang.reflect.InvocationTargetException ite) {
+                    throw new RuntimeException("写入工作台失败: " + ite.getCause(), ite.getCause());
+                }
                 diag.end("写入工作台 (replaceFrom)");
                 diag.begin("保存工程 (codec.save)");
                 String stamp = DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").withZone(ZoneOffset.UTC).format(Instant.now());
@@ -1684,7 +1688,11 @@ extends JFrame {
                 this.projectCodec.save(target, this.model, this.metadata("全量扫描"));
                 diag.end("保存工程 (codec.save)");
                 diag.begin("提交历史 (commitHistory)");
-                SwingUtilities.invokeAndWait(() -> this.commitHistory());
+                try {
+                    SwingUtilities.invokeAndWait(() -> this.commitHistory());
+                } catch (java.lang.reflect.InvocationTargetException ite) {
+                    throw new RuntimeException("提交历史失败: " + ite.getCause(), ite.getCause());
+                }
                 diag.end("提交历史 (commitHistory)");
                 diag.writeReport();
                 this.showProgress(false, false, "全量扫描完成  |  节点=" + this.model.nodes().size() + " 边=" + this.model.edges().size());
@@ -1707,48 +1715,96 @@ extends JFrame {
 
     private void analyzeProjectFull() {
         String rootText = this.project.getText().trim();
-        if (rootText.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "请先在上方输入框填写项目根目录（如 E:\\TeaCraft\\Branch.1\\TeaCraft）", "项目全量解析", 2);
-            return;
+        Path projectDir;
+        if (rootText.isEmpty() || Path.of(rootText, new String[0]).equals(Path.of(System.getProperty("user.home"), new String[0]))) {
+            JFileChooser chooser = new JFileChooser(rootText.isEmpty() ? System.getProperty("user.home") : rootText);
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            chooser.setDialogTitle("选择要分析的项目根目录");
+            if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return;
+            }
+            projectDir = chooser.getSelectedFile().toPath().toAbsolutePath().normalize();
+            this.project.setText(projectDir.toString());
+        } else {
+            projectDir = Path.of(rootText, new String[0]).toAbsolutePath().normalize();
         }
-        Path projectDir = Path.of(rootText, new String[0]).toAbsolutePath().normalize();
         if (!Files.isDirectory(projectDir, new LinkOption[0])) {
             JOptionPane.showMessageDialog(this, "目录不存在: " + String.valueOf(projectDir), "项目全量解析", 0);
             return;
         }
-        this.append("[项目全量解析] 开始扫描: " + String.valueOf(projectDir));
+        this.append("[项目全量解析] 开始按目录层级扫描: " + String.valueOf(projectDir));
         this.showProgress(true, true, "项目全量解析中…  " + String.valueOf(projectDir));
+        ScanDiagnostics diag = new ScanDiagnostics(projectDir, 90_000);
+        diag.writeReport();
+        diag.startWatchdog(() -> SwingUtilities.invokeLater(() -> {
+            this.showProgress(false, false, "项目全量解析疑似卡死（见诊断报告）");
+            this.append("[诊断] 项目全量解析疑似卡死在「" + diag.currentStage() + "」环节，已写入 "
+                    + String.valueOf(projectDir.resolve(".codenode/full-scan-diag.log")));
+        }));
         Thread.startVirtualThread(() -> {
             try {
+                diag.begin("初始化项目队列");
                 if (this.queue == null || !this.queue.projectRoot().equals(projectDir)) {
                     this.initializeProject(false);
                 }
-                SwingUtilities.invokeLater(() -> this.status.setText("  项目全量解析：扫描文件并按包归组…"));
-                WorkflowModel result = ProjectAnalysisService.scanProject(projectDir);
-                SwingUtilities.invokeLater(() -> {
-                    try {
+                diag.end("初始化项目队列");
+                WorkflowModel result = new WorkflowModel();
+                diag.begin("扫描目录并建图 (DirectoryGraphBuilder)");
+                DirectoryGraphBuilder.build(result, projectDir, (stage, done, total) -> {
+                    diag.heartbeat();
+                    SwingUtilities.invokeLater(() -> {
+                        if (total > 0) {
+                            this.progressBar.setIndeterminate(false);
+                            this.progressBar.setMaximum(Math.max(1, total));
+                            this.progressBar.setValue(Math.min(total, done));
+                        } else {
+                            this.progressBar.setIndeterminate(true);
+                        }
+                        this.progressBar.setString(stage);
+                        this.status.setText("  " + stage + "  " + (String)(total > 0 ? done + "/" + total : ""));
+                    });
+                });
+                diag.end("扫描目录并建图 (DirectoryGraphBuilder)");
+                diag.begin("嵌套组布局 (HierarchyLayout)");
+                HierarchyLayout.layout(result);
+                diag.end("嵌套组布局 (HierarchyLayout)");
+                diag.begin("写入工作台 (replaceFrom)");
+                final WorkflowModel finalResult = result;
+                try {
+                    SwingUtilities.invokeAndWait(() -> {
                         this.saveInspector();
                         this.storeActiveOutput();
-                        this.model.replaceFrom(result);
+                        this.model.replaceFrom(finalResult);
+                        this.canvas.frameAll();
                         this.canvas.repaint();
-                        String stamp = DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS").withZone(ZoneOffset.UTC).format(Instant.now());
-                        Path target = projectDir.resolve("项目全量解析-" + stamp + ".cnode").toAbsolutePath().normalize();
-                        this.projectCodec.save(target, this.model, this.metadata("项目全量解析"));
-                        this.commitHistory();
-                        this.showProgress(false, false, "全量解析完成  |  节点=" + this.model.nodes().size() + " 边=" + this.model.edges().size());
-                        this.append("[项目全量解析完成] 节点=" + this.model.nodes().size() + " 边=" + this.model.edges().size() + " 已保存: " + String.valueOf(target));
-                    }
-                    catch (Exception e) {
-                        this.error(e);
-                        this.showProgress(false, false, "  全量解析失败");
-                    }
-                });
+                    });
+                } catch (java.lang.reflect.InvocationTargetException ite) {
+                    throw new RuntimeException("写入工作台失败: " + ite.getCause(), ite.getCause());
+                }
+                diag.end("写入工作台 (replaceFrom)");
+                diag.begin("提交历史 (commitHistory)");
+                try {
+                    SwingUtilities.invokeAndWait(() -> this.commitHistory());
+                } catch (java.lang.reflect.InvocationTargetException ite) {
+                    throw new RuntimeException("提交历史失败: " + ite.getCause(), ite.getCause());
+                }
+                diag.end("提交历史 (commitHistory)");
+                diag.writeReport();
+                this.showProgress(false, false, "全量解析完成  |  节点=" + this.model.nodes().size() + " 边=" + this.model.edges().size());
+                this.append("[项目全量解析完成] 已在当前工作台生成节点图：节点=" + this.model.nodes().size()
+                        + " 边=" + this.model.edges().size()
+                        + "\n[诊断报告] " + String.valueOf(projectDir.resolve(".codenode/full-scan-diag.log")));
             }
             catch (Exception e) {
+                diag.end("失败");
+                diag.writeReport();
                 SwingUtilities.invokeLater(() -> {
                     this.showProgress(false, false, "  全量解析失败");
                     this.error(e);
                 });
+            }
+            finally {
+                diag.stopWatchdog();
             }
         });
     }
@@ -2176,8 +2232,16 @@ extends JFrame {
     }
 
     private void error(Exception e) {
-        JOptionPane.showMessageDialog(this, e.getMessage(), "CodeNode", 0);
-        this.append("操作失败：" + e.getMessage());
+        Throwable cause = e;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        String message = cause.getMessage();
+        if (message == null || message.isBlank()) {
+            message = cause.getClass().getSimpleName() + (cause.getStackTrace().length > 0 ? " @ " + cause.getStackTrace()[0] : "");
+        }
+        JOptionPane.showMessageDialog(this, message, "CodeNode", 0);
+        this.append("操作失败：" + message);
         this.status.setText("  操作失败");
     }
 

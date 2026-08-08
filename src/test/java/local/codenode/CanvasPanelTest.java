@@ -20,8 +20,8 @@ class CanvasPanelTest {
         invoke(canvas,"control A");assertEquals(2,canvas.selectedNodes().size());
     }
 
-    @Test void wheelZoomsAndZFramesSelection(){
-        WorkflowModel model=new WorkflowModel();WorkflowModel.Node node=model.addNode(900,700);CanvasPanel canvas=canvas(model);click(canvas,920,720,0,MouseEvent.BUTTON1);double before=canvas.zoom();wheel(canvas,500,350,-2);assertTrue(canvas.zoom()>before);canvas.setView(0,0,.5);invoke(canvas,"Z");assertTrue(canvas.zoom()>.5);assertNotEquals(0,canvas.panX());
+    @Test void wheelZoomsAndZCentersView(){
+        WorkflowModel model=new WorkflowModel();WorkflowModel.Node node=model.addNode(900,700);CanvasPanel canvas=canvas(model);click(canvas,920,720,0,MouseEvent.BUTTON1);double before=canvas.zoom();wheel(canvas,500,350,-2);assertTrue(canvas.zoom()>before);canvas.setView(0,0,.5);int oldPanX=canvas.panX(),oldPanY=canvas.panY();invoke(canvas,"Z");assertEquals(.5,canvas.zoom(),0.0001);assertNotEquals(oldPanX,canvas.panX());
     }
 
     @Test void altRightClickCreatesDraggableReroutePoint(){

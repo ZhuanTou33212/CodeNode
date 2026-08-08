@@ -98,8 +98,19 @@ public final class AgentChatPanel extends JPanel {
             controller.reset();
             transcript.setText("");
             reasoning.clear();
+            refreshContext();
+        });
+        JButton newSession = new JButton("新建会话");
+        newSession.setFocusPainted(false);
+        newSession.addActionListener(e -> {
+            controller.reset();
+            transcript.setText("");
+            reasoning.clear();
+            append("— 已新建会话，历史已清空（若需恢复旧会话请勿清空并重启前保留 .codenode/agent-sessions）\n\n", DIM);
+            refreshContext();
         });
         actions.add(settings);
+        actions.add(newSession);
         actions.add(clear);
         bar.add(actions, BorderLayout.EAST);
         return bar;

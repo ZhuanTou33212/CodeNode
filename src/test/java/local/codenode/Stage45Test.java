@@ -242,11 +242,13 @@ public class Stage45Test {
             assertTrue(result.ok());
             assertTrue(((Number) result.data().get("sourceFiles")).intValue() >= 1);
             assertTrue(((Number) result.data().get("nodes")).intValue() >= 1);
-            // 资产聚为资源组而非逐个普通节点
-            assertTrue(((Number) result.data().get("assetBundles")).intValue() >= 1,
-                    "资产应聚为 ASSET_BUNDLE 资源组");
+            // 目录层级：资产目录成普通组，资产文件成 ASSET 节点
+            assertEquals(0, ((Number) result.data().get("assetBundles")).intValue(),
+                    "目录层级扫描不生成 ASSET_BUNDLE 资源组");
+            assertTrue(((Number) result.data().get("assets")).intValue() >= 1,
+                    "资产文件应为 ASSET 节点");
             assertTrue(((Number) result.data().get("groups")).intValue() >= 1,
-                    "源码应按 package 归入 GROUP");
+                    "目录应归入 GROUP");
         } finally {
             deleteRecursive(root);
         }
@@ -270,10 +272,12 @@ public class Stage45Test {
             assertTrue(result.ok());
             assertTrue(Boolean.TRUE.equals(result.data().get("appliedToWorkbench")));
             assertNotNull(applied[0], "应把生成图写入工作台");
-            assertTrue(applied[0].nodes().stream().anyMatch(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE),
-                    "写入的图应包含资源组节点");
-            assertTrue(applied[0].nodes().stream().noneMatch(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET),
-                    "资产不应成为逐个 ASSET 节点");
+            assertTrue(applied[0].nodes().stream().noneMatch(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE),
+                    "目录层级扫描不生成 ASSET_BUNDLE 资源组");
+            assertTrue(applied[0].nodes().stream().anyMatch(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET),
+                    "资产文件应为 ASSET 节点");
+            assertTrue(applied[0].nodes().stream().anyMatch(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP),
+                    "目录应归入 GROUP");
         } finally {
             deleteRecursive(root);
         }

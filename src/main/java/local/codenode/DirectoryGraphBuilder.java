@@ -62,7 +62,16 @@ public final class DirectoryGraphBuilder {
         DirectoryGraphBuilder.classifyDirs(rootEntry);
         this.totalFiles = DirectoryGraphBuilder.countFiles(rootEntry);
         this.report("识别目录并建图", 0, this.totalFiles);
-        this.buildDir(rootEntry, 40, 40, "");
+        // 根目录直接展开：直属子目录/文件作为顶层节点（不额外包一层根组）
+        int cy = 40;
+        for (DirEntry child : rootEntry.dirs) {
+            WorkflowModel.Node childNode = this.buildDir(child, 40, cy, "");
+            cy += DirectoryGraphBuilder.slotHeight(childNode);
+        }
+        for (FileEntry file : rootEntry.files) {
+            this.createFileNode(file, 40, cy, "");
+            cy += 110;
+        }
         if (this.model.nodes().size() > 30000) {
             throw new IOException("目录规模过大（节点超过 30000 个），已停止建图，请选择更小的子目录");
         }
@@ -171,9 +180,6 @@ public final class DirectoryGraphBuilder {
     }
 
     private WorkflowModel.Node buildDir(DirEntry dir, int x, int y, String parentScopeId) {
-        if (dir.assetLeaf) {
-            return this.buildAssetBundle(dir, x, y, parentScopeId);
-        }
         return this.buildGroup(dir, x, y, parentScopeId);
     }
 
@@ -233,7 +239,9 @@ public final class DirectoryGraphBuilder {
             in.name = content.name;
             this.model.connectNoRecompute(content, out, go, in);
         }
-        group.containerHeight = Math.max(400, cy - y + 60);
+        // 画布上组节点保持紧凑尺寸（Blender 节点组风格），内部内容仅在组视图内可见
+        group.containerWidth = 280;
+        group.containerHeight = 150;
         return group;
     }
 
@@ -264,7 +272,7 @@ public final class DirectoryGraphBuilder {
 
     private static int slotHeight(WorkflowModel.Node node) {
         if (node.nodeKind == WorkflowModel.NodeKind.GROUP) {
-            return Math.max(420, node.containerHeight);
+            return 170;
         }
         if (node.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE) {
             return 150;
