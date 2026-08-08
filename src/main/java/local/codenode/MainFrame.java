@@ -5,6 +5,7 @@ package local.codenode;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -123,7 +124,7 @@ extends JFrame {
     private final JComboBox<WorkflowModel.Mode> mode = new JComboBox<WorkflowModel.Mode>(WorkflowModel.Mode.values());
     private final JComboBox<String> language = new JComboBox<String>(new String[]{"java", "powershell", "go"});
     private final JComboBox<String> agentProvider = new JComboBox<String>(new String[]{"本地申请槽", "Codex 自动"});
-    private final JTextField project = new JTextField(System.getProperty("user.home"), 25);
+    private final JTextField project = new JTextField("", 25);
     private final JTextField output = new JTextField("output", 18);
     private final JTextField nodeName = new JTextField();
     private final JTextField artifact = new JTextField();
@@ -148,6 +149,8 @@ extends JFrame {
     private final JLabel status = new JLabel("  就绪");
     private final JProgressBar progressBar = new JProgressBar();
     private final JLabel documentTab = new JLabel();
+    private final JTabbedPane documentTabs = new JTabbedPane();
+    private final List<DocumentSession> documents = new ArrayList<DocumentSession>();
     private final CnodeProjectCodec projectCodec = new CnodeProjectCodec();
     private final CnodeRecoveryService recovery = new CnodeRecoveryService(this.projectCodec);
     private final CodeSlotService codeSlotService = new CodeSlotService();
@@ -189,6 +192,8 @@ extends JFrame {
     private ToolWindow outputTool;
     private ToolWindow errorTool;
     private ToolWindow queueTool;
+    private ToolWindow fileBrowserTool;
+    private local.codenode.ui.FileBrowserPanel fileBrowserPanel;
     private JTabbedPane workbenchTabs;
     private JScrollPane inspectorScroll;
     private static final int HEADER = 34;
@@ -200,7 +205,7 @@ extends JFrame {
             this.docked.put(position, new ArrayList());
         }
         this.dockOrientation.put(ToolWindow.DockPosition.LEFT, 0);
-        this.dockOrientation.put(ToolWindow.DockPosition.RIGHT, 0);
+        this.dockOrientation.put(ToolWindow.DockPosition.RIGHT, 1);
         this.dockOrientation.put(ToolWindow.DockPosition.TOP, 1);
         this.dockOrientation.put(ToolWindow.DockPosition.BOTTOM, 1);
         this.setDefaultCloseOperation(0);
@@ -293,12 +298,6 @@ extends JFrame {
                 this.markDirty();
             }
         });
-        WorkflowModel.Node first = this.model.addNode(100, 100);
-        WorkflowModel.Node second = this.model.addNode(390, 220);
-        first.name = "输入与解析";
-        second.name = "生成产物";
-        this.model.connect(first, second);
-        this.canvas.select(second);
         this.initializeProject(false);
         this.updateMode();
         this.nodeControlApi = new NodeControlApi(this.model, () -> this.currentProjectFile != null ? this.currentProjectFile.getParent() : Path.of(this.project.getText(), new String[0]), this.canvas::selected, ids -> this.canvas.selectNodes(ids.stream().map(this.model::byId).toList()), this.canvas::repaint, this::saveProject, this::undo, this::redo);
@@ -331,7 +330,7 @@ extends JFrame {
         file.addSeparator();
         file.add(this.item("退出", this::closeApplication));
         JMenu edit = this.menu("编辑(E)", this.item("应用节点修改", this::saveInspector));
-        JMenu view = this.menu("视图(V)", this.item("显示节点资源管理器", () -> this.inspectorTool.redock()), this.item("显示输出", () -> this.outputTool.redock()), this.item("显示错误列表", () -> this.errorTool.redock()), this.item("切换到代码审查", () -> {
+        JMenu view = this.menu("视图(V)", this.item("显示文件浏览器", () -> this.fileBrowserTool.redock()), this.item("显示节点资源管理器", () -> this.inspectorTool.redock()), this.item("显示输出", () -> this.outputTool.redock()), this.item("显示错误列表", () -> this.errorTool.redock()), this.item("切换到代码审查", () -> {
             if (this.workbenchTabs != null) {
                 this.workbenchTabs.setSelectedIndex(1);
             }
@@ -407,6 +406,8 @@ extends JFrame {
         UiTheme.apply(this.workbenchTabs);
         this.editor = this.workbenchTabs;
         this.dockRoot = new JPanel(new BorderLayout());
+        this.fileBrowserPanel = new local.codenode.ui.FileBrowserPanel((file, text) -> this.openFileFromBrowser(file, text));
+        this.fileBrowserTool = new ToolWindow(this, "文件浏览器", this.fileBrowserPanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.fileBrowserTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.fileBrowserTool));
         this.inspectorTool = new ToolWindow(this, "节点资源管理器", this.inspector(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.inspectorTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.inspectorTool));
         this.outputTool = new ToolWindow(this, "输出", this.outputPanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.outputTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.outputTool));
         this.errorTool = new ToolWindow(this, "错误列表", this.errorPanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.errorTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.errorTool));
@@ -415,8 +416,10 @@ extends JFrame {
         for (ToolWindow tool : List.of(this.outputTool, this.errorTool, this.queueTool)) {
             this.tabGroup.put(tool, this.tabGroupSequence);
         }
+        this.docked.get((Object)ToolWindow.DockPosition.LEFT).add(this.fileBrowserTool);
         this.docked.get((Object)ToolWindow.DockPosition.RIGHT).add(this.inspectorTool);
         this.docked.get((Object)ToolWindow.DockPosition.RIGHT).addAll(List.of(this.outputTool, this.errorTool, this.queueTool));
+        this.canvas.onFileDropped((file, point) -> this.dropFileToCanvas(file, point));
         this.rebuildDockLayout();
         return this.dockRoot;
     }
@@ -502,9 +505,15 @@ extends JFrame {
             JComponent second = list.get(i);
             JSplitPane split = new JSplitPane(orientation, first, second);
             UiTheme.styleSplit(split);
-            double ratio = (double)i / (double)(i + 1);
-            split.setResizeWeight(ratio);
-            SwingUtilities.invokeLater(() -> split.setDividerLocation(ratio));
+            // 两侧弹性可调：拖动分隔线即可缩放左右任一窗口
+            split.setDividerSize(8);
+            split.setResizeWeight(0.5);
+            split.setOneTouchExpandable(true);
+            final double proportion = i / (double) (i + 1);
+            SwingUtilities.invokeLater(() -> {
+                int width = split.getWidth();
+                split.setDividerLocation((int) Math.round((width > 0 ? width : 600) * proportion));
+            });
             group = split;
         }
         return group;
@@ -528,8 +537,15 @@ extends JFrame {
         boolean leading = position == ToolWindow.DockPosition.LEFT || position == ToolWindow.DockPosition.TOP;
         JSplitPane split = new JSplitPane(horizontal ? 1 : 0, leading ? tool : center, leading ? center : tool);
         UiTheme.styleSplit(split);
-        split.setResizeWeight(leading ? 0.0 : 1.0);
-        SwingUtilities.invokeLater(() -> split.setDividerLocation(leading ? 0.24 : 0.76));
+        split.setDividerSize(8);
+        split.setOneTouchExpandable(true);
+        // 等比缩放：窗口 resize 时两侧按比例调整，拖拽分隔线可自由缩放
+        split.setResizeWeight(0.5);
+        double proportion = leading ? 0.22 : 0.70;
+        SwingUtilities.invokeLater(() -> {
+            int width = split.getWidth();
+            split.setDividerLocation((int) Math.round((width > 0 ? width : 1000) * proportion));
+        });
         return split;
     }
 
@@ -588,131 +604,176 @@ extends JFrame {
     }
 
     private JComponent documentTabs() {
-        JPanel tabs = new JPanel(new FlowLayout(0, 0, 0));
-        tabs.setBackground(UiTheme.PANEL);
-        this.documentTab.setText("  未命名.cnode   ×  ");
-        this.documentTab.setOpaque(true);
-        this.documentTab.setBackground(UiTheme.BACKGROUND);
-        this.documentTab.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(2, 0, 0, 0, UiTheme.ACCENT), new EmptyBorder(7, 8, 7, 8)));
-        tabs.add(this.documentTab);
-        return tabs;
+        this.documentTabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        this.documentTabs.setBackground(UiTheme.PANEL);
+        this.documentTabs.setForeground(UiTheme.TEXT);
+        this.documentTabs.addChangeListener(e -> this.onDocumentTabChanged());
+        return this.documentTabs;
+    }
+
+    /** 切换文档 tab：把对应文档模型换入主 model（快照换入）。 */
+    private void onDocumentTabChanged() {
+        int index = this.documentTabs.getSelectedIndex();
+        if (index < 0 || index >= this.documents.size()) {
+            return;
+        }
+        DocumentSession session = this.documents.get(index);
+        if (session.model == this.model) {
+            return;
+        }
+        this.loadingProject = true;
+        try {
+            this.model.replaceFrom(session.model);
+            this.canvas.setView(session.panX, session.panY, session.zoom);
+            this.canvas.select(null);
+            this.canvas.repaint();
+            this.currentProjectFile = session.file;
+            this.documentId = session.documentId;
+            this.documentCreatedAt = session.createdAt;
+            this.projectReadOnly = session.readOnly;
+            this.dirty = session.dirty;
+            this.executableOutput = session.executableOutput;
+            this.markdownOutput = session.markdownOutput;
+            this.displayedMode = session.mode;
+            this.mode.setSelectedItem((Object)session.mode);
+            this.output.setText(session.mode == WorkflowModel.Mode.EXECUTABLE ? session.executableOutput : session.markdownOutput);
+            this.loadInspector(null);
+            this.refreshDocumentTitle();
+            this.status.setText("  已切换文档  |  " + (session.file == null ? "未命名" : session.file.getFileName()));
+            this.canvas.repaint();
+        } finally {
+            this.loadingProject = false;
+        }
+    }
+
+    /** 当前文档会话。 */
+    private DocumentSession currentDocument() {
+        int index = this.documentTabs.getSelectedIndex();
+        if (index >= 0 && index < this.documents.size()) {
+            return this.documents.get(index);
+        }
+        return null;
     }
 
     private JComponent inspector() {
         JPanel outer = new JPanel(new BorderLayout());
-        outer.setPreferredSize(new Dimension(335, 600));
+        outer.setMinimumSize(new Dimension(140, 300));
         JPanel body = new JPanel();
         body.setLayout(new BoxLayout(body, 1));
-        body.setBorder(new EmptyBorder(10, 11, 12, 11));
+        body.setBorder(new EmptyBorder(6, 9, 8, 9));
         this.nodePath.setForeground(UiTheme.MUTED);
-        this.nodePath.setBorder(new EmptyBorder(0, 0, 9, 0));
+        this.nodePath.setBorder(new EmptyBorder(0, 0, 5, 0));
         this.nodePath.setAlignmentX(0.0f);
         body.add(this.nodePath);
         body.add(MainFrame.label("名称"));
         body.add(MainFrame.fixedField(this.nodeName));
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("Prompt / 文档职责"));
         this.prompt.setLineWrap(true);
         this.prompt.setWrapStyleWord(true);
         JScrollPane promptScroll = new JScrollPane(this.prompt);
-        promptScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 175));
+        promptScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 110));
         promptScroll.setAlignmentX(0.0f);
         body.add(promptScroll);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("产物相对路径"));
         body.add(MainFrame.fixedField(this.artifact));
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("所属文件节点（Markdown 共享代码槽）"));
-        this.fileOwner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        this.fileOwner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         this.fileOwner.setAlignmentX(0.0f);
         body.add(this.fileOwner);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("所属范围节点"));
-        this.parentScope.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        this.parentScope.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         this.parentScope.setAlignmentX(0.0f);
         body.add(this.parentScope);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("条件 / 计算运算"));
-        this.operation.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        this.operation.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         this.operation.setAlignmentX(0.0f);
         body.add(this.operation);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("节点颜色 (空=默认, #RRGGBB 格式)"));
-        this.nodeColor.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        this.nodeColor.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         this.nodeColor.setAlignmentX(0.0f);
         body.add(this.nodeColor);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         this.rangeMode.setAlignmentX(0.0f);
         body.add(this.rangeMode);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("资产类型"));
-        this.assetTypeCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+        this.assetTypeCombo.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         this.assetTypeCombo.setAlignmentX(0.0f);
         for (String type : NodeRegistry.allAssetTypes()) {
             this.assetTypeCombo.addItem(type);
         }
         body.add(this.assetTypeCombo);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("资源组数据 (JSON 格式)"));
         this.bundleData.setLineWrap(true);
         this.bundleData.setWrapStyleWord(true);
         JScrollPane bundleScroll = new JScrollPane(this.bundleData);
-        bundleScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+        bundleScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 55));
         bundleScroll.setAlignmentX(0.0f);
         body.add(bundleScroll);
-        body.add(Box.createVerticalStrut(5));
+        body.add(Box.createVerticalStrut(4));
         this.expandBundleBtn.setAlignmentX(0.0f);
         this.expandBundleBtn.addActionListener(e -> this.expandBundle());
         body.add(this.expandBundleBtn);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         JButton analyzeBtn = new JButton("分析文件内容");
         analyzeBtn.setAlignmentX(0.0f);
         analyzeBtn.addActionListener(e -> this.analyzeFileContent());
         body.add(analyzeBtn);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         JButton expandFileBtn = new JButton("展开为范围节点");
         expandFileBtn.setAlignmentX(0.0f);
         expandFileBtn.addActionListener(e -> this.expandFileToRange());
         body.add(expandFileBtn);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         JButton indexFileBtn = new JButton("索引本地文件");
         indexFileBtn.setAlignmentX(0.0f);
         indexFileBtn.addActionListener(e -> this.indexLocalFile());
         body.add(indexFileBtn);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         JButton virtualPathBtn = new JButton("新建相对路径");
         virtualPathBtn.setAlignmentX(0.0f);
         virtualPathBtn.addActionListener(e -> this.createVirtualFileNode());
         body.add(virtualPathBtn);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         this.assetPreview.setAlignmentX(0.0f);
-        this.assetPreview.setPreferredSize(new Dimension(300, 150));
+        this.assetPreview.setPreferredSize(new Dimension(280, 170));
+        this.assetPreview.setMaximumSize(new Dimension(Integer.MAX_VALUE, 180));
+        this.assetPreview.setHorizontalAlignment(0);
+        this.assetPreview.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(1, 1, 1, 1, UiTheme.BORDER), new EmptyBorder(4, 4, 4, 4)));
+        this.assetPreview.setOpaque(true);
+        this.assetPreview.setBackground(UiTheme.PANEL);
+        this.assetPreview.setForeground(UiTheme.MUTED);
         body.add(this.assetPreview);
-        body.add(Box.createVerticalStrut(10));
+        body.add(Box.createVerticalStrut(5));
         body.add(MainFrame.label("输入 / 输出端口"));
-        this.portTable.setRowHeight(23);
+        this.portTable.setRowHeight(22);
         this.portTable.setFillsViewportHeight(true);
         this.portTable.getColumnModel().getColumn(0).setPreferredWidth(42);
         this.portTable.getColumnModel().getColumn(3).setPreferredWidth(38);
         this.portTable.getColumnModel().getColumn(2).setCellEditor(new PortTypeEditor());
         JScrollPane portScroll = new JScrollPane(this.portTable);
-        portScroll.setPreferredSize(new Dimension(300, 110));
-        portScroll.setMinimumSize(new Dimension(100, 80));
-        portScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
+        portScroll.setMinimumSize(new Dimension(100, 70));
+        portScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 110));
         portScroll.setAlignmentX(0.0f);
         body.add(portScroll);
-        JPanel portButtons = new JPanel(new FlowLayout(0, 4, 4));
+        JPanel portButtons = new JPanel(new FlowLayout(0, 4, 3));
         portButtons.setAlignmentX(0.0f);
-        portButtons.setPreferredSize(new Dimension(300, 38));
-        portButtons.setMinimumSize(new Dimension(100, 38));
-        portButtons.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        portButtons.setMinimumSize(new Dimension(100, 32));
+        portButtons.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
         portButtons.add(this.button("＋输入", () -> this.addPort(false)));
         portButtons.add(this.button("＋输出", () -> this.addPort(true)));
         portButtons.add(this.button("删除端口", this::removePort));
         body.add(portButtons);
         body.add(MainFrame.label("申请输出目录"));
         body.add(MainFrame.fixedField(this.output));
-        body.add(Box.createVerticalStrut(12));
+        body.add(Box.createVerticalStrut(8));
         JButton apply = this.button("应用节点修改", this::saveInspector);
         apply.setAlignmentX(0.0f);
         body.add(apply);
@@ -874,30 +935,7 @@ extends JFrame {
     }
 
     private void newProject() {
-        if (!this.confirmDiscardOrSave()) {
-            return;
-        }
-        this.model.clear();
-        this.canvas.select(null);
-        this.canvas.setView(0, 0);
-        this.currentProjectFile = null;
-        this.documentId = UUID.randomUUID().toString();
-        this.documentCreatedAt = Instant.now();
-        this.projectReadOnly = false;
-        this.executableOutput = "output";
-        this.markdownOutput = "output/docs";
-        this.displayedMode = WorkflowModel.Mode.EXECUTABLE;
-        this.loadingProject = true;
-        this.mode.setSelectedItem((Object)WorkflowModel.Mode.EXECUTABLE);
-        this.language.setSelectedItem("java");
-        this.output.setText(this.executableOutput);
-        this.loadingProject = false;
-        this.setProjectEditable(true);
-        this.dirty = false;
-        this.resetHistory();
-        this.refreshDocumentTitle();
-        this.status.setText("  新工程  |  自动保存间隔 15 分钟");
-        this.canvas.repaint();
+        this.newDocumentTab();
     }
 
     private void openProject() {
@@ -912,9 +950,6 @@ extends JFrame {
     }
 
     void openProject(Path file) {
-        if (!this.confirmDiscardOrSave()) {
-            return;
-        }
         try {
             CnodeProjectCodec.Loaded loaded = this.projectCodec.load(file);
             Path root = file.toAbsolutePath().normalize().getParent();
@@ -931,26 +966,39 @@ extends JFrame {
     }
 
     private void applyLoaded(CnodeProjectCodec.Loaded loaded, Path file) {
-        this.model.replaceFrom(loaded.model());
         CnodeProjectCodec.Metadata metadata = loaded.metadata();
         CnodeProjectCodec.Settings settings = metadata.settings();
-        this.currentProjectFile = file;
+        // 若该文件已在某 tab 打开，切到它
+        for (int i = 0; i < this.documents.size(); i++) {
+            DocumentSession s = this.documents.get(i);
+            if (s.file != null && s.file.equals(file.toAbsolutePath().normalize())) {
+                this.documentTabs.setSelectedIndex(i);
+                this.switchToDocument(i);
+                return;
+            }
+        }
+        DocumentSession session = new DocumentSession();
+        session.model = loaded.model().deepCopy();
+        session.file = file.toAbsolutePath().normalize();
+        session.documentId = metadata.documentId();
+        session.createdAt = metadata.createdAt();
+        session.readOnly = loaded.readOnly();
+        session.executableOutput = settings.executablePath();
+        session.markdownOutput = settings.markdownPath();
+        session.mode = settings.mode();
+        session.panX = settings.panX();
+        session.panY = settings.panY();
+        session.zoom = settings.zoom();
+        this.documents.add(session);
+        int index = this.documents.size() - 1;
+        String tabTitle = file.getFileName() == null ? "工程" : file.getFileName().toString();
+        this.documentTabs.addTab(tabTitle, null);
+        installTabCloseButton(index);
+        this.documentTabs.setSelectedIndex(index);
+        this.switchToDocument(index);
+        this.canvas.selectNodes(settings.selectedNodeIds().stream().map(this.model::byId).toList());
         this.syncProjectLocation(file);
         this.rememberRecent(file);
-        this.documentId = metadata.documentId();
-        this.documentCreatedAt = metadata.createdAt();
-        this.projectReadOnly = loaded.readOnly();
-        this.executableOutput = settings.executablePath();
-        this.markdownOutput = settings.markdownPath();
-        this.displayedMode = settings.mode();
-        this.loadingProject = true;
-        this.mode.setSelectedItem((Object)settings.mode());
-        this.language.setSelectedItem(settings.language());
-        this.output.setText(settings.mode() == WorkflowModel.Mode.EXECUTABLE ? this.executableOutput : this.markdownOutput);
-        this.loadingProject = false;
-        this.canvas.setView(settings.panX(), settings.panY(), settings.zoom());
-        this.canvas.selectNodes(settings.selectedNodeIds().stream().map(this.model::byId).toList());
-        this.setProjectEditable(!this.projectReadOnly);
         this.dirty = false;
         this.resetHistory();
         this.refreshDocumentTitle();
@@ -1128,6 +1176,17 @@ extends JFrame {
                 this.recovery.clear(target.getParent(), this.documentId);
             }
             this.dirty = false;
+            DocumentSession session = this.currentDocument();
+            if (session != null) {
+                session.file = target;
+                session.dirty = false;
+                session.executableOutput = this.executableOutput;
+                session.markdownOutput = this.markdownOutput;
+                session.mode = this.displayedMode;
+                session.panX = this.canvas.panX();
+                session.panY = this.canvas.panY();
+                session.zoom = this.canvas.zoom();
+            }
             this.refreshDocumentTitle();
             this.status.setText("  已保存  |  " + String.valueOf(target));
             this.append("工程已保存：" + String.valueOf(target));
@@ -1304,11 +1363,20 @@ extends JFrame {
     }
 
     private void initializeProject(boolean announce) {
+        String rootText = this.project.getText() == null ? "" : this.project.getText().trim();
+        if (rootText.isEmpty()) {
+            // 空白状态：未选择项目，不创建申请槽、不加载目录树
+            this.status.setText("  未选择项目  |  可从「项目」选择目录或新建工程");
+            return;
+        }
         try {
-            this.queue = new QueueService(Path.of(this.project.getText(), new String[0]));
+            this.queue = new QueueService(Path.of(rootText));
             this.results = new ResultService(this.queue.stateRoot());
             int restored = this.queue.restoreActiveStatuses(this.model);
             this.refreshQueue();
+            if (this.fileBrowserPanel != null) {
+                this.fileBrowserPanel.setRoot(this.queue.projectRoot());
+            }
             this.status.setText("  就绪  |  " + String.valueOf(this.queue.projectRoot()));
             if (announce) {
                 this.append("项目申请槽已初始化：" + String.valueOf(this.queue.stateRoot()));
@@ -2095,6 +2163,8 @@ extends JFrame {
         }
         if (!this.dirty) {
             this.dirty = true;
+            DocumentSession session = this.currentDocument();
+            if (session != null) session.dirty = true;
             this.refreshDocumentTitle();
         }
     }
@@ -2183,7 +2253,18 @@ extends JFrame {
         String name = this.currentProjectFile == null ? "未命名.cnode" : this.currentProjectFile.getFileName().toString();
         String marker = this.dirty ? " *" : "";
         String readonly = this.projectReadOnly ? " [只读]" : "";
-        this.documentTab.setText("  " + name + readonly + marker + "   ×  ");
+        DocumentSession current = this.currentDocument();
+        int index = this.documentTabs.getSelectedIndex();
+        if (current != null && index >= 0) {
+            String tabText = name + readonly + marker;
+            this.documentTabs.setTitleAt(index, tabText);
+            if (this.documentTabs.getTabComponentAt(index) instanceof JPanel comp) {
+                for (java.awt.Component c : comp.getComponents()) {
+                    if (c instanceof JLabel) ((JLabel) c).setText(tabText);
+                }
+            }
+            current.dirty = this.dirty;
+        }
         this.setTitle("CodeNode Desktop — " + name + readonly + marker);
     }
 
@@ -2267,18 +2348,38 @@ extends JFrame {
     }
 
     private void updateAssetPreview(WorkflowModel.Node node) {
-        if (node == null || !NodeRegistry.isImageAsset(node.relativePath)) {
+        if (node == null) {
+            this.assetPreview.setIcon(null);
+            this.assetPreview.setText("");
+            return;
+        }
+        boolean isAssetImage = node.nodeKind == WorkflowModel.NodeKind.ASSET
+                && "image".equals(node.assetType);
+        boolean isImagePath = NodeRegistry.isImageAsset(node.relativePath);
+        if (!isAssetImage && !isImagePath) {
             this.assetPreview.setIcon(null);
             this.assetPreview.setText("");
             return;
         }
         try {
             Path assetRoot = this.currentProjectFile != null ? this.currentProjectFile.getParent() : Path.of(this.project.getText(), new String[0]);
-            Path imagePath = assetRoot.resolve(node.relativePath);
+            String rel = node.relativePath == null || node.relativePath.isBlank() ? node.artifact : node.relativePath;
+            if (rel == null || rel.isBlank()) {
+                this.assetPreview.setIcon(null);
+                this.assetPreview.setText("图片路径为空");
+                return;
+            }
+            Path imagePath = assetRoot.resolve(rel);
             if (Files.isRegularFile(imagePath, new LinkOption[0])) {
                 ImageIcon icon = new ImageIcon(imagePath.toString());
-                if (icon.getIconWidth() > 0) {
-                    Image scaled = icon.getImage().getScaledInstance(280, 140, 4);
+                if (icon.getIconWidth() > 0 && icon.getIconHeight() > 0) {
+                    // 等比缩放，保持比例，适配预览区
+                    int maxW = 300;
+                    int maxH = 170;
+                    int w = icon.getIconWidth();
+                    int h = icon.getIconHeight();
+                    double scale = Math.min(1.0, Math.min((double) maxW / w, (double) maxH / h));
+                    Image scaled = icon.getImage().getScaledInstance(Math.max(1, (int) (w * scale)), Math.max(1, (int) (h * scale)), 4);
                     this.assetPreview.setIcon(new ImageIcon(scaled));
                     this.assetPreview.setText("");
                 } else {
@@ -2436,6 +2537,105 @@ extends JFrame {
         this.append((created ? "已创建文件节点并索引本地文件: " : "已更新文件节点索引: ") + relative);
     }
 
+    /** 文件浏览器双击：在画布创建/定位文件节点，并在代码栏（代码审查）打开内容。 */
+    private void openFileFromBrowser(Path file, boolean text) {
+        if (file == null) return;
+        Path root = projectRootForFile(file);
+        String relative;
+        try {
+            relative = root.relativize(file).toString().replace('\\', '/');
+        } catch (Exception e) {
+            relative = file.getFileName() == null ? file.toString() : file.getFileName().toString();
+        }
+        if (projectReadOnly) return;
+        WorkflowModel.Node node = this.canvas.selected();
+        if (node == null || (node.nodeKind != WorkflowModel.NodeKind.FILE && node.nodeKind != WorkflowModel.NodeKind.ASSET)) {
+            Point p = this.newNodePosition();
+            node = this.model.addFileNode(p.x, p.y, file.getFileName() == null ? "文件" : file.getFileName().toString(), relative);
+            this.canvas.select(node);
+        } else {
+            node.relativePath = relative;
+            if (node.name.isBlank() || node.name.equals("文件节点") || node.name.equals("范围文件")) {
+                node.name = file.getFileName() == null ? "文件" : file.getFileName().toString();
+            }
+        }
+        // 文本文件：先在代码槽写入内容，再提交历史（避免历史快照里的代码槽为空导致 undo 后内容被清理）
+        if (text) {
+            try {
+                WorkflowModel.CodeSlot slot = this.model.ensureFileSlot(node);
+                String content = Files.isRegularFile(file) ? Files.readString(file, java.nio.charset.StandardCharsets.UTF_8) : "";
+                slot.activeCode = content;
+                slot.language = languageOf(relative);
+            } catch (Exception e) {
+                this.append("读取文件失败: " + e.getMessage());
+            }
+        }
+        this.commitHistory();
+        this.loadInspector(node);
+        this.canvas.repaint();
+        // 在代码栏打开内容（代码审查面板加载该文件节点的代码槽）
+        if (text) {
+            try {
+                WorkflowModel.CodeSlot slot = this.model.ensureFileSlot(node);
+                if (this.codeReviewPanel != null) this.codeReviewPanel.loadFrom(node, slot);
+                if (this.workbenchTabs != null) this.workbenchTabs.setSelectedIndex(1);
+                this.append("已在代码栏打开: " + relative);
+            } catch (Exception e) {
+                this.append("打开代码栏失败: " + e.getMessage());
+            }
+        }
+    }
+
+    /** 拖放文件到画布：在落点创建文件节点。 */
+    private void dropFileToCanvas(Path file, Point world) {
+        if (file == null || this.projectReadOnly) return;
+        Path root = projectRootForFile(file);
+        String relative;
+        try {
+            relative = root.relativize(file).toString().replace('\\', '/');
+        } catch (Exception e) {
+            relative = file.getFileName() == null ? file.toString() : file.getFileName().toString();
+        }
+        if (Files.isDirectory(file)) {
+            // 目录整体作为一个文件节点（相对路径），不递归展开
+            WorkflowModel.Node node = this.model.addFileNode(world.x, world.y, file.getFileName() == null ? "目录" : file.getFileName().toString(), relative);
+            node.rangeMode = true;
+            this.canvas.select(node);
+            this.commitHistory();
+            this.loadInspector(node);
+            this.canvas.repaint();
+            this.append("已拖入目录节点: " + relative);
+            return;
+        }
+        WorkflowModel.Node node = this.model.addFileNode(world.x, world.y, file.getFileName() == null ? "文件" : file.getFileName().toString(), relative);
+        this.canvas.select(node);
+        this.commitHistory();
+        this.loadInspector(node);
+        this.canvas.repaint();
+        this.append("已拖入文件节点: " + relative);
+    }
+
+    private Path projectRootForFile(Path file) {
+        Path root = (this.currentProjectFile != null ? this.currentProjectFile.getParent() : Path.of(this.project.getText(), new String[0])).toAbsolutePath().normalize();
+        try {
+            if (file.startsWith(root)) return root;
+        } catch (Exception ignored) {}
+        return root;
+    }
+
+    private static String languageOf(String relative) {
+        String lower = relative.toLowerCase();
+        if (lower.endsWith(".java")) return "java";
+        if (lower.endsWith(".kt")) return "kotlin";
+        if (lower.endsWith(".py")) return "python";
+        if (lower.endsWith(".js")) return "javascript";
+        if (lower.endsWith(".ts")) return "typescript";
+        if (lower.endsWith(".md")) return "markdown";
+        if (lower.endsWith(".json")) return "json";
+        if (lower.endsWith(".xml")) return "xml";
+        return "text";
+    }
+
     private void createVirtualFileNode() {
         if (this.projectReadOnly) {
             return;
@@ -2480,5 +2680,124 @@ extends JFrame {
     }
 
     private record HistoryState(WorkflowModel model, List<String> selectedNodeIds, int panX, int panY, double zoom) {
+    }
+
+    /** 单个文档标签会话：独立的模型与文档状态。 */
+    private static final class DocumentSession {
+        WorkflowModel model;
+        Path file;
+        String documentId;
+        Instant createdAt;
+        boolean readOnly;
+        boolean dirty;
+        String executableOutput = "output";
+        String markdownOutput = "output/docs";
+        WorkflowModel.Mode mode = WorkflowModel.Mode.EXECUTABLE;
+        int panX;
+        int panY;
+        double zoom = 1.0;
+    }
+
+    /** 新建一个空白文档 tab（不打开任何文件）。 */
+    private void newDocumentTab() {
+        DocumentSession session = new DocumentSession();
+        session.model = new WorkflowModel();
+        session.documentId = UUID.randomUUID().toString();
+        session.createdAt = Instant.now();
+        session.panX = 0;
+        session.panY = 0;
+        session.zoom = 1.0;
+        this.documents.add(session);
+        int index = this.documents.size() - 1;
+        this.documentTabs.addTab("未命名.cnode", null);
+        installTabCloseButton(index);
+        this.documentTabs.setSelectedIndex(index);
+        this.switchToDocument(index);
+        this.dirty = false;
+        this.refreshDocumentTitle();
+        this.resetHistory();
+        this.canvas.repaint();
+        this.status.setText("  新文档  |  未命名");
+    }
+
+    /** 安装 tab 的关闭按钮。 */
+    private void installTabCloseButton(int index) {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        panel.setOpaque(false);
+        JLabel title = new JLabel("未命名.cnode");
+        title.setForeground(UiTheme.TEXT);
+        JButton close = new JButton("×");
+        close.setBorderPainted(false);
+        close.setContentAreaFilled(false);
+        close.setFocusPainted(false);
+        close.setForeground(UiTheme.MUTED);
+        close.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        close.addActionListener(e -> this.closeDocument(index));
+        panel.add(title);
+        panel.add(close);
+        this.documentTabs.setTabComponentAt(index, panel);
+    }
+
+    /** 切换到指定文档：快照换入主 model。 */
+    private void switchToDocument(int index) {
+        if (index < 0 || index >= this.documents.size()) return;
+        DocumentSession session = this.documents.get(index);
+        this.loadingProject = true;
+        try {
+            this.model.replaceFrom(session.model);
+            this.canvas.setView(session.panX, session.panY, session.zoom);
+            this.canvas.select(null);
+            this.canvas.repaint();
+            this.currentProjectFile = session.file;
+            this.documentId = session.documentId;
+            this.documentCreatedAt = session.createdAt;
+            this.projectReadOnly = session.readOnly;
+            this.dirty = session.dirty;
+            this.executableOutput = session.executableOutput;
+            this.markdownOutput = session.markdownOutput;
+            this.displayedMode = session.mode;
+            this.mode.setSelectedItem((Object)session.mode);
+            this.output.setText(session.mode == WorkflowModel.Mode.EXECUTABLE ? session.executableOutput : session.markdownOutput);
+            this.loadInspector(null);
+            this.refreshDocumentTitle();
+        } finally {
+            this.loadingProject = false;
+        }
+    }
+
+    /** 关闭指定文档 tab。 */
+    private void closeDocument(int index) {
+        if (index < 0 || index >= this.documents.size()) return;
+        DocumentSession session = this.documents.get(index);
+        boolean wasCurrent = index == this.documentTabs.getSelectedIndex();
+        this.documents.remove(index);
+        this.documentTabs.removeTabAt(index);
+        if (this.documents.isEmpty()) {
+            // 全部关闭 → 空白画布
+            this.model.clear();
+            this.canvas.select(null);
+            this.canvas.setView(0, 0);
+            this.currentProjectFile = null;
+            this.documentId = UUID.randomUUID().toString();
+            this.documentCreatedAt = Instant.now();
+            this.dirty = false;
+            this.loadInspector(null);
+            this.refreshDocumentTitle();
+            this.resetHistory();
+            this.canvas.repaint();
+            this.status.setText("  无打开的文档  |  新建或打开项目");
+            return;
+        }
+        // 重新编号 tab 关闭按钮（后续 tab 序号变化）
+        for (int i = 0; i < this.documents.size(); i++) {
+            installTabCloseButton(i);
+        }
+        if (wasCurrent) {
+            int next = Math.min(index, this.documents.size() - 1);
+            this.documentTabs.setSelectedIndex(next);
+            this.switchToDocument(next);
+        } else {
+            this.documentTabs.repaint();
+        }
     }
 }

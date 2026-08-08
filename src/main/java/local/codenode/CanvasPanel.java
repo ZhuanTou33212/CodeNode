@@ -15,6 +15,8 @@ import java.awt.Point;
 import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -24,6 +26,8 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Point2D;
 import java.awt.geom.RoundRectangle2D;
+import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -45,6 +49,7 @@ import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.TransferHandler;
 import javax.swing.JPopupMenu;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
@@ -88,6 +93,7 @@ extends JPanel {
     private Point panOrigin;
     private Point wirePoint;
     private Point lastMouse = new Point(300, 220);
+    private java.util.function.BiConsumer<Path, Point> fileDroppedListener = (path, point) -> {};
     private Point boxStart;
     private Point boxCurrent;
     private Point rerouteOrigin;
@@ -330,7 +336,7 @@ extends JPanel {
                 Point world = CanvasPanel.this.world(e.getPoint());
                 if (CanvasPanel.this.panStart != null) {
                     CanvasPanel.this.panStart = null;
-                    CanvasPanel.this.changeListener.run();
+                    // 平移画布是纯视图操作，不记录撤销历史
                     return;
                 }
                 if (CanvasPanel.this.resizingNode != null) {
@@ -470,6 +476,38 @@ extends JPanel {
         this.addMouseMotionListener(mouse);
         this.addMouseWheelListener(mouse);
         this.installKeys();
+        this.installFileDrop();
+    }
+
+    /** 注册文件拖放回调：拖入文件到画布时调用（世界坐标落点）。 */
+    public void onFileDropped(java.util.function.BiConsumer<Path, Point> listener) {
+        this.fileDroppedListener = listener == null ? (path, point) -> {} : listener;
+    }
+
+    private void installFileDrop() {
+        this.setTransferHandler(new TransferHandler() {
+            @Override public boolean canImport(TransferSupport support) {
+                return support.isDrop() && support.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
+            }
+            @Override public boolean importData(TransferSupport support) {
+                if (!canImport(support)) return false;
+                try {
+                    Transferable t = support.getTransferable();
+                    @SuppressWarnings("unchecked")
+                    List<File> files = (List<File>) t.getTransferData(DataFlavor.javaFileListFlavor);
+                    if (files == null || files.isEmpty()) return false;
+                    Point screen = support.getDropLocation().getDropPoint();
+                    Point world = CanvasPanel.this.world(screen);
+                    for (File file : files) {
+                        if (file == null) continue;
+                        CanvasPanel.this.fileDroppedListener.accept(file.toPath().toAbsolutePath().normalize(), new Point(world.x, world.y));
+                    }
+                    return true;
+                } catch (Exception ignored) {
+                    return false;
+                }
+            }
+        });
     }
 
     public void onSelection(Consumer<WorkflowModel.Node> listener) {
@@ -1188,7 +1226,7 @@ extends JPanel {
         this.zoom = next;
         this.panX = (int)Math.round((double)screen.x - world.x * next);
         this.panY = (int)Math.round((double)screen.y - world.y * next);
-        this.changeListener.run();
+        // 缩放是纯视图操作，不记录撤销历史
         this.repaint();
     }
 
