@@ -108,7 +108,8 @@ public class ProjectBuildRunTest {
 
     @Test
     void processRunnerRunsCommandAndStreams() {
-        String javaBin = Path.of(System.getProperty("java.home"), "bin", "java.exe").toString();
+        boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
+        String javaBin = Path.of(System.getProperty("java.home"), "bin", "java" + (windows ? ".exe" : "")).toString();
         List<String> log = new java.util.ArrayList<>();
         ProcessRunner.RunOutcome outcome = ProcessRunner.run(
                 List.of(javaBin, "-version"), Path.of("."), 30, log::add);

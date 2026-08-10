@@ -21,7 +21,8 @@ public final class ToolLocator {
         if (prop != null && !prop.isBlank()) return Path.of(prop);
         String env = System.getenv("CODENODE_TOOLS");
         if (env != null && !env.isBlank()) return Path.of(env);
-        return Path.of("E:\\CodeNode\\tools");
+        if (isWindows()) return Path.of("E:\\CodeNode\\tools");
+        return Path.of(System.getProperty("user.dir", "."), "tools");
     }
 
     /** 工具目录下所有 JDK（含 jdk/bin/java.exe 的目录），按版本号降序。 */
@@ -32,8 +33,10 @@ public final class ToolLocator {
         try (var stream = Files.list(dir)) {
             for (Path candidate : stream.toList()) {
                 if (!Files.isDirectory(candidate)) continue;
-                Path bin = candidate.resolve("bin").resolve("java" + (isWindows() ? ".exe" : ""));
-                if (Files.isRegularFile(bin)) result.add(candidate);
+                Path home = candidate.resolve("Contents").resolve("Home");
+                if (!Files.isDirectory(home)) home = candidate;
+                Path bin = home.resolve("bin").resolve("java" + (isWindows() ? ".exe" : ""));
+                if (Files.isRegularFile(bin)) result.add(home);
             }
         } catch (Exception ignored) {}
         result.sort(Comparator.comparing(ToolLocator::version).reversed());
