@@ -236,7 +236,7 @@ public final class BuildRunner {
         Path toolJavac = ToolLocator.javac();
         if (toolJavac != null) return toolJavac.toString();
         String home = System.getProperty("java.home", "");
-        return home + "\\bin\\javac" + (isWindows() ? ".exe" : "");
+        return Path.of(home, "bin", "javac" + (isWindows() ? ".exe" : "")).toString();
     }
 
     private static boolean isWindows() {
