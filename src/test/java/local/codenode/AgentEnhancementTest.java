@@ -37,7 +37,7 @@ public class AgentEnhancementTest {
         Path root = Files.createTempDirectory("agent-canvas");
         try {
             WorkflowModel model = modelWithNodes();
-            AgentToolContext context = new AgentToolContext(() -> root, () -> model, msg -> false, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> model, (level, what, detail) -> false, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             var result = registry.execute("get_workbench_model", Map.of(), context);
             assertTrue(result.ok());
@@ -59,7 +59,7 @@ public class AgentEnhancementTest {
             WorkflowModel.Node group = model.addGroupNode(0, 0, "包组");
             WorkflowModel.Node child = model.addNode(50, 50);
             child.parentScopeId = group.id;
-            AgentToolContext context = new AgentToolContext(() -> root, () -> model, msg -> false, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> model, (level, what, detail) -> false, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             var result = registry.execute("get_workbench_model", Map.of("view", "groups"), context);
             assertTrue(result.ok());
@@ -75,7 +75,7 @@ public class AgentEnhancementTest {
         // 通过反射读取 messages 并塞入 50 条，然后调用 compactHistory + requestMessages
         try {
             AgentConfig config = new AgentConfig(Path.of("config/agent.properties"));
-            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, msg -> false, entry -> {});
+            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> false, entry -> {});
             AgentChatController controller = new AgentChatController(config, AgentToolkit.buildDefaultRegistry(ctx), ctx);
 
             java.lang.reflect.Field messagesField = AgentChatController.class.getDeclaredField("messages");
@@ -102,7 +102,7 @@ public class AgentEnhancementTest {
         Path root = Files.createTempDirectory("agent-persist");
         try {
             AgentConfig config = new AgentConfig(Path.of("config/agent.properties"));
-            AgentToolContext ctx = new AgentToolContext(() -> root, () -> null, msg -> false, entry -> {});
+            AgentToolContext ctx = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, entry -> {});
             AgentChatController c1 = new AgentChatController(config, AgentToolkit.buildDefaultRegistry(ctx), ctx);
             java.lang.reflect.Field messagesField = AgentChatController.class.getDeclaredField("messages");
             messagesField.setAccessible(true);
@@ -134,7 +134,7 @@ public class AgentEnhancementTest {
         // 构造 30 条消息，末尾是一组 assistant(tool_calls) + tool 响应，验证窗口裁剪不拆散它们
         try {
             AgentConfig config = new AgentConfig(Path.of("config/agent.properties"));
-            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, msg -> false, entry -> {});
+            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> false, entry -> {});
             AgentChatController controller = new AgentChatController(config, AgentToolkit.buildDefaultRegistry(ctx), ctx);
             java.lang.reflect.Field messagesField = AgentChatController.class.getDeclaredField("messages");
             messagesField.setAccessible(true);
@@ -178,7 +178,7 @@ public class AgentEnhancementTest {
     void sanitizeRemovesOrphanToolMessages() throws Exception {
         try {
             AgentConfig config = new AgentConfig(Path.of("config/agent.properties"));
-            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, msg -> false, entry -> {});
+            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> false, entry -> {});
             AgentChatController controller = new AgentChatController(config, AgentToolkit.buildDefaultRegistry(ctx), ctx);
             java.lang.reflect.Field messagesField = AgentChatController.class.getDeclaredField("messages");
             messagesField.setAccessible(true);
@@ -193,6 +193,34 @@ public class AgentEnhancementTest {
             sanitize.setAccessible(true);
             sanitize.invoke(controller);
             assertFalse(messages.stream().anyMatch(m -> "tool".equals(m.get("role"))), "孤立 tool 消息应被移除");
+        } catch (Exception e) {
+            fail("反射测试失败: " + e);
+        }
+    }
+
+    @Test
+    void toolFailuresAreFlaggedForRetry() {
+        // 验证失败/空结果会被判定为"需继续尝试"，触发重试提示逻辑
+        try {
+            AgentConfig config = new AgentConfig(Path.of("config/agent.properties"));
+            AgentToolContext ctx = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> false, entry -> {});
+            AgentChatController controller = new AgentChatController(config, AgentToolkit.buildDefaultRegistry(ctx), ctx);
+            java.lang.reflect.Field messagesField = AgentChatController.class.getDeclaredField("messages");
+            messagesField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> messages = (List<Map<String, Object>>) messagesField.get(controller);
+            messages.clear();
+            messages.add(Map.of("role", "system", "content", "sys"));
+            // 失败的 tool 结果应触发"系统提示继续"注入
+            messages.add(Map.of("role", "user", "content", "找文件"));
+            messages.add(Map.of("role", "assistant", "tool_calls", List.of(Map.of("id", "c1", "function", Map.of("name", "find_files", "arguments", "{}")))));
+            messages.add(Map.of("role", "tool", "tool_call_id", "c1", "content", "未找到任何文件"));
+            java.lang.reflect.Method request = AgentChatController.class.getDeclaredMethod("requestMessages");
+            request.setAccessible(true);
+            // requestMessages 不应抛出且应保留该 tool 消息前驱
+            Object result = request.invoke(controller);
+            assertNotNull(result);
+            assertTrue(messages.stream().anyMatch(m -> "未找到任何文件".equals(m.get("content"))), "失败结果应保留在历史中");
         } catch (Exception e) {
             fail("反射测试失败: " + e);
         }

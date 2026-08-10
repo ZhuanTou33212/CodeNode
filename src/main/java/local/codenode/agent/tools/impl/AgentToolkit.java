@@ -76,5 +76,11 @@ public final class AgentToolkit {
         RuntimeTraceTool.register(registry);
         WriteAnalysisMdTool.register(registry);
         UiControlTool.register(registry);
+        ProjectInfoTool.register(registry);
+        BuildProjectTool.register(registry);
+        RunProjectTool.register(registry);
+        ListTasksTool.register(registry);
+        BulkEditTool.register(registry);
+        AnalyzeProjectTool.register(registry);
     }
 }

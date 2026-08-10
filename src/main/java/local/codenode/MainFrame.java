@@ -175,7 +175,7 @@ extends JFrame {
     private boolean loadingProject;
     private boolean loadingInspector;
     private boolean dirty;
-    private WorkflowModel.Mode displayedMode = WorkflowModel.Mode.EXECUTABLE;
+    private WorkflowModel.Mode displayedMode = WorkflowModel.Mode.MARKDOWN;
     private String executableOutput = "output";
     private String markdownOutput = "output/docs";
     private final Deque<HistoryState> undoHistory = new ArrayDeque<HistoryState>();
@@ -190,10 +190,13 @@ extends JFrame {
     private JComponent editor;
     private ToolWindow inspectorTool;
     private ToolWindow outputTool;
-    private ToolWindow errorTool;
+    private ToolWindow changeTool;
     private ToolWindow queueTool;
     private ToolWindow fileBrowserTool;
     private local.codenode.ui.FileBrowserPanel fileBrowserPanel;
+    private local.codenode.ui.FileChangePanel fileChangePanel;
+    private ToolWindow projectRunTool;
+    private local.codenode.ui.ProjectRunPanel projectRunPanel;
     private JTabbedPane workbenchTabs;
     private JScrollPane inspectorScroll;
     private static final int HEADER = 34;
@@ -264,6 +267,11 @@ extends JFrame {
         });
         this.agentTools = AgentToolkit.buildDefaultRegistry(this.agentToolContext, this.agentConfig);
         this.agentChatController = new AgentChatController(this.agentConfig, this.agentTools, this.agentToolContext);
+        this.agentToolContext.setFileChangeNotifier((relative, kind, detail) -> SwingUtilities.invokeLater(() -> {
+            if (this.fileChangePanel != null) {
+                this.fileChangePanel.recordChange(relative, kind, detail);
+            }
+        }));
         this.add((Component)this.toolbar(), "North");
         this.add((Component)this.workbench(), "Center");
         this.add((Component)this.statusBar(), "South");
@@ -330,7 +338,7 @@ extends JFrame {
         file.addSeparator();
         file.add(this.item("退出", this::closeApplication));
         JMenu edit = this.menu("编辑(E)", this.item("应用节点修改", this::saveInspector));
-        JMenu view = this.menu("视图(V)", this.item("显示文件浏览器", () -> this.fileBrowserTool.redock()), this.item("显示节点资源管理器", () -> this.inspectorTool.redock()), this.item("显示输出", () -> this.outputTool.redock()), this.item("显示错误列表", () -> this.errorTool.redock()), this.item("切换到代码审查", () -> {
+        JMenu view = this.menu("视图(V)", this.item("显示文件浏览器", () -> this.fileBrowserTool.redock()), this.item("显示节点资源管理器", () -> this.inspectorTool.redock()), this.item("显示输出与运行报告", () -> this.outputTool.redock()), this.item("显示文件变更", () -> this.changeTool.redock()), this.item("显示工程构建运行", () -> this.projectRunTool.redock()), this.item("切换到代码审查", () -> {
             if (this.workbenchTabs != null) {
                 this.workbenchTabs.setSelectedIndex(1);
             }
@@ -339,8 +347,10 @@ extends JFrame {
                 this.workbenchTabs.setSelectedIndex(2);
             }
         }), this.item("显示申请队列", () -> this.queueTool.redock()));
-        JMenu projectMenu = this.menu("项目(P)", this.item("初始化本地申请槽", () -> this.initializeProject(true)));
-        JMenu analysisMenu = this.menu("分析项目(A)", this.item("全量扫描（目录层级）", this::fullScanProject), this.item("项目全量解析（按包归组）", this::analyzeProjectFull), this.item("分析项目结构（申请提交）", this::analyzeProject));
+        JMenu projectMenu = this.menu("项目(P)", this.item("初始化本地申请槽", () -> this.initializeProject(true)), this.item("打开工程构建运行", () -> this.projectRunTool.redock()));
+        JMenu analysisMenu = this.menu("分析项目(A)", this.item("全量扫描（目录层级）", this::fullScanProject), this.item("项目全量解析（按包归组）", this::analyzeProjectFull), this.item("分析项目结构（申请提交）", this::analyzeProject), this.item("识别并构建当前工程", () -> {
+            if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
+        }));
         JMenu build = this.menu("生成(B)", this.item("提交选择的节点到 Agent", this::submitSelected), this.item("选择组输出提交…", () -> this.showSubmissionMenu(null)));
         JMenu debug = this.menu("调试(D)", new JMenuItem[0]);
         JMenu tools = this.menu("工具(T)", this.item("刷新结果", this::pollResults));
@@ -368,6 +378,10 @@ extends JFrame {
         this.analysisBtn = this.button("项目全量解析", this::analyzeProjectFull);
         this.analysisBtn.setEnabled(false);
         JButton fullScanBtn = this.button("全量扫描", this::fullScanProject);
+        JButton runProjectBtn = this.button("工程构建运行", () -> {
+            if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
+            this.projectRunTool.redock();
+        });
         toolbar.add(new JLabel("项目"));
         toolbar.add(this.project);
         toolbar.add(choose);
@@ -388,6 +402,7 @@ extends JFrame {
         toolbar.add(analyzeProjectBtn);
         toolbar.add(this.analysisBtn);
         toolbar.add(fullScanBtn);
+        toolbar.add(runProjectBtn);
         return toolbar;
     }
 
@@ -409,16 +424,20 @@ extends JFrame {
         this.fileBrowserPanel = new local.codenode.ui.FileBrowserPanel((file, text) -> this.openFileFromBrowser(file, text));
         this.fileBrowserTool = new ToolWindow(this, "文件浏览器", this.fileBrowserPanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.fileBrowserTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.fileBrowserTool));
         this.inspectorTool = new ToolWindow(this, "节点资源管理器", this.inspector(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.inspectorTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.inspectorTool));
-        this.outputTool = new ToolWindow(this, "输出", this.outputPanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.outputTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.outputTool));
-        this.errorTool = new ToolWindow(this, "错误列表", this.errorPanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.errorTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.errorTool));
+        this.outputTool = new ToolWindow(this, "输出与运行报告", this.outputPanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.outputTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.outputTool));
+        this.fileChangePanel = new local.codenode.ui.FileChangePanel(() -> this.currentProjectRoot() != null && !this.currentProjectRoot().isBlank() ? Path.of(this.currentProjectRoot()) : Path.of("."));
+        this.changeTool = new ToolWindow(this, "文件变更", this.fileChangePanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.changeTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.changeTool));
         this.queueTool = new ToolWindow(this, "申请队列", this.queuePanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.queueTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.queueTool));
+        this.projectRunPanel = new local.codenode.ui.ProjectRunPanel();
+        this.projectRunTool = new ToolWindow(this, "工程构建运行", this.projectRunPanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.projectRunTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.projectRunTool));
         this.tabGroup.put(this.inspectorTool, this.tabGroupSequence++);
-        for (ToolWindow tool : List.of(this.outputTool, this.errorTool, this.queueTool)) {
+        for (ToolWindow tool : List.of(this.outputTool, this.changeTool, this.queueTool)) {
             this.tabGroup.put(tool, this.tabGroupSequence);
         }
         this.docked.get((Object)ToolWindow.DockPosition.LEFT).add(this.fileBrowserTool);
         this.docked.get((Object)ToolWindow.DockPosition.RIGHT).add(this.inspectorTool);
-        this.docked.get((Object)ToolWindow.DockPosition.RIGHT).addAll(List.of(this.outputTool, this.errorTool, this.queueTool));
+        this.docked.get((Object)ToolWindow.DockPosition.RIGHT).addAll(List.of(this.outputTool, this.changeTool, this.queueTool));
+        this.docked.get((Object)ToolWindow.DockPosition.BOTTOM).add(this.projectRunTool);
         this.canvas.onFileDropped((file, point) -> this.dropFileToCanvas(file, point));
         this.rebuildDockLayout();
         return this.dockRoot;
@@ -644,6 +663,7 @@ extends JFrame {
         } finally {
             this.loadingProject = false;
         }
+        this.syncProjectPanels(session.file == null ? null : session.file.getParent());
     }
 
     /** 当前文档会话。 */
@@ -816,14 +836,8 @@ extends JFrame {
     }
 
     private JComponent errorPanel() {
-        this.errors.setEditable(false);
-        this.errors.setLineWrap(true);
-        this.errors.setWrapStyleWord(true);
-        this.errors.setFont(new Font("Consolas", 0, 13));
-        this.errors.setText("暂无编译或运行错误。");
-        JScrollPane scroll = new JScrollPane(this.errors);
-        scroll.setPreferredSize(new Dimension(320, 190));
-        return scroll;
+        // 错误与运行报告合并：错误文本直接进入输出/运行报告面板（log）
+        return this.outputPanel();
     }
 
     private JComponent reviewPanel() {
@@ -1120,7 +1134,7 @@ extends JFrame {
         ToolWindow target = switch (panel) {
             case "inspector" -> this.inspectorTool;
             case "output" -> this.outputTool;
-            case "error" -> this.errorTool;
+            case "error", "changes", "files" -> this.changeTool;
             case "queue" -> this.queueTool;
             default -> null;
         };
@@ -1294,6 +1308,29 @@ extends JFrame {
         if (parent != null) {
             this.project.setText(parent.toString());
         }
+        this.syncProjectPanels(parent);
+    }
+
+    /** 让文件浏览器与工程构建运行面板跟随当前项目根目录。 */
+    private void syncProjectPanels(Path projectDir) {
+        Path root = projectDir;
+        if (root == null) {
+            String text = this.project.getText() == null ? "" : this.project.getText().trim();
+            if (!text.isBlank()) root = Path.of(text);
+            else if (this.currentProjectFile != null) root = this.currentProjectFile.getParent();
+        }
+        if (root == null) return;
+        root = root.toAbsolutePath().normalize();
+        if (this.fileBrowserPanel != null) {
+            this.fileBrowserPanel.setRoot(root);
+        }
+        if (this.projectRunPanel != null) {
+            this.projectRunPanel.setProjectPathSilent(root.toString());
+        }
+        // Agent 工作环境随当前项目迁移（不再使用写死的默认路径）
+        if (this.agentChatPanel != null) {
+            this.agentChatPanel.setProjectPath(root.toString());
+        }
     }
 
     private void loadRecentProjects() {
@@ -1377,6 +1414,9 @@ extends JFrame {
             if (this.fileBrowserPanel != null) {
                 this.fileBrowserPanel.setRoot(this.queue.projectRoot());
             }
+            if (this.projectRunPanel != null) {
+                this.projectRunPanel.setProjectPathSilent(this.queue.projectRoot().toString());
+            }
             this.status.setText("  就绪  |  " + String.valueOf(this.queue.projectRoot()));
             if (announce) {
                 this.append("项目申请槽已初始化：" + String.valueOf(this.queue.stateRoot()));
@@ -1388,6 +1428,17 @@ extends JFrame {
         catch (Exception e) {
             this.error(e);
         }
+    }
+
+    private String currentProjectRoot() {
+        if (this.queue != null && this.queue.projectRoot() != null) {
+            return this.queue.projectRoot().toString();
+        }
+        String text = this.project.getText() == null ? "" : this.project.getText().trim();
+        if (text.isBlank() && this.currentProjectFile != null) {
+            return this.currentProjectFile.getParent().toString();
+        }
+        return text;
     }
 
     private void updateMode() {
@@ -2069,10 +2120,6 @@ extends JFrame {
             if (node != null && node.status == WorkflowModel.Status.FAILED && !node.diagnostic.isBlank()) {
                 String string = "错误定位 [" + node.id + "] " + node.diagnostic;
                 this.append(string);
-                if (this.errors.getText().startsWith("暂无")) {
-                    this.errors.setText("");
-                }
-                this.errors.append((this.errors.getText().isEmpty() ? "" : "\n") + string);
             }
         }
         catch (IOException | RuntimeException e) {
@@ -2296,7 +2343,7 @@ extends JFrame {
         this.resultPollTimer.stop();
         this.autoSaveTimer.stop();
         this.codexAgent.close();
-        for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.outputTool, this.errorTool, this.queueTool}) {
+        for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.outputTool, this.changeTool, this.queueTool}) {
             if (tool == null) continue;
             tool.shutdown();
         }
@@ -2326,11 +2373,25 @@ extends JFrame {
         this.status.setText("  操作失败");
     }
 
-    private boolean confirmAgentTool(String message) {
+    private boolean confirmAgentTool(local.codenode.agent.tools.AgentToolContext.ConfirmationLevel level, String what, String detail) {
+        // 低/中风险：项目内常规操作直接放行，不打扰用户（记录审计）
+        if (level == local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.LOW
+                || level == local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.WRITE) {
+            this.append("[Agent] " + what);
+            return true;
+        }
+        // 高风险：用自然语言解释 Agent 想做什么，而非代码字符串
+        StringBuilder message = new StringBuilder();
+        message.append("Agent 想执行以下操作：\n\n");
+        message.append("  ").append(what).append("\n");
+        if (detail != null && !detail.isBlank()) {
+            message.append("\n详细说明：\n  ").append(detail).append("\n");
+        }
+        message.append("\n是否允许？");
         boolean[] result = new boolean[]{false};
         try {
             SwingUtilities.invokeAndWait(() -> {
-                result[0] = JOptionPane.showConfirmDialog(this, message, "Agent 工具确认", 2) == 0;
+                result[0] = JOptionPane.showConfirmDialog(this, message.toString(), "Agent 操作确认", 0) == 0;
             });
         }
         catch (Exception exception) {
@@ -2692,7 +2753,7 @@ extends JFrame {
         boolean dirty;
         String executableOutput = "output";
         String markdownOutput = "output/docs";
-        WorkflowModel.Mode mode = WorkflowModel.Mode.EXECUTABLE;
+        WorkflowModel.Mode mode = WorkflowModel.Mode.MARKDOWN;
         int panX;
         int panY;
         double zoom = 1.0;
@@ -2763,6 +2824,7 @@ extends JFrame {
         } finally {
             this.loadingProject = false;
         }
+        this.syncProjectPanels(session.file == null ? null : session.file.getParent());
     }
 
     /** 关闭指定文档 tab。 */

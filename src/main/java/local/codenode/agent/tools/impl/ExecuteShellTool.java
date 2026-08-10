@@ -50,8 +50,19 @@ public final class ExecuteShellTool {
         if (slash >= 0) normalized = normalized.substring(slash + 1);
         if (!ALLOWED.contains(normalized)) return AgentToolResult.error("命令不在白名单：" + base);
         long timeoutSeconds = arguments.get("timeoutSeconds") instanceof Number n ? Math.max(1, n.longValue()) : 30;
-        if (!context.confirm("确认执行命令：" + command + " ？（超时 " + timeoutSeconds + " 秒）")) {
-            return AgentToolResult.error("已取消执行");
+        // 分级确认：仅危险命令（删除/强改/清理/提交推送等）或白名单外需要用户确认；
+        // 普通构建/运行/查询命令直接放行。
+        boolean sensitive = isSensitiveCommand(tokens);
+        if (sensitive) {
+            String what = "在项目目录执行命令：" + command;
+            String detail = "这是一条" + (isDestructiveCommand(tokens) ? "具有破坏性" : "可能影响系统/仓库状态") +
+                    "的命令，执行后可能不可撤销。超时 " + timeoutSeconds + " 秒。";
+            if (!context.confirm(local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.HIGH, what, detail)) {
+                return AgentToolResult.error("已取消执行");
+            }
+        } else {
+            context.confirm(local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.LOW,
+                    "执行命令：" + command, "普通构建/查询命令，直接执行。");
         }
         ProcessBuilder builder = new ProcessBuilder(tokens);
         builder.directory(context.projectRoot().toFile());
@@ -104,5 +115,43 @@ public final class ExecuteShellTool {
         }
         if (current.length() > 0) tokens.add(current.toString());
         return tokens;
+    }
+
+    /** 是否危险/敏感命令：删除、清理、强制、push/publish、reset/checkout 危险参数等。 */
+    private static boolean isSensitiveCommand(List<String> tokens) {
+        if (tokens.isEmpty()) return false;
+        String base = tokens.get(0).toLowerCase();
+        for (String flag : tokens) {
+            String f = flag.toLowerCase();
+            if (f.equals("rm") || f.equals("del") || f.equals("rmdir") || f.equals("rd")
+                    || f.equals("rm -rf") || f.equals("clean") || f.equals("distclean")
+                    || f.equals("reset") || f.equals("hard") || f.equals("push") || f.equals("publish")
+                    || f.equals("-f") || f.equals("--force") || f.equals("--hard")) {
+                return true;
+            }
+        }
+        if (base.contains("git")) {
+            for (String flag : tokens) {
+                String f = flag.toLowerCase();
+                if (f.equals("reset") || f.equals("clean") || f.equals("push") || f.equals("rebase")
+                        || f.equals("checkout") || f.equals("--hard") || f.equals("-f")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 是否破坏性命令（删除/清理/覆盖历史）。 */
+    private static boolean isDestructiveCommand(List<String> tokens) {
+        if (tokens.isEmpty()) return false;
+        for (String flag : tokens) {
+            String f = flag.toLowerCase();
+            if (f.equals("rm") || f.equals("del") || f.equals("rmdir") || f.equals("clean")
+                    || f.equals("reset") || f.equals("--hard") || f.equals("push")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -38,7 +38,6 @@ public final class AgentChatPanel extends JPanel {
     private final JLabel status = new JLabel("空闲");
     private final JLabel context = new JLabel(" ");
     private final CollapsibleReasoningPanel reasoning = new CollapsibleReasoningPanel();
-    private boolean assistantOpen;
 
     private final ChatListener listener = event -> SwingUtilities.invokeLater(() -> onEvent(event));
 
@@ -202,12 +201,29 @@ public final class AgentChatPanel extends JPanel {
         context.setText("工具 " + tools + "  |  项目 " + project + "  |  " + (config.isConfigured() ? "已连接" : "未配置"));
     }
 
+    /**
+     * 设置 Agent 工作项目路径（随当前打开的项目迁移，而非固定默认值）。
+     * 同步更新 config 的 defaultProjectPath，使工具/Agent 上下文指向当前项目。
+     */
+    public void setProjectPath(String projectRoot) {
+        if (projectRoot == null || projectRoot.isBlank()) {
+            return;
+        }
+        config.setDefaultProjectPath(projectRoot.trim());
+        try { config.save(); } catch (Exception ignored) {}
+        refreshContext();
+    }
+
+    /** 当前 Agent 工作项目路径。 */
+    public String projectPath() {
+        return config.defaultProjectPath();
+    }
+
     private void doSend() {
         String text = input.getText().trim();
         if (text.isEmpty()) return;
         syncModelFromCombo();
         append("❯ " + text + "\n\n", USER);
-        assistantOpen = true;
         input.setText("");
         refreshModelCombo();
         controller.sendMessage(text, listener);
@@ -216,7 +232,8 @@ public final class AgentChatPanel extends JPanel {
     private void onEvent(ChatEvent event) {
         switch (event.kind()) {
             case STREAM -> {
-                if (assistantOpen) append(event.text(), TEXT);
+                // 正式答案/正文始终显示在主对话区（推理与工具过程放在折叠区）
+                append(event.text(), TEXT);
             }
             case REASONING -> {
                 reasoning.appendReasoning(event.text());
@@ -225,21 +242,18 @@ public final class AgentChatPanel extends JPanel {
             case TOOL_CALL -> {
                 AgentToolCall call = event.toolCall();
                 if (call != null) {
-                    append("\n▸ 调用 " + call.name() + "\n", TOOL);
-                    assistantOpen = true;
+                    reasoning.appendReasoning("\n▸ 调用 " + call.name() + "\n");
+                    if (!reasoning.isExpanded()) reasoning.setExpanded(true);
                 }
             }
             case TURN_COMPLETE -> {
                 append("\n\n", DIM);
-                assistantOpen = false;
             }
             case ERROR -> {
                 append("\n✗ " + event.error() + "\n\n", ERROR);
-                assistantOpen = false;
             }
             case CANCELLED -> {
                 append("\n— 已停止\n\n", DIM);
-                assistantOpen = false;
             }
             case STATE -> updateState(event.state() != null ? event.state().name() : "IDLE");
         }

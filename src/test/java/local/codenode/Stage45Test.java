@@ -163,7 +163,7 @@ public class Stage45Test {
         Path root = Files.createTempDirectory("b45-tool");
         Files.writeString(root.resolve("a.txt"), "hello\nworld\n", StandardCharsets.UTF_8);
         try {
-            AgentToolContext context = new AgentToolContext(() -> root, () -> null, msg -> false, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             AgentToolResult ok = registry.execute("read_file", Map.of("path", "a.txt"), context);
             assertTrue(ok.ok());
@@ -180,7 +180,7 @@ public class Stage45Test {
         Path root = Files.createTempDirectory("b45-write");
         List<String> audit = new java.util.ArrayList<>();
         try {
-            AgentToolContext context = new AgentToolContext(() -> root, () -> null, msg -> false, audit::add);
+            AgentToolContext context = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, audit::add);
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             AgentToolResult result = registry.execute("write_file",
                     Map.of("path", "x.txt", "content", "data"), context);
@@ -195,7 +195,7 @@ public class Stage45Test {
     @Test
     void codeReviewDetectsPasswordAndTodoDeterministically() {
         String code = "String password = \"hunter2\";\n// TODO fix later\nint x = 1;\n";
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null, msg -> false, entry -> {});
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> false, entry -> {});
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("code_review", Map.of("code", code), context);
         assertTrue(result.ok());
@@ -207,7 +207,7 @@ public class Stage45Test {
 
     @Test
     void executeShellEnforcesWhitelist() {
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null, msg -> true, entry -> {});
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> true, entry -> {});
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("execute_shell", Map.of("command", "rm -rf /"), context);
         assertFalse(result.ok());
@@ -218,7 +218,7 @@ public class Stage45Test {
     void getWorkbenchModelReportsNodeCount() {
         WorkflowModel model = new WorkflowModel();
         model.addNode(0, 0);
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, msg -> false, entry -> {});
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {});
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("get_workbench_model", Map.of(), context);
         assertTrue(result.ok());
@@ -236,7 +236,7 @@ public class Stage45Test {
         Files.writeString(root.resolve("assets/demo/models/block.json"), "{}", StandardCharsets.UTF_8);
         Files.writeString(root.resolve("assets/demo/textures/stone.png"), "x", StandardCharsets.UTF_8);
         try {
-            AgentToolContext context = new AgentToolContext(() -> root, () -> null, msg -> false, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             AgentToolResult result = registry.execute("scan_project", Map.of(), context);
             assertTrue(result.ok());
@@ -264,7 +264,7 @@ public class Stage45Test {
         Files.writeString(root.resolve("assets/demo/models/block.json"), "{}", StandardCharsets.UTF_8);
         final WorkflowModel[] applied = {null};
         try {
-            AgentToolContext context = new AgentToolContext(() -> root, () -> null, msg -> false, entry -> {},
+            AgentToolContext context = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, entry -> {},
                     generated -> applied[0] = generated);
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             AgentToolResult result = registry.execute("scan_project",
@@ -287,7 +287,7 @@ public class Stage45Test {
     void createNodesCreatesAndConnectsOnWorkbench() {
         WorkflowModel model = new WorkflowModel();
         final WorkflowModel[] mutated = {model};
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, msg -> false, entry -> {},
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {},
                 null, mutator -> { mutator.mutate(mutated[0]); });
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("create_nodes",
@@ -377,7 +377,7 @@ public class Stage45Test {
         Path root = Files.createTempDirectory("b45-edit");
         Files.writeString(root.resolve("demo.txt"), "hello world\nsecond line\n", StandardCharsets.UTF_8);
         try {
-            AgentToolContext context = new AgentToolContext(() -> root, () -> null, msg -> true, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> true, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             AgentToolResult r = registry.execute("edit_file",
                     Map.of("path", "demo.txt", "oldText", "world", "newText", "codex"), context);
@@ -400,7 +400,7 @@ public class Stage45Test {
         Files.writeString(root.resolve("src/main/java/Main.java"), "package demo;\nint value = 42;\n", StandardCharsets.UTF_8);
         Files.writeString(root.resolve("assets/a.json"), "{\"k\":1}", StandardCharsets.UTF_8);
         try {
-            AgentToolContext context = new AgentToolContext(() -> root, () -> null, msg -> false, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             assertTrue(registry.execute("find_files", Map.of("pattern", "**/*.java"), context).ok());
             AgentToolResult found = registry.execute("find_files", Map.of("pattern", "**/*.java"), context);
@@ -418,7 +418,7 @@ public class Stage45Test {
 
     @Test
     void askUserReturnsAnswerFromHandler() {
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null, msg -> false, entry -> {});
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null, (level, what, detail) -> false, entry -> {});
         context.setQuestionHandler((question, options) -> "my-answer");
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult r = registry.execute("ask_user", Map.of("question", "选哪个？", "options", List.of("A", "B")), context);
@@ -427,7 +427,7 @@ public class Stage45Test {
     }
 
     private static AgentToolContext contextWithModel(WorkflowModel model) {
-        return new AgentToolContext(() -> Path.of("."), () -> model, msg -> false, entry -> {},
+        return new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {},
                 null, mutator -> mutator.mutate(model), () -> {}, () -> {}, () -> {});
     }
 

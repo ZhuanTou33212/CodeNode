@@ -12,6 +12,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import local.codenode.AgentProvider;
 import local.codenode.Json;
 import local.codenode.agent.ChatEvent;
@@ -30,6 +36,12 @@ import local.codenode.config.AgentConfig;
  */
 public final class AgentChatController {
     private static final int MAX_TOOL_LOOP = 10;
+    /** 工具失败/空结果后主动提示继续尝试的上限（避免死循环）。 */
+    private static final int MAX_TOOL_RETRY = 5;
+    /** 单个工具执行的最大等待秒数（外层兜底超时，防止工具阻塞卡死）。 */
+    private static final int DEFAULT_TOOL_TIMEOUT_SECONDS = 60;
+    /** 长耗时工具（构建/运行/编译）的默认超时秒数。 */
+    private static final int LONG_TOOL_TIMEOUT_SECONDS = 300;
     /** 发送给 API 前保留的最大消息数（system 除外）。 */
     private static final int MAX_HISTORY_MESSAGES = 20;
     /** 触发摘要压缩的历史消息阈值。 */
@@ -42,6 +54,7 @@ public final class AgentChatController {
     private final AgentToolRegistry tools;
     private final AgentToolContext toolContext;
     private final List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
+    private final ExecutorService toolExecutor = Executors.newCachedThreadPool();
     private final String sessionId = UUID.randomUUID().toString();
     private String sessionSummary = "";
     private volatile AgentProvider.SessionState state = AgentProvider.SessionState.IDLE;
@@ -237,6 +250,9 @@ public final class AgentChatController {
         sb.append("分工与规则：\n");
         sb.append("1. 创建节点用 create_nodes（count 指定数量，connect=true 可串联，nodeKind 可选）；编辑节点（改名/移动/删除/复制/改类型/状态/颜色等）用 workbench_edit；连线用 workbench_connect；分组/解组/展开资源组/增删端口用 workbench_structure；保存工程用 save_project；查看工作台用 get_workbench_model。\n");
         sb.append("2. 扫描/分析项目用 scan_project（applyToWorkbench=true 写入工作台）；应用内编译并运行用 compile_run；实时抓取运行数据用 runtime_trace；写分析 md 节点用 write_analysis_md；操控界面用 ui_control；读文件用 read_file；写文件用 write_file；精确改文件代码用 edit_file；找文件用 find_files；跨文件搜内容用 search_files；列目录用 list_directory；抓网页用 fetch_url；代码审查用 code_review；构建/运行用 execute_shell。\n");
+        sb.append("2.1 构建真实项目（Gradle/Maven/纯 Java）用 project_info 识别工程、build_project 构建、run_project 运行（可 trace=true 启动 JFR 实时追踪方法调用）、list_tasks 查看可用任务；这些工具面向工程根目录，path 缺省为当前项目。\n");
+        sb.append("2.2 用户要求「分析文档/分析项目」时，用 analyze_project 调用本地软件的工程识别与分析模块（返回构建系统/入口类/源文件清单/逐文件结构摘要），并基于分析结果进行后续制作，不要凭空猜测项目结构。\n");
+        sb.append("2.3 大批量修改数据（批量创建/删除节点、批量写文件、批量建资产）用 bulk_edit；该工具会请求用户确认并解释将做什么，确认后再执行。\n");
         sb.append("3. 需要向用户澄清或获取输入时用 ask_user（可给 options）。\n");
         sb.append("4. 当工具找不到文件/节点/项目路径，或需要用户提供信息才能继续时，必须用 ask_user 向用户提问确认。调用 ask_user 后必须等待用户回复（工具会阻塞直到用户回答），拿到回答后再继续后续工作，而不是直接放弃、只说失败或假装成功。\n");
         sb.append("5. 项目操作必须调用工具并以工具返回结果作为回复依据，不要只输出文字。\n");
@@ -244,6 +260,10 @@ public final class AgentChatController {
         sb.append("7. 工具参数缺省时使用当前项目目录。\n");
         sb.append("8. 仅当请求不涉及上述能力（如闲聊）时才直接文字回复。\n");
         sb.append("9. 复杂任务必须分多步调用工具：每步调用一个工具，根据工具返回结果决定下一步是否继续调用，直到任务完整解决后再输出最终结论。不要在一次工具调用后就停止，除非任务已确实完成。\n");
+        sb.append("9.1 工具调用失败或返回空结果时，绝对不要就此停下：先用 get_workbench_model / find_files / search_files / list_directory / project_info 等换一种方式排查，或调整参数、缩小步骤重试；系统也会在失败后提示你继续。只有多种方案都试过仍无法完成时，才用 ask_user 说明情况并请用户协助。\n");
+        sb.append("9.2 只有触及敏感操作（删除文件、执行 git 危险命令如 reset/push/clean、跨出项目目录、或超出用户当前请求范围）时才需要用户确认；项目内的普通读写、构建、查询直接执行，不要反复询问。\n");
+        sb.append("9.3 若确需用户确认，确认文案必须用自然语言向用户解释你打算做什么（如“我打算修改 src/App.java 中的连接超时配置”），而不是用一串代码或命令字符串提问。\n");
+        sb.append("9.4 调用工具时可以自行给 timeoutSeconds 参数设定合理等待时间（默认 60 秒，构建/运行/编译等长任务默认 300 秒，上限 600 秒）；系统会等待工具返回，超时或失败时自动提示你重新思考换方案，不要因为一次失败就停下。\n");
         sb.append("10. 多个工具可在同一轮并发调用（如 read_file + find_files）；工具返回的大结果已被系统截断，请依据结果要点继续，不要假设结果完整。\n");
         sb.append("文件类型解析规则：\n");
         sb.append("11. read_file 只能读取文本文件，且自动检测类型：二进制文件（.class/.png/.jar/.zip/.pdf/.docx/图片/音视频等）会被拒绝并返回类型与解析建议，不要强行读取。\n");
@@ -268,12 +288,27 @@ public final class AgentChatController {
         List<Map<String, Object>> toolSchema = this.tools.toOpenAiTools();
         int guard = 0;
         boolean executedTool = false;
+        boolean lastRoundHadIssue = false;
+        int retryNudges = 0;
         while (!this.stopRequested && guard++ < MAX_TOOL_LOOP) {
             Map<String, Object> assistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
             this.messages.add(assistant);
             Object rawCalls = assistant.get("tool_calls");
-            if (!(rawCalls instanceof List<?>) || ((List<?>)rawCalls).isEmpty()) break;
+            if (!(rawCalls instanceof List<?>) || ((List<?>)rawCalls).isEmpty()) {
+                // 模型没有继续调用工具：若上一轮工具失败/空结果且未耗尽重试次数，提示继续思考其他方案，
+                // 而不是直接停下。
+                if (lastRoundHadIssue && !this.stopRequested && retryNudges < MAX_TOOL_RETRY) {
+                    retryNudges++;
+                    lastRoundHadIssue = false;
+                    this.messages.add(Map.of("role", "user",
+                            "content", "【系统提示】上一轮工具执行失败或返回了空结果，任务尚未完成。请换一种思路继续：尝试不同的工具、不同的参数或更小的步骤，直到真正拿到结果；确实无法完成时再向用户说明。"));
+                    this.saveSessionFile();
+                    continue;
+                }
+                break;
+            }
             executedTool = true;
+            lastRoundHadIssue = false;
             Set<String> expectedCallIds = new LinkedHashSet<String>();
             for (Object callObj : (List<?>)rawCalls) {
                 if (callObj instanceof Map<?, ?> call) {
@@ -313,16 +348,27 @@ public final class AgentChatController {
                 catch (RuntimeException ignored) {
                     args = Map.of();
                 }
-                // 工具执行：单工具异常不中断整轮，回写错误给模型
+                // 工具执行：带超时保护 + 单工具异常兜底，回写错误给模型
                 AgentToolResult result;
                 try {
-                    result = this.tools.execute(name, args, this.toolContext);
+                    long toolTimeout = this.resolveToolTimeout(name, args);
+                    result = this.executeToolWithTimeout(name, args, toolTimeout);
                 } catch (Exception toolFailure) {
                     result = AgentToolResult.error("工具执行异常: " + toolFailure.getMessage());
                 }
                 String resultText = result.ok() ? result.text() : "失败：" + result.text();
                 String truncated = AgentChatController.truncate(resultText, MAX_TOOL_RESULT_CHARS);
-                listener.onEvent(ChatEvent.stream("\n[工具 " + name + "] " + truncated + "\n"));
+                // 判定本轮是否出现失败/空结果/超时：失败、空文本、取消、超时都视为未取得有效结果
+                boolean issue = !result.ok() || result.text() == null || result.text().isBlank()
+                        || result.text().contains("已取消") || result.text().contains("失败")
+                        || result.text().contains("超时")
+                        || result.text().startsWith("未找到") || result.text().startsWith("没有");
+                if (issue) {
+                    lastRoundHadIssue = true;
+                    listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] ⚠ " + truncated + "（未取得有效结果，继续尝试其他方案）\n"));
+                } else {
+                    listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] " + truncated + "\n"));
+                }
                 LinkedHashMap<String, Object> toolMessage = new LinkedHashMap<String, Object>();
                 toolMessage.put("role", "tool");
                 toolMessage.put("tool_call_id", callId);
@@ -330,6 +376,14 @@ public final class AgentChatController {
                 this.messages.add(toolMessage);
             }
             this.saveSessionFile();
+            // 本轮执行了工具且存在失败：立即注入"重新思考"提示并继续，而不是等模型主动停下
+            if (lastRoundHadIssue && !this.stopRequested && retryNudges < MAX_TOOL_RETRY) {
+                retryNudges++;
+                lastRoundHadIssue = false;
+                this.messages.add(Map.of("role", "user",
+                        "content", "【系统提示】刚才的工具调用失败或返回空结果，任务尚未完成。请重新思考：换一种工具、调整参数、缩小步骤或换个思路重试，直到真正取得结果；只有多种方案都失败时才向用户说明。"));
+                this.saveSessionFile();
+            }
             if (this.messages.size() > SUMMARY_THRESHOLD) {
                 this.compactHistory();
                 this.saveSessionFile();
@@ -339,12 +393,23 @@ public final class AgentChatController {
         // （覆盖 ask_user 返回答案后模型不继续、以及模型中途停下的情况）。
         if (!this.stopRequested && executedTool) {
             Map<String, Object> summaryRequest = Map.of("role", "user",
-                    "content", "请基于以上工具执行结果与用户提供的回答，总结本次任务的结论，并给出清晰、完整的最终答案回复给用户。");
+                    "content", "请基于以上工具执行结果与用户提供的回答，总结本次任务的结论，并给出清晰、完整的最终答案回复给用户。注意：你的回复内容本身就会直接展示给用户，请务必把最终答案写在回复正文（content）中，不要只放在推理里。");
             this.messages.add(summaryRequest);
             if (guard < MAX_TOOL_LOOP) {
                 Map<String, Object> finalAssistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
                 this.messages.add(finalAssistant);
                 this.saveSessionFile();
+            }
+        } else if (!this.stopRequested && !this.messages.isEmpty()) {
+            // 未调用工具也检查：若最后一条 assistant 只有推理没有正文，把推理结论作为正式答案输出，
+            // 避免"想出了答案却不显示"。
+            Map<String, Object> last = this.messages.get(this.messages.size() - 1);
+            if ("assistant".equals(last.get("role"))
+                    && (last.get("content") == null || String.valueOf(last.get("content")).isBlank())
+                    && last.get("reasoning") != null
+                    && !String.valueOf(last.get("reasoning")).isBlank()) {
+                String fallback = String.valueOf(last.get("reasoning")).trim();
+                listener.onEvent(ChatEvent.stream("\n" + fallback + "\n"));
             }
         }
     }
@@ -353,6 +418,45 @@ public final class AgentChatController {
         if (text == null) return "";
         if (text.length() <= max) return text;
         return text.substring(0, max) + "\n…（已截断，共 " + text.length() + " 字符）";
+    }
+
+    /**
+     * 带超时执行单个工具：在独立线程运行，超过 timeoutSeconds 未返回则视为超时失败。
+     * 超时结果回写为"工具执行超时"，让模型重新思考换方案。
+     */
+    private AgentToolResult executeToolWithTimeout(String name, Map<String, Object> args, long timeoutSeconds) {
+        Future<AgentToolResult> future = this.toolExecutor.submit(() -> this.tools.execute(name, args, this.toolContext));
+        try {
+            return future.get(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException timeout) {
+            future.cancel(true);
+            return AgentToolResult.error("工具执行超时（超过 " + timeoutSeconds + " 秒）：" + name
+                    + "。请换更小的步骤、不同的参数或换一个工具重试。");
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return AgentToolResult.error("工具执行被中断：" + name);
+        } catch (ExecutionException execution) {
+            Throwable cause = execution.getCause() == null ? execution : execution.getCause();
+            return AgentToolResult.error("工具执行异常: " + cause.getMessage());
+        }
+    }
+
+    /**
+     * 根据工具名与参数解析合理超时：优先取参数 timeoutSeconds（Agent 可自行设定），
+     * 长耗时工具（构建/运行/编译/抓包/扫描）给长默认值，其余给短默认值。
+     */
+    private long resolveToolTimeout(String name, Map<String, Object> args) {
+        Object explicit = args == null ? null : args.get("timeoutSeconds");
+        if (explicit instanceof Number n) {
+            return Math.max(1, Math.min(600, n.longValue()));
+        }
+        String lower = name == null ? "" : name.toLowerCase();
+        if (lower.contains("build") || lower.contains("run") || lower.contains("compile")
+                || lower.contains("trace") || lower.contains("scan") || lower.contains("fetch")
+                || lower.contains("shell") || lower.contains("url")) {
+            return LONG_TOOL_TIMEOUT_SECONDS;
+        }
+        return DEFAULT_TOOL_TIMEOUT_SECONDS;
     }
 
     /**

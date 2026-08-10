@@ -205,7 +205,7 @@ public class Stage45FullScanTest {
 
     @Test
     void compileRunToolWithExplicitSources() {
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), msg -> false, entry -> {});
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), (level, what, detail) -> false, entry -> {});
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("compile_run", Map.of(
                 "sourceFiles", Map.of("Main.java",
@@ -222,7 +222,7 @@ public class Stage45FullScanTest {
             WorkflowModel.Node file = model.addFileNode(0, 0, "App.java", "App.java");
             WorkflowModel.CodeSlot slot = model.ensureFileSlot(file);
             slot.activeCode = "public class App { public static void main(String[] a) { System.out.println(\"rt\"); } }";
-            AgentToolContext context = new AgentToolContext(() -> root, () -> model, msg -> false, entry -> {});
+            AgentToolContext context = new AgentToolContext(() -> root, () -> model, (level, what, detail) -> false, entry -> {});
             AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
             AgentToolResult result = registry.execute("runtime_trace",
                     Map.of("targetId", file.id), context);
@@ -236,7 +236,7 @@ public class Stage45FullScanTest {
     @Test
     void writeAnalysisMdWritesMdNode() {
         WorkflowModel model = new WorkflowModel();
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, msg -> false, entry -> {},
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {},
                 null, mutator -> mutator.mutate(model));
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("write_analysis_md",
@@ -253,7 +253,7 @@ public class Stage45FullScanTest {
     @Test
     void uiControlCallsUiActionWhenWired() {
         List<String> actions = new java.util.ArrayList<>();
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), msg -> false, entry -> {},
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), (level, what, detail) -> false, entry -> {},
                 null, null, () -> {}, () -> {}, () -> {},
                 (action, arguments) -> actions.add(action + ":" + arguments.get("zoom")));
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
@@ -285,7 +285,7 @@ public class Stage45FullScanTest {
     }
 
     private static AgentToolContext contextWithModel(WorkflowModel model) {
-        return new AgentToolContext(() -> Path.of("."), () -> model, msg -> false, entry -> {},
+        return new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {},
                 null, mutator -> mutator.mutate(model), () -> {}, () -> {}, () -> {});
     }
 

@@ -59,7 +59,9 @@ public final class EditFileTool {
                 updated = content.replace(oldText, newText);
                 replaced = countOccurrences(content, oldText);
             }
-            if (!context.confirm("确认修改文件 " + relative + "（替换 " + replaced + " 处）？")) {
+            if (!context.confirm(local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.WRITE,
+                    "修改文件 " + relative + "（替换 " + replaced + " 处）",
+                    "将把 " + relative + " 中的目标文本替换为 " + abbreviate(newText) + "。")) {
                 return AgentToolResult.error("已取消修改");
             }
             if (Files.exists(file)) {
@@ -67,6 +69,7 @@ public final class EditFileTool {
             }
             Files.writeString(file, updated, StandardCharsets.UTF_8);
             context.audit("edit_file " + relative + " replaced=" + replaced);
+            context.notifyFileChange(relative, "modify", "替换 " + replaced + " 处");
             return AgentToolResult.ok("已替换 " + replaced + " 处：" + relative,
                 Map.of("path", relative, "replaced", replaced));
         } catch (Exception e) {

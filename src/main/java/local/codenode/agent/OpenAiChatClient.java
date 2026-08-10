@@ -94,6 +94,7 @@ public final class OpenAiChatClient {
 
     private Map<String, Object> parseSse(InputStream input, Consumer<ChatEvent> events) throws IOException, InterruptedException {
         StringBuilder content = new StringBuilder();
+        StringBuilder reasoning = new StringBuilder();
         Map<Integer, PendingToolCall> toolCalls = new LinkedHashMap<>();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
             String line;
@@ -118,6 +119,7 @@ public final class OpenAiChatClient {
                     events.accept(ChatEvent.stream(text));
                 }
                 if (delta.get("reasoning_content") instanceof String text && !text.isEmpty()) {
+                    reasoning.append(text);
                     events.accept(ChatEvent.reasoning(text));
                 }
                 if (delta.get("tool_calls") instanceof List<?> calls) {
@@ -137,6 +139,7 @@ public final class OpenAiChatClient {
         Map<String, Object> assistant = new LinkedHashMap<>();
         assistant.put("role", "assistant");
         if (content.length() > 0) assistant.put("content", content.toString());
+        if (reasoning.length() > 0) assistant.put("reasoning", reasoning.toString());
         if (!toolCalls.isEmpty()) {
             List<Map<String, Object>> calls = new ArrayList<>();
             for (PendingToolCall pending : toolCalls.values()) {

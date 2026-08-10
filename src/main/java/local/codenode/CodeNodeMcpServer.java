@@ -25,7 +25,7 @@ final class CodeNodeMcpServer {
         this.bridgeContext = new AgentToolContext(
                 () -> this.projectRoot,
                 () -> null,
-                message -> false,
+                (level, what, detail) -> false,
                 entry -> System.err.println("[agent-tool] " + entry));
         new QueueService(this.projectRoot);
     }

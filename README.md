@@ -31,14 +31,15 @@ CodeNode 是一个 **Java 21 / Swing 原生桌面节点工作台**：用可视�
 - 与「节点图」「代码审查」并列的 **「内嵌 Agent」** 标签页，opencode 风格对话 UI（`❯` 输入、Enter 发送、彩色消息、推理折叠区、停止按钮）。
 - 接入 **OpenAI 兼容 API**（默认 DeepSeek），支持 **双模型切换**（`deepseek-v4-flash` / `deepseek-v4-pro`，pro 为推理模型，带 `reasoning_content`）。
 - 多轮流式对话，会话历史维护；配置存本地 `config/agent.properties`（**api_key 仅本地，不入库不提交**）。
-- **17 个本地工具**，Agent 可按需调用：
+- **25 个本地工具**，Agent 可按需调用：
 
 | 类别 | 工具 |
 |------|------|
 | 工作台 | `get_workbench_model` · `create_nodes` · `workbench_edit` · `workbench_connect` · `workbench_structure` |
 | 项目 | `scan_project`（`applyToWorkbench` 落画布）· `save_project` |
+| 工程构建运行 | `project_info`（识别构建系统/入口类/JDK）· `build_project`（Gradle/Maven/纯javac）· `run_project`（可 JFR 实时追踪）· `list_tasks` |
 | 文件 | `read_file` · `write_file` · `edit_file` · `find_files` · `search_files` · `list_directory` |
-| 其他 | `execute_shell`（白名单+超时强杀）· `code_review` · `ask_user` · `fetch_url` |
+| 其他 | `execute_shell`（白名单+超时强杀）· `code_review` · `ask_user` · `fetch_url` · `compile_run` · `runtime_trace` · `write_analysis_md` · `ui_control` |
 
 - 高危工具（`write_file` / `edit_file` / `execute_shell`）执行前弹确认框并写审计日志；`ask_user` 可向用户提问澄清。
 
@@ -109,7 +110,8 @@ src/main/java/local/codenode/         桌面程序源码（Swing）
 ├── CodexAppServerProvider / AgentProvider / AppServerMessages   Agent 会话链路
 ├── config/AgentConfig                Agent 本地配置
 ├── ui/agent + ui/settings            内嵌 Agent 对话 UI 与设置
-└── agent/tools + agent/tools/impl    工具注册表与 17 个内置工具
+└── agent/tools + agent/tools/impl    工具注册表与 25 个内置工具
+src/main/java/local/codenode/project  JavaProject/JdkManager/BuildRunner/RunLauncher/TraceCollector（工程构建运行与实时追踪）
 src/main/resources/schemas/           cnode-project-1.1.schema.json
 src/test/java/local/codenode/         JUnit 测试（含 Stage45Test）
 scripts/                              打包与安装脚本

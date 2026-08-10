@@ -22,6 +22,8 @@ public final class AgentToolContext {
     private final Runnable redoAction;
     private final UiAction uiAction;
     private QuestionHandler questionHandler;
+    private Supplier<List<Map<String, Object>>> conversationSupplier;
+    private FileChangeNotifier fileChangeNotifier;
 
     public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, null, null, null, null, null);
@@ -61,8 +63,20 @@ public final class AgentToolContext {
         return this.modelSupplier.get();
     }
 
+    /** 请求用户确认（旧签名，低风险默认询问）。 */
     public boolean confirm(String message) {
-        return this.confirmation == null || this.confirmation.confirm(message);
+        return this.confirmation == null || this.confirmation.confirm(ConfirmationLevel.WRITE, message, "");
+    }
+
+    /**
+     * 分级确认：仅高风险（delete/execute/git 危险命令/跨目录/超出请求范围）需要用户确认；
+     * 低风险（项目内 write_file 等）默认放行。确认文案用自然语言解释"在做什么"。
+     */
+    public boolean confirm(ConfirmationLevel level, String what, String detail) {
+        if (this.confirmation == null) {
+            return true;
+        }
+        return this.confirmation.confirm(level, what, detail);
     }
 
     public void audit(String entry) {
@@ -118,9 +132,35 @@ public final class AgentToolContext {
         return true;
     }
 
+    /** 设置会话消息历史提供者（供总结等工具读取）。 */
+    public void setConversationSupplier(Supplier<List<Map<String, Object>>> conversationSupplier) {
+        this.conversationSupplier = conversationSupplier;
+    }
+
+    /** 获取会话消息历史（最近消息），用于总结/分析；未设置时返回空。 */
+    public List<Map<String, Object>> conversationHistory() {
+        if (this.conversationSupplier == null) {
+            return List.of();
+        }
+        List<Map<String, Object>> history = this.conversationSupplier.get();
+        return history == null ? List.of() : List.copyOf(history);
+    }
+
+    /** 设置文件变更通知（Agent 写/改文件后回调，驱动文件变更面板刷新）。 */
+    public void setFileChangeNotifier(FileChangeNotifier notifier) {
+        this.fileChangeNotifier = notifier;
+    }
+
+    /** 通知文件变更（写/改/删文件后调用）。 */
+    public void notifyFileChange(String relative, String kind, String detail) {
+        if (this.fileChangeNotifier != null) {
+            this.fileChangeNotifier.onChange(relative, kind, detail);
+        }
+    }
+
     @FunctionalInterface
     public static interface ConfirmationHandler {
-        public boolean confirm(String var1);
+        public boolean confirm(ConfirmationLevel var1, String var2, String var3);
     }
 
     @FunctionalInterface
@@ -146,5 +186,21 @@ public final class AgentToolContext {
     @FunctionalInterface
     public static interface WorkbenchMutator {
         public void mutate(WorkflowModel var1);
+    }
+
+    /** 文件变更通知器（Agent 写/改/删文件后回调）。 */
+    @FunctionalInterface
+    public static interface FileChangeNotifier {
+        public void onChange(String var1, String var2, String var3);
+    }
+
+    /** 确认级别：低风险直接放行，高风险需用户确认。 */
+    public enum ConfirmationLevel {
+        /** 低风险：项目内常规操作，直接放行，不询问。 */
+        LOW,
+        /** 中风险：写入/修改文件（项目内），默认放行但记录。 */
+        WRITE,
+        /** 高风险：执行外部命令、删除、git 危险操作、跨目录、超出用户请求范围——必须确认。 */
+        HIGH
     }
 }

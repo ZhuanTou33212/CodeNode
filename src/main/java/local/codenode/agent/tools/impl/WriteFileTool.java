@@ -38,7 +38,13 @@ public final class WriteFileTool {
         Path root = context.projectRoot().toAbsolutePath().normalize();
         Path target = root.resolve(relative).normalize();
         if (!target.startsWith(root)) return AgentToolResult.error("路径越过项目边界");
-        if (!context.confirm("确认写入文件 " + relative + "？")) return AgentToolResult.error("已取消写入");
+        // 项目内写文件为中风险：默认放行并记录；但跨目录/改写已存在文件仍提示（若内容差异较大）
+        boolean existed = Files.exists(target);
+        String what = "写入文件 " + relative + (existed ? "（覆盖已有文件）" : "（新建文件）");
+        if (!context.confirm(local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.WRITE, what,
+                "将 " + content.length() + " 字节内容写入 " + relative + "。")) {
+            return AgentToolResult.error("已取消写入");
+        }
         boolean backup = !(arguments.get("backup") instanceof Boolean b) || b;
         try {
             if (Files.exists(target) && backup) {
@@ -48,6 +54,7 @@ public final class WriteFileTool {
             if (target.getParent() != null) Files.createDirectories(target.getParent());
             Files.writeString(target, content, StandardCharsets.UTF_8);
             context.audit("write_file " + relative + " bytes=" + content.length());
+            context.notifyFileChange(relative, existed ? "modify" : "create", content.length() + " 字节");
             return AgentToolResult.ok("已写入 " + relative + "（" + content.length() + " 字节）",
                 Map.of("path", relative, "bytes", content.length()));
         } catch (Exception e) {
