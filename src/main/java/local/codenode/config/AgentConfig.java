@@ -113,6 +113,17 @@ public final class AgentConfig {
         return parseInt(properties.getProperty("file_analysis.max_lines", "200"), 200);
     }
 
+
+    public String permission(String category) {
+        String value = properties.getProperty("agent.permissions", "ui:allow,write:confirm,execute:confirm,system:enabled");
+        for (String item : value.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) return pair[1].trim().toLowerCase(); }
+        return "confirm";
+    }
+    public boolean isPermissionAllowed(String category) { return "allow".equals(permission(category)) || "enabled".equals(permission(category)); }
+    public boolean isSystemEnabled() { return isPermissionAllowed("system"); }
+    public String permissions() { return properties.getProperty("agent.permissions", "ui:allow,write:confirm,execute:confirm,system:enabled"); }
+    public void setPermissions(String value) { properties.setProperty("agent.permissions", value == null || value.isBlank() ? "ui:allow,write:confirm,execute:confirm,system:enabled" : value.trim()); }
+
     /** 工具是否允许注册：不在 disabled 且（enabled 为空或在 enabled 内）。 */
     public boolean isToolAllowed(String toolName) {
         if (toolName == null || toolName.isBlank()) return false;

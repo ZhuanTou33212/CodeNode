@@ -4,6 +4,7 @@ api_base=https://api.deepseek.com/v1
 api_key=
 model=deepseek-v4-flash
 models=deepseek-v4-flash,deepseek-v4-pro
+agent.permissions=ui:allow,write:confirm,execute:confirm,system:enabled
 default_project_path=
 
 # ---- harness 与工具设置（Stage6）----

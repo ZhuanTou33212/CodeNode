@@ -8,6 +8,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
+import local.codenode.agent.PermissionMemory;
+import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.WorkflowModel;
 
 public final class AgentToolContext {
@@ -24,6 +27,9 @@ public final class AgentToolContext {
     private QuestionHandler questionHandler;
     private Supplier<List<Map<String, Object>>> conversationSupplier;
     private FileChangeNotifier fileChangeNotifier;
+    private SoftwareInfoProvider softwareInfoProvider;
+    private final AtomicBoolean toolStopRequested = new AtomicBoolean(false);
+    private final PermissionMemory permissionMemory = new PermissionMemory();
 
     public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, null, null, null, null, null);
@@ -79,6 +85,14 @@ public final class AgentToolContext {
         return this.confirmation.confirm(level, what, detail);
     }
 
+    /** Confirm once per session for a stable tool/action signature. */
+    public boolean confirmRemembered(ConfirmationLevel level, String what, String detail, String signature) {
+        Boolean remembered = permissionMemory.get(signature);
+        if (remembered != null) return remembered;
+        boolean allowed = confirm(level, what, detail);
+        if (allowed) permissionMemory.remember(signature, true);
+        return allowed;
+    }
     public void audit(String entry) {
         if (this.audit != null) {
             this.audit.log(entry);
@@ -187,6 +201,13 @@ public final class AgentToolContext {
     public static interface WorkbenchMutator {
         public void mutate(WorkflowModel var1);
     }
+
+    public void setSoftwareInfoProvider(SoftwareInfoProvider provider) { this.softwareInfoProvider = provider; }
+    public SoftwareInfoProvider softwareInfoProvider() { return softwareInfoProvider; }
+    public void requestToolStop() { toolStopRequested.set(true); }
+    public void clearToolStop() { toolStopRequested.set(false); }
+    public boolean toolStopRequested() { return toolStopRequested.get(); }
+    public PermissionMemory permissionMemory() { return permissionMemory; }
 
     /** 文件变更通知器（Agent 写/改/删文件后回调）。 */
     @FunctionalInterface

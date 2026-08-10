@@ -110,6 +110,9 @@ import local.codenode.ToolWindow;
 import local.codenode.UiTheme;
 import local.codenode.WorkflowModel;
 import local.codenode.agent.AgentChatController;
+import local.codenode.agent.AgentContext;
+import local.codenode.agent.AgentInfoSnapshot;
+import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.impl.AgentToolkit;
@@ -117,8 +120,7 @@ import local.codenode.config.AgentConfig;
 import local.codenode.ui.agent.AgentChatPanel;
 import local.codenode.ui.settings.AgentSettingsPanel;
 
-public final class MainFrame
-extends JFrame {
+public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private final WorkflowModel model = new WorkflowModel();
     private final CanvasPanel canvas = new CanvasPanel(this.model);
     private final JComboBox<WorkflowModel.Mode> mode = new JComboBox<WorkflowModel.Mode>(WorkflowModel.Mode.values());
@@ -252,6 +254,7 @@ extends JFrame {
                 SwingUtilities.invokeLater(() -> this.append("[Agent] 工作台变更失败：" + e.getMessage()));
             }
         }, () -> SwingUtilities.invokeLater(this::saveProject), () -> SwingUtilities.invokeLater(this::undo), () -> SwingUtilities.invokeLater(this::redo), this::agentUiAction);
+        this.agentToolContext.setSoftwareInfoProvider(this);
         this.agentToolContext.setQuestionHandler((question, options) -> {
             String[] result = new String[]{""};
             try {
@@ -959,6 +962,23 @@ extends JFrame {
         }
     }
 
+    @Override public Map<String, Object> softwareInfo() {
+        LinkedHashMap<String, Object> info = new LinkedHashMap<>();
+        info.put("version", "CodeNode Desktop 0.16"); info.put("formatVersion", "cnode 1.1");
+        info.put("mode", String.valueOf(mode.getSelectedItem())); info.put("language", String.valueOf(language.getSelectedItem()));
+        info.put("projectRoot", currentProjectRoot().toString()); info.put("projectName", projectName());
+        info.put("openDocuments", documents.size()); info.put("currentDocument", currentProjectFile == null ? "" : currentProjectFile.getFileName().toString());
+        info.put("canvasNodes", model.nodes().size()); info.put("canvasEdges", model.edges().size());
+        info.put("groups", model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP).count());
+        info.put("assetBundles", model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE).count());
+        info.put("selectedNodes", canvas.selected() == null ? 0 : 1); info.put("toolCount", agentTools == null ? 0 : agentTools.listTools().size());
+        info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state"));
+        return info;
+    }
+    @Override public Map<String, Object> environmentInfo() {
+        LinkedHashMap<String, Object> info = new LinkedHashMap<>();
+        info.put("jdk", System.getProperty("java.version")); info.put("gradle", "tool directory"); info.put("maven", "wrapper"); return info;
+    }
     public NodeControlApi nodeControlApi() {
         return this.nodeControlApi;
     }
@@ -972,6 +992,7 @@ extends JFrame {
                 loaded = this.projectCodec.load(checkpoint.get());
             }
             this.applyLoaded(loaded, file.toAbsolutePath().normalize());
+            try { this.projectCodec.loadAgentContext(file).ifPresent(this.agentChatController::restoreContext); } catch (Exception ignored) { }
             this.append("已打开工程：" + String.valueOf(file));
         }
         catch (Exception e) {
@@ -1119,8 +1140,20 @@ extends JFrame {
                     this.append("[Agent] 已新建内容节点：" + name);
                     break;
                 }
-                default: {
-                    this.append("[Agent] 未知界面操控：" + action);
+                                case "switch_tab": {
+                    int index = arguments.get("index") instanceof Number n ? n.intValue() : -1;
+                    if (index < 0) { String tab = String.valueOf(arguments.getOrDefault("tab", "")); index = tab.equals("code") ? 1 : tab.equals("agent") ? 2 : 0; }
+                    if (workbenchTabs != null && index >= 0 && index < workbenchTabs.getTabCount()) workbenchTabs.setSelectedIndex(index);
+                    break;
+                }
+                case "open_document": { Object path = arguments.get("path"); if (path == null || String.valueOf(path).isBlank()) openProject(); else openProject(Path.of(String.valueOf(path))); break; }
+                case "close_document": { closeDocument(documentTabs.getSelectedIndex()); break; }
+                case "save_document": { saveProject(); break; }
+                case "select_node": { String id = String.valueOf(arguments.getOrDefault("nodeId", "")); WorkflowModel.Node selected = model.byId(id); if (selected != null) canvas.select(selected); break; }
+                case "read_ui_state": { append("[Agent UI] tab=" + (workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()) + " size=" + getWidth() + "x" + getHeight()); break; }
+                case "open_menu": { append("[Agent] 菜单动作已请求：" + arguments.getOrDefault("menu", "")); break; }
+                case "dock_panel": { toggleAgentPanel(String.valueOf(arguments.getOrDefault("panel", ""))); break; }
+                case "run_config", "build_project", "run_project", "stop_run": { if (projectRunTool != null) projectRunTool.redock(); append("[Agent] 工程运行面板已切换：" + action); break; }                default: {
                     break;
                 }
             }
@@ -1182,7 +1215,7 @@ extends JFrame {
             target = target.toAbsolutePath().normalize();
             this.saveInspector();
             this.storeActiveOutput();
-            this.projectCodec.save(target, this.model, this.metadata(this.projectName(target)));
+            this.projectCodec.save(target, this.model, this.metadata(this.projectName(target)), AgentContext.of(this.agentChatController.sessionId(), this.agentChatController.summary(), this.agentChatController.messageHistory()), this.agentChatController.infoSnapshot());
             this.currentProjectFile = target;
             this.syncProjectLocation(target);
             this.rememberRecent(target);
@@ -1219,7 +1252,7 @@ extends JFrame {
             this.storeActiveOutput();
             Path root = this.currentProjectFile.getParent();
             this.recovery.saveCheckpoint(root, this.model, this.metadata());
-            this.projectCodec.save(this.currentProjectFile, this.model, this.metadata());
+            this.projectCodec.save(this.currentProjectFile, this.model, this.metadata(), AgentContext.of(this.agentChatController.sessionId(), this.agentChatController.summary(), this.agentChatController.messageHistory()), this.agentChatController.infoSnapshot());
             this.recovery.clear(root, this.documentId);
             this.dirty = false;
             this.refreshDocumentTitle();

@@ -19,6 +19,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import local.codenode.AgentProvider;
+import local.codenode.agent.AgentInfoSnapshot;
 import local.codenode.Json;
 import local.codenode.agent.ChatEvent;
 import local.codenode.agent.ChatListener;
@@ -88,9 +89,18 @@ public final class AgentChatController {
         this.sessionSummary = "";
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
+        this.toolContext.clearToolStop();
+        this.toolContext.permissionMemory().clear();
         deleteSessionFile();
     }
 
+    /** Restore a document-level context while retaining the current live system prompt. */
+    public void restoreContext(AgentContext context) {
+        if (context == null) return;
+        this.messages.clear(); this.messages.add(this.systemPrompt());
+        this.sessionSummary = context.summary();
+        this.messages.addAll(context.messages());
+    }
     public List<Map<String, Object>> messageHistory() {
         return List.copyOf(this.messages);
     }
@@ -110,6 +120,8 @@ public final class AgentChatController {
         if (this.messages.isEmpty()) {
             this.messages.add(this.systemPrompt());
             this.loadSessionFile();
+        } else {
+            this.messages.set(0, this.systemPrompt());
         }
         this.state = AgentProvider.SessionState.ACTIVE_RUNNING;
         this.stopRequested = false;
@@ -278,6 +290,7 @@ public final class AgentChatController {
         sb.append("19. 分析结果用 write_analysis_md 写成 Markdown 分析节点（缺省自动从画布生成项目架构），落在已分析项目上供后续节点调用。\n");
         sb.append("20. 需要操控软件本体（缩放/平移/聚焦/查看全部/调整窗口/切换面板/新建内容节点）用 ui_control；节点库按分类切换：资产类节点（图片/模型等）用软件现有预设（create_nodes nodeKind=asset/bundle），程序类用文件节点（nodeKind=file），所有文件节点创建时引用相对路径。\n");
         sb.append("21. 实时数据分析流程：先 scan_project 全量扫描 → write_analysis_md 生成架构 → runtime_trace/compile_run 依据实时运行输出判断应用了什么代码/程序/资产 → 再 write_analysis_md 更新总体架构 md 节点。\n");
+        sb.append("\n").append(AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider()).toText()).append("\n");
         if (this.config.extraHarnessPrompt() != null && !this.config.extraHarnessPrompt().isBlank()) {
             sb.append("\n【用户自定义附加规则】\n").append(this.config.extraHarnessPrompt()).append("\n");
         }
@@ -351,6 +364,7 @@ public final class AgentChatController {
                 // 工具执行：带超时保护 + 单工具异常兜底，回写错误给模型
                 AgentToolResult result;
                 try {
+                    listener.onEvent(ChatEvent.toolProgress(name));
                     long toolTimeout = this.resolveToolTimeout(name, args);
                     result = this.executeToolWithTimeout(name, args, toolTimeout);
                 } catch (Exception toolFailure) {
@@ -425,9 +439,17 @@ public final class AgentChatController {
      * 超时结果回写为"工具执行超时"，让模型重新思考换方案。
      */
     private AgentToolResult executeToolWithTimeout(String name, Map<String, Object> args, long timeoutSeconds) {
+        this.toolContext.clearToolStop();
         Future<AgentToolResult> future = this.toolExecutor.submit(() -> this.tools.execute(name, args, this.toolContext));
         try {
-            return future.get(timeoutSeconds, TimeUnit.SECONDS);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+            while (true) {
+                if (this.stopRequested || this.toolContext.toolStopRequested()) { future.cancel(true); return AgentToolResult.error("工具已取消：" + name); }
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) throw new TimeoutException();
+                try { return future.get(Math.min(TimeUnit.NANOSECONDS.toMillis(remaining), 250), TimeUnit.MILLISECONDS); }
+                catch (TimeoutException tick) { }
+            }
         } catch (TimeoutException timeout) {
             future.cancel(true);
             return AgentToolResult.error("工具执行超时（超过 " + timeoutSeconds + " 秒）：" + name
@@ -501,7 +523,12 @@ public final class AgentChatController {
             return;
         }
         this.stopRequested = true;
+        this.toolContext.requestToolStop();
         this.client.abort();
+    }
+
+    public void requestToolStop() { this.toolContext.requestToolStop(); }
+    public AgentInfoSnapshot infoSnapshot() { return AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider());
     }
 
     private static Map<String, Object> toStringMap(Map<?, ?> map) {

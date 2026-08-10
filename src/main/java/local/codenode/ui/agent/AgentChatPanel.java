@@ -255,11 +255,11 @@ public final class AgentChatPanel extends JPanel {
             case CANCELLED -> {
                 append("\n— 已停止\n\n", DIM);
             }
-            case STATE -> updateState(event.state() != null ? event.state().name() : "IDLE");
+            case STATE -> updateState(event.state() != null ? event.state().name() : "IDLE", event.activity());
         }
     }
 
-    private void updateState(String stateName) {
+    private void updateState(String stateName, String activity) {
         boolean running = "ACTIVE_RUNNING".equals(stateName) || "ACTIVE_CANCELLED".equals(stateName);
         status.setText("IDLE".equals(stateName) ? "空闲"
                 : "ACTIVE_RUNNING".equals(stateName) ? "生成中…" : stateName);
