@@ -373,6 +373,8 @@ public final class AgentChatController {
                     args = Map.of();
                 }
                 // 工具执行：带超时保护 + 单工具异常兜底，回写错误给模型
+                String stepId = this.timeline.beginStep(name, "tool call");
+                local.codenode.WorkflowModel beforeWorkbench = isWorkbenchMutation(name) ? this.toolContext.snapshotWorkbench() : null;
                 AgentToolResult result;
                 try {
                     listener.onEvent(ChatEvent.toolProgress(name));
@@ -385,6 +387,7 @@ public final class AgentChatController {
                 String resultId = this.toolContext.resultStore().store(name, result);
                 String structured = this.toolContext.resultStore().modelPayload(resultId, name, result, MAX_TOOL_RESULT_CHARS);
                 String preview = AgentChatController.truncate(resultText, 1200);
+                boolean reversible = beforeWorkbench != null && result.ok() && this.toolContext.model() != null && this.toolContext.model().revision() != beforeWorkbench.revision();
                 // 判定本轮是否出现失败/空结果/超时：失败、空文本、取消、超时都视为未取得有效结果
                 boolean issue = !result.ok() || result.text() == null || result.text().isBlank()
                         || result.text().contains("已取消") || result.text().contains("失败")
@@ -395,6 +398,12 @@ public final class AgentChatController {
                     listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] ⚠ " + preview + "（未取得有效结果，继续尝试其他方案）\n"));
                 } else {
                     listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] " + preview + "\n"));
+                }
+                if (issue) {
+                    this.timeline.failStep(stepId, preview);
+                } else {
+                    Runnable undo = reversible ? () -> this.toolContext.restoreWorkbench(beforeWorkbench) : null;
+                    this.timeline.completeStep(stepId, resultId, preview, undo);
                 }
                 LinkedHashMap<String, Object> toolMessage = new LinkedHashMap<String, Object>();
                 toolMessage.put("role", "tool");
@@ -542,6 +551,13 @@ public final class AgentChatController {
 
     public void requestToolStop() { this.toolContext.requestToolStop(); }
     public AgentInfoSnapshot infoSnapshot() { return AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider());
+    }
+
+    private static boolean isWorkbenchMutation(String name) {
+        return switch (name == null ? "" : name) {
+            case "create_nodes", "workbench_edit", "workbench_connect", "workbench_structure", "ui_control" -> true;
+            default -> false;
+        };
     }
 
     private static Map<String, Object> toStringMap(Map<?, ?> map) {
