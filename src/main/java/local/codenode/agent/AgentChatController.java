@@ -428,6 +428,7 @@ public final class AgentChatController {
         // 强制总结：执行过工具后，补一轮"请总结"请求，确保用户始终收到最终答案
         // （覆盖 ask_user 返回答案后模型不继续、以及模型中途停下的情况）。
         if (!this.stopRequested && executedTool) {
+            this.timeline.verify();
             Map<String, Object> summaryRequest = Map.of("role", "user",
                     "content", "请基于以上工具执行结果与用户提供的回答，总结本次任务的结论，并给出清晰、完整的最终答案回复给用户。注意：你的回复内容本身就会直接展示给用户，请务必把最终答案写在回复正文（content）中，不要只放在推理里。");
             this.messages.add(summaryRequest);
@@ -545,6 +546,7 @@ public final class AgentChatController {
             return;
         }
         this.stopRequested = true;
+        this.timeline.cancelTask();
         this.toolContext.requestToolStop();
         this.client.abort();
     }
