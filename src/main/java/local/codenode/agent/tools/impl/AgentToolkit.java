@@ -17,6 +17,7 @@ import local.codenode.agent.tools.impl.FindFilesTool;
 import local.codenode.agent.tools.impl.GetWorkbenchModelTool;
 import local.codenode.agent.tools.impl.ListDirectoryTool;
 import local.codenode.agent.tools.impl.ReadFileTool;
+import local.codenode.agent.tools.impl.ReadToolResultTool;
 import local.codenode.agent.tools.impl.RuntimeTraceTool;
 import local.codenode.agent.tools.impl.SaveProjectTool;
 import local.codenode.agent.tools.impl.ScanProjectTool;
@@ -62,6 +63,7 @@ public final class AgentToolkit {
         WorkbenchStructureTool.register(registry);
         ScanProjectTool.register(registry);
         ReadFileTool.register(registry);
+        ReadToolResultTool.register(registry);
         WriteFileTool.register(registry);
         EditFileTool.register(registry);
         FindFilesTool.register(registry);

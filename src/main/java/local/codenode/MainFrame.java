@@ -140,8 +140,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private final JButton expandBundleBtn = new JButton("展开资源组为独立节点");
     private final JLabel assetPreview = new JLabel();
     private final JTextArea prompt = new JTextArea(7, 22);
-    private final JTextArea log = new JTextArea(7, 80);
-    private final JTextArea errors = new JTextArea(7, 50);
+    private final JComboBox<SubmissionChoice> submissionTarget = new JComboBox<>();
+    private final JButton submitRequestButton = new JButton("提交");
     private CodeReviewPanel codeReviewPanel;
     private final DefaultListModel<String> queueItems = new DefaultListModel();
     private final JList<String> queueList = new JList<String>(this.queueItems);
@@ -191,14 +191,14 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private JPanel dockRoot;
     private JComponent editor;
     private ToolWindow inspectorTool;
-    private ToolWindow outputTool;
     private ToolWindow changeTool;
     private ToolWindow queueTool;
     private ToolWindow fileBrowserTool;
     private local.codenode.ui.FileBrowserPanel fileBrowserPanel;
     private local.codenode.ui.FileChangePanel fileChangePanel;
-    private ToolWindow projectRunTool;
     private local.codenode.ui.ProjectRunPanel projectRunPanel;
+    private local.codenode.ui.FloatingOutputOverlay floatingOutput;
+    private JTabbedPane inspectorTabs;
     private JTabbedPane workbenchTabs;
     private JScrollPane inspectorScroll;
     private static final int HEADER = 34;
@@ -221,7 +221,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 MainFrame.this.closeApplication();
             }
         });
-        this.setMinimumSize(new Dimension(1180, 760));
+        this.setMinimumSize(new Dimension(760, 500));
         this.setJMenuBar(this.menuBar());
         this.setLayout(new BorderLayout());
         try {
@@ -310,6 +310,9 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             }
         });
         this.initializeProject(false);
+        if (this.currentDocument() == null && this.currentProjectFile == null) {
+            this.syncProjectPanels(null);
+        }
         this.updateMode();
         this.nodeControlApi = new NodeControlApi(this.model, () -> this.currentProjectFile != null ? this.currentProjectFile.getParent() : Path.of(this.project.getText(), new String[0]), this.canvas::selected, ids -> this.canvas.selectNodes(ids.stream().map(this.model::byId).toList()), this.canvas::repaint, this::saveProject, this::undo, this::redo);
         this.installGlobalKeys();
@@ -341,7 +344,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         file.addSeparator();
         file.add(this.item("退出", this::closeApplication));
         JMenu edit = this.menu("编辑(E)", this.item("应用节点修改", this::saveInspector));
-        JMenu view = this.menu("视图(V)", this.item("显示文件浏览器", () -> this.fileBrowserTool.redock()), this.item("显示节点资源管理器", () -> this.inspectorTool.redock()), this.item("显示输出与运行报告", () -> this.outputTool.redock()), this.item("显示文件变更", () -> this.changeTool.redock()), this.item("显示工程构建运行", () -> this.projectRunTool.redock()), this.item("切换到代码审查", () -> {
+        JMenu view = this.menu("视图(V)", this.item("显示文件浏览器", () -> this.fileBrowserTool.redock()), this.item("显示节点资源管理器", () -> this.inspectorTool.redock()), this.item("显示文件变更", () -> this.changeTool.redock()), this.item("切换到代码审查", () -> {
             if (this.workbenchTabs != null) {
                 this.workbenchTabs.setSelectedIndex(1);
             }
@@ -350,11 +353,11 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 this.workbenchTabs.setSelectedIndex(2);
             }
         }), this.item("显示申请队列", () -> this.queueTool.redock()));
-        JMenu projectMenu = this.menu("项目(P)", this.item("初始化本地申请槽", () -> this.initializeProject(true)), this.item("打开工程构建运行", () -> this.projectRunTool.redock()));
+        JMenu projectMenu = this.menu("项目(P)", this.item("初始化本地申请槽", () -> this.initializeProject(true)), this.item("工程运行", this::openProjectRun));
         JMenu analysisMenu = this.menu("分析项目(A)", this.item("全量扫描（目录层级）", this::fullScanProject), this.item("项目全量解析（按包归组）", this::analyzeProjectFull), this.item("分析项目结构（申请提交）", this::analyzeProject), this.item("识别并构建当前工程", () -> {
             if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
         }));
-        JMenu build = this.menu("生成(B)", this.item("提交选择的节点到 Agent", this::submitSelected), this.item("选择组输出提交…", () -> this.showSubmissionMenu(null)));
+        JMenu build = this.menu("生成(B)", this.item("打开输出请求", this::focusSubmissionControls), this.item("提交当前选择", this::submitSelected));
         JMenu debug = this.menu("调试(D)", new JMenuItem[0]);
         JMenu tools = this.menu("工具(T)", this.item("刷新结果", this::pollResults));
         JMenu help = this.menu("帮助(H)", new JMenuItem[0]);
@@ -365,26 +368,25 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
 
     private JComponent toolbar() {
-        JPanel toolbar = new JPanel(new FlowLayout(0, 7, 7));
+        JPanel toolbar = new UiTheme.ResponsiveWrapPanel(FlowLayout.LEFT, 8, 6);
         toolbar.setBackground(UiTheme.TOOLBAR);
-        toolbar.setBorder(new EmptyBorder(1, 7, 1, 7));
+        toolbar.setBorder(new EmptyBorder(7, 12, 7, 12));
+        toolbar.setMinimumSize(new Dimension(0, 0));
         JButton choose = this.button("打开项目", this::chooseProject);
         JButton recent = new JButton("最近打开");
         JButton init = this.button("初始化", () -> this.initializeProject(true));
         recent.addActionListener(e -> this.showRecentProjects(recent));
         JButton add = this.button("＋ 添加节点", this::addNode);
-        JButton submit = this.button("▷ 提交申请", this::submitSelected);
-        JButton submitMenu = new JButton("▼");
-        submitMenu.setToolTipText("选择单节点或组输出申请");
-        submitMenu.addActionListener(e -> this.showSubmissionMenu(submitMenu));
         JButton analyzeProjectBtn = this.button("分析项目结构", this::analyzeProject);
         this.analysisBtn = this.button("项目全量解析", this::analyzeProjectFull);
         this.analysisBtn.setEnabled(false);
         JButton fullScanBtn = this.button("全量扫描", this::fullScanProject);
         JButton runProjectBtn = this.button("工程构建运行", () -> {
             if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
-            this.projectRunTool.redock();
+            this.openProjectRun();
         });
+        this.project.setMinimumSize(new Dimension(120, 30));
+        this.project.setPreferredSize(new Dimension(220, 30));
         toolbar.add(new JLabel("项目"));
         toolbar.add(this.project);
         toolbar.add(choose);
@@ -399,9 +401,6 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         toolbar.add(this.agentProvider);
         toolbar.add(MainFrame.separator());
         toolbar.add(add);
-        toolbar.add(submit);
-        toolbar.add(submitMenu);
-        toolbar.add(MainFrame.separator());
         toolbar.add(analyzeProjectBtn);
         toolbar.add(this.analysisBtn);
         toolbar.add(fullScanBtn);
@@ -415,7 +414,16 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         canvasScroll.getVerticalScrollBar().setUnitIncrement(20);
         JPanel canvasPanel = new JPanel(new BorderLayout());
         canvasPanel.add((Component)this.documentTabs(), "North");
-        canvasPanel.add((Component)canvasScroll, "Center");
+        javax.swing.JLayeredPane canvasLayer = new javax.swing.JLayeredPane() {
+            @Override public void doLayout() {
+                for (Component child : getComponents()) child.setBounds(0, 0, getWidth(), getHeight());
+            }
+        };
+        canvasLayer.setMinimumSize(new Dimension(0, 0));
+        canvasLayer.add(canvasScroll, javax.swing.JLayeredPane.DEFAULT_LAYER);
+        this.floatingOutput = new local.codenode.ui.FloatingOutputOverlay();
+        canvasLayer.add(this.floatingOutput, javax.swing.JLayeredPane.PALETTE_LAYER);
+        canvasPanel.add(canvasLayer, "Center");
         this.workbenchTabs = new JTabbedPane();
         this.workbenchTabs.addTab("节点图", canvasPanel);
         this.workbenchTabs.addTab("代码审查", this.reviewPanel());
@@ -423,24 +431,25 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.workbenchTabs.addTab("内嵌 Agent", this.agentChatPanel);
         UiTheme.apply(this.workbenchTabs);
         this.editor = this.workbenchTabs;
+        this.editor.setMinimumSize(new Dimension(260, 220));
         this.dockRoot = new JPanel(new BorderLayout());
         this.fileBrowserPanel = new local.codenode.ui.FileBrowserPanel((file, text) -> this.openFileFromBrowser(file, text));
         this.fileBrowserTool = new ToolWindow(this, "文件浏览器", this.fileBrowserPanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.fileBrowserTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.fileBrowserTool));
         this.inspectorTool = new ToolWindow(this, "节点资源管理器", this.inspector(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.inspectorTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.inspectorTool));
-        this.outputTool = new ToolWindow(this, "输出与运行报告", this.outputPanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.outputTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.outputTool));
         this.fileChangePanel = new local.codenode.ui.FileChangePanel(() -> this.currentProjectRoot() != null && !this.currentProjectRoot().isBlank() ? Path.of(this.currentProjectRoot()) : Path.of("."));
         this.changeTool = new ToolWindow(this, "文件变更", this.fileChangePanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.changeTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.changeTool));
         this.queueTool = new ToolWindow(this, "申请队列", this.queuePanel(), collapsed -> this.rebuildDockLayout(), position -> this.dock(this.queueTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.queueTool));
-        this.projectRunPanel = new local.codenode.ui.ProjectRunPanel();
-        this.projectRunTool = new ToolWindow(this, "工程构建运行", this.projectRunPanel, collapsed -> this.rebuildDockLayout(), position -> this.dock(this.projectRunTool, (ToolWindow.DockRequest)position), () -> this.toggleDockOrientation(this.projectRunTool));
-        this.tabGroup.put(this.inspectorTool, this.tabGroupSequence++);
-        for (ToolWindow tool : List.of(this.outputTool, this.changeTool, this.queueTool)) {
-            this.tabGroup.put(tool, this.tabGroupSequence);
+        int rightTabs = this.tabGroupSequence++;
+        for (ToolWindow tool : List.of(this.inspectorTool, this.changeTool, this.queueTool)) {
+            this.tabGroup.put(tool, rightTabs);
         }
+        this.fileBrowserTool.setMinimumSize(new Dimension(180, 180));
+        this.inspectorTool.setMinimumSize(new Dimension(300, 220));
+        this.changeTool.setMinimumSize(new Dimension(260, 180));
+        this.queueTool.setMinimumSize(new Dimension(260, 180));
         this.docked.get((Object)ToolWindow.DockPosition.LEFT).add(this.fileBrowserTool);
         this.docked.get((Object)ToolWindow.DockPosition.RIGHT).add(this.inspectorTool);
-        this.docked.get((Object)ToolWindow.DockPosition.RIGHT).addAll(List.of(this.outputTool, this.changeTool, this.queueTool));
-        this.docked.get((Object)ToolWindow.DockPosition.BOTTOM).add(this.projectRunTool);
+        this.docked.get((Object)ToolWindow.DockPosition.RIGHT).addAll(List.of(this.changeTool, this.queueTool));
         this.canvas.onFileDropped((file, point) -> this.dropFileToCanvas(file, point));
         this.rebuildDockLayout();
         return this.dockRoot;
@@ -529,12 +538,13 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             UiTheme.styleSplit(split);
             // 两侧弹性可调：拖动分隔线即可缩放左右任一窗口
             split.setDividerSize(8);
-            split.setResizeWeight(0.5);
             split.setOneTouchExpandable(true);
             final double proportion = i / (double) (i + 1);
+            split.setResizeWeight(proportion);
             SwingUtilities.invokeLater(() -> {
-                int width = split.getWidth();
-                split.setDividerLocation((int) Math.round((width > 0 ? width : 600) * proportion));
+                int extent = split.getOrientation() == JSplitPane.HORIZONTAL_SPLIT ? split.getWidth() : split.getHeight();
+                int fallback = split.getOrientation() == JSplitPane.HORIZONTAL_SPLIT ? 600 : 420;
+                split.setDividerLocation((int) Math.round(Math.max(1, extent > 0 ? extent : fallback) * proportion));
             });
             group = split;
         }
@@ -557,18 +567,59 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private JComponent attachDock(JComponent center, JComponent tool, ToolWindow.DockPosition position) {
         boolean horizontal = position == ToolWindow.DockPosition.LEFT || position == ToolWindow.DockPosition.RIGHT;
         boolean leading = position == ToolWindow.DockPosition.LEFT || position == ToolWindow.DockPosition.TOP;
-        JSplitPane split = new JSplitPane(horizontal ? 1 : 0, leading ? tool : center, leading ? center : tool);
+        JSplitPane split = new JSplitPane(horizontal ? JSplitPane.HORIZONTAL_SPLIT : JSplitPane.VERTICAL_SPLIT,
+                leading ? tool : center, leading ? center : tool);
         UiTheme.styleSplit(split);
         split.setDividerSize(8);
         split.setOneTouchExpandable(true);
-        // 等比缩放：窗口 resize 时两侧按比例调整，拖拽分隔线可自由缩放
-        split.setResizeWeight(0.5);
-        double proportion = leading ? 0.22 : 0.70;
-        SwingUtilities.invokeLater(() -> {
-            int width = split.getWidth();
-            split.setDividerLocation((int) Math.round((width > 0 ? width : 1000) * proportion));
+        // Side tools keep a legible working width; the canvas absorbs resize first.
+        split.setResizeWeight(leading ? 0.0 : 1.0);
+        SwingUtilities.invokeLater(() -> this.setInitialDockExtent(split, position));
+        split.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override public void componentResized(java.awt.event.ComponentEvent event) {
+                MainFrame.this.enforceDockMinimum(split, position);
+            }
         });
         return split;
+    }
+
+    private void setInitialDockExtent(JSplitPane split, ToolWindow.DockPosition position) {
+        int total = split.getOrientation() == JSplitPane.HORIZONTAL_SPLIT ? split.getWidth() : split.getHeight();
+        if (total <= 0) return;
+        int desired = preferredDockExtent(position, total);
+        boolean leading = position == ToolWindow.DockPosition.LEFT || position == ToolWindow.DockPosition.TOP;
+        int location = leading ? desired : total - desired - split.getDividerSize();
+        split.setDividerLocation(Math.max(0, location));
+    }
+
+    private void enforceDockMinimum(JSplitPane split, ToolWindow.DockPosition position) {
+        int total = split.getOrientation() == JSplitPane.HORIZONTAL_SPLIT ? split.getWidth() : split.getHeight();
+        if (total <= 0) return;
+        boolean leading = position == ToolWindow.DockPosition.LEFT || position == ToolWindow.DockPosition.TOP;
+        int current = leading ? split.getDividerLocation()
+                : total - split.getDividerLocation() - split.getDividerSize();
+        int minimum = minimumDockExtent(position, total);
+        int centerMinimum = split.getOrientation() == JSplitPane.HORIZONTAL_SPLIT ? 260 : 180;
+        int allowed = Math.max(0, total - centerMinimum - split.getDividerSize());
+        int target = Math.min(preferredDockExtent(position, total), allowed);
+        if (current < minimum && target >= minimum) {
+            int location = leading ? target : total - target - split.getDividerSize();
+            split.setDividerLocation(Math.max(0, location));
+        }
+    }
+
+    private static int minimumDockExtent(ToolWindow.DockPosition position, int total) {
+        if (position == ToolWindow.DockPosition.RIGHT) return total < 900 ? 270 : 300;
+        if (position == ToolWindow.DockPosition.LEFT) return total < 900 ? 175 : 200;
+        return total < 650 ? 160 : 200;
+    }
+
+    private static int preferredDockExtent(ToolWindow.DockPosition position, int total) {
+        return switch (position) {
+            case RIGHT -> total >= 1400 ? 390 : total >= 1100 ? 350 : total >= 900 ? 315 : Math.max(270, total - 490);
+            case LEFT -> total >= 1300 ? 250 : total >= 950 ? 220 : 180;
+            case TOP, BOTTOM -> Math.max(190, Math.min(300, total / 3));
+        };
     }
 
     private JComponent collapsedRail() {
@@ -679,9 +730,100 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
 
     private JComponent inspector() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setMinimumSize(new Dimension(280, 240));
+        panel.setPreferredSize(new Dimension(340, 620));
+
+        JPanel requestBar = new JPanel(new BorderLayout(6, 4));
+        requestBar.setBorder(new EmptyBorder(8, 9, 8, 9));
+        JLabel requestLabel = new JLabel("输出请求");
+        requestLabel.setForeground(UiTheme.MUTED);
+        requestBar.add(requestLabel, BorderLayout.NORTH);
+        this.submissionTarget.setToolTipText("选择当前节点或有效组输出作为请求目标");
+        this.submissionTarget.setMinimumSize(new Dimension(120, 30));
+        this.submissionTarget.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+            @Override public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) { refreshSubmissionTargets(); }
+            @Override public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {}
+            @Override public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {}
+        });
+        requestBar.add(this.submissionTarget, BorderLayout.CENTER);
+        this.submitRequestButton.addActionListener(e -> this.submitSubmissionChoice());
+        requestBar.add(this.submitRequestButton, BorderLayout.EAST);
+
+        this.inspectorTabs = new JTabbedPane();
+        this.inspectorTabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        this.inspectorTabs.addTab("节点", this.nodeInspector());
+        this.projectRunPanel = new local.codenode.ui.ProjectRunPanel(this::append);
+        JScrollPane runScroll = new JScrollPane(this.projectRunPanel);
+        runScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        runScroll.setBorder(null);
+        runScroll.getVerticalScrollBar().setUnitIncrement(24);
+        this.inspectorTabs.addTab("工程运行", runScroll);
+        panel.add(requestBar, BorderLayout.NORTH);
+        panel.add(this.inspectorTabs, BorderLayout.CENTER);
+        this.refreshSubmissionTargets();
+        return panel;
+    }
+
+    private void refreshSubmissionTargets() {
+        SubmissionChoice previous = (SubmissionChoice)this.submissionTarget.getSelectedItem();
+        this.submissionTarget.removeAllItems();
+        WorkflowModel.Mode currentMode = (WorkflowModel.Mode)this.mode.getSelectedItem();
+        boolean virtualOnly = currentMode == WorkflowModel.Mode.MARKDOWN
+                && this.model.nodes().stream().noneMatch(n -> n.nodeKind == WorkflowModel.NodeKind.FILE);
+        WorkflowModel.Node selected = this.canvas.selected();
+        if (!virtualOnly && selected != null && selected.nodeKind != WorkflowModel.NodeKind.GROUP_OUTPUT) {
+            this.submissionTarget.addItem(new SubmissionChoice("当前节点 · " + selected.name, "", true));
+        }
+        for (WorkflowModel.Node group : this.model.groupOutputs()) {
+            if (!this.model.isValidGroupOutput(group)) continue;
+            int count = this.model.upstreamOf(group).size();
+            this.submissionTarget.addItem(new SubmissionChoice("组输出 · " + group.name + "  (" + count + ")", group.id, false));
+        }
+        if (previous != null) {
+            for (int i = 0; i < this.submissionTarget.getItemCount(); i++) {
+                SubmissionChoice item = this.submissionTarget.getItemAt(i);
+                if (item.nodeId().equals(previous.nodeId()) && item.selectedNode() == previous.selectedNode()) {
+                    this.submissionTarget.setSelectedIndex(i);
+                    break;
+                }
+            }
+        }
+        boolean available = this.submissionTarget.getItemCount() > 0;
+        this.submissionTarget.setEnabled(available);
+        this.submitRequestButton.setEnabled(available);
+        if (!available) this.submissionTarget.setToolTipText(virtualOnly ? "虚拟文件空间需要有效组输出" : "请选择节点或连接有效组输出");
+    }
+
+    private void submitSubmissionChoice() {
+        SubmissionChoice choice = (SubmissionChoice)this.submissionTarget.getSelectedItem();
+        if (choice == null) return;
+        if (choice.selectedNode()) {
+            this.submitSelected();
+        } else {
+            WorkflowModel.Node group = this.model.byId(choice.nodeId());
+            if (group != null) this.submitGroup(group);
+        }
+        this.refreshSubmissionTargets();
+    }
+
+    private void focusSubmissionControls() {
+        this.inspectorTool.redock();
+        if (this.inspectorTabs != null) this.inspectorTabs.setSelectedIndex(0);
+        this.refreshSubmissionTargets();
+        SwingUtilities.invokeLater(() -> this.submissionTarget.requestFocusInWindow());
+    }
+
+    private void openProjectRun() {
+        this.inspectorTool.redock();
+        if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
+        if (this.inspectorTabs != null) this.inspectorTabs.setSelectedIndex(1);
+    }
+
+    private JComponent nodeInspector() {
         JPanel outer = new JPanel(new BorderLayout());
-        outer.setMinimumSize(new Dimension(140, 300));
-        JPanel body = new JPanel();
+        outer.setMinimumSize(new Dimension(0, 0));
+        JPanel body = new UiTheme.VerticalScrollPanel();
         body.setLayout(new BoxLayout(body, 1));
         body.setBorder(new EmptyBorder(6, 9, 8, 9));
         this.nodePath.setForeground(UiTheme.MUTED);
@@ -766,8 +908,9 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         body.add(virtualPathBtn);
         body.add(Box.createVerticalStrut(5));
         this.assetPreview.setAlignmentX(0.0f);
-        this.assetPreview.setPreferredSize(new Dimension(280, 170));
-        this.assetPreview.setMaximumSize(new Dimension(Integer.MAX_VALUE, 180));
+        this.assetPreview.setMinimumSize(new Dimension(0, 100));
+        this.assetPreview.setPreferredSize(new Dimension(240, 145));
+        this.assetPreview.setMaximumSize(new Dimension(Integer.MAX_VALUE, 160));
         this.assetPreview.setHorizontalAlignment(0);
         this.assetPreview.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(1, 1, 1, 1, UiTheme.BORDER), new EmptyBorder(4, 4, 4, 4)));
         this.assetPreview.setOpaque(true);
@@ -804,7 +947,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         ungroup.setAlignmentX(0.0f);
         body.add(ungroup);
         body.add(Box.createVerticalGlue());
-        JTextArea hint = new JTextArea("连线：输出端口和输入端口都可以向外拖；整理点可拖到输入端口建立分支，Alt+左键拖动整理点可移动。\n失败结果会标红节点，并在输出面板显示文件、行与列。");
+        JTextArea hint = new JTextArea("连线：输出端口和输入端口都可以向外拖；整理点可拖到输入端口建立分支，Alt+左键拖动整理点可移动。\n失败结果会标红节点，并在画布右侧短暂显示文件、行与列。");
         hint.setEditable(false);
         hint.setLineWrap(true);
         hint.setWrapStyleWord(true);
@@ -829,20 +972,6 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         return outer;
     }
 
-    private JComponent outputPanel() {
-        this.log.setEditable(false);
-        this.log.setLineWrap(true);
-        this.log.setFont(new Font("Consolas", 0, 13));
-        JScrollPane scroll = new JScrollPane(this.log);
-        scroll.setPreferredSize(new Dimension(320, 190));
-        return scroll;
-    }
-
-    private JComponent errorPanel() {
-        // 错误与运行报告合并：错误文本直接进入输出/运行报告面板（log）
-        return this.outputPanel();
-    }
-
     private JComponent reviewPanel() {
         this.codeReviewPanel = new CodeReviewPanel(this::acceptDraft, this::rejectDraft, this::rollbackCode, this::refreshReview);
         return this.codeReviewPanel;
@@ -863,12 +992,12 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private JComponent statusBar() {
         JPanel bar = new JPanel(new BorderLayout());
         bar.setBackground(UiTheme.TOOLBAR);
-        bar.setBorder(new EmptyBorder(4, 5, 4, 8));
+        bar.setBorder(new EmptyBorder(6, 12, 6, 12));
         this.status.setForeground(UiTheme.TEXT);
         bar.add((Component)this.status, "West");
         JLabel queueState = new JLabel("本地文件队列  |  UTF-8  |  Java 21");
         queueState.setForeground(UiTheme.MUTED);
-        JPanel eastPanel = new JPanel(new FlowLayout(0, 12, 0));
+        JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         eastPanel.setOpaque(false);
         this.progressBar.setPreferredSize(new Dimension(180, 14));
         this.progressBar.setStringPainted(true);
@@ -878,6 +1007,15 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         eastPanel.add(this.spaceMode);
         eastPanel.add(queueState);
         bar.add((Component)eastPanel, "East");
+        bar.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override public void componentResized(java.awt.event.ComponentEvent event) {
+                int width = bar.getWidth();
+                queueState.setVisible(width >= 900);
+                spaceMode.setVisible(width >= 720);
+                progressBar.setPreferredSize(new Dimension(width >= 1050 ? 180 : 120, 14));
+                eastPanel.revalidate();
+            }
+        });
         return bar;
     }
 
@@ -1153,7 +1291,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 case "read_ui_state": { append("[Agent UI] tab=" + (workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()) + " size=" + getWidth() + "x" + getHeight()); break; }
                 case "open_menu": { append("[Agent] 菜单动作已请求：" + arguments.getOrDefault("menu", "")); break; }
                 case "dock_panel": { toggleAgentPanel(String.valueOf(arguments.getOrDefault("panel", ""))); break; }
-                case "run_config", "build_project", "run_project", "stop_run": { if (projectRunTool != null) projectRunTool.redock(); append("[Agent] 工程运行面板已切换：" + action); break; }                default: {
+                case "run_config", "build_project", "run_project", "stop_run": { openProjectRun(); append("[Agent] 已打开工程运行：" + action); break; }                default: {
                     break;
                 }
             }
@@ -1166,7 +1304,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private void toggleAgentPanel(String panel) {
         ToolWindow target = switch (panel) {
             case "inspector" -> this.inspectorTool;
-            case "output" -> this.outputTool;
+            case "output" -> this.inspectorTool;
             case "error", "changes", "files" -> this.changeTool;
             case "queue" -> this.queueTool;
             default -> null;
@@ -1182,7 +1320,20 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         }
     }
 
+    static boolean canSave(boolean hasActiveProject, boolean readOnly) {
+        return hasActiveProject && !readOnly;
+    }
+
+    private boolean hasActiveProject() {
+        return this.currentDocument() != null;
+    }
+
     private void saveProject() {
+        if (!canSave(this.hasActiveProject(), this.projectReadOnly)) {
+            this.status.setText("  未创建或打开项目  |  请先新建或打开项目");
+            this.append("保存不可用：请先创建或打开项目");
+            return;
+        }
         if (this.projectReadOnly) {
             this.error(new IllegalStateException("更高版本工程只能只读打开"));
             return;
@@ -1195,6 +1346,11 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
 
     private void saveProjectAs() {
+        if (!canSave(this.hasActiveProject(), this.projectReadOnly)) {
+            this.status.setText("  未创建或打开项目  |  请先新建或打开项目");
+            this.append("保存不可用：请先创建或打开项目");
+            return;
+        }
         if (this.projectReadOnly) {
             this.error(new IllegalStateException("更高版本工程不能另存为当前格式"));
             return;
@@ -1346,14 +1502,14 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
 
     /** 让文件浏览器与工程构建运行面板跟随当前项目根目录。 */
     private void syncProjectPanels(Path projectDir) {
-        Path root = projectDir;
-        if (root == null) {
-            String text = this.project.getText() == null ? "" : this.project.getText().trim();
-            if (!text.isBlank()) root = Path.of(text);
-            else if (this.currentProjectFile != null) root = this.currentProjectFile.getParent();
+        // null is an explicit blank state: never retain the previous project directory.
+        if (projectDir == null) {
+            if (this.fileBrowserPanel != null) this.fileBrowserPanel.setRoot(null);
+            if (this.projectRunPanel != null) this.projectRunPanel.setProjectPathSilent("");
+            if (this.agentChatPanel != null) this.agentChatPanel.setProjectPath("");
+            return;
         }
-        if (root == null) return;
-        root = root.toAbsolutePath().normalize();
+        Path root = projectDir.toAbsolutePath().normalize();
         if (this.fileBrowserPanel != null) {
             this.fileBrowserPanel.setRoot(root);
         }
@@ -1467,13 +1623,11 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         if (this.queue != null && this.queue.projectRoot() != null) {
             return this.queue.projectRoot().toString();
         }
-        String text = this.project.getText() == null ? "" : this.project.getText().trim();
-        if (text.isBlank() && this.currentProjectFile != null) {
+        if (this.currentProjectFile != null && this.currentProjectFile.getParent() != null) {
             return this.currentProjectFile.getParent().toString();
         }
-        return text;
+        return "";
     }
-
     private void updateMode() {
         WorkflowModel.Mode next;
         if (this.loadingProject) {
@@ -1556,6 +1710,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.nodeColor.setEnabled(enabled && !this.projectReadOnly);
         }
         this.loadingInspector = false;
+        this.refreshSubmissionTargets();
         this.refreshReview();
         if (this.inspectorScroll != null) {
             SwingUtilities.invokeLater(() -> this.inspectorScroll.getViewport().setViewPosition(new Point(0, 0)));
@@ -2207,8 +2362,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
 
     private void append(String message) {
-        this.log.append((this.log.getText().isEmpty() ? "" : "\n") + message);
-        this.log.setCaretPosition(this.log.getDocument().getLength());
+        if (message == null || message.isBlank()) return;
+        if (this.floatingOutput != null) this.floatingOutput.showMessage(message);
     }
 
     private void watch(JTextComponent component) {
@@ -2376,7 +2531,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.resultPollTimer.stop();
         this.autoSaveTimer.stop();
         this.codexAgent.close();
-        for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.outputTool, this.changeTool, this.queueTool}) {
+        for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.changeTool, this.queueTool}) {
             if (tool == null) continue;
             tool.shutdown();
         }
@@ -2766,6 +2921,10 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         return new Point(wx, wy);
     }
 
+    private record SubmissionChoice(String label, String nodeId, boolean selectedNode) {
+        @Override public String toString() { return this.label; }
+    }
+
     private record NodeOwnerChoice(String id, String label) {
         @Override
         public String toString() {
@@ -2879,6 +3038,10 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.loadInspector(null);
             this.refreshDocumentTitle();
             this.resetHistory();
+            this.project.setText("");
+            this.queue = null;
+            this.results = null;
+            this.syncProjectPanels(null);
             this.canvas.repaint();
             this.status.setText("  无打开的文档  |  新建或打开项目");
             return;

@@ -9,37 +9,41 @@ import javax.swing.plaf.basic.BasicSplitPaneUI;
 import java.awt.*;
 
 public final class UiTheme {
-    public static final Color BACKGROUND = new Color(30, 30, 30);
-    public static final Color PANEL = new Color(37, 37, 38);
-    public static final Color TOOLBAR = new Color(42, 45, 50);
-    public static final Color INPUT = new Color(51, 51, 55);
-    public static final Color BORDER = new Color(63, 63, 70);
-    public static final Color TEXT = new Color(220, 220, 220);
-    public static final Color MUTED = new Color(155, 164, 175);
-    public static final Color ACCENT = new Color(0, 122, 204);
-    public static final Color SELECTION = new Color(9, 71, 113);
+    public static final Color BACKGROUND = new Color(238, 230, 207);
+    public static final Color PANEL = new Color(249, 246, 237);
+    public static final Color TOOLBAR = new Color(243, 236, 219);
+    public static final Color INPUT = new Color(235, 226, 205);
+    public static final Color BORDER = new Color(205, 190, 157);
+    public static final Color TEXT = Color.getHSBColor(57f / 360f, 0.85f, 0.15f);
+    public static final Color MUTED = new Color(108, 94, 61);
+    public static final Color ACCENT = new Color(177, 91, 38);
+    public static final Color SELECTION = new Color(232, 204, 164);
+    public static final Color CANVAS_GRID = new Color(222, 211, 185);
+    public static final Color CANVAS_GRID_MAJOR = new Color(199, 184, 150);
 
     private UiTheme() {}
 
     public static void install() {
         UIManager.put("control", PANEL);
         UIManager.put("info", PANEL);
-        UIManager.put("nimbusBase", TOOLBAR);
+        UIManager.put("nimbusBase", new Color(207, 191, 158));
         UIManager.put("nimbusLightBackground", INPUT);
         UIManager.put("text", TEXT);
         UIManager.put("textText", TEXT);
-        UIManager.put("Menu.background", TOOLBAR);UIManager.put("Menu.foreground", TEXT);UIManager.put("Menu.selectionBackground", SELECTION);UIManager.put("Menu.selectionForeground", Color.WHITE);
-        UIManager.put("MenuItem.background", PANEL);UIManager.put("MenuItem.foreground", TEXT);UIManager.put("MenuItem.selectionBackground", SELECTION);UIManager.put("MenuItem.selectionForeground", Color.WHITE);
+        UIManager.put("Menu.background", TOOLBAR);UIManager.put("Menu.foreground", TEXT);UIManager.put("Menu.selectionBackground", SELECTION);UIManager.put("Menu.selectionForeground", TEXT);
+        UIManager.put("MenuItem.background", PANEL);UIManager.put("MenuItem.foreground", TEXT);UIManager.put("MenuItem.selectionBackground", SELECTION);UIManager.put("MenuItem.selectionForeground", TEXT);
         UIManager.put("PopupMenu.background", PANEL);UIManager.put("PopupMenu.foreground", TEXT);UIManager.put("PopupMenu.border", new LineBorder(BORDER));
         UIManager.put("ToolTip.background", INPUT);
         UIManager.put("ToolTip.foreground", TEXT);
         UIManager.put("ToolTip.border", new LineBorder(BORDER));
-        UIManager.put("ScrollBar.thumb", new Color(92, 92, 96));
-        UIManager.put("ScrollBar.track", PANEL);
+        UIManager.put("ScrollBar.thumb", new Color(164, 142, 101));
+        UIManager.put("ScrollBar.track", BACKGROUND);
+        UIManager.put("ScrollBar.width", 10);
     }
 
     public static void apply(Component component) {
-        component.setFont(new Font("Microsoft YaHei UI", Font.PLAIN, 13));
+        Font systemFont = UIManager.getFont("Label.font");
+        component.setFont((systemFont == null ? component.getFont() : systemFont).deriveFont(Font.PLAIN, 13f));
         component.setForeground(TEXT);
         if (component instanceof JMenuBar bar) { bar.setBackground(TOOLBAR); bar.setOpaque(true); }
         else if (component instanceof JMenuItem item) { item.setBackground(TOOLBAR); item.setForeground(TEXT); item.setOpaque(true); }
@@ -47,17 +51,26 @@ public final class UiTheme {
         else if (component instanceof JPanel panel && !(component instanceof CanvasPanel)) panel.setBackground(PANEL);
         if (component instanceof JTextComponent text) {
             text.setBackground(INPUT); text.setForeground(TEXT); text.setCaretColor(TEXT);
-            text.setSelectionColor(SELECTION); text.setSelectedTextColor(Color.WHITE);
+            text.setSelectionColor(SELECTION); text.setSelectedTextColor(TEXT);
             text.setBorder(new CompoundBorder(new LineBorder(BORDER), new EmptyBorder(5, 7, 5, 7)));
         } else if (component instanceof JButton button) {
             button.setBackground(TOOLBAR); button.setForeground(TEXT); button.setFocusPainted(false); button.setOpaque(true);
-            button.setBorder(new CompoundBorder(new LineBorder(BORDER), new EmptyBorder(5, 10, 5, 10)));
+            button.setRolloverEnabled(true);
+            button.setBorder(new CompoundBorder(new LineBorder(BORDER, 1, true), new EmptyBorder(6, 12, 6, 12)));
+            button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            if (button.getClientProperty("apple-feedback-installed") == null) {
+                button.putClientProperty("apple-feedback-installed", Boolean.TRUE);
+                button.addChangeListener(event -> {
+                    ButtonModel model = button.getModel();
+                    button.setBackground(model.isPressed() ? new Color(220, 205, 176) : (model.isRollover() ? INPUT : TOOLBAR));
+                });
+            }
         } else if (component instanceof JComboBox<?> combo) {
             combo.setBackground(INPUT); combo.setForeground(TEXT); combo.setBorder(new LineBorder(BORDER));
         } else if (component instanceof JTable table) {
-            table.setBackground(INPUT);table.setForeground(TEXT);table.setGridColor(BORDER);table.setSelectionBackground(SELECTION);table.setSelectionForeground(Color.WHITE);table.getTableHeader().setBackground(TOOLBAR);table.getTableHeader().setForeground(TEXT);
+            table.setBackground(INPUT);table.setForeground(TEXT);table.setGridColor(BORDER);table.setSelectionBackground(SELECTION);table.setSelectionForeground(TEXT);table.getTableHeader().setBackground(TOOLBAR);table.getTableHeader().setForeground(TEXT);
         } else if (component instanceof JList<?> list) {
-            list.setBackground(INPUT);list.setForeground(TEXT);list.setSelectionBackground(SELECTION);list.setSelectionForeground(Color.WHITE);list.setBorder(new EmptyBorder(4,6,4,6));
+            list.setBackground(INPUT);list.setForeground(TEXT);list.setSelectionBackground(SELECTION);list.setSelectionForeground(TEXT);list.setBorder(new EmptyBorder(4,6,4,6));
         } else if (component instanceof JScrollPane scroll) {
             scroll.getViewport().setBackground(BACKGROUND); scroll.setBorder(new LineBorder(BORDER));
         } else if (component instanceof JSplitPane split) {
@@ -66,7 +79,7 @@ public final class UiTheme {
             tabs.setBackground(PANEL); tabs.setForeground(TEXT); tabs.setBorder(new LineBorder(BORDER));
         } else if (component instanceof JScrollBar bar) {
             bar.setUI(new BasicScrollBarUI(){
-                @Override protected void configureScrollBarColors(){thumbColor=new Color(82,82,86);trackColor=PANEL;}
+                @Override protected void configureScrollBarColors(){thumbColor=new Color(161,140,99);trackColor=BACKGROUND;}
                 @Override protected JButton createDecreaseButton(int orientation){return zeroButton();}
                 @Override protected JButton createIncreaseButton(int orientation){return zeroButton();}
                 private JButton zeroButton(){JButton button=new JButton();button.setPreferredSize(new Dimension(0,0));button.setMinimumSize(new Dimension(0,0));button.setMaximumSize(new Dimension(0,0));return button;}
@@ -77,14 +90,14 @@ public final class UiTheme {
         if (component instanceof JMenu menu) apply(menu.getPopupMenu());
     }
 
-    public static Border panelBorder() { return new LineBorder(BORDER); }
-    public static Border sectionBorder() { return new CompoundBorder(new MatteBorder(0, 0, 1, 0, BORDER), new EmptyBorder(7, 10, 7, 10)); }
+    public static Border panelBorder() { return new LineBorder(BORDER, 1, true); }
+    public static Border sectionBorder() { return new CompoundBorder(new MatteBorder(0, 0, 1, 0, BORDER), new EmptyBorder(9, 12, 9, 12)); }
     /** 统一样式并确保 divider 可拖拽：自定义 MouseAdapter 手动更新 divider 位置，
      *  用 consume() 阻止默认 divider 拖拽干扰（避免双重更新导致回弹）。 */
     public static void styleSplit(JSplitPane split){
         split.setBackground(BORDER);
         split.setBorder(null);
-        split.setDividerSize(12);
+        split.setDividerSize(8);
         split.setContinuousLayout(false);
         final boolean horizontal = split.getOrientation() == JSplitPane.HORIZONTAL_SPLIT;
         final int[] press = {-1};
@@ -128,8 +141,8 @@ public final class UiTheme {
         }
         div.addMouseListener(drag);
         div.addMouseMotionListener(drag);
-        div.setBackground(BORDER);
-        div.setForeground(BORDER);
+        div.setBackground(new Color(197, 179, 143));
+        div.setForeground(new Color(197, 179, 143));
     }
 
     /** 获取 JSplitPane 的 divider（通过 BasicSplitPaneUI）。 */
@@ -139,5 +152,88 @@ public final class UiTheme {
             return basic.getDivider();
         }
         return null;
+    }
+
+    /** Vertical content that always adopts the viewport width instead of clipping off-screen. */
+    public static final class VerticalScrollPanel extends JPanel implements Scrollable {
+        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        @Override public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) { return 24; }
+        @Override public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) { return Math.max(48, visibleRect.height - 32); }
+        @Override public boolean getScrollableTracksViewportWidth() { return true; }
+        @Override public boolean getScrollableTracksViewportHeight() { return false; }
+    }
+
+    /** A wrap panel that updates its own height whenever its assigned width changes. */
+    public static final class ResponsiveWrapPanel extends JPanel {
+        private int responsiveHeight = -1;
+        private int lastWidth = -1;
+        private boolean updatePending;
+
+        public ResponsiveWrapPanel(int align, int hgap, int vgap) {
+            super(new WrapLayout(align, hgap, vgap));
+        }
+
+        @Override public void setBounds(int x, int y, int width, int height) {
+            super.setBounds(x, y, width, height);
+            if (width <= 0 || width == lastWidth || updatePending) return;
+            lastWidth = width;
+            updatePending = true;
+            SwingUtilities.invokeLater(() -> {
+                updatePending = false;
+                Dimension measured = getLayout().preferredLayoutSize(this);
+                if (measured.height != responsiveHeight) {
+                    responsiveHeight = measured.height;
+                    revalidate();
+                    if (getParent() != null) getParent().revalidate();
+                }
+            });
+        }
+
+        @Override public Dimension getPreferredSize() {
+            Dimension size = super.getPreferredSize();
+            if (responsiveHeight > 0) size.height = responsiveHeight;
+            size.width = 0;
+            return size;
+        }
+
+        @Override public Dimension getMinimumSize() {
+            Dimension size = getPreferredSize();
+            size.width = 0;
+            return size;
+        }
+    }
+
+    /** Flow layout that wraps controls instead of forcing a toolbar wider than the window. */
+    public static final class WrapLayout extends FlowLayout {
+        public WrapLayout(int align, int hgap, int vgap) { super(align, hgap, vgap); }
+        @Override public Dimension preferredLayoutSize(Container target) { return layoutSize(target, true); }
+        @Override public Dimension minimumLayoutSize(Container target) {
+            Dimension size = layoutSize(target, false);
+            size.width = Math.max(0, size.width - getHgap() - 1);
+            return size;
+        }
+        private Dimension layoutSize(Container target, boolean preferred) {
+            synchronized (target.getTreeLock()) {
+                Insets insets = target.getInsets();
+                int width = target.getWidth() > 0 ? target.getWidth() : Integer.MAX_VALUE;
+                int maxWidth = Math.max(0, width - insets.left - insets.right - getHgap() * 2);
+                int rowWidth = 0, rowHeight = 0, totalWidth = 0;
+                int totalHeight = insets.top + insets.bottom + getVgap() * 2;
+                for (Component component : target.getComponents()) {
+                    if (!component.isVisible()) continue;
+                    Dimension size = preferred ? component.getPreferredSize() : component.getMinimumSize();
+                    if (rowWidth > 0 && rowWidth + getHgap() + size.width > maxWidth) {
+                        totalWidth = Math.max(totalWidth, rowWidth);
+                        totalHeight += rowHeight + getVgap();
+                        rowWidth = 0; rowHeight = 0;
+                    }
+                    rowWidth += (rowWidth == 0 ? 0 : getHgap()) + size.width;
+                    rowHeight = Math.max(rowHeight, size.height);
+                }
+                totalWidth = Math.max(totalWidth, rowWidth);
+                totalHeight += rowHeight;
+                return new Dimension(totalWidth + insets.left + insets.right + getHgap() * 2, totalHeight);
+            }
+        }
     }
 }

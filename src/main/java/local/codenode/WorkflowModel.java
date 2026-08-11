@@ -467,6 +467,23 @@ public final class WorkflowModel {
         }
     }
 
+    /** Removes many nodes in one transaction: one edge sweep, one reference sweep and one type recomputation. */
+    public void removeNodes(Collection<Node> removed) {
+        if (removed == null || removed.isEmpty()) return;
+        LinkedHashSet<String> ids = removed.stream().filter(Objects::nonNull).map(n -> n.id).collect(Collectors.toCollection(LinkedHashSet::new));
+        if (ids.isEmpty()) return;
+        boolean changed = this.nodes.removeIf(n -> ids.contains(n.id));
+        if (!changed) return;
+        ids.forEach(this.nodeIndex::remove);
+        this.edges.removeIf(e -> ids.contains(e.source) || ids.contains(e.target));
+        this.codeSlots.keySet().removeIf(key -> ids.stream().anyMatch(id -> key.equals("node:" + id) || key.equals("file:" + id)));
+        this.nodes.forEach(n -> {
+            if (ids.contains(n.fileNodeId)) n.fileNodeId = "";
+            if (ids.contains(n.parentScopeId)) n.parentScopeId = "";
+        });
+        this.recomputeTypes();
+        this.touch();
+    }
     public void removeNode(Node node) {
         if (this.nodes.remove(node)) {
             this.nodeIndex.remove(node.id);

@@ -10,6 +10,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicBoolean;
 import local.codenode.agent.PermissionMemory;
+import local.codenode.agent.AgentResultStore;
 import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.WorkflowModel;
 
@@ -30,6 +31,7 @@ public final class AgentToolContext {
     private SoftwareInfoProvider softwareInfoProvider;
     private final AtomicBoolean toolStopRequested = new AtomicBoolean(false);
     private final PermissionMemory permissionMemory = new PermissionMemory();
+    private final AgentResultStore resultStore = new AgentResultStore();
 
     public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, null, null, null, null, null);
@@ -67,6 +69,16 @@ public final class AgentToolContext {
 
     public WorkflowModel model() {
         return this.modelSupplier.get();
+    }
+    public WorkflowModel snapshotWorkbench() {
+        WorkflowModel current = model();
+        return current == null ? null : current.deepCopy();
+    }
+
+    public void restoreWorkbench(WorkflowModel snapshot) {
+        if (snapshot != null && this.workbenchApplier != null) {
+            this.workbenchApplier.applyToWorkbench(snapshot.deepCopy());
+        }
     }
 
     /** 请求用户确认（旧签名，低风险默认询问）。 */
@@ -208,6 +220,7 @@ public final class AgentToolContext {
     public void clearToolStop() { toolStopRequested.set(false); }
     public boolean toolStopRequested() { return toolStopRequested.get(); }
     public PermissionMemory permissionMemory() { return permissionMemory; }
+    public AgentResultStore resultStore() { return resultStore; }
 
     /** 文件变更通知器（Agent 写/改/删文件后回调）。 */
     @FunctionalInterface

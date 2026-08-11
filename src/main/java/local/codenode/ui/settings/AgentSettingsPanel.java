@@ -80,10 +80,10 @@ public final class AgentSettingsPanel extends JPanel {
         config.setApiKey(new String(apiKey.getPassword()));
         try {
             config.save();
-            feedback.setForeground(new Color(120, 200, 150));
+            feedback.setForeground(new Color(58, 116, 73));
             feedback.setText("已保存到 " + config.file());
         } catch (Exception e) {
-            feedback.setForeground(new Color(230, 120, 120));
+            feedback.setForeground(new Color(166, 55, 47));
             feedback.setText("保存失败：" + e.getMessage());
         }
     }

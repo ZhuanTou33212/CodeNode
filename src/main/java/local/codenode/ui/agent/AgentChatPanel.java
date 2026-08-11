@@ -19,11 +19,11 @@ import java.util.List;
 
 /** 内嵌 Agent 对话面板（opencode 风格：❯ 输入提示、Enter 发送、紧凑顶部栏、彩色消息、推理折叠区）。 */
 public final class AgentChatPanel extends JPanel {
-    private static final Color USER = new Color(86, 156, 214);
-    private static final Color TEXT = new Color(225, 225, 225);
-    private static final Color TOOL = new Color(155, 164, 175);
-    private static final Color ERROR = new Color(240, 130, 130);
-    private static final Color DIM = new Color(120, 128, 140);
+    private static final Color USER = UiTheme.ACCENT;
+    private static final Color TEXT = UiTheme.TEXT;
+    private static final Color TOOL = new Color(130, 108, 67);
+    private static final Color ERROR = new Color(166, 55, 47);
+    private static final Color DIM = UiTheme.MUTED;
 
     private final AgentChatController controller;
     private final AgentConfig config;
@@ -206,10 +206,12 @@ public final class AgentChatPanel extends JPanel {
      * 同步更新 config 的 defaultProjectPath，使工具/Agent 上下文指向当前项目。
      */
     public void setProjectPath(String projectRoot) {
-        if (projectRoot == null || projectRoot.isBlank()) {
+        String normalized = projectRoot == null ? "" : projectRoot.trim();
+        if (normalized.equals(config.defaultProjectPath())) {
+            refreshContext();
             return;
         }
-        config.setDefaultProjectPath(projectRoot.trim());
+        config.setDefaultProjectPath(normalized);
         try { config.save(); } catch (Exception ignored) {}
         refreshContext();
     }

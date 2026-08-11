@@ -78,7 +78,7 @@ public class CodeEditor extends JPanel {
         codeArea.setForeground(UiTheme.TEXT);
         codeArea.setCaretColor(UiTheme.TEXT);
         codeArea.setSelectionColor(UiTheme.SELECTION);
-        codeArea.setSelectedTextColor(Color.WHITE);
+        codeArea.setSelectedTextColor(UiTheme.TEXT);
         lineNumbers.setBackground(UiTheme.TOOLBAR);
         lineNumbers.setForeground(UiTheme.MUTED);
     }

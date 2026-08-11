@@ -33,7 +33,7 @@ public class PortTypeEditor extends AbstractCellEditor implements TableCellEdito
                 if (text.startsWith("▸")) {
                     JLabel lb = (JLabel) super.getListCellRendererComponent(list, text, index, isSelected, cellHasFocus);
                     lb.setFont(lb.getFont().deriveFont(Font.BOLD));
-                    lb.setForeground(isSelected ? Color.WHITE : new Color(86, 156, 214));
+                    lb.setForeground(isSelected ? UiTheme.TEXT : UiTheme.ACCENT);
                     return lb;
                 }
                 return super.getListCellRendererComponent(list, text.trim(), index, isSelected, cellHasFocus);

@@ -54,6 +54,7 @@ public final class AgentChatController {
     private final OpenAiChatClient client;
     private final AgentToolRegistry tools;
     private final AgentToolContext toolContext;
+    private final AgentExecutionTimeline timeline = new AgentExecutionTimeline();
     private final List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
     private final ExecutorService toolExecutor = Executors.newCachedThreadPool();
     private final String sessionId = UUID.randomUUID().toString();
@@ -66,6 +67,10 @@ public final class AgentChatController {
         this.client = new OpenAiChatClient(config);
         this.tools = tools;
         this.toolContext = toolContext;
+    }
+
+    public AgentExecutionTimeline timeline() {
+        return this.timeline;
     }
 
     public AgentProvider.SessionState state() {
@@ -124,6 +129,7 @@ public final class AgentChatController {
             this.messages.set(0, this.systemPrompt());
         }
         this.state = AgentProvider.SessionState.ACTIVE_RUNNING;
+        this.timeline.beginTask(userText);
         this.stopRequested = false;
         listener.onEvent(ChatEvent.state(this.state));
         this.messages.add(Map.of("role", "user", "content", userText));
@@ -133,9 +139,11 @@ public final class AgentChatController {
                 this.runTurnLoop(listener);
             }
             catch (InterruptedException interrupted) {
+                this.timeline.cancelTask();
                 listener.onEvent(ChatEvent.cancelled());
             }
             catch (Exception failure) {
+                this.timeline.failTask();
                 listener.onEvent(ChatEvent.error(failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
             }
             finally {
@@ -371,7 +379,9 @@ public final class AgentChatController {
                     result = AgentToolResult.error("工具执行异常: " + toolFailure.getMessage());
                 }
                 String resultText = result.ok() ? result.text() : "失败：" + result.text();
-                String truncated = AgentChatController.truncate(resultText, MAX_TOOL_RESULT_CHARS);
+                String resultId = this.toolContext.resultStore().store(name, result);
+                String structured = this.toolContext.resultStore().modelPayload(resultId, name, result, MAX_TOOL_RESULT_CHARS);
+                String preview = AgentChatController.truncate(resultText, 1200);
                 // 判定本轮是否出现失败/空结果/超时：失败、空文本、取消、超时都视为未取得有效结果
                 boolean issue = !result.ok() || result.text() == null || result.text().isBlank()
                         || result.text().contains("已取消") || result.text().contains("失败")
@@ -379,14 +389,14 @@ public final class AgentChatController {
                         || result.text().startsWith("未找到") || result.text().startsWith("没有");
                 if (issue) {
                     lastRoundHadIssue = true;
-                    listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] ⚠ " + truncated + "（未取得有效结果，继续尝试其他方案）\n"));
+                    listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] ⚠ " + preview + "（未取得有效结果，继续尝试其他方案）\n"));
                 } else {
-                    listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] " + truncated + "\n"));
+                    listener.onEvent(ChatEvent.reasoning("\n[工具 " + name + "] " + preview + "\n"));
                 }
                 LinkedHashMap<String, Object> toolMessage = new LinkedHashMap<String, Object>();
                 toolMessage.put("role", "tool");
                 toolMessage.put("tool_call_id", callId);
-                toolMessage.put("content", result.ok() ? truncated : "执行失败：" + truncated);
+                toolMessage.put("content", structured);
                 this.messages.add(toolMessage);
             }
             this.saveSessionFile();

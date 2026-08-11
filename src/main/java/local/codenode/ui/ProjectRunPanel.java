@@ -16,21 +16,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /**
  * 工程运行面板（Stage4.8 4.9 UI / Stage4.7 实时追踪入口）：
  * 选择/输入项目路径 → 识别工程 → 构建（Gradle/Maven/纯javac）→ 运行（入口类/JAR/Gradle任务/Maven目标）→
  * 输出流式回显 + 错误定位 + 可选 JFR 实时追踪摘要。后台线程执行，不阻塞 EDT。
  */
-public final class ProjectRunPanel extends JPanel {
+public final class ProjectRunPanel extends JPanel implements Scrollable {
     private final JTextField projectPath = new JTextField("", 28);
     private final JLabel projectInfo = new JLabel("未识别工程");
     private final JComboBox<String> mainClass = new JComboBox<>();
     private final JComboBox<String> taskCombo = new JComboBox<>();
     private final JComboBox<String> runTaskCombo = new JComboBox<>();
     private final JCheckBox traceCheck = new JCheckBox("实时追踪 (JFR)");
-    private final JTextArea log = new JTextArea(12, 60);
-    private final JTextArea errors = new JTextArea(5, 60);
+    private final Consumer<String> outputSink;
     private final JButton buildBtn = new JButton("构建");
     private final JButton runBtn = new JButton("▶ 运行");
     private final JButton stopBtn = new JButton("■ 停止");
@@ -41,75 +41,85 @@ public final class ProjectRunPanel extends JPanel {
     private RunLauncher.RunningProcess currentHandle;
 
     public ProjectRunPanel() {
+        this(message -> {});
+    }
+
+    public ProjectRunPanel(Consumer<String> outputSink) {
         super(new BorderLayout());
+        this.outputSink = outputSink == null ? message -> {} : outputSink;
+        setMinimumSize(new Dimension(0, 0));
         setBackground(UiTheme.PANEL);
         add(buildControls(), BorderLayout.NORTH);
-        add(outputArea(), BorderLayout.CENTER);
     }
 
     private JComponent buildControls() {
-        JPanel top = new JPanel(new BorderLayout());
+        JPanel top = new JPanel();
+        top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
         top.setBackground(UiTheme.PANEL);
-        top.setBorder(new EmptyBorder(6, 8, 4, 8));
+        top.setBorder(new EmptyBorder(12, 12, 12, 12));
 
-        JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        row1.setOpaque(false);
-        row1.add(label("项目路径"));
-        row1.add(projectPath);
-        row1.add(refreshBtn);
-        top.add(row1, BorderLayout.NORTH);
+        JPanel pathControl = new JPanel(new BorderLayout(6, 0));
+        pathControl.setOpaque(false);
+        pathControl.add(projectPath, BorderLayout.CENTER);
+        pathControl.add(refreshBtn, BorderLayout.EAST);
+        top.add(formRow("项目路径", pathControl));
+        top.add(Box.createVerticalStrut(8));
 
-        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        row2.setOpaque(false);
-        row2.add(label("入口类"));
-        row2.add(mainClass);
-        row2.add(label("构建任务"));
-        row2.add(taskCombo);
-        row2.add(label("运行任务"));
-        row2.add(runTaskCombo);
-        row2.add(traceCheck);
-        row2.add(buildBtn);
-        row2.add(runBtn);
-        row2.add(stopBtn);
-        top.add(row2, BorderLayout.SOUTH);
-
-        JPanel middle = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        middle.setOpaque(false);
         projectInfo.setForeground(UiTheme.MUTED);
-        middle.add(projectInfo);
-        top.add(middle, BorderLayout.CENTER);
+        projectInfo.setFont(projectInfo.getFont().deriveFont(12f));
+        projectInfo.setAlignmentX(Component.LEFT_ALIGNMENT);
+        projectInfo.setMinimumSize(new Dimension(0, 24));
+        projectInfo.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        top.add(projectInfo);
+        top.add(Box.createVerticalStrut(8));
 
-        mainClass.setPreferredSize(new Dimension(180, 26));
-        taskCombo.setPreferredSize(new Dimension(140, 26));
-        runTaskCombo.setPreferredSize(new Dimension(220, 26));
-        projectPath.setPreferredSize(new Dimension(360, 26));
+        top.add(formRow("入口类", mainClass));
+        top.add(Box.createVerticalStrut(8));
+        top.add(formRow("构建任务", taskCombo));
+        top.add(Box.createVerticalStrut(8));
+        top.add(formRow("运行任务", runTaskCombo));
+        top.add(Box.createVerticalStrut(10));
+
+        traceCheck.setAlignmentX(Component.LEFT_ALIGNMENT);
+        top.add(traceCheck);
+        top.add(Box.createVerticalStrut(8));
+        JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
+        buttons.setOpaque(false);
+        buttons.setAlignmentX(Component.LEFT_ALIGNMENT);
+        buttons.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        buttons.add(buildBtn);
+        buttons.add(runBtn);
+        buttons.add(stopBtn);
+        top.add(buttons);
+        top.add(Box.createVerticalGlue());
 
         refreshBtn.addActionListener(e -> discoverProject());
         buildBtn.addActionListener(e -> buildProject());
         runBtn.addActionListener(e -> runProject());
+        stopBtn.setEnabled(false);
         stopBtn.addActionListener(e -> {
             RunLauncher.RunningProcess handle = currentHandle;
-            if (handle != null) {
-                RunLauncher.stop(handle);
-            } else {
-                RunLauncher.stop();
-            }
+            if (handle != null) RunLauncher.stop(handle);
+            else RunLauncher.stop();
         });
         return top;
     }
 
-    private JComponent outputArea() {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBackground(UiTheme.PANEL);
-        log.setEditable(false);
-        log.setFont(new Font("Consolas", Font.PLAIN, 13));
-        errors.setEditable(false);
-        errors.setFont(new Font("Consolas", Font.PLAIN, 13));
-        errors.setForeground(new Color(255, 120, 120));
-        panel.add(new JScrollPane(log), BorderLayout.CENTER);
-        panel.add(new JScrollPane(errors), BorderLayout.SOUTH);
-        errors.setRows(4);
-        return panel;
+    private static JPanel formRow(String title, JComponent field) {
+        JPanel row = new JPanel();
+        row.setLayout(new BoxLayout(row, BoxLayout.Y_AXIS));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 58));
+        JLabel caption = label(title);
+        caption.setAlignmentX(Component.LEFT_ALIGNMENT);
+        field.setAlignmentX(Component.LEFT_ALIGNMENT);
+        field.setMinimumSize(new Dimension(0, 30));
+        field.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+        row.add(caption);
+        row.add(Box.createVerticalStrut(3));
+        row.add(field);
+        return row;
     }
 
     private static JLabel label(String text) {
@@ -119,16 +129,18 @@ public final class ProjectRunPanel extends JPanel {
     }
 
     public void setProjectPath(String path) {
-        if (path != null && !path.isBlank()) {
-            projectPath.setText(path);
-            discoverProject();
+        String normalized = path == null ? "" : path.trim();
+        projectPath.setText(normalized);
+        if (normalized.isBlank()) {
+            projectInfo.setText("未选择项目路径");
+            return;
         }
+        discoverProject();
     }
 
     public void setProjectPathSilent(String path) {
-        if (path != null && !path.isBlank()) {
-            projectPath.setText(path);
-        }
+        projectPath.setText(path == null ? "" : path.trim());
+        if (projectPath.getText().isBlank()) projectInfo.setText("未选择项目路径");
     }
 
     private void discoverProject() {
@@ -184,6 +196,7 @@ public final class ProjectRunPanel extends JPanel {
                 sb.append("  |  源集: ").append(JavaProject.sourceRoots(root).size());
                 if (!mains.isEmpty()) sb.append("  |  入口: ").append(mains.size());
                 projectInfo.setText(sb.toString());
+                projectInfo.setToolTipText(sb.toString());
             });
         });
     }
@@ -210,16 +223,16 @@ public final class ProjectRunPanel extends JPanel {
                               .append(err.get("column") == null || ((Number) err.get("column")).intValue() == 0 ? "" : ":" + err.get("column"))
                               .append("  ").append(err.get("message")).append('\n');
                         }
-                        errors.setText(sb.toString());
+                        appendLog("[编译错误] " + sb);
                     } else {
-                        errors.setText(result.ok() ? "构建成功 (exit " + result.exitCode() + ")" : "构建失败 (exit " + result.exitCode() + ")");
+                        appendLog(result.ok() ? "构建成功 (exit " + result.exitCode() + ")" : "构建失败 (exit " + result.exitCode() + ")");
                     }
                     appendLog("[构建完成] exit=" + result.exitCode());
                     buildBtn.setEnabled(true);
                 });
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
-                    errors.setText("构建异常: " + e.getMessage());
+                    appendLog("[构建异常] " + e.getMessage());
                     buildBtn.setEnabled(true);
                 });
             }
@@ -258,7 +271,7 @@ public final class ProjectRunPanel extends JPanel {
                     BuildRunner.BuildResult compiled = BuildRunner.build(currentRoot, List.of(), 300, line -> SwingUtilities.invokeLater(() -> appendLog(line)));
                     if (!compiled.ok()) {
                         SwingUtilities.invokeLater(() -> {
-                            errors.setText(compiled.tail());
+                            appendLog("[编译错误] " + compiled.tail());
                             appendLog("[运行] 编译失败，未启动");
                             runBtn.setEnabled(true);
                             stopBtn.setEnabled(false);
@@ -321,11 +334,16 @@ public final class ProjectRunPanel extends JPanel {
 
     private void appendLog(String line) {
         if (line == null || line.isBlank()) return;
-        log.append((log.getText().isEmpty() ? "" : "\n") + line);
-        log.setCaretPosition(log.getDocument().getLength());
+        this.outputSink.accept(line);
     }
 
     private void clearErrors() {
-        errors.setText("");
+        // Floating output has no persistent error surface to clear.
     }
+
+    @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+    @Override public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) { return 24; }
+    @Override public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) { return Math.max(48, visibleRect.height - 32); }
+    @Override public boolean getScrollableTracksViewportWidth() { return true; }
+    @Override public boolean getScrollableTracksViewportHeight() { return false; }
 }

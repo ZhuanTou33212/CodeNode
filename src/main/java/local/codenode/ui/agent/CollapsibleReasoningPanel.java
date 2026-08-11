@@ -29,7 +29,7 @@ public final class CollapsibleReasoningPanel extends JPanel {
         area.setLineWrap(true);
         area.setWrapStyleWord(true);
         area.setFont(new Font("Consolas", Font.PLAIN, 12));
-        area.setForeground(new Color(170, 200, 230));
+        area.setForeground(UiTheme.MUTED);
         scroll = new JScrollPane(area);
         scroll.setVisible(false);
 

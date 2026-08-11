@@ -130,7 +130,7 @@ extends JPanel {
     public CanvasPanel(final WorkflowModel model) {
         this.model = model;
         this.setBackground(UiTheme.BACKGROUND);
-        this.setPreferredSize(new Dimension(1600, 1000));
+        this.setPreferredSize(new Dimension(1200, 800));
         this.setFocusable(true);
         this.animTimer = new Timer(16, e -> this.animateContainers());
         this.animTimer.start();
@@ -995,7 +995,7 @@ extends JPanel {
                 }
             }
         }
-        deleting.forEach(this.model::removeNode);
+        this.model.removeNodes(deleting);
         for (WorkflowModel.Node del : new LinkedHashSet<WorkflowModel.Node>(deleting)) {
             if (del.nodeKind != WorkflowModel.NodeKind.GROUP) continue;
             for (WorkflowModel.Node child : this.model.nodes()) {
@@ -1035,7 +1035,7 @@ extends JPanel {
             return;
         }
         List<WorkflowModel.Node> unused = this.model.nodes().stream().filter(n -> !this.selectedNodes.contains(n) && this.model.edges().stream().noneMatch(e -> e.source().equals(n.id) || e.target().equals(n.id))).toList();
-        unused.forEach(this.model::removeNode);
+        this.model.removeNodes(unused);
         if (!unused.isEmpty()) {
             this.changeListener.run();
         }
@@ -1740,12 +1740,12 @@ extends JPanel {
         Graphics2D screen = (Graphics2D)raw.create();
         screen.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         if (!this.groupFocusId.isBlank() && (g = this.model.byId(this.groupFocusId)) != null) {
-            screen.setColor(new Color(45, 45, 48));
+            screen.setColor(UiTheme.PANEL);
             screen.fillRect(0, 0, this.getWidth(), 28);
             screen.setColor(UiTheme.ACCENT);
             screen.setFont(this.getFont().deriveFont(1, 13.0f));
             screen.drawString("根 > " + g.name, 12, 20);
-            screen.setColor(new Color(70, 70, 73));
+            screen.setColor(UiTheme.BORDER);
             screen.drawLine(0, 28, this.getWidth(), 28);
         }
         this.drawGrid(screen);
@@ -1757,13 +1757,13 @@ extends JPanel {
         }
         this.drawEdges(screen);
         if (this.connecting != null && this.wirePoint != null) {
-            this.drawCurve(screen, CanvasPanel.portCenter(this.outputPort(this.connecting, this.connectingPort)), this.wirePoint, new Color(86, 156, 214), 2.5f);
+            this.drawCurve(screen, CanvasPanel.portCenter(this.outputPort(this.connecting, this.connectingPort)), this.wirePoint, UiTheme.ACCENT, 2.5f);
         }
         if (this.inputConnecting != null && this.wirePoint != null) {
-            this.drawCurve(screen, this.wirePoint, CanvasPanel.portCenter(this.inputPort(this.inputConnecting, this.inputConnectingPort)), new Color(86, 156, 214), 2.5f);
+            this.drawCurve(screen, this.wirePoint, CanvasPanel.portCenter(this.inputPort(this.inputConnecting, this.inputConnectingPort)), UiTheme.ACCENT, 2.5f);
         }
         if (this.connectingReroute != null && this.wirePoint != null) {
-            this.drawCurve(screen, new Point(this.connectingReroute.x, this.connectingReroute.y), this.wirePoint, new Color(210, 170, 70), 2.5f);
+            this.drawCurve(screen, new Point(this.connectingReroute.x, this.connectingReroute.y), this.wirePoint, new Color(188, 130, 55), 2.5f);
         }
         for (WorkflowModel.Node node : this.model.nodes()) {
             if (CanvasPanel.isContainer(node) || !this.visibleNode(node)) continue;
@@ -1783,12 +1783,12 @@ extends JPanel {
         double sy = CanvasPanel.mod(this.panY, step);
         for (double x = sx; x < (double)this.getWidth(); x += step) {
             index = (int)Math.round((x - (double)this.panX) / step);
-            g.setColor(Math.floorMod(index, 5) == 0 ? new Color(52, 52, 54) : new Color(39, 39, 41));
+            g.setColor(Math.floorMod(index, 5) == 0 ? UiTheme.CANVAS_GRID_MAJOR : UiTheme.CANVAS_GRID);
             g.drawLine((int)x, 0, (int)x, this.getHeight());
         }
         for (double y = sy; y < (double)this.getHeight(); y += step) {
             index = (int)Math.round((y - (double)this.panY) / step);
-            g.setColor(Math.floorMod(index, 5) == 0 ? new Color(52, 52, 54) : new Color(39, 39, 41));
+            g.setColor(Math.floorMod(index, 5) == 0 ? UiTheme.CANVAS_GRID_MAJOR : UiTheme.CANVAS_GRID);
             g.drawLine(0, (int)y, this.getWidth(), (int)y);
         }
     }
@@ -1801,7 +1801,7 @@ extends JPanel {
             WorkflowModel.Node target = this.model.byId(edge.target());
             if (!this.visibleNode(source) || !this.visibleNode(target) || (points = this.edgePoints(edge)).size() < 2) continue;
             visibleReroutes.addAll(edge.reroutes());
-            Color color = edge == this.selectedEdge ? UiTheme.ACCENT : new Color(86, 156, 214);
+            Color color = edge == this.selectedEdge ? UiTheme.ACCENT : new Color(132, 113, 75);
             float width = edge == this.selectedEdge ? 3.0f : 2.0f;
             for (int i = 1; i < points.size(); ++i) {
                 this.drawCurve(g, points.get(i - 1), points.get(i), color, width);
@@ -1810,7 +1810,7 @@ extends JPanel {
         for (WorkflowModel.Reroute point : visibleReroutes) {
             g.setColor(UiTheme.PANEL);
             g.fill(new Ellipse2D.Double(point.x - 6, point.y - 6, 12.0, 12.0));
-            g.setColor(point == this.selectedReroute ? UiTheme.ACCENT : new Color(210, 170, 70));
+            g.setColor(point == this.selectedReroute ? UiTheme.ACCENT : new Color(188, 130, 55));
             g.setStroke(new BasicStroke(2.0f));
             g.draw(new Ellipse2D.Double(point.x - 6, point.y - 6, 12.0, 12.0));
         }
@@ -1829,43 +1829,43 @@ extends JPanel {
         Color border = switch (n.status) {
             case FAILED -> new Color(244, 71, 71);
             case SUCCEEDED -> new Color(78, 201, 176);
-            case QUEUED, PROCESSING -> new Color(220, 170, 70);
-            default -> new Color(82, 82, 88);
+            case QUEUED, PROCESSING -> new Color(188, 130, 55);
+            default -> new Color(133, 115, 80);
         };
-        Color bgColor = n.status == WorkflowModel.Status.SUCCEEDED ? new Color(55, 55, 60) : (CanvasPanel.isContainer(n) ? new Color(38, 38, 40, 150) : UiTheme.PANEL);
+        Color bgColor = n.status == WorkflowModel.Status.SUCCEEDED ? new Color(242, 240, 221) : (CanvasPanel.isContainer(n) ? new Color(249, 246, 237, 232) : UiTheme.PANEL);
         RoundRectangle2D.Float box = new RoundRectangle2D.Float(n.x, n.y, width, height, 7.0f, 7.0f);
         g.setColor(bgColor);
         g.fill(box);
-        Color header = n.status == WorkflowModel.Status.QUEUED || n.status == WorkflowModel.Status.PROCESSING ? new Color(138, 116, 64) : CanvasPanel.categoryColor(n);
+        Color header = n.status == WorkflowModel.Status.QUEUED || n.status == WorkflowModel.Status.PROCESSING ? new Color(145, 100, 49) : CanvasPanel.categoryColor(n);
         g.setColor(this.selectedNodes.contains(n) ? header.brighter() : header);
         g.fill(new RoundRectangle2D.Float(n.x + 1, n.y + 1, width - 2, 34.0f, 6.0f, 6.0f));
         g.setStroke(new BasicStroke((float)((n == this.primary ? 2.8 : (this.selectedNodes.contains(n) ? 2.1 : (n == this.hoveringScope ? 3.5 : 1.5))) / this.zoom)));
         g.setColor(n == this.hoveringScope ? UiTheme.ACCENT : (this.selectedNodes.contains(n) ? UiTheme.ACCENT : border));
         g.draw(box);
         if (n == this.hoveringScope) {
-            g.setColor(new Color(0, 122, 204, 40));
+            g.setColor(new Color(177, 91, 38, 32));
             g.fill(box);
         }
-        g.setColor(n.muted ? new Color(230, 160, 160) : Color.WHITE);
+        g.setColor(n.muted ? new Color(255, 220, 220) : Color.WHITE);
         g.setFont(this.getFont().deriveFont(1, 14.0f));
         g.drawString(CanvasPanel.trim(n.name, CanvasPanel.isContainer(n) ? 35 : (n.nodeKind == WorkflowModel.NodeKind.GROUP ? 30 : 17)), n.x + 13, n.y + 22);
         if (n.nodeKind == WorkflowModel.NodeKind.GROUP) {
             g.setFont(this.getFont().deriveFont(1, 9.0f));
-            g.setColor(new Color(180, 170, 220));
+            g.setColor(new Color(235, 215, 179));
             String grpLabel = "GRP";
             int grpW = g.getFontMetrics().stringWidth(grpLabel);
             g.drawString(grpLabel, n.x + width - 24 - grpW, n.y + 21);
         }
         String category = CanvasPanel.trim(n.category, 12);
         g.setFont(this.getFont().deriveFont(10.0f));
-        g.setColor(new Color(225, 225, 225));
+        g.setColor(new Color(255, 255, 255, 210));
         g.drawString(category, n.x + width - 11 - g.getFontMetrics().stringWidth(category), n.y + 21);
         if (n.collapsed) {
             return;
         }
         if (n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE) {
             BundleDataUtil.BundleView view = this.bundleView(n);
-            g.setColor(new Color(120, 160, 220));
+            g.setColor(new Color(160, 105, 51));
             g.setFont(this.getFont().deriveFont(1, 11.0f));
             g.drawString("成员 " + view.memberCount(), n.x + 13, n.y + 34 + 18);
             int bx = n.x + 13;
@@ -1877,9 +1877,9 @@ extends JPanel {
                     bx = n.x + 13;
                     by += 18;
                 }
-                g.setColor(new Color(70, 90, 120));
+                g.setColor(new Color(237, 224, 196));
                 g.fillRoundRect(bx, by - 12, w, 16, 5, 5);
-                g.setColor(new Color(200, 215, 230));
+                g.setColor(UiTheme.TEXT);
                 g.drawString(text, bx + 6, by);
                 bx += w + 5;
             }
@@ -1895,13 +1895,13 @@ extends JPanel {
                     ++shown;
                 }
                 if (view.members().size() > 8) {
-                    g.setColor(new Color(210, 200, 120));
+                    g.setColor(new Color(170, 119, 51));
                     g.drawString("… 共 " + view.members().size() + " 项", n.x + 16, py);
                 }
-                g.setColor(new Color(100, 100, 105));
+                g.setColor(UiTheme.MUTED);
                 g.drawString("双击收起/展开预览", n.x + 16, py + 14);
             } else {
-                g.setColor(new Color(100, 100, 105));
+                g.setColor(UiTheme.MUTED);
                 g.drawString("双击展开成员预览", n.x + 13, by + 20);
             }
         }
@@ -1947,10 +1947,10 @@ extends JPanel {
         }
         g.setColor(UiTheme.MUTED);
         g.drawString(n.category + " · " + CanvasPanel.statusLabel(n.status), n.x + 13, n.y + height - 10);
-        g.setColor(new Color(100, 100, 105));
+        g.setColor(UiTheme.MUTED);
         g.fillPolygon(new int[]{n.x + width - 10, n.x + width, n.x + width}, new int[]{n.y + height, n.y + height - 10, n.y + height}, 3);
         if (CanvasPanel.isContainer(n)) {
-            g.setColor(new Color(190, 190, 195));
+            g.setColor(new Color(184, 164, 125));
             g.setFont(this.getFont().deriveFont(1, 11.0f));
             if (n.name.startsWith("If")) {
                 int middle = n.x + width / 2;
@@ -1965,14 +1965,14 @@ extends JPanel {
 
     private void drawOverlay(Graphics2D g) {
         if (this.boxStart != null && this.boxCurrent != null) {
-            g.setColor(new Color(0, 122, 204, 45));
+            g.setColor(new Color(177, 91, 38, 44));
             g.fill(this.box());
             g.setColor(UiTheme.ACCENT);
             g.setStroke(new BasicStroke((float)(1.5 / this.zoom)));
             g.draw(this.box());
         }
         this.drawPath(g, this.cutPath, new Color(244, 71, 71));
-        this.drawPath(g, this.reroutePath, new Color(210, 170, 70));
+        this.drawPath(g, this.reroutePath, new Color(188, 130, 55));
     }
 
     private void drawPath(Graphics2D g, List<Point> path, Color color) {
@@ -2353,7 +2353,7 @@ extends JPanel {
             case "text.string" -> new Color(79, 125, 87);
             case "io.input", "io.output", "io.group-output", "io.group-input" -> new Color(47, 125, 140);
             case "io.capture" -> new Color(160, 90, 45);
-            case "agent.custom" -> new Color(138, 116, 64);
+            case "agent.custom" -> new Color(145, 100, 49);
             default -> {
                 switch (node.category.toLowerCase(Locale.ROOT)) {
                     case "java": {

@@ -186,12 +186,15 @@ public final class BulkEditTool {
         List<String> deleted = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         context.mutateWorkbench(model -> {
+            List<WorkflowModel.Node> targets = new ArrayList<>();
             for (String id : ids) {
                 WorkflowModel.Node node = model.byId(id);
                 if (node == null) { errors.add("节点不存在: " + id); continue; }
-                model.removeNode(node);
+                targets.add(node);
                 deleted.add(id);
             }
+            // One model transaction avoids recomputing types and sweeping all references once per node.
+            model.removeNodes(targets);
         });
         context.audit("bulk_edit delete_nodes count=" + deleted.size());
         if (deleted.isEmpty()) return AgentToolResult.error("删除失败：" + String.join("；", errors));

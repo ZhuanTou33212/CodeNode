@@ -26,7 +26,7 @@ public final class ToolWindow extends JPanel {
 
     public ToolWindow(Window owner,String title,JComponent content,Consumer<Boolean> collapseListener,Consumer<DockRequest> dockListener,Runnable arrangeListener){
         super(new BorderLayout());this.owner=owner;this.title=title;this.content=content;this.collapseListener=collapseListener;this.dockListener=dockListener;this.arrangeListener=arrangeListener;setBorder(UiTheme.panelBorder());
-        JPanel header=new JPanel(new BorderLayout());header.setBackground(UiTheme.TOOLBAR);header.setBorder(UiTheme.sectionBorder());JLabel label=new JLabel(title);label.setFont(label.getFont().deriveFont(Font.BOLD,13f));header.add(label,BorderLayout.WEST);
+        JPanel header=new JPanel(new BorderLayout());header.setBackground(UiTheme.TOOLBAR);header.setBorder(UiTheme.sectionBorder());JLabel label=new JLabel(title);label.setFont(label.getFont().deriveFont(Font.BOLD,13f));label.setToolTipText(title);label.setMinimumSize(new Dimension(0,24));header.add(label,BorderLayout.WEST);
         JPanel actions=new JPanel(new FlowLayout(FlowLayout.RIGHT,2,0));actions.setOpaque(false);for(JButton button:new JButton[]{collapse,arrange,floating}){button.setFocusPainted(false);button.setMargin(new Insets(1,6,1,6));actions.add(button);}header.add(actions,BorderLayout.EAST);add(header,BorderLayout.NORTH);add(content,BorderLayout.CENTER);
         arrange.setToolTipText("切换水平 / 竖直编排");collapse.addActionListener(e->setCollapsed(!collapsed));arrange.addActionListener(e->arrangeListener.run());floating.addActionListener(e->floatWindow());
         MouseAdapter drag=new MouseAdapter(){Point start;@Override public void mousePressed(MouseEvent e){start=e.getPoint();}@Override public void mouseDragged(MouseEvent e){if(start!=null&&start.distance(e.getPoint())>12){start=null;floatWindow();}}};header.addMouseListener(drag);header.addMouseMotionListener(drag);
@@ -35,7 +35,7 @@ public final class ToolWindow extends JPanel {
     public void floatWindow(){
         if(dialog!=null)return;
         remove(content);collapsed=true;collapseListener.accept(true);
-        dialog=new JDialog(owner);dialog.setTitle(title);dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);dialog.add(content);dialog.setSize(430,560);dialog.setLocationRelativeTo(owner);
+        dialog=new JDialog(owner);dialog.setTitle(title);dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);dialog.add(content);int width=Math.max(360,Math.min(540,owner.getWidth()/3));int height=Math.max(420,Math.min(680,owner.getHeight()-100));dialog.setSize(width,height);dialog.setMinimumSize(new Dimension(320,360));dialog.setLocationRelativeTo(owner);
         dialog.addWindowListener(new WindowAdapter(){@Override public void windowClosing(WindowEvent e){redock();}});
         dialog.setVisible(true);
         floatOrigin=dialog.getLocation();dockArmed=false;
