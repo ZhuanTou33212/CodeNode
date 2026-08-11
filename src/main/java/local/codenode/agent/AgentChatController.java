@@ -147,6 +147,9 @@ public final class AgentChatController {
                 listener.onEvent(ChatEvent.error(failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
             }
             finally {
+                if (!this.stopRequested && this.timeline.snapshot().taskState() != AgentExecutionTimeline.TaskState.FAILED) {
+                    this.timeline.completeTask();
+                }
                 this.state = AgentProvider.SessionState.IDLE;
                 listener.onEvent(ChatEvent.state(this.state));
             }
