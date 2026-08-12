@@ -9,36 +9,36 @@ import javax.swing.plaf.basic.BasicSplitPaneUI;
 import java.awt.*;
 
 public final class UiTheme {
-    public static final Color BACKGROUND = new Color(238, 230, 207);
-    public static final Color PANEL = new Color(249, 246, 237);
-    public static final Color TOOLBAR = new Color(243, 236, 219);
-    public static final Color INPUT = new Color(235, 226, 205);
-    public static final Color BORDER = new Color(205, 190, 157);
-    public static final Color TEXT = Color.getHSBColor(57f / 360f, 0.85f, 0.15f);
-    public static final Color MUTED = new Color(108, 94, 61);
-    public static final Color ACCENT = new Color(177, 91, 38);
-    public static final Color SELECTION = new Color(232, 204, 164);
-    public static final Color CANVAS_GRID = new Color(222, 211, 185);
-    public static final Color CANVAS_GRID_MAJOR = new Color(199, 184, 150);
+    public static final Color BACKGROUND = new Color(20, 22, 26);
+    public static final Color PANEL = new Color(29, 32, 38);
+    public static final Color TOOLBAR = new Color(25, 28, 33);
+    public static final Color INPUT = new Color(38, 42, 49);
+    public static final Color BORDER = new Color(58, 64, 74);
+    public static final Color TEXT = new Color(238, 237, 233);
+    public static final Color MUTED = new Color(153, 160, 171);
+    public static final Color ACCENT = new Color(224, 146, 78);
+    public static final Color SELECTION = new Color(91, 66, 45);
+    public static final Color CANVAS_GRID = new Color(31, 35, 42);
+    public static final Color CANVAS_GRID_MAJOR = new Color(47, 53, 63);
 
     private UiTheme() {}
 
     public static void install() {
         UIManager.put("control", PANEL);
         UIManager.put("info", PANEL);
-        UIManager.put("nimbusBase", new Color(207, 191, 158));
+        UIManager.put("nimbusBase", new Color(55, 61, 70));
         UIManager.put("nimbusLightBackground", INPUT);
         UIManager.put("text", TEXT);
         UIManager.put("textText", TEXT);
         UIManager.put("Menu.background", TOOLBAR);UIManager.put("Menu.foreground", TEXT);UIManager.put("Menu.selectionBackground", SELECTION);UIManager.put("Menu.selectionForeground", TEXT);
         UIManager.put("MenuItem.background", PANEL);UIManager.put("MenuItem.foreground", TEXT);UIManager.put("MenuItem.selectionBackground", SELECTION);UIManager.put("MenuItem.selectionForeground", TEXT);
         UIManager.put("PopupMenu.background", PANEL);UIManager.put("PopupMenu.foreground", TEXT);UIManager.put("PopupMenu.border", new LineBorder(BORDER));
-        UIManager.put("ToolTip.background", INPUT);
+        UIManager.put("ToolTip.background", PANEL);
         UIManager.put("ToolTip.foreground", TEXT);
         UIManager.put("ToolTip.border", new LineBorder(BORDER));
         UIManager.put("ScrollBar.thumb", new Color(164, 142, 101));
-        UIManager.put("ScrollBar.track", BACKGROUND);
-        UIManager.put("ScrollBar.width", 10);
+        UIManager.put("ScrollBar.track", PANEL);
+        UIManager.put("ScrollBar.width", 8);
     }
 
     public static void apply(Component component) {
@@ -52,17 +52,17 @@ public final class UiTheme {
         if (component instanceof JTextComponent text) {
             text.setBackground(INPUT); text.setForeground(TEXT); text.setCaretColor(TEXT);
             text.setSelectionColor(SELECTION); text.setSelectedTextColor(TEXT);
-            text.setBorder(new CompoundBorder(new LineBorder(BORDER), new EmptyBorder(5, 7, 5, 7)));
+            text.setBorder(new CompoundBorder(new LineBorder(BORDER, 1, true), new EmptyBorder(6, 9, 6, 9)));
         } else if (component instanceof JButton button) {
-            button.setBackground(TOOLBAR); button.setForeground(TEXT); button.setFocusPainted(false); button.setOpaque(true);
+            button.setBackground(TOOLBAR); button.setForeground(TEXT); button.setFocusPainted(false); button.setOpaque(false); button.setContentAreaFilled(false);
             button.setRolloverEnabled(true);
-            button.setBorder(new CompoundBorder(new LineBorder(BORDER, 1, true), new EmptyBorder(6, 12, 6, 12)));
+            button.setBorder(new EmptyBorder(7, 11, 7, 11));
             button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
             if (button.getClientProperty("apple-feedback-installed") == null) {
                 button.putClientProperty("apple-feedback-installed", Boolean.TRUE);
                 button.addChangeListener(event -> {
                     ButtonModel model = button.getModel();
-                    button.setBackground(model.isPressed() ? new Color(220, 205, 176) : (model.isRollover() ? INPUT : TOOLBAR));
+                    boolean active = model.isPressed() || model.isRollover(); button.setOpaque(active); button.setContentAreaFilled(active); button.setBackground(model.isPressed() ? SELECTION : INPUT); button.setForeground(model.isPressed() ? ACCENT : TEXT);
                 });
             }
         } else if (component instanceof JComboBox<?> combo) {
@@ -72,11 +72,11 @@ public final class UiTheme {
         } else if (component instanceof JList<?> list) {
             list.setBackground(INPUT);list.setForeground(TEXT);list.setSelectionBackground(SELECTION);list.setSelectionForeground(TEXT);list.setBorder(new EmptyBorder(4,6,4,6));
         } else if (component instanceof JScrollPane scroll) {
-            scroll.getViewport().setBackground(BACKGROUND); scroll.setBorder(new LineBorder(BORDER));
+            scroll.getViewport().setBackground(PANEL); scroll.setBorder(null);
         } else if (component instanceof JSplitPane split) {
             styleSplit(split);
         } else if (component instanceof JTabbedPane tabs) {
-            tabs.setBackground(PANEL); tabs.setForeground(TEXT); tabs.setBorder(new LineBorder(BORDER));
+            tabs.setBackground(PANEL); tabs.setForeground(TEXT); tabs.setBorder(null); tabs.setOpaque(true);
         } else if (component instanceof JScrollBar bar) {
             bar.setUI(new BasicScrollBarUI(){
                 @Override protected void configureScrollBarColors(){thumbColor=new Color(161,140,99);trackColor=BACKGROUND;}

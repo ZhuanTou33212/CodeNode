@@ -68,6 +68,7 @@ import javax.swing.JList;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
+import javax.swing.MenuElement;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
@@ -255,6 +256,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             }
         }, () -> SwingUtilities.invokeLater(this::saveProject), () -> SwingUtilities.invokeLater(this::undo), () -> SwingUtilities.invokeLater(this::redo), this::agentUiAction);
         this.agentToolContext.setSoftwareInfoProvider(this);
+        this.agentToolContext.setPermissionSupplier(this.agentConfig::permissions);
         this.agentToolContext.setQuestionHandler((question, options) -> {
             String[] result = new String[]{""};
             try {
@@ -354,7 +356,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             }
         }), this.item("显示申请队列", () -> this.queueTool.redock()));
         JMenu projectMenu = this.menu("项目(P)", this.item("初始化本地申请槽", () -> this.initializeProject(true)), this.item("工程运行", this::openProjectRun));
-        JMenu analysisMenu = this.menu("分析项目(A)", this.item("全量扫描（目录层级）", this::fullScanProject), this.item("项目全量解析（按包归组）", this::analyzeProjectFull), this.item("分析项目结构（申请提交）", this::analyzeProject), this.item("识别并构建当前工程", () -> {
+        JMenu analysisMenu = this.menu("分析项目(A)", this.item("全量扫描（目录层级）", this::fullScanProject), this.item("项目全量解析（按包归组）", this::analyzeProjectFull), this.item("自动整理当前画布", this::autoArrangeCanvas), this.item("分析项目结构（申请提交）", this::analyzeProject), this.item("识别并构建当前工程", () -> {
             if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
         }));
         JMenu build = this.menu("生成(B)", this.item("打开输出请求", this::focusSubmissionControls), this.item("提交当前选择", this::submitSelected));
@@ -368,9 +370,9 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
 
     private JComponent toolbar() {
-        JPanel toolbar = new UiTheme.ResponsiveWrapPanel(FlowLayout.LEFT, 8, 6);
+        JPanel toolbar = new UiTheme.ResponsiveWrapPanel(FlowLayout.LEFT, 10, 8);
         toolbar.setBackground(UiTheme.TOOLBAR);
-        toolbar.setBorder(new EmptyBorder(7, 12, 7, 12));
+        toolbar.setBorder(new EmptyBorder(12, 18, 10, 18));
         toolbar.setMinimumSize(new Dimension(0, 0));
         JButton choose = this.button("打开项目", this::chooseProject);
         JButton recent = new JButton("最近打开");
@@ -537,7 +539,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             JSplitPane split = new JSplitPane(orientation, first, second);
             UiTheme.styleSplit(split);
             // 两侧弹性可调：拖动分隔线即可缩放左右任一窗口
-            split.setDividerSize(8);
+            split.setDividerSize(5);
             split.setOneTouchExpandable(true);
             final double proportion = i / (double) (i + 1);
             split.setResizeWeight(proportion);
@@ -570,7 +572,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         JSplitPane split = new JSplitPane(horizontal ? JSplitPane.HORIZONTAL_SPLIT : JSplitPane.VERTICAL_SPLIT,
                 leading ? tool : center, leading ? center : tool);
         UiTheme.styleSplit(split);
-        split.setDividerSize(8);
+        split.setDividerSize(5);
         split.setOneTouchExpandable(true);
         // Side tools keep a legible working width; the canvas absorbs resize first.
         split.setResizeWeight(leading ? 0.0 : 1.0);
@@ -698,6 +700,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         try {
             this.model.replaceFrom(session.model);
             this.canvas.setView(session.panX, session.panY, session.zoom);
+            this.canvas.restoreGroupFocus(session.currentGroupId);
             this.canvas.select(null);
             this.canvas.repaint();
             this.currentProjectFile = session.file;
@@ -752,6 +755,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
 
         this.inspectorTabs = new JTabbedPane();
         this.inspectorTabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        this.inspectorTabs.setOpaque(true);
+        this.inspectorTabs.setBackground(UiTheme.PANEL);
         this.inspectorTabs.addTab("节点", this.nodeInspector());
         this.projectRunPanel = new local.codenode.ui.ProjectRunPanel(this::append);
         JScrollPane runScroll = new JScrollPane(this.projectRunPanel);
@@ -814,6 +819,18 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         SwingUtilities.invokeLater(() -> this.submissionTarget.requestFocusInWindow());
     }
 
+    private void autoArrangeCanvas() {
+        if (this.projectReadOnly) { this.append("自动整理不可用：当前工程为只读"); return; }
+        this.saveInspector();
+        AutoLayout.layout(this.model, this.canvas);
+        HierarchyLayout.layout(this.model);
+        this.canvas.frameAll();
+        this.dirty = true;
+        this.commitHistory();
+        this.canvas.repaint();
+        this.status.setText("  已自动整理画布  |  节点=" + this.model.nodes().size());
+        this.append("已自动整理画布：拓扑分层 + 嵌套组布局");
+    }
     private void openProjectRun() {
         this.inspectorTool.redock();
         if (this.projectRunPanel != null) this.projectRunPanel.setProjectPath(this.currentProjectRoot());
@@ -1162,6 +1179,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         session.panX = settings.panX();
         session.panY = settings.panY();
         session.zoom = settings.zoom();
+        session.currentGroupId = settings.currentGroupId();
         this.documents.add(session);
         int index = this.documents.size() - 1;
         String tabTitle = file.getFileName() == null ? "工程" : file.getFileName().toString();
@@ -1169,6 +1187,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         installTabCloseButton(index);
         this.documentTabs.setSelectedIndex(index);
         this.switchToDocument(index);
+        this.canvas.restoreGroupFocus(settings.currentGroupId());
         this.canvas.selectNodes(settings.selectedNodeIds().stream().map(this.model::byId).toList());
         this.syncProjectLocation(file);
         this.rememberRecent(file);
@@ -1289,9 +1308,17 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 case "save_document": { saveProject(); break; }
                 case "select_node": { String id = String.valueOf(arguments.getOrDefault("nodeId", "")); WorkflowModel.Node selected = model.byId(id); if (selected != null) canvas.select(selected); break; }
                 case "read_ui_state": { append("[Agent UI] tab=" + (workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()) + " size=" + getWidth() + "x" + getHeight()); break; }
-                case "open_menu": { append("[Agent] 菜单动作已请求：" + arguments.getOrDefault("menu", "")); break; }
-                case "dock_panel": { toggleAgentPanel(String.valueOf(arguments.getOrDefault("panel", ""))); break; }
-                case "run_config", "build_project", "run_project", "stop_run": { openProjectRun(); append("[Agent] 已打开工程运行：" + action); break; }                default: {
+                case "open_menu": { dispatchMenuAction(String.valueOf(arguments.getOrDefault("menu", ""))); break; }
+                case "dock_panel": { dockAgentPanel(String.valueOf(arguments.getOrDefault("panel", "")), String.valueOf(arguments.getOrDefault("position", ""))); break; }
+                case "run_config", "build_project", "run_project", "stop_run": {
+                    openProjectRun();
+                    if (this.projectRunPanel != null) {
+                        if ("build_project".equals(action)) this.projectRunPanel.requestBuild();
+                        else if ("run_project".equals(action) || "run_config".equals(action)) this.projectRunPanel.requestRun();
+                        else this.projectRunPanel.requestStop();
+                    }
+                    break;
+                }                default: {
                     break;
                 }
             }
@@ -1301,6 +1328,18 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         }
     }
 
+    private void dispatchMenuAction(String menu) {
+        String wanted = menu == null ? "" : menu.trim(); if (wanted.isBlank() || getJMenuBar() == null) return;
+        for (MenuElement element : getJMenuBar().getSubElements()) if (element instanceof JMenu top) for (int i = 0; i < top.getItemCount(); i++) { JMenuItem item = top.getItem(i); if (item != null && (wanted.equals(item.getText()) || wanted.equals(top.getText() + "/" + item.getText()))) { item.doClick(); return; } }
+        append("[Agent] 未找到菜单项：" + wanted);
+    }
+
+    private void dockAgentPanel(String panel, String position) {
+        ToolWindow target = switch (panel) { case "files" -> fileBrowserTool; case "inspector", "output" -> inspectorTool; case "error", "changes" -> changeTool; case "queue" -> queueTool; default -> null; };
+        if (target == null) { append("[Agent] 未知面板：" + panel); return; }
+        if (position == null || position.isBlank()) { target.redock(); return; }
+        try { dock(target, new ToolWindow.DockRequest(ToolWindow.DockPosition.valueOf(position.trim().toUpperCase()), null)); } catch (IllegalArgumentException e) { append("[Agent] 未知停靠位置：" + position); }
+    }
     private void toggleAgentPanel(String panel) {
         ToolWindow target = switch (panel) {
             case "inspector" -> this.inspectorTool;
@@ -1389,6 +1428,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 session.panX = this.canvas.panX();
                 session.panY = this.canvas.panY();
                 session.zoom = this.canvas.zoom();
+                session.currentGroupId = this.canvas.currentGroupId();
             }
             this.refreshDocumentTitle();
             this.status.setText("  已保存  |  " + String.valueOf(target));
@@ -1431,7 +1471,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
 
     private CnodeProjectCodec.Settings currentSettings() {
         WorkflowModel.Node selected = this.canvas.selected();
-        return new CnodeProjectCodec.Settings((WorkflowModel.Mode)((Object)this.mode.getSelectedItem()), String.valueOf(this.language.getSelectedItem()), this.executableOutput, this.markdownOutput, selected == null ? null : selected.id, this.canvas.panX(), this.canvas.panY(), this.canvas.zoom(), selected == null ? null : selected.id, this.selectedNodeIds());
+        return new CnodeProjectCodec.Settings((WorkflowModel.Mode)((Object)this.mode.getSelectedItem()), String.valueOf(this.language.getSelectedItem()), this.executableOutput, this.markdownOutput, selected == null ? null : selected.id, this.canvas.panX(), this.canvas.panY(), this.canvas.zoom(), selected == null ? null : selected.id, this.selectedNodeIds(), this.canvas.currentGroupId());
     }
 
     private List<String> selectedNodeIds() {
@@ -2949,6 +2989,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         int panX;
         int panY;
         double zoom = 1.0;
+        String currentGroupId = "";
     }
 
     /** 新建一个空白文档 tab（不打开任何文件）。 */
@@ -2999,6 +3040,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         try {
             this.model.replaceFrom(session.model);
             this.canvas.setView(session.panX, session.panY, session.zoom);
+            this.canvas.restoreGroupFocus(session.currentGroupId);
             this.canvas.select(null);
             this.canvas.repaint();
             this.currentProjectFile = session.file;

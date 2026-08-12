@@ -1,0 +1,148 @@
+﻿diff --git a/src/main/java/local/codenode/CanvasPanel.java b/src/main/java/local/codenode/CanvasPanel.java
+--- a/src/main/java/local/codenode/CanvasPanel.java
++++ b/src/main/java/local/codenode/CanvasPanel.java
+@@ -109,3 +109,5 @@ public final class CanvasPanel
+     private boolean keyboardGrab;
+     private String groupFocusId = "";
++    private final Map<String, ViewState> groupViewStates = new HashMap<String, ViewState>();
++    private int navigationHover = -1;
+     private WorkflowModel.Node hoveringScope;
+@@ -115,4 +117,5 @@ public final class CanvasPanel
+     private final Timer animTimer;
+     private Consumer<WorkflowModel.Node> selectionListener = node -> {};
+     private Consumer<String> feedbackListener = message -> {};
++    private Consumer<List<WorkflowModel.Node>> navigationListener = path -> {};
+     private Runnable changeListener = () -> {};
+@@ -175,4 +178,7 @@ public final class CanvasPanel
+                 if (!SwingUtilities.isLeftMouseButton(e)) {
+                     return;
+                 }
++                if (CanvasPanel.this.handleNavigationClick(e.getPoint())) {
++                    return;
++                }
+                 RerouteHit reroute = CanvasPanel.this.hitReroute(world);
+@@ -464,7 +470,12 @@ public final class CanvasPanel
+                     CanvasPanel.this.repaint();
+                 }
++                int nextNavigationHover = CanvasPanel.this.navigationHit(e.getPoint());
++                if (nextNavigationHover != CanvasPanel.this.navigationHover) {
++                    CanvasPanel.this.navigationHover = nextNavigationHover;
++                    CanvasPanel.this.repaint();
++                }
+@@ -521,4 +532,8 @@ public final class CanvasPanel
+         this.changeListener = listener;
+     }
+
++    public void onNavigation(Consumer<List<WorkflowModel.Node>> listener) {
++        this.navigationListener = listener == null ? path -> {} : listener;
++    }
+
+@@ -579,3 +594,47 @@ public final class CanvasPanel
+         this.repaint();
+     }
+
++    public String currentGroupId() {
++        return this.groupFocusId;
++    }
+
++    public List<WorkflowModel.Node> groupPath() {
++        ArrayList<WorkflowModel.Node> path = new ArrayList<WorkflowModel.Node>();
++        HashSet<String> seen = new HashSet<String>();
++        WorkflowModel.Node current = this.groupFocusId.isBlank() ? null : this.model.byId(this.groupFocusId);
++        while (current != null && current.nodeKind == WorkflowModel.NodeKind.GROUP && seen.add(current.id)) {
++            path.add(0, current);
++            current = current.parentScopeId.isBlank() ? null : this.model.byId(current.parentScopeId);
++        }
++        return List.copyOf(path);
++    }
+
++    public boolean enterGroup(String groupId) {
++        WorkflowModel.Node group = this.model.byId(groupId);
++        if (group == null || group.nodeKind != WorkflowModel.NodeKind.GROUP) return false;
++        this.enterGroupFocus(groupId);
++        return true;
++    }
+
++    public boolean navigateToGroup(String targetGroupId) {
++        String target = targetGroupId == null ? "" : targetGroupId;
++        if (target.equals(this.groupFocusId)) return true;
++        if (!target.isBlank()) {
++            WorkflowModel.Node targetNode = this.model.byId(target);
++            if (targetNode == null || targetNode.nodeKind != WorkflowModel.NodeKind.GROUP) return false;
++            boolean ancestor = this.groupPath().stream().anyMatch(node -> node.id.equals(target));
++            if (!ancestor) return false;
++        }
++        this.saveViewState(this.groupFocusId);
++        this.groupFocusId = target;
++        this.restoreViewState(target);
++        this.publishNavigation();
++        return true;
++    }
+
++    public boolean restoreGroupFocus(String targetGroupId) {
++        String target = targetGroupId == null ? "" : targetGroupId;
++        if (!target.isBlank()) {
++            WorkflowModel.Node node = this.model.byId(target);
++            if (node == null || node.nodeKind != WorkflowModel.NodeKind.GROUP) target = "";
++        }
++        this.groupViewStates.clear();
++        this.groupFocusId = target;
++        this.clearNodeSelection();
++        List<WorkflowModel.Node> children = this.currentVisibleChildren();
++        if (children.isEmpty()) this.setView(0, 0, 1.0); else this.frameNodes(children);
++        this.publishNavigation();
++        return target.equals(targetGroupId == null ? "" : targetGroupId);
++    }
+
++    private void publishNavigation() {
++        this.navigationListener.accept(this.groupPath());
++        this.repaint();
++    }
+
++    private List<WorkflowModel.Node> currentVisibleChildren() {
++        return this.model.nodes().stream().filter(node -> node.parentScopeId.equals(this.groupFocusId)).toList();
++    }
+
++    private void saveViewState(String scopeId) {
++        this.groupViewStates.put(scopeId, new ViewState(this.panX, this.panY, this.zoom,
++                this.selectedNodes.stream().map(node -> node.id).toList(), this.primary == null ? "" : this.primary.id));
++    }
+
++    private void restoreViewState(String scopeId) {
++        ViewState state = this.groupViewStates.get(scopeId);
++        this.clearNodeSelection();
++        if (state == null) {
++            List<WorkflowModel.Node> children = this.currentVisibleChildren();
++            if (children.isEmpty()) this.setView(0, 0, 1.0); else this.frameNodes(children);
++            return;
++        }
++        this.setView(state.panX, state.panY, state.zoom);
++        this.selectNodes(state.selectedIds.stream().map(this.model::byId).filter(java.util.Objects::nonNull).toList());
++        if (!state.primaryId.isBlank()) this.primary = this.model.byId(state.primaryId);
++    }
+
++    private boolean handleNavigationClick(Point point) {
++        int hit = this.navigationHit(point);
++        if (hit < 0) return false;
++        if (hit == 0) return this.navigateToGroup("");
++        List<WorkflowModel.Node> path = this.groupPath();
++        return hit - 1 < path.size() && this.navigateToGroup(path.get(hit - 1).id);
++    }
+
++    private int navigationHit(Point point) {
++        if (this.groupFocusId.isBlank() || point.y < 0 || point.y > 32) return -1;
++        if (point.x >= 8 && point.x < 78) return 0;
++        int x = 86;
++        FontMetrics metrics = this.getFontMetrics(this.getFont().deriveFont(12.0f));
++        String root = "鏍圭敾甯?;
++        if (point.x >= x && point.x < x + metrics.stringWidth(root) + 28) return 1;
++        x += metrics.stringWidth(root) + 36;
++        List<WorkflowModel.Node> path = this.groupPath();
++        for (int i = 0; i < path.size(); i++) {
++            int width = metrics.stringWidth(path.get(i).name) + 28;
++            if (point.x >= x && point.x < x + width) return i + 2;
++            x += width + 8;
++        }
++        return -1;
++    }
+

@@ -27,7 +27,7 @@ public final class AgentTimelinePanel extends JPanel {
         super(new BorderLayout(6, 0));
         this.timeline = timeline;
         setOpaque(false);
-        setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, UiTheme.BORDER), BorderFactory.createEmptyBorder(6, 10, 6, 10)));
         state.setFont(state.getFont().deriveFont(Font.BOLD, 11f));
         state.setForeground(UiTheme.TEXT);
         add(state, BorderLayout.WEST);
@@ -45,7 +45,7 @@ public final class AgentTimelinePanel extends JPanel {
         undo.setMargin(new java.awt.Insets(2, 8, 2, 8));
         undo.addActionListener(e -> timeline.undoLast());
         add(undo, BorderLayout.EAST);
-        setPreferredSize(new Dimension(10, 34));
+        setPreferredSize(new Dimension(10, 38));
         timeline.addListener(snapshot -> SwingUtilities.invokeLater(() -> render(snapshot)));
     }
 

@@ -68,6 +68,38 @@ class CanvasPanelTest {
         WorkflowModel model=connectedModel();CanvasPanel canvas=canvas(model);invoke(canvas,"control A");invoke(canvas,"control C");invoke(canvas,"control V");assertEquals(4,model.nodes().size());assertEquals(2,model.edges().size());assertEquals(2,canvas.selectedNodes().size());invoke(canvas,"DELETE");assertEquals(2,model.nodes().size());WorkflowModel.Node node=model.nodes().getFirst();int originalX=node.x,originalY=node.y;click(canvas,originalX+20,originalY+20,0,MouseEvent.BUTTON1);long now=System.currentTimeMillis();canvas.dispatchEvent(new MouseEvent(canvas,MouseEvent.MOUSE_PRESSED,now,InputEvent.BUTTON1_DOWN_MASK,originalX+20,originalY+20,1,false,MouseEvent.BUTTON1));canvas.dispatchEvent(new MouseEvent(canvas,MouseEvent.MOUSE_DRAGGED,now+1,InputEvent.BUTTON1_DOWN_MASK,originalX+120,originalY+80,0,false,MouseEvent.NOBUTTON));invoke(canvas,"ESCAPE");assertEquals(originalX,node.x);assertEquals(originalY,node.y);
     }
 
+    @Test void nestedGroupsKeepParentPathAndReturnToDirectParent() {
+        WorkflowModel model = new WorkflowModel();
+        WorkflowModel.Node root = model.addGroupNode(0, 0, "A");
+        WorkflowModel.Node child = model.addGroupNode(20, 20, "B"); child.parentScopeId = root.id;
+        WorkflowModel.Node leaf = model.addGroupNode(40, 40, "C"); leaf.parentScopeId = child.id;
+        CanvasPanel canvas = canvas(model);
+        assertTrue(canvas.enterGroup(root.id));
+        assertTrue(canvas.enterGroup(child.id));
+        assertTrue(canvas.enterGroup(leaf.id));
+        assertEquals(List.of(root, child, leaf), canvas.groupPath());
+        assertTrue(canvas.navigateToGroup(child.id));
+        assertEquals(child.id, canvas.currentGroupId());
+        assertTrue(canvas.navigateToGroup(root.id));
+        assertEquals(root.id, canvas.currentGroupId());
+        assertTrue(canvas.navigateToGroup(""));
+        assertEquals("", canvas.currentGroupId());
+    }
+
+    @Test void groupCreatedInsideFocusInheritsCurrentGroup() {
+        WorkflowModel model = new WorkflowModel();
+        WorkflowModel.Node parent = model.addGroupNode(0, 0, "父组");
+        WorkflowModel.Node first = model.addNode(40, 80); first.parentScopeId = parent.id;
+        WorkflowModel.Node second = model.addNode(320, 80); second.parentScopeId = parent.id;
+        CanvasPanel canvas = canvas(model);
+        assertTrue(canvas.enterGroup(parent.id));
+        canvas.selectNodes(List.of(first, second));
+        invoke(canvas, "control G");
+        WorkflowModel.Node nested = model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP && n != parent).findFirst().orElseThrow();
+        assertEquals(parent.id, nested.parentScopeId);
+        assertEquals(nested.id, first.parentScopeId);
+        assertEquals(nested.id, second.parentScopeId);
+    }
     private static WorkflowModel connectedModel(){WorkflowModel model=new WorkflowModel();WorkflowModel.Node source=model.addNode(100,100),target=model.addNode(400,100);model.connect(source,target);return model;}
     private static CanvasPanel canvas(WorkflowModel model){CanvasPanel canvas=new CanvasPanel(model);canvas.setSize(1000,700);return canvas;}
     private static void click(CanvasPanel canvas,int x,int y,int modifiers,int button){long now=System.currentTimeMillis();canvas.dispatchEvent(new MouseEvent(canvas,MouseEvent.MOUSE_PRESSED,now,modifiers,x,y,1,false,button));canvas.dispatchEvent(new MouseEvent(canvas,MouseEvent.MOUSE_RELEASED,now+1,modifiers,x,y,1,false,button));}

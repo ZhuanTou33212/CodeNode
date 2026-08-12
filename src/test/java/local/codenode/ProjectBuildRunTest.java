@@ -5,7 +5,9 @@ import local.codenode.project.JavaProject;
 import local.codenode.project.JdkManager;
 import local.codenode.project.ProcessRunner;
 import local.codenode.project.RunConfig;
+import local.codenode.project.RunLauncher;
 import local.codenode.project.TraceCollector;
+import local.codenode.project.ToolLocator;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -135,6 +137,35 @@ public class ProjectBuildRunTest {
         assertNotNull(summary.get("trace"));
     }
 
+    @Test
+    void jfrRunProducesParsableSamplingSummary() throws Exception {
+        Path root = Files.createTempDirectory("pj-jfr");
+        try {
+            Path src = root.resolve("src/main/java/demo");
+            Files.createDirectories(src);
+            Files.writeString(src.resolve("App.java"), """
+                package demo;
+                public class App {
+                    public static void main(String[] args) {
+                        long end = System.nanoTime() + 1500000000L;
+                        double x = 0;
+                        while (System.nanoTime() < end) x += Math.sin(x);
+                        System.out.println(x);
+                    }
+                }
+                """, StandardCharsets.UTF_8);
+            assertTrue(BuildRunner.build(root, List.of(), 120, line -> {}).ok());
+            RunConfig config = new RunConfig("demo.App", RunConfig.Kind.MAIN_CLASS, "demo.App", null,
+                    ToolLocator.jdk() == null ? null : ToolLocator.jdk().toString(), List.of(), List.of(), root, List.of(), true);
+            RunLauncher.RunOutcome outcome = RunLauncher.run(config, 30, line -> {});
+            assertEquals(0, outcome.exitCode(), outcome.output());
+            assertTrue(outcome.trace().containsKey("events"), String.valueOf(outcome.trace()));
+            assertTrue(((Number) outcome.trace().get("events")).intValue() > 0, String.valueOf(outcome.trace()));
+            assertTrue(outcome.trace().containsKey("methods"), String.valueOf(outcome.trace()));
+        } finally {
+            deleteRecursive(root);
+        }
+    }
     @Test
     void jdkManagerProbesCurrentJdk() {
         List<JdkManager.JdkInfo> jdks = JdkManager.probe();

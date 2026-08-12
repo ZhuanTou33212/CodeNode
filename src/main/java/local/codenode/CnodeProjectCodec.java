@@ -18,9 +18,10 @@ public final class CnodeProjectCodec {
     private static final Set<String> REQUIRED=Set.of("mimetype","manifest.json","graph.json","workspace.json","output-profiles.json","integrity.json");
     private static final Set<String> OPTIONAL=Set.of("agent-context.json","agent-info.json");
 
-    public record Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId,List<String> selectedNodeIds) {
-        public Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId){this(mode,language,executablePath,markdownPath,entryNodeId,panX,panY,zoom,selectedNodeId,selectedNodeId==null?List.of():List.of(selectedNodeId));}
-        public Settings{selectedNodeIds=selectedNodeIds==null?List.of():List.copyOf(selectedNodeIds);if(selectedNodeId==null&&!selectedNodeIds.isEmpty())selectedNodeId=selectedNodeIds.getLast();}
+    public record Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId,List<String> selectedNodeIds,String currentGroupId) {
+        public Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId){this(mode,language,executablePath,markdownPath,entryNodeId,panX,panY,zoom,selectedNodeId,selectedNodeId==null?List.of():List.of(selectedNodeId),"");}
+        public Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId,List<String> selectedNodeIds){this(mode,language,executablePath,markdownPath,entryNodeId,panX,panY,zoom,selectedNodeId,selectedNodeIds,"");}
+        public Settings{selectedNodeIds=selectedNodeIds==null?List.of():List.copyOf(selectedNodeIds);if(selectedNodeId==null&&!selectedNodeIds.isEmpty())selectedNodeId=selectedNodeIds.getLast();currentGroupId=currentGroupId==null?"":currentGroupId;}
     }
     public record Metadata(String documentId,String name,Instant createdAt,Settings settings) {}
     public record Loaded(WorkflowModel model,Metadata metadata,boolean readOnly) {}
@@ -54,7 +55,7 @@ public final class CnodeProjectCodec {
         Map<String,Object> graph=Json.object(text(entries,"graph.json"));Map<String,Object> workspace=Json.object(text(entries,"workspace.json"));Map<String,Object> profiles=Json.object(text(entries,"output-profiles.json"));
         WorkflowModel model=decodeGraph(graph,workspace);
         String documentId=requiredId(string(manifest,"documentId"),"documentId");String name=string(manifest,"name");Instant created=parseInstant(string(manifest,"createdAt"));
-        Settings settings=decodeSettings(workspace,profiles);for(String selectedNodeId:settings.selectedNodeIds())if(model.byId(selectedNodeId)==null)throw new IOException("选择状态引用不存在的节点");if(settings.entryNodeId()!=null&&model.byId(settings.entryNodeId())==null)throw new IOException("入口配置引用不存在的节点");return new Loaded(model,new Metadata(documentId,name,created,settings),readOnly);
+        Settings settings=decodeSettings(workspace,profiles);if(!settings.currentGroupId().isBlank()){WorkflowModel.Node currentGroup=model.byId(settings.currentGroupId());if(currentGroup==null||currentGroup.nodeKind!=WorkflowModel.NodeKind.GROUP)settings=new Settings(settings.mode(),settings.language(),settings.executablePath(),settings.markdownPath(),settings.entryNodeId(),settings.panX(),settings.panY(),settings.zoom(),settings.selectedNodeId(),settings.selectedNodeIds(),"");}for(String selectedNodeId:settings.selectedNodeIds())if(model.byId(selectedNodeId)==null)throw new IOException("选择状态引用不存在的节点");if(settings.entryNodeId()!=null&&model.byId(settings.entryNodeId())==null)throw new IOException("入口配置引用不存在的节点");return new Loaded(model,new Metadata(documentId,name,created,settings),readOnly);
     }
 
     public static Path backupPath(Path project){return project.resolveSibling(project.getFileName()+".bak");}
@@ -128,7 +129,7 @@ public final class CnodeProjectCodec {
 
     private static Map<String,Object> workspace(WorkflowModel model,Settings settings){
         LinkedHashMap<String,Object> views=new LinkedHashMap<>();for(WorkflowModel.Node node:model.nodes())views.put(node.id,Map.of("x",node.x,"y",node.y));
-        return Map.of("viewport",Map.of("x",settings.panX(),"y",settings.panY(),"zoom",settings.zoom()),"nodeViews",views,"selection",Map.of("nodeIds",settings.selectedNodeIds(),"edgeIds",List.of()),"activeMode",settings.mode().wireName,"activeLanguage",settings.language());
+        return Map.of("viewport",Map.of("x",settings.panX(),"y",settings.panY(),"zoom",settings.zoom()),"nodeViews",views,"selection",Map.of("nodeIds",settings.selectedNodeIds(),"edgeIds",List.of()),"activeMode",settings.mode().wireName,"activeLanguage",settings.language(),"currentGroupId",settings.currentGroupId());
     }
     private static Map<String,Object> profiles(Settings settings){
         return Map.of("executableWorkflow",Map.of("entryNodeId",settings.entryNodeId()==null?"":settings.entryNodeId(),"relativePath",settings.executablePath(),"language",settings.language(),"compile",false,"run",false),"markdownBlueprint",Map.of("scope","project","targetNodeId","","relativePath",settings.markdownPath(),"language",settings.language(),"includeGraphSummary",true,"includeNodePrompts",true));
@@ -187,7 +188,7 @@ public final class CnodeProjectCodec {
     }
 
     private static Settings decodeSettings(Map<String,Object> workspace,Map<String,Object> profiles) throws IOException {
-        String modeName=string(workspace,"activeMode");WorkflowModel.Mode mode=null;for(WorkflowModel.Mode candidate:WorkflowModel.Mode.values())if(candidate.wireName.equals(modeName))mode=candidate;if(mode==null)throw new IOException("未知工作模式");String language=language(string(workspace,"activeLanguage"));Map<String,Object> viewport=object(workspace,"viewport"),selection=object(workspace,"selection"),executable=object(profiles,"executableWorkflow"),markdown=object(profiles,"markdownBlueprint");List<String> selectedIds=list(selection,"nodeIds").stream().map(String::valueOf).toList();String selectedId=selectedIds.isEmpty()?null:selectedIds.getLast();String entry=string(executable,"entryNodeId");if(entry.isBlank())entry=null;double zoom=number(viewport,"zoom");if(zoom<.25||zoom>2.5)throw new IOException("画布缩放超出范围");return new Settings(mode,language,relative(string(executable,"relativePath"),"executable output"),relative(string(markdown,"relativePath"),"markdown output"),entry,integer(viewport,"x"),integer(viewport,"y"),zoom,selectedId,selectedIds);
+        String modeName=string(workspace,"activeMode");WorkflowModel.Mode mode=null;for(WorkflowModel.Mode candidate:WorkflowModel.Mode.values())if(candidate.wireName.equals(modeName))mode=candidate;if(mode==null)throw new IOException("未知工作模式");String language=language(string(workspace,"activeLanguage"));Map<String,Object> viewport=object(workspace,"viewport"),selection=object(workspace,"selection"),executable=object(profiles,"executableWorkflow"),markdown=object(profiles,"markdownBlueprint");List<String> selectedIds=list(selection,"nodeIds").stream().map(String::valueOf).toList();String selectedId=selectedIds.isEmpty()?null:selectedIds.getLast();String entry=string(executable,"entryNodeId");if(entry.isBlank())entry=null;double zoom=number(viewport,"zoom");if(zoom<.25||zoom>2.5)throw new IOException("画布缩放超出范围");return new Settings(mode,language,relative(string(executable,"relativePath"),"executable output"),relative(string(markdown,"relativePath"),"markdown output"),entry,integer(viewport,"x"),integer(viewport,"y"),zoom,selectedId,selectedIds,optionalString(workspace,"currentGroupId",""));
     }
 
     private static Map<String,byte[]> readArchive(Path source) throws IOException {

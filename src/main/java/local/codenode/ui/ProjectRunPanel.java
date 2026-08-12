@@ -201,6 +201,15 @@ public final class ProjectRunPanel extends JPanel implements Scrollable {
         });
     }
 
+    /** Agent/UI action entry points. */
+    public void requestBuild() { buildProject(); }
+    public void requestRun() { runProject(); }
+    public void requestStop() {
+        RunLauncher.RunningProcess handle = currentHandle;
+        if (handle != null) RunLauncher.stop(handle); else RunLauncher.stop();
+        stopBtn.setEnabled(false);
+        runBtn.setEnabled(true);
+    }
     private void buildProject() {
         if (currentRoot == null) { discoverProject(); return; }
         appendLog("[构建] " + currentRoot);

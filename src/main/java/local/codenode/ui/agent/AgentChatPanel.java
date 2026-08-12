@@ -39,6 +39,7 @@ public final class AgentChatPanel extends JPanel {
     private final JLabel context = new JLabel(" ");
     private final CollapsibleReasoningPanel reasoning = new CollapsibleReasoningPanel();
     private final AgentTimelinePanel timelinePanel;
+    private final WorkspaceContextBar workspaceBar;
 
     private final ChatListener listener = event -> SwingUtilities.invokeLater(() -> onEvent(event));
 
@@ -48,7 +49,8 @@ public final class AgentChatPanel extends JPanel {
         this.config = config;
         this.openSettings = openSettings;
         this.timelinePanel = new AgentTimelinePanel(controller.timeline());
-        setBackground(UiTheme.BACKGROUND);
+        this.workspaceBar = new WorkspaceContextBar(this::projectPath, this::setProjectPath);
+        setBackground(UiTheme.PANEL);
 
         document = transcript.getStyledDocument();
         transcript.setEditable(false);
@@ -59,7 +61,7 @@ public final class AgentChatPanel extends JPanel {
 
         JScrollPane scroll = new JScrollPane(transcript);
         scroll.setBorder(null);
-        scroll.getViewport().setBackground(UiTheme.BACKGROUND);
+        scroll.getViewport().setBackground(UiTheme.PANEL);
         scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
 
         JPanel center = new JPanel(new BorderLayout());
@@ -70,7 +72,11 @@ public final class AgentChatPanel extends JPanel {
 
         add(topBar(), BorderLayout.NORTH);
         add(center, BorderLayout.CENTER);
-        add(bottomBar(), BorderLayout.SOUTH);
+        JPanel composer = new JPanel(new BorderLayout(0, 8));
+        composer.setOpaque(false);
+        composer.add(bottomBar(), BorderLayout.CENTER);
+        composer.add(workspaceBar, BorderLayout.SOUTH);
+        add(composer, BorderLayout.SOUTH);
 
         refreshModelCombo();
         refreshContext();
@@ -79,7 +85,7 @@ public final class AgentChatPanel extends JPanel {
     private JPanel topBar() {
         JPanel bar = new JPanel(new BorderLayout());
         bar.setOpaque(false);
-        bar.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        bar.setBorder(BorderFactory.createEmptyBorder(12, 16, 8, 16));
         JLabel title = new JLabel("内嵌 Agent");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 13f));
         title.setForeground(UiTheme.TEXT);
@@ -121,7 +127,7 @@ public final class AgentChatPanel extends JPanel {
     private JPanel bottomBar() {
         JPanel bottom = new JPanel(new BorderLayout(0, 4));
         bottom.setOpaque(false);
-        bottom.setBorder(BorderFactory.createEmptyBorder(4, 10, 8, 10));
+        bottom.setBorder(BorderFactory.createEmptyBorder(10, 16, 14, 16));
 
         JPanel inputRow = new JPanel(new BorderLayout(8, 0));
         inputRow.setOpaque(false);
@@ -134,7 +140,7 @@ public final class AgentChatPanel extends JPanel {
         input.setFont(new Font("Consolas", Font.PLAIN, 14));
         input.setLineWrap(true);
         input.setWrapStyleWord(true);
-        input.setBackground(UiTheme.INPUT);
+        input.setBackground(UiTheme.PANEL);
         input.getInputMap().put(KeyStroke.getKeyStroke("ENTER"), "sendLine");
         input.getActionMap().put("sendLine", new AbstractAction() {
             @Override public void actionPerformed(ActionEvent e) { doSend(); }

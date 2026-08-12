@@ -29,6 +29,7 @@ public final class AgentToolContext {
     private Supplier<List<Map<String, Object>>> conversationSupplier;
     private FileChangeNotifier fileChangeNotifier;
     private SoftwareInfoProvider softwareInfoProvider;
+    private java.util.function.Supplier<String> permissionSupplier = () -> "";
     private final AtomicBoolean toolStopRequested = new AtomicBoolean(false);
     private final PermissionMemory permissionMemory = new PermissionMemory();
     private final AgentResultStore resultStore = new AgentResultStore();
@@ -91,10 +92,25 @@ public final class AgentToolContext {
      * 低风险（项目内 write_file 等）默认放行。确认文案用自然语言解释"在做什么"。
      */
     public boolean confirm(ConfirmationLevel level, String what, String detail) {
+        if (level == ConfirmationLevel.UI && permissionMode("ui").matches("deny|disabled|off")) return false;
         if (this.confirmation == null) {
             return true;
         }
         return this.confirmation.confirm(level, what, detail);
+    }
+
+    public void setPermissionSupplier(java.util.function.Supplier<String> supplier) { this.permissionSupplier = supplier == null ? () -> "" : supplier; }
+    private String permissionMode(String category) {
+        String raw = permissionSupplier.get();
+        if (raw == null || raw.isBlank()) return "";
+        for (String item : raw.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) return pair[1].trim().toLowerCase(java.util.Locale.ROOT); }
+        return "";
+    }
+    private boolean permissionAllowed(String category) {
+        String raw = permissionSupplier.get();
+        if (raw == null || raw.isBlank()) return true;
+        for (String item : raw.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) { String value = pair[1].trim().toLowerCase(java.util.Locale.ROOT); return value.equals("allow") || value.equals("enabled") || value.equals("confirm"); } }
+        return true;
     }
 
     /** Confirm once per session for a stable tool/action signature. */
@@ -234,6 +250,8 @@ public final class AgentToolContext {
         LOW,
         /** 中风险：写入/修改文件（项目内），默认放行但记录。 */
         WRITE,
+        /** UI 操作：受 agent.permissions 的 ui 开关控制。 */
+        UI,
         /** 高风险：执行外部命令、删除、git 危险操作、跨目录、超出用户请求范围——必须确认。 */
         HIGH
     }

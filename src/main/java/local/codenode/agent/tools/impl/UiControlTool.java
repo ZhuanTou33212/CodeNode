@@ -18,6 +18,7 @@ public final class UiControlTool {
         String action = String.valueOf(arguments.getOrDefault("action", "")).trim().toLowerCase();
         if (action.isEmpty()) return AgentToolResult.error("缺少 action");
         if (context.toolStopRequested()) return AgentToolResult.error("界面操控已取消");
+        if (!context.confirm(AgentToolContext.ConfirmationLevel.UI, "操控 CodeNode 界面：" + action, "Agent 请求执行 UI 动作；可在 agent.permissions 中设置 ui:allow 或 ui:confirm。")) return AgentToolResult.error("UI 操作未获权限：" + action);
         boolean applied = context.ui(action, arguments);
         LinkedHashMap<String, Object> data = new LinkedHashMap<>(); data.put("action", action); data.put("applied", applied);
         if (!applied) return AgentToolResult.error("ui_control 未接线（当前上下文不支持 " + action + "）", data);

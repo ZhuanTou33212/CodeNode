@@ -110,11 +110,14 @@ extends JPanel {
     private boolean dragChanged;
     private boolean keyboardGrab;
     private String groupFocusId = "";
+    private final Map<String, ViewState> groupViewStates = new HashMap<String, ViewState>();
+    private int navigationHover = -1;
     private WorkflowModel.Node hoveringScope;
     private final Map<String, int[]> containerTargets = new LinkedHashMap<String, int[]>();
     private final Timer animTimer;
     private Consumer<WorkflowModel.Node> selectionListener = node -> {};
     private Consumer<String> feedbackListener = message -> {};
+    private Consumer<List<WorkflowModel.Node>> navigationListener = path -> {};
     private Runnable changeListener = () -> {};
     private Supplier<String> languageSupplier = () -> "java";
     private WorkflowModel clipboard;
@@ -173,6 +176,9 @@ extends JPanel {
                     return;
                 }
                 if (!SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+                if (CanvasPanel.this.handleNavigationClick(e.getPoint())) {
                     return;
                 }
                 RerouteHit reroute = CanvasPanel.this.hitReroute(world);
@@ -465,6 +471,11 @@ extends JPanel {
                     CanvasPanel.this.wirePoint = world;
                     CanvasPanel.this.repaint();
                 }
+                int nextNavigationHover = CanvasPanel.this.navigationHit(e.getPoint());
+                if (nextNavigationHover != CanvasPanel.this.navigationHover) {
+                    CanvasPanel.this.navigationHover = nextNavigationHover;
+                    CanvasPanel.this.repaint();
+                }
             }
 
             @Override
@@ -520,6 +531,10 @@ extends JPanel {
 
     public void onChange(Runnable listener) {
         this.changeListener = listener;
+    }
+
+    public void onNavigation(Consumer<List<WorkflowModel.Node>> listener) {
+        this.navigationListener = listener == null ? path -> {} : listener;
     }
 
     public void setLanguageSupplier(Supplier<String> supplier) {
@@ -587,7 +602,102 @@ extends JPanel {
         this.repaint();
     }
 
-    private void installKeys() {
+
+    public String currentGroupId() { return this.groupFocusId; }
+
+    public List<WorkflowModel.Node> groupPath() {
+        ArrayList<WorkflowModel.Node> path = new ArrayList<WorkflowModel.Node>();
+        HashSet<String> seen = new HashSet<String>();
+        WorkflowModel.Node current = this.groupFocusId.isBlank() ? null : this.model.byId(this.groupFocusId);
+        while (current != null && current.nodeKind == WorkflowModel.NodeKind.GROUP && seen.add(current.id)) {
+            path.add(0, current);
+            current = current.parentScopeId.isBlank() ? null : this.model.byId(current.parentScopeId);
+        }
+        return List.copyOf(path);
+    }
+
+    public boolean enterGroup(String groupId) {
+        WorkflowModel.Node group = this.model.byId(groupId);
+        if (group == null || group.nodeKind != WorkflowModel.NodeKind.GROUP) return false;
+        this.enterGroupFocus(groupId);
+        return true;
+    }
+
+    public boolean navigateToGroup(String targetGroupId) {
+        String target = targetGroupId == null ? "" : targetGroupId;
+        if (target.equals(this.groupFocusId)) return true;
+        if (!target.isBlank() && this.groupPath().stream().noneMatch(node -> node.id.equals(target))) return false;
+        this.saveViewState(this.groupFocusId);
+        this.groupFocusId = target;
+        this.restoreViewState(target);
+        this.navigationListener.accept(this.groupPath());
+        this.repaint();
+        return true;
+    }
+
+    public boolean restoreGroupFocus(String targetGroupId) {
+        String target = targetGroupId == null ? "" : targetGroupId;
+        if (!target.isBlank()) {
+            WorkflowModel.Node node = this.model.byId(target);
+            if (node == null || node.nodeKind != WorkflowModel.NodeKind.GROUP) target = "";
+        }
+        this.groupViewStates.clear();
+        this.groupFocusId = target;
+        this.clearNodeSelection();
+        String focusedScopeId = target;
+        List<WorkflowModel.Node> children = this.model.nodes().stream().filter(node -> node.parentScopeId.equals(focusedScopeId)).toList();
+        if (children.isEmpty()) this.setView(0, 0, 1.0); else this.frameNodes(children);
+        this.navigationListener.accept(this.groupPath());
+        return target.equals(targetGroupId == null ? "" : targetGroupId);
+    }
+
+    private void saveViewState(String scopeId) {
+        this.groupViewStates.put(scopeId, new ViewState(this.panX, this.panY, this.zoom, this.selectedNodes.stream().map(node -> node.id).toList(), this.primary == null ? "" : this.primary.id));
+    }
+
+    private void restoreViewState(String scopeId) {
+        ViewState state = this.groupViewStates.get(scopeId);
+        this.clearNodeSelection();
+        if (state == null) {
+            List<WorkflowModel.Node> children = this.model.nodes().stream().filter(node -> node.parentScopeId.equals(scopeId)).toList();
+            if (children.isEmpty()) this.setView(0, 0, 1.0); else this.frameNodes(children);
+            return;
+        }
+        this.setView(state.panX, state.panY, state.zoom);
+        this.selectNodes(state.selectedIds.stream().map(this.model::byId).filter(java.util.Objects::nonNull).toList());
+        if (!state.primaryId.isBlank()) this.primary = this.model.byId(state.primaryId);
+    }
+
+    private boolean handleNavigationClick(Point point) {
+        int hit = this.navigationHit(point);
+        if (hit < 0) return false;
+        if (hit == 0) {
+            WorkflowModel.Node current = this.model.byId(this.groupFocusId);
+            return this.navigateToGroup(current == null ? "" : current.parentScopeId);
+        }
+        List<WorkflowModel.Node> path = this.groupPath();
+        return hit - 1 < path.size() && this.navigateToGroup(path.get(hit - 1).id);
+    }
+
+    private int navigationHit(Point point) {
+        if (this.groupFocusId.isBlank() || point.y < 0 || point.y > 32) return -1;
+        if (point.x >= 8 && point.x < 78) return 0;
+        int x = 86;
+        FontMetrics metrics = this.getFontMetrics(this.getFont().deriveFont(12.0f));
+        String root = "根画布";
+        if (point.x >= x && point.x < x + metrics.stringWidth(root) + 28) return 1;
+        x += metrics.stringWidth(root) + 36;
+        List<WorkflowModel.Node> path = this.groupPath();
+        for (int i = 0; i < path.size(); i++) {
+            int width = metrics.stringWidth(path.get(i).name) + 28;
+            if (point.x >= x && point.x < x + width) return i + 2;
+            x += width + 8;
+        }
+        return -1;
+    }
+
+    private record ViewState(int panX, int panY, double zoom, List<String> selectedIds, String primaryId) {}
+     private void installKeys() {
         this.bind("shift A", this::showAddMenu);
         this.bind("shift W", this::showQuickMenu);
         this.bind("DELETE", this::deleteSelection);
@@ -996,6 +1106,11 @@ extends JPanel {
             }
         }
         this.model.removeNodes(deleting);
+        if (!this.groupFocusId.isBlank() && this.model.byId(this.groupFocusId) == null) {
+            this.groupFocusId = "";
+            this.groupViewStates.clear();
+            this.navigationListener.accept(this.groupPath());
+        }
         for (WorkflowModel.Node del : new LinkedHashSet<WorkflowModel.Node>(deleting)) {
             if (del.nodeKind != WorkflowModel.NodeKind.GROUP) continue;
             for (WorkflowModel.Node child : this.model.nodes()) {
@@ -1419,6 +1534,7 @@ extends JPanel {
             minY = n.y;
         }
         WorkflowModel.Node group = this.model.addGroupNode(minX - 20, minY - 40, "节点组 " + (this.model.groupOutputs().size() + 1));
+        group.parentScopeId = this.groupFocusId;
         WorkflowModel.Node gi = this.model.addGroupInputNode(group.x + 30, group.y + 60, "节点组输入");
         gi.parentScopeId = group.id;
         WorkflowModel.Node go = this.model.addNodeGroupOutput(group.x + 30, group.y + 120, "节点组输出");
@@ -1471,18 +1587,17 @@ extends JPanel {
     }
 
     private void enterGroupFocus(String groupId) {
+        this.saveViewState(this.groupFocusId);
         this.groupFocusId = groupId;
         this.syncGroupPorts(this.model.byId(groupId));
         this.clearNodeSelection();
         List<WorkflowModel.Node> children = this.model.nodes().stream().filter(n -> n.parentScopeId.equals(groupId)).toList();
         this.frameNodes(children);
+        this.navigationListener.accept(this.groupPath());
     }
 
     private void cancelGroupFocus() {
-        this.groupFocusId = "";
-        this.clearNodeSelection();
-        this.frameAll();
-        this.repaint();
+        this.navigateToGroup(this.groupFocusId.isBlank() ? "" : this.model.byId(this.groupFocusId) == null ? "" : this.model.byId(this.groupFocusId).parentScopeId);
     }
 
     private void syncGroupPorts(WorkflowModel.Node group) {
@@ -1743,10 +1858,31 @@ extends JPanel {
             screen.setColor(UiTheme.PANEL);
             screen.fillRect(0, 0, this.getWidth(), 28);
             screen.setColor(UiTheme.ACCENT);
-            screen.setFont(this.getFont().deriveFont(1, 13.0f));
-            screen.drawString("根 > " + g.name, 12, 20);
+            screen.setFont(this.getFont().deriveFont(1, 12.0f));
+            screen.setColor(this.navigationHover == 0 ? UiTheme.ACCENT : UiTheme.TEXT);
+            screen.drawString("‹ 返回", 12, 20);
+            int x = 86;
+            String root = "根画布";
+            screen.setColor(this.navigationHover == 1 ? UiTheme.ACCENT : UiTheme.TEXT);
+            screen.drawString(root, x, 20);
+            x += screen.getFontMetrics().stringWidth(root) + 36;
+            List<WorkflowModel.Node> path = this.groupPath();
+            for (int i = 0; i < path.size(); i++) {
+                WorkflowModel.Node item = path.get(i);
+                screen.setColor(this.navigationHover == i + 2 ? UiTheme.ACCENT : (i == path.size() - 1 ? UiTheme.ACCENT : UiTheme.MUTED));
+                screen.drawString("/  " + item.name, x, 20);
+                x += screen.getFontMetrics().stringWidth("/  " + item.name) + 8;
+            }
             screen.setColor(UiTheme.BORDER);
             screen.drawLine(0, 28, this.getWidth(), 28);
+            boolean emptyGroup = this.model.nodes().stream().noneMatch(node -> node.parentScopeId.equals(this.groupFocusId));
+            if (emptyGroup) {
+                screen.setColor(UiTheme.MUTED);
+                screen.setFont(this.getFont().deriveFont(1, 14.0f));
+                String emptyMessage = "该组暂无节点，可在此继续添加或打组";
+                int messageWidth = screen.getFontMetrics().stringWidth(emptyMessage);
+                screen.drawString(emptyMessage, Math.max(16, (this.getWidth() - messageWidth) / 2), Math.max(72, this.getHeight() / 2));
+            }
         }
         this.drawGrid(screen);
         screen.translate(this.panX, this.panY);
@@ -1832,7 +1968,7 @@ extends JPanel {
             case QUEUED, PROCESSING -> new Color(188, 130, 55);
             default -> new Color(133, 115, 80);
         };
-        Color bgColor = n.status == WorkflowModel.Status.SUCCEEDED ? new Color(242, 240, 221) : (CanvasPanel.isContainer(n) ? new Color(249, 246, 237, 232) : UiTheme.PANEL);
+        Color bgColor = n.status == WorkflowModel.Status.SUCCEEDED ? new Color(47, 54, 61) : (CanvasPanel.isContainer(n) ? new Color(40, 44, 52, 245) : UiTheme.PANEL);
         RoundRectangle2D.Float box = new RoundRectangle2D.Float(n.x, n.y, width, height, 7.0f, 7.0f);
         g.setColor(bgColor);
         g.fill(box);
@@ -1843,22 +1979,22 @@ extends JPanel {
         g.setColor(n == this.hoveringScope ? UiTheme.ACCENT : (this.selectedNodes.contains(n) ? UiTheme.ACCENT : border));
         g.draw(box);
         if (n == this.hoveringScope) {
-            g.setColor(new Color(177, 91, 38, 32));
+            g.setColor(new Color(224, 146, 78, 38));
             g.fill(box);
         }
-        g.setColor(n.muted ? new Color(255, 220, 220) : Color.WHITE);
+        g.setColor(n.muted ? new Color(255, 170, 170) : UiTheme.TEXT);
         g.setFont(this.getFont().deriveFont(1, 14.0f));
         g.drawString(CanvasPanel.trim(n.name, CanvasPanel.isContainer(n) ? 35 : (n.nodeKind == WorkflowModel.NodeKind.GROUP ? 30 : 17)), n.x + 13, n.y + 22);
         if (n.nodeKind == WorkflowModel.NodeKind.GROUP) {
             g.setFont(this.getFont().deriveFont(1, 9.0f));
-            g.setColor(new Color(235, 215, 179));
+            g.setColor(new Color(72, 61, 50));
             String grpLabel = "GRP";
             int grpW = g.getFontMetrics().stringWidth(grpLabel);
             g.drawString(grpLabel, n.x + width - 24 - grpW, n.y + 21);
         }
         String category = CanvasPanel.trim(n.category, 12);
         g.setFont(this.getFont().deriveFont(10.0f));
-        g.setColor(new Color(255, 255, 255, 210));
+        g.setColor(new Color(238, 237, 233, 210));
         g.drawString(category, n.x + width - 11 - g.getFontMetrics().stringWidth(category), n.y + 21);
         if (n.collapsed) {
             return;
@@ -1877,7 +2013,7 @@ extends JPanel {
                     bx = n.x + 13;
                     by += 18;
                 }
-                g.setColor(new Color(237, 224, 196));
+                g.setColor(new Color(62, 53, 45));
                 g.fillRoundRect(bx, by - 12, w, 16, 5, 5);
                 g.setColor(UiTheme.TEXT);
                 g.drawString(text, bx + 6, by);

@@ -236,7 +236,7 @@ public class Stage45FullScanTest {
     @Test
     void writeAnalysisMdWritesMdNode() {
         WorkflowModel model = new WorkflowModel();
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {},
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> level == AgentToolContext.ConfirmationLevel.UI, entry -> {},
                 null, mutator -> mutator.mutate(model));
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("write_analysis_md",
@@ -253,9 +253,10 @@ public class Stage45FullScanTest {
     @Test
     void uiControlCallsUiActionWhenWired() {
         List<String> actions = new java.util.ArrayList<>();
-        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), (level, what, detail) -> false, entry -> {},
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), (level, what, detail) -> level == AgentToolContext.ConfirmationLevel.UI, entry -> {},
                 null, null, () -> {}, () -> {}, () -> {},
                 (action, arguments) -> actions.add(action + ":" + arguments.get("zoom")));
+        context.setPermissionSupplier(() -> "ui:allow");
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("ui_control",
                 Map.of("action", "zoom", "zoom", 1.5), context);
@@ -285,7 +286,7 @@ public class Stage45FullScanTest {
     }
 
     private static AgentToolContext contextWithModel(WorkflowModel model) {
-        return new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> false, entry -> {},
+        return new AgentToolContext(() -> Path.of("."), () -> model, (level, what, detail) -> level == AgentToolContext.ConfirmationLevel.UI, entry -> {},
                 null, mutator -> mutator.mutate(model), () -> {}, () -> {}, () -> {});
     }
 

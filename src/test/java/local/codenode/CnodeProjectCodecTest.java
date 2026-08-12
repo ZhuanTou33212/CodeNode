@@ -42,6 +42,19 @@ class CnodeProjectCodecTest {
         WorkflowModel model=model();List<String> selected=model.nodes().stream().map(node->node.id).toList();String primary=selected.getLast();var settings=new CnodeProjectCodec.Settings(WorkflowModel.Mode.EXECUTABLE,"java","output/app","output/docs",primary,0,0,1.0,primary,selected);Path file=temp.resolve("multi-selection.cnode");codec.save(file,model,new CnodeProjectCodec.Metadata("doc-selection","选择",Instant.now(),settings));var restored=codec.load(file).metadata().settings();assertEquals(selected,restored.selectedNodeIds());assertEquals(primary,restored.selectedNodeId());
     }
 
+    @Test void roundTripPreservesNestedGroupParentScopesAndCurrentFocus() throws Exception {
+        WorkflowModel model = new WorkflowModel();
+        WorkflowModel.Node root = model.addGroupNode(0, 0, "根组");
+        WorkflowModel.Node nested = model.addGroupNode(40, 40, "子组"); nested.parentScopeId = root.id;
+        WorkflowModel.Node leaf = model.addNode(80, 80); leaf.parentScopeId = nested.id;
+        var settings = new CnodeProjectCodec.Settings(WorkflowModel.Mode.MARKDOWN, "java", "output/app", "output/docs", null, 12, 24, 1.2, null, List.of(), nested.id);
+        Path file = temp.resolve("nested-focus.cnode");
+        codec.save(file, model, new CnodeProjectCodec.Metadata("nested", "嵌套", Instant.now(), settings));
+        CnodeProjectCodec.Loaded loaded = codec.load(file);
+        assertEquals(nested.id, loaded.metadata().settings().currentGroupId());
+        assertEquals(root.id, loaded.model().byId(nested.id).parentScopeId);
+        assertEquals(nested.id, loaded.model().byId(leaf.id).parentScopeId);
+    }
     @Test void roundTripPreservesStageTwoNodeMetadataAndCodeDraft() throws Exception {WorkflowModel model=new WorkflowModel();var node=model.addNode(10,10);node.nodeKind=WorkflowModel.NodeKind.CALCULATION;node.valueType="number";node.operation="add";node.classificationKey="calculation.scalar";var slot=model.ensureNodeSlot(node);slot.activeRevision=2;slot.activeCode="old";slot.draft=new WorkflowModel.CodeDraft("request-1",2,"new","calculation.scalar");Path file=temp.resolve("stage2.cnode");codec.save(file,model,metadata(model));WorkflowModel loaded=codec.load(file).model();WorkflowModel.Node restored=loaded.byId(node.id);assertEquals(WorkflowModel.NodeKind.CALCULATION,restored.nodeKind);assertEquals("add",restored.operation);assertEquals("new",loaded.codeSlot("node:"+node.id).draft.code);assertEquals(2,loaded.codeSlot("node:"+node.id).activeRevision);}
 
     @Test void atomicallyReplacesProjectAndKeepsBackup() throws Exception {
