@@ -38,6 +38,7 @@ public final class AgentChatPanel extends JPanel {
     private final JLabel status = new JLabel("空闲");
     private final JLabel context = new JLabel(" ");
     private final CollapsibleReasoningPanel reasoning = new CollapsibleReasoningPanel();
+    private final AgentTimelinePanel timelinePanel;
 
     private final ChatListener listener = event -> SwingUtilities.invokeLater(() -> onEvent(event));
 
@@ -46,6 +47,7 @@ public final class AgentChatPanel extends JPanel {
         this.controller = controller;
         this.config = config;
         this.openSettings = openSettings;
+        this.timelinePanel = new AgentTimelinePanel(controller.timeline());
         setBackground(UiTheme.BACKGROUND);
 
         document = transcript.getStyledDocument();
@@ -62,6 +64,7 @@ public final class AgentChatPanel extends JPanel {
 
         JPanel center = new JPanel(new BorderLayout());
         center.setOpaque(false);
+        center.add(timelinePanel, BorderLayout.NORTH);
         center.add(scroll, BorderLayout.CENTER);
         center.add(reasoning, BorderLayout.SOUTH);
 

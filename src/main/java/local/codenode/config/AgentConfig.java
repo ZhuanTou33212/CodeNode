@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.Optional;
 
 /**
  * 内嵌 Agent 的本地配置文件（默认 {@code config/agent.properties}，启动自动生成）。
@@ -23,6 +24,8 @@ public final class AgentConfig {
 
     private final Path file;
     private final Properties properties = new Properties();
+    private final WindowsCredentialStore credentialStore = new WindowsCredentialStore();
+    private volatile String apiKeyCache;
 
     public AgentConfig() {
         this(Path.of(System.getProperty("user.dir", "."), CONFIG_DIR, CONFIG_FILE));
@@ -41,6 +44,7 @@ public final class AgentConfig {
     /** 从磁盘重新加载；文件不存在时保持默认（并触发 createDefaultsIfMissing）。 */
     public synchronized void reload() {
         properties.clear();
+        apiKeyCache = null;
         if (Files.isRegularFile(file)) {
             try (var reader = new InputStreamReader(Files.newInputStream(file), StandardCharsets.UTF_8)) {
                 properties.load(reader);
@@ -67,7 +71,12 @@ public final class AgentConfig {
     public Path file() { return file; }
 
     public String apiBase() { return properties.getProperty("api_base", ""); }
-    public String apiKey() { return properties.getProperty("api_key", ""); }
+    public synchronized String apiKey() {
+        if (apiKeyCache != null) return apiKeyCache;
+        Optional<String> secure = credentialStore.read(WindowsCredentialStore.targetFor(apiBase()));
+        apiKeyCache = secure.orElseGet(() -> properties.getProperty("api_key", ""));
+        return apiKeyCache;
+    }
     public String model() { return properties.getProperty("model", DEFAULT_MODEL); }
     public String defaultProjectPath() { return properties.getProperty("default_project_path", ""); }
 
@@ -148,8 +157,14 @@ public final class AgentConfig {
         }
     }
 
-    public void setApiBase(String value) { properties.setProperty("api_base", value == null ? "" : value.trim()); }
-    public void setApiKey(String value) { properties.setProperty("api_key", value == null ? "" : value.trim()); }
+    public void setApiBase(String value) { properties.setProperty("api_base", value == null ? "" : value.trim()); apiKeyCache = null; }
+    public synchronized void setApiKey(String value) {
+        String key = value == null ? "" : value.trim();
+        if (key.isBlank()) { credentialStore.delete(WindowsCredentialStore.targetFor(apiBase())); properties.remove("api_key"); apiKeyCache = ""; return; }
+        if (credentialStore.write(WindowsCredentialStore.targetFor(apiBase()), key)) { properties.remove("api_key"); }
+        else { properties.setProperty("api_key", key); }
+        apiKeyCache = key;
+    }
     public void setModel(String value) { properties.setProperty("model", value == null || value.isBlank() ? DEFAULT_MODEL : value.trim()); }
     public void setModels(List<String> models) { properties.setProperty("models", models == null || models.isEmpty() ? "" : String.join(",", models)); }
     public void setDefaultProjectPath(String value) { properties.setProperty("default_project_path", value == null ? "" : value.trim()); }
