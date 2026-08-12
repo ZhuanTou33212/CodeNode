@@ -36,8 +36,8 @@ public final class UiTheme {
         UIManager.put("ToolTip.background", PANEL);
         UIManager.put("ToolTip.foreground", TEXT);
         UIManager.put("ToolTip.border", new LineBorder(BORDER));
-        UIManager.put("ScrollBar.thumb", new Color(164, 142, 101));
-        UIManager.put("ScrollBar.track", PANEL);
+        UIManager.put("ScrollBar.thumb", Color.WHITE);
+        UIManager.put("ScrollBar.track", BACKGROUND);
         UIManager.put("ScrollBar.width", 8);
     }
 
@@ -79,7 +79,7 @@ public final class UiTheme {
             tabs.setBackground(PANEL); tabs.setForeground(TEXT); tabs.setBorder(null); tabs.setOpaque(true);
         } else if (component instanceof JScrollBar bar) {
             bar.setUI(new BasicScrollBarUI(){
-                @Override protected void configureScrollBarColors(){thumbColor=new Color(161,140,99);trackColor=BACKGROUND;}
+                @Override protected void configureScrollBarColors(){thumbColor=Color.WHITE;thumbHighlightColor=Color.WHITE;thumbDarkShadowColor=Color.WHITE;trackColor=BACKGROUND;trackHighlightColor=BACKGROUND;}
                 @Override protected JButton createDecreaseButton(int orientation){return zeroButton();}
                 @Override protected JButton createIncreaseButton(int orientation){return zeroButton();}
                 private JButton zeroButton(){JButton button=new JButton();button.setPreferredSize(new Dimension(0,0));button.setMinimumSize(new Dimension(0,0));button.setMaximumSize(new Dimension(0,0));return button;}
