@@ -243,6 +243,32 @@
         }
       }
     },
+    "agent-context.json": {
+      "type": "object",
+      "required": ["schemaVersion", "sessionId", "summary", "messages", "maxChars", "truncated"],
+      "properties": {
+        "schemaVersion": { "type": "integer", "const": 1 },
+        "sessionId": { "type": "string" },
+        "summary": { "type": "string", "maxLength": 1000000 },
+        "messages": { "type": "array" },
+        "maxChars": { "type": "integer", "maximum": 1000000 },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "agent-info.json": { "type": "object" },
+    "knowledge-graph.dsl": { "type": "string" },
+    "knowledge-meta.json": {
+      "type": "object",
+      "required": ["schemaVersion", "cache", "generatedAt", "elementCount", "roots"],
+      "properties": {
+        "schemaVersion": { "type": "integer", "const": 1 },
+        "cache": { "type": "boolean", "const": true },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "elementCount": { "type": "integer", "minimum": 0 },
+        "roots": { "type": "array", "items": { "type": "string" } },
+        "elements": { "type": "array" }
+      }
+    },
     "integrity.json": {
       "type": "object",
       "required": ["algorithm", "files"],

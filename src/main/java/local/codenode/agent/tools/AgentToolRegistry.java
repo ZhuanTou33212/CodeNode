@@ -40,10 +40,44 @@ public final class AgentToolRegistry {
         RegisteredTool tool = tools.get(name);
         if (tool == null) return AgentToolResult.error("未知工具：" + name);
         try {
-            return tool.executor().execute(context, arguments == null ? Map.of() : arguments);
+            Map<String, Object> actual = arguments == null ? Map.of() : arguments;
+            String validation = validate(tool.spec().inputSchema(), actual);
+            if (validation != null) return AgentToolResult.error("工具参数无效：" + validation);
+            return tool.executor().execute(context, actual);
         } catch (Exception e) {
             return AgentToolResult.error("工具 " + name + " 执行失败：" + e.getMessage());
         }
+    }
+
+    private static String validate(Map<String, Object> schema, Map<String, Object> arguments) {
+        if (schema == null || schema.isEmpty()) return null;
+        Object required = schema.get("required");
+        if (required instanceof List<?> list) {
+            for (Object item : list) {
+                String key = String.valueOf(item);
+                if (!arguments.containsKey(key) || arguments.get(key) == null
+                        || arguments.get(key) instanceof String s && s.isBlank()) return "缺少必填参数 " + key;
+            }
+        }
+        Object rawProperties = schema.get("properties");
+        if (!(rawProperties instanceof Map<?, ?> properties)) return null;
+        for (Map.Entry<String, Object> entry : arguments.entrySet()) {
+            Object raw = properties.get(entry.getKey());
+            if (!(raw instanceof Map<?, ?> property) || entry.getValue() == null) continue;
+            String type = String.valueOf(property.get("type"));
+            Object value = entry.getValue();
+            boolean valid = switch (type) {
+                case "string" -> value instanceof String;
+                case "integer" -> value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long;
+                case "number" -> value instanceof Number;
+                case "boolean" -> value instanceof Boolean;
+                case "array" -> value instanceof List<?>;
+                case "object" -> value instanceof Map<?, ?>;
+                default -> true;
+            };
+            if (!valid) return "参数 " + entry.getKey() + " 应为 " + type;
+        }
+        return null;
     }
 
     /** 转换为 OpenAI chat.completions 的 tools 参数。 */

@@ -45,9 +45,7 @@ public final class RunLauncher {
         }
 
         public void stop() {
-            if (process != null && process.isAlive()) {
-                process.destroyForcibly();
-            }
+            ProcessRunner.terminateTree(process);
         }
 
         public int exitCode() {
@@ -124,12 +122,14 @@ public final class RunLauncher {
             output.append(line).append('\n');
             if (logSink != null) logSink.accept(line);
         };
+        Process process = null;
         try {
-            Process process = builder.start();
+            process = builder.start();
             currentProcess = process;
             stopRequested = false;
+            Process runningProcess = process;
             Thread reader = new Thread(() -> {
-                try (var in = process.getInputStream()) {
+                try (var in = runningProcess.getInputStream()) {
                     byte[] buffer = new byte[4096];
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
@@ -146,7 +146,7 @@ public final class RunLauncher {
             boolean timedOut = false;
             if (!finished) {
                 timedOut = true;
-                process.destroyForcibly();
+                ProcessRunner.terminateTree(process);
                 process.waitFor(2L, TimeUnit.SECONDS);
                 exitCode = -1;
                 String msg = "\n…（运行超时 " + timeoutSeconds + " 秒，已强制终止）";
@@ -158,7 +158,15 @@ public final class RunLauncher {
             reader.join(500);
             Map<String, Object> trace = config.trace() ? collectTrace(config, process) : Map.of();
             return new RunOutcome(exitCode, timedOut, output.toString(), trace);
+        } catch (InterruptedException e) {
+            ProcessRunner.terminateTree(process);
+            Thread.currentThread().interrupt();
+            String msg = "运行已取消";
+            output.append(msg);
+            if (logSink != null) logSink.accept(msg);
+            return new RunOutcome(-1, false, output.toString(), Map.of());
         } catch (Exception e) {
+            ProcessRunner.terminateTree(process);
             String msg = "启动进程失败: " + e.getMessage();
             output.append(msg);
             if (logSink != null) logSink.accept(msg);
@@ -172,9 +180,7 @@ public final class RunLauncher {
     public static void stop() {
         stopRequested = true;
         Process process = currentProcess;
-        if (process != null && process.isAlive()) {
-            process.destroyForcibly();
-        }
+        ProcessRunner.terminateTree(process);
     }
 
     /** 停止指定句柄的后台进程。 */

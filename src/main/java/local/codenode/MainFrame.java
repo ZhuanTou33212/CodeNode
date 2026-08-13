@@ -111,6 +111,7 @@ import local.codenode.ToolWindow;
 import local.codenode.UiTheme;
 import local.codenode.WorkflowModel;
 import local.codenode.agent.AgentChatController;
+import local.codenode.agent.knowledge.KnowledgeGraph;
 import local.codenode.agent.AgentContext;
 import local.codenode.agent.AgentInfoSnapshot;
 import local.codenode.agent.SoftwareInfoProvider;
@@ -154,6 +155,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private final JLabel documentTab = new JLabel();
     private final JTabbedPane documentTabs = new JTabbedPane();
     private final List<DocumentSession> documents = new ArrayList<DocumentSession>();
+    private final KnowledgeGraph detachedKnowledgeGraph = new KnowledgeGraph();
+    private int activeDocumentIndex = -1;
     private final CnodeProjectCodec projectCodec = new CnodeProjectCodec();
     private final CnodeRecoveryService recovery = new CnodeRecoveryService(this.projectCodec);
     private final CodeSlotService codeSlotService = new CodeSlotService();
@@ -257,6 +260,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         }, () -> SwingUtilities.invokeLater(this::saveProject), () -> SwingUtilities.invokeLater(this::undo), () -> SwingUtilities.invokeLater(this::redo), this::agentUiAction);
         this.agentToolContext.setSoftwareInfoProvider(this);
         this.agentToolContext.setPermissionSupplier(this.agentConfig::permissions);
+        this.agentToolContext.setKnowledgeGraphSupplier(this::currentKnowledgeGraph);
         this.agentToolContext.setQuestionHandler((question, options) -> {
             String[] result = new String[]{""};
             try {
@@ -272,6 +276,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         });
         this.agentTools = AgentToolkit.buildDefaultRegistry(this.agentToolContext, this.agentConfig);
         this.agentChatController = new AgentChatController(this.agentConfig, this.agentTools, this.agentToolContext);
+        this.agentToolContext.setConversationSupplier(this.agentChatController::messageHistory);
         this.agentToolContext.setFileChangeNotifier((relative, kind, detail) -> SwingUtilities.invokeLater(() -> {
             if (this.fileChangePanel != null) {
                 this.fileChangePanel.recordChange(relative, kind, detail);
@@ -689,38 +694,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     /** 切换文档 tab：把对应文档模型换入主 model（快照换入）。 */
     private void onDocumentTabChanged() {
         int index = this.documentTabs.getSelectedIndex();
-        if (index < 0 || index >= this.documents.size()) {
-            return;
-        }
-        DocumentSession session = this.documents.get(index);
-        if (session.model == this.model) {
-            return;
-        }
-        this.loadingProject = true;
-        try {
-            this.model.replaceFrom(session.model);
-            this.canvas.setView(session.panX, session.panY, session.zoom);
-            this.canvas.restoreGroupFocus(session.currentGroupId);
-            this.canvas.select(null);
-            this.canvas.repaint();
-            this.currentProjectFile = session.file;
-            this.documentId = session.documentId;
-            this.documentCreatedAt = session.createdAt;
-            this.projectReadOnly = session.readOnly;
-            this.dirty = session.dirty;
-            this.executableOutput = session.executableOutput;
-            this.markdownOutput = session.markdownOutput;
-            this.displayedMode = session.mode;
-            this.mode.setSelectedItem((Object)session.mode);
-            this.output.setText(session.mode == WorkflowModel.Mode.EXECUTABLE ? session.executableOutput : session.markdownOutput);
-            this.loadInspector(null);
-            this.refreshDocumentTitle();
-            this.status.setText("  已切换文档  |  " + (session.file == null ? "未命名" : session.file.getFileName()));
-            this.canvas.repaint();
-        } finally {
-            this.loadingProject = false;
-        }
-        this.syncProjectPanels(session.file == null ? null : session.file.getParent());
+        if (!this.loadingProject && index >= 0 && index < this.documents.size()) this.switchToDocument(index);
     }
 
     /** 当前文档会话。 */
@@ -830,6 +804,11 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.canvas.repaint();
         this.status.setText("  已自动整理画布  |  节点=" + this.model.nodes().size());
         this.append("已自动整理画布：拓扑分层 + 嵌套组布局");
+    }
+
+    private KnowledgeGraph currentKnowledgeGraph() {
+        DocumentSession session = currentDocument();
+        return session == null ? detachedKnowledgeGraph : session.knowledgeGraph;
     }
     private void openProjectRun() {
         this.inspectorTool.redock();
@@ -1126,11 +1105,31 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         info.put("canvasNodes", model.nodes().size()); info.put("canvasEdges", model.edges().size());
         info.put("groups", model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP).count());
         info.put("assetBundles", model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE).count());
-        info.put("selectedNodes", canvas.selected() == null ? 0 : 1); info.put("selectedNodeId", canvas.selected() == null ? "" : canvas.selected().id);
+        info.put("selectedNodes", canvas.selectedNodes().size()); info.put("selectedNodeId", canvas.selected() == null ? "" : canvas.selected().id);
         info.put("workbenchTab", workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()); info.put("documentTab", documentTabs == null ? -1 : documentTabs.getSelectedIndex());
         info.put("windowWidth", getWidth()); info.put("windowHeight", getHeight()); info.put("toolCount", agentTools == null ? 0 : agentTools.listTools().size());
-        info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state"));
+        info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","new_content","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state"));
+        info.put("runConfig", projectRunPanel == null ? Map.of() : projectRunPanel.runConfigSnapshot());
+        info.put("panelVisibility", panelVisibility());
+        info.put("capturedAt", Instant.now().toString());
         return info;
+    }
+
+    private static boolean panelVisible(ToolWindow panel) {
+        return panel != null && !panel.isCollapsed();
+    }
+
+    private Map<String, Object> panelVisibility() {
+        return Map.of(
+                "files", panelState(fileBrowserTool),
+                "inspector", panelState(inspectorTool),
+                "changes", panelState(changeTool),
+                "queue", panelState(queueTool),
+                "projectRun", Map.of("visible", panelVisible(inspectorTool) && inspectorTabs != null && inspectorTabs.getSelectedIndex() == 1, "floating", inspectorTool != null && inspectorTool.isFloating()));
+    }
+
+    private static Map<String, Object> panelState(ToolWindow panel) {
+        return Map.of("visible", panelVisible(panel), "floating", panel != null && panel.isFloating());
     }
     @Override public Map<String, Object> environmentInfo() {
         LinkedHashMap<String, Object> info = new LinkedHashMap<>();
@@ -1142,6 +1141,16 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
 
     void openProject(Path file) {
         try {
+            Path normalizedFile = file.toAbsolutePath().normalize();
+            for (int i = 0; i < this.documents.size(); i++) {
+                DocumentSession open = this.documents.get(i);
+                if (normalizedFile.equals(open.file)) {
+                    this.documentTabs.setSelectedIndex(i);
+                    this.switchToDocument(i);
+                    this.append("工程已在标签中，已切换且保留未保存会话：" + normalizedFile);
+                    return;
+                }
+            }
             CnodeProjectCodec.Loaded loaded = this.projectCodec.load(file);
             Path root = file.toAbsolutePath().normalize().getParent();
             Optional<Path> checkpoint = this.recovery.newerCheckpoint(root, loaded.metadata().documentId(), file);
@@ -1149,7 +1158,17 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 loaded = this.projectCodec.load(checkpoint.get());
             }
             this.applyLoaded(loaded, file.toAbsolutePath().normalize());
-            try { this.projectCodec.loadAgentContext(file).ifPresent(this.agentChatController::restoreContext); } catch (Exception ignored) { }
+            try {
+                DocumentSession session = this.currentDocument();
+                if (session != null) {
+                    session.agentContext = this.projectCodec.loadAgentContext(file).orElse(null);
+                    session.knowledgeGraph = this.projectCodec.loadKnowledgeGraph(file);
+                    this.agentChatController.restoreContext(session.agentContext);
+                    if (this.agentChatPanel != null) this.agentChatPanel.showContext(session.agentContext);
+                }
+            } catch (Exception contextFailure) {
+                this.append("[Agent] 工程上下文恢复失败：" + contextFailure.getMessage());
+            }
             this.append("已打开工程：" + String.valueOf(file));
         }
         catch (Exception e) {
@@ -1210,7 +1229,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         return state;
     }
 
-    private void agentUiAction(String action, Map<String, Object> arguments) {
+    private boolean agentUiAction(String action, Map<String, Object> arguments) {
         try {
             switch (action) {
                 case "view_all": {
@@ -1219,7 +1238,9 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 }
                 case "focus": {
                     String nodeId = String.valueOf(arguments.getOrDefault("nodeId", ""));
-                    this.canvas.focusNode(this.model.byId(nodeId));
+                    WorkflowModel.Node focused = this.model.byId(nodeId);
+                    if (focused == null) throw new IllegalArgumentException("节点不存在：" + nodeId);
+                    this.canvas.focusNode(focused);
                     break;
                 }
                 case "zoom": {
@@ -1312,19 +1333,27 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                                 case "switch_tab": {
                     int index = arguments.get("index") instanceof Number n ? n.intValue() : -1;
                     if (index < 0) { String tab = String.valueOf(arguments.getOrDefault("tab", "")); index = tab.equals("code") ? 1 : tab.equals("agent") ? 2 : 0; }
-                    if (workbenchTabs != null && index >= 0 && index < workbenchTabs.getTabCount()) workbenchTabs.setSelectedIndex(index);
+                    if (workbenchTabs == null || index < 0 || index >= workbenchTabs.getTabCount()) throw new IllegalArgumentException("无效工作台标签索引：" + index); else workbenchTabs.setSelectedIndex(index);
                     break;
                 }
                 case "open_document": { Object path = arguments.get("path"); if (path == null || String.valueOf(path).isBlank()) openProject(); else openProject(Path.of(String.valueOf(path))); break; }
-                case "close_document": { closeDocument(documentTabs.getSelectedIndex()); break; }
-                case "save_document": { saveProject(); break; }
-                case "select_node": { String id = String.valueOf(arguments.getOrDefault("nodeId", "")); WorkflowModel.Node selected = model.byId(id); if (selected != null) canvas.select(selected); break; }
+                case "close_document": { if (!closeDocument(documentTabs.getSelectedIndex())) throw new IllegalStateException("关闭文档已取消"); break; }
+                case "save_document": {
+                    Object path = arguments.get("path");
+                    boolean saved = path == null || String.valueOf(path).isBlank()
+                            ? saveProject()
+                            : saveProjectTo(Path.of(String.valueOf(path)), true);
+                    if (!saved) throw new IllegalStateException("保存文档失败或已取消");
+                    break;
+                }
+                case "select_node": { String id = String.valueOf(arguments.getOrDefault("nodeId", "")); WorkflowModel.Node selected = model.byId(id); if (selected == null) throw new IllegalArgumentException("节点不存在：" + id); canvas.select(selected); break; }
                 case "read_ui_state": { append("[Agent UI] " + uiStateSnapshot()); break; }
                 case "open_menu": { dispatchMenuAction(String.valueOf(arguments.getOrDefault("menu", ""))); break; }
                 case "dock_panel": { dockAgentPanel(String.valueOf(arguments.getOrDefault("panel", "")), String.valueOf(arguments.getOrDefault("position", ""))); break; }
                 case "run_config", "build_project", "run_project", "stop_run": {
                     openProjectRun();
-                    if (this.projectRunPanel != null) {
+                    if (this.projectRunPanel == null) throw new IllegalStateException("项目运行面板不可用");
+                    {
                         if ("run_config".equals(action)) {
                             this.projectRunPanel.applyRunConfig(arguments);
                             append("[Agent UI] 运行配置=" + this.projectRunPanel.runConfigSnapshot());
@@ -1333,40 +1362,64 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                         else this.projectRunPanel.requestStop();
                     }
                     break;
-                }                default: {
-                    break;
-                }
+                }                default: throw new IllegalArgumentException("未知 UI action：" + action);
             }
+            return true;
         }
         catch (Exception e) {
             this.append("[Agent] 界面操控失败：" + e.getMessage());
+            throw e instanceof RuntimeException runtime ? runtime : new IllegalStateException(e);
         }
     }
 
     private void dispatchMenuAction(String menu) {
-        String wanted = menu == null ? "" : menu.trim(); if (wanted.isBlank() || getJMenuBar() == null) return;
-        for (MenuElement element : getJMenuBar().getSubElements()) if (element instanceof JMenu top) for (int i = 0; i < top.getItemCount(); i++) { JMenuItem item = top.getItem(i); if (item != null && (wanted.equals(item.getText()) || wanted.equals(top.getText() + "/" + item.getText()))) { item.doClick(); return; } }
-        append("[Agent] 未找到菜单项：" + wanted);
+        String wanted = menu == null ? "" : menu.trim(); if (wanted.isBlank() || getJMenuBar() == null) throw new IllegalArgumentException("菜单名称不能为空");
+        for (MenuElement element : getJMenuBar().getSubElements()) if (element instanceof JMenu top && clickMenu(top, wanted, top.getText())) return;
+        throw new IllegalArgumentException("未找到菜单项：" + wanted);
+    }
+
+    private static boolean clickMenu(JMenu menu, String wanted, String prefix) {
+        for (int i = 0; i < menu.getItemCount(); i++) {
+            JMenuItem item = menu.getItem(i);
+            if (item == null) continue;
+            String path = prefix + "/" + item.getText();
+            if (wanted.equals(item.getText()) || wanted.equals(path)) { item.doClick(); return true; }
+            if (item instanceof JMenu submenu && clickMenu(submenu, wanted, path)) return true;
+        }
+        return false;
     }
 
     private void dockAgentPanel(String panel, String position) {
-        ToolWindow target = switch (panel) { case "files" -> fileBrowserTool; case "inspector", "output" -> inspectorTool; case "error", "changes" -> changeTool; case "queue" -> queueTool; default -> null; };
-        if (target == null) { append("[Agent] 未知面板：" + panel); return; }
+        ToolWindow target = switch (panel) { case "files" -> fileBrowserTool; case "inspector", "output", "run", "project_run" -> inspectorTool; case "error", "changes" -> changeTool; case "queue" -> queueTool; default -> null; };
+        if (target == null) throw new IllegalArgumentException("未知面板：" + panel);
+        if (("run".equals(panel) || "project_run".equals(panel)) && inspectorTabs != null) inspectorTabs.setSelectedIndex(1);
         if (position == null || position.isBlank()) { target.redock(); return; }
-        try { dock(target, new ToolWindow.DockRequest(ToolWindow.DockPosition.valueOf(position.trim().toUpperCase()), null)); } catch (IllegalArgumentException e) { append("[Agent] 未知停靠位置：" + position); }
+        String normalized = position.trim().toLowerCase();
+        if ("float".equals(normalized)) { target.floatWindow(); return; }
+        if (normalized.startsWith("merge:")) {
+            String otherName = normalized.substring("merge:".length());
+            ToolWindow other = switch (otherName) { case "files" -> fileBrowserTool; case "inspector", "output", "run", "project_run" -> inspectorTool; case "error", "changes" -> changeTool; case "queue" -> queueTool; default -> null; };
+            if (other == null || other == target) throw new IllegalArgumentException("无效合并目标：" + otherName);
+            dock(target, new ToolWindow.DockRequest(null, other));
+            return;
+        }
+        try { dock(target, new ToolWindow.DockRequest(ToolWindow.DockPosition.valueOf(normalized.toUpperCase()), null)); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException("未知停靠位置：" + position); }
     }
     private void toggleAgentPanel(String panel) {
         ToolWindow target = switch (panel) {
             case "inspector" -> this.inspectorTool;
             case "output" -> this.inspectorTool;
-            case "error", "changes", "files" -> this.changeTool;
+            case "error", "changes" -> this.changeTool;
+            case "files" -> this.fileBrowserTool;
             case "queue" -> this.queueTool;
+            case "run", "project_run" -> this.inspectorTool;
             default -> null;
         };
         if (target == null) {
-            this.append("[Agent] 未知面板：" + panel);
-            return;
+            throw new IllegalArgumentException("未知面板：" + panel);
         }
+        if (("run".equals(panel) || "project_run".equals(panel)) && this.inspectorTabs != null) this.inspectorTabs.setSelectedIndex(1);
         if (target.isCollapsed()) {
             target.redock();
         } else {
@@ -1382,50 +1435,51 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         return this.currentDocument() != null;
     }
 
-    private void saveProject() {
+    private boolean saveProject() {
         if (!canSave(this.hasActiveProject(), this.projectReadOnly)) {
             this.status.setText("  未创建或打开项目  |  请先新建或打开项目");
             this.append("保存不可用：请先创建或打开项目");
-            return;
+            return false;
         }
         if (this.projectReadOnly) {
             this.error(new IllegalStateException("更高版本工程只能只读打开"));
-            return;
+            return false;
         }
         if (this.currentProjectFile == null) {
-            this.saveProjectAs();
-            return;
+            return this.saveProjectAs();
         }
-        this.saveProjectTo(this.currentProjectFile, true);
+        return this.saveProjectTo(this.currentProjectFile, true);
     }
 
-    private void saveProjectAs() {
+    private boolean saveProjectAs() {
         if (!canSave(this.hasActiveProject(), this.projectReadOnly)) {
             this.status.setText("  未创建或打开项目  |  请先新建或打开项目");
             this.append("保存不可用：请先创建或打开项目");
-            return;
+            return false;
         }
         if (this.projectReadOnly) {
             this.error(new IllegalStateException("更高版本工程不能另存为当前格式"));
-            return;
+            return false;
         }
         JFileChooser chooser = this.projectChooser(true);
         if (chooser.showSaveDialog(this) != 0) {
-            return;
+            return false;
         }
         Path target = chooser.getSelectedFile().toPath();
         if (!target.getFileName().toString().toLowerCase().endsWith(".cnode")) {
             target = target.resolveSibling(String.valueOf(target.getFileName()) + ".cnode");
         }
-        this.saveProjectTo(target.toAbsolutePath().normalize(), true);
+        return this.saveProjectTo(target.toAbsolutePath().normalize(), true);
     }
 
-    private void saveProjectTo(Path target, boolean clearRecovery) {
+    private boolean saveProjectTo(Path target, boolean clearRecovery) {
         try {
             target = target.toAbsolutePath().normalize();
             this.saveInspector();
             this.storeActiveOutput();
-            this.projectCodec.save(target, this.model, this.metadata(this.projectName(target)), AgentContext.of(this.agentChatController.sessionId(), this.agentChatController.summary(), this.agentChatController.messageHistory()), this.agentChatController.infoSnapshot());
+            AgentContext context = this.agentChatController.snapshotContext();
+            this.projectCodec.save(target, this.model, this.metadata(this.projectName(target)), context,
+                    this.agentChatController.infoSnapshot(), this.currentKnowledgeGraph());
             this.currentProjectFile = target;
             this.syncProjectLocation(target);
             this.rememberRecent(target);
@@ -1444,13 +1498,17 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 session.panY = this.canvas.panY();
                 session.zoom = this.canvas.zoom();
                 session.currentGroupId = this.canvas.currentGroupId();
+                session.agentContext = context;
+                session.model = this.model.deepCopy();
             }
             this.refreshDocumentTitle();
             this.status.setText("  已保存  |  " + String.valueOf(target));
             this.append("工程已保存：" + String.valueOf(target));
+            return true;
         }
         catch (Exception e) {
             this.error(e);
+            return false;
         }
     }
 
@@ -1463,7 +1521,11 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.storeActiveOutput();
             Path root = this.currentProjectFile.getParent();
             this.recovery.saveCheckpoint(root, this.model, this.metadata());
-            this.projectCodec.save(this.currentProjectFile, this.model, this.metadata(), AgentContext.of(this.agentChatController.sessionId(), this.agentChatController.summary(), this.agentChatController.messageHistory()), this.agentChatController.infoSnapshot());
+            AgentContext context = this.agentChatController.snapshotContext();
+            this.projectCodec.save(this.currentProjectFile, this.model, this.metadata(), context,
+                    this.agentChatController.infoSnapshot(), this.currentKnowledgeGraph());
+            DocumentSession session = this.currentDocument();
+            if (session != null) { session.agentContext = context; session.model = this.model.deepCopy(); }
             this.recovery.clear(root, this.documentId);
             this.dirty = false;
             this.refreshDocumentTitle();
@@ -3001,9 +3063,12 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         String markdownOutput = "output/docs";
         WorkflowModel.Mode mode = WorkflowModel.Mode.MARKDOWN;
         int panX;
+        AgentContext agentContext;
         int panY;
         double zoom = 1.0;
         String currentGroupId = "";
+        KnowledgeGraph knowledgeGraph = new KnowledgeGraph();
+        List<String> selectedNodeIds = List.of();
     }
 
     /** 新建一个空白文档 tab（不打开任何文件）。 */
@@ -3049,13 +3114,16 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     /** 切换到指定文档：快照换入主 model。 */
     private void switchToDocument(int index) {
         if (index < 0 || index >= this.documents.size()) return;
+        if (this.activeDocumentIndex == index) return;
+        this.captureActiveDocumentState();
+        this.activeDocumentIndex = index;
         DocumentSession session = this.documents.get(index);
         this.loadingProject = true;
         try {
             this.model.replaceFrom(session.model);
             this.canvas.setView(session.panX, session.panY, session.zoom);
             this.canvas.restoreGroupFocus(session.currentGroupId);
-            this.canvas.select(null);
+            this.canvas.selectNodes(session.selectedNodeIds.stream().map(this.model::byId).filter(Objects::nonNull).toList());
             this.canvas.repaint();
             this.currentProjectFile = session.file;
             this.documentId = session.documentId;
@@ -3067,19 +3135,28 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.displayedMode = session.mode;
             this.mode.setSelectedItem((Object)session.mode);
             this.output.setText(session.mode == WorkflowModel.Mode.EXECUTABLE ? session.executableOutput : session.markdownOutput);
+            this.agentChatController.restoreContext(session.agentContext);
+            if (this.agentChatPanel != null) this.agentChatPanel.showContext(session.agentContext);
             this.loadInspector(null);
             this.refreshDocumentTitle();
         } finally {
             this.loadingProject = false;
         }
         this.syncProjectPanels(session.file == null ? null : session.file.getParent());
+        this.resetHistory();
+        this.status.setText("  已切换文档  |  " + (session.file == null ? "未命名" : session.file.getFileName()));
     }
 
     /** 关闭指定文档 tab。 */
-    private void closeDocument(int index) {
-        if (index < 0 || index >= this.documents.size()) return;
-        DocumentSession session = this.documents.get(index);
-        boolean wasCurrent = index == this.documentTabs.getSelectedIndex();
+    private boolean closeDocument(int index) {
+        if (index < 0 || index >= this.documents.size()) return false;
+        if (index != this.activeDocumentIndex) {
+            this.documentTabs.setSelectedIndex(index);
+            this.switchToDocument(index);
+        }
+        if (!this.confirmDiscardOrSave()) return false;
+        this.captureActiveDocumentState();
+        this.activeDocumentIndex = -1;
         this.documents.remove(index);
         this.documentTabs.removeTabAt(index);
         if (this.documents.isEmpty()) {
@@ -3098,20 +3175,41 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.queue = null;
             this.results = null;
             this.syncProjectPanels(null);
+            this.agentChatController.restoreContext(null);
+            if (this.agentChatPanel != null) this.agentChatPanel.showContext(null);
             this.canvas.repaint();
             this.status.setText("  无打开的文档  |  新建或打开项目");
-            return;
+            return true;
         }
         // 重新编号 tab 关闭按钮（后续 tab 序号变化）
         for (int i = 0; i < this.documents.size(); i++) {
             installTabCloseButton(i);
         }
-        if (wasCurrent) {
-            int next = Math.min(index, this.documents.size() - 1);
-            this.documentTabs.setSelectedIndex(next);
-            this.switchToDocument(next);
-        } else {
-            this.documentTabs.repaint();
-        }
+
+        int next = Math.min(index, this.documents.size() - 1);
+        this.documentTabs.setSelectedIndex(next);
+        this.switchToDocument(next);
+        return true;
+    }
+
+    private void captureActiveDocumentState() {
+        if (this.agentChatController == null || this.activeDocumentIndex < 0 || this.activeDocumentIndex >= this.documents.size()) return;
+        DocumentSession session = this.documents.get(this.activeDocumentIndex);
+        this.storeActiveOutput();
+        session.model = this.model.deepCopy();
+        session.file = this.currentProjectFile;
+        session.documentId = this.documentId;
+        session.createdAt = this.documentCreatedAt;
+        session.readOnly = this.projectReadOnly;
+        session.dirty = this.dirty;
+        session.executableOutput = this.executableOutput;
+        session.markdownOutput = this.markdownOutput;
+        session.mode = this.displayedMode;
+        session.panX = this.canvas.panX();
+        session.panY = this.canvas.panY();
+        session.zoom = this.canvas.zoom();
+        session.currentGroupId = this.canvas.currentGroupId();
+        session.selectedNodeIds = this.selectedNodeIds();
+        session.agentContext = this.agentChatController.snapshotContext();
     }
 }

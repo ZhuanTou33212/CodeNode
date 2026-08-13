@@ -29,9 +29,11 @@ public final class ProcessRunner {
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(dir.toFile());
         builder.redirectErrorStream(true);
+        Process process = null;
         try {
-            Process process = builder.start();
-            Thread reader = new Thread(() -> pipe(process.getInputStream(), output, logSink));
+            process = builder.start();
+            final Process runningProcess = process;
+            Thread reader = new Thread(() -> pipe(runningProcess.getInputStream(), output, logSink));
             reader.setDaemon(true);
             reader.start();
             boolean finished = process.waitFor(Math.max(5L, timeoutSeconds), TimeUnit.SECONDS);
@@ -39,7 +41,7 @@ public final class ProcessRunner {
             boolean timedOut = false;
             if (!finished) {
                 timedOut = true;
-                process.destroyForcibly();
+                terminateTree(process);
                 process.waitFor(2L, TimeUnit.SECONDS);
                 exitCode = -1;
                 String msg = "\n…（运行超时 " + timeoutSeconds + " 秒，已强制终止）";
@@ -50,12 +52,30 @@ public final class ProcessRunner {
             }
             reader.join(500);
             return new RunOutcome(exitCode, timedOut, output.toString());
+        } catch (InterruptedException e) {
+            terminateTree(process);
+            Thread.currentThread().interrupt();
+            String msg = "运行已取消";
+            output.append(msg);
+            if (logSink != null) logSink.accept(msg);
+            return new RunOutcome(-1, false, output.toString());
         } catch (Exception e) {
+            terminateTree(process);
             String msg = "启动进程失败: " + e.getMessage();
             output.append(msg);
             if (logSink != null) logSink.accept(msg);
             return new RunOutcome(-1, false, output.toString());
         }
+    }
+
+    /** Terminate descendants first so wrapper scripts cannot leave orphaned build/run processes. */
+    public static void terminateTree(Process process) {
+        if (process == null) return;
+        try {
+            List<ProcessHandle> descendants = process.toHandle().descendants().toList();
+            for (int i = descendants.size() - 1; i >= 0; i--) descendants.get(i).destroyForcibly();
+        } catch (Exception ignored) {}
+        if (process.isAlive()) process.destroyForcibly();
     }
 
     private static void pipe(InputStream in, StringBuilder out, Consumer<String> logSink) {

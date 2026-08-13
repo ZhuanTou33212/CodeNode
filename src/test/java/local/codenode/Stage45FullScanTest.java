@@ -255,7 +255,7 @@ public class Stage45FullScanTest {
         List<String> actions = new java.util.ArrayList<>();
         AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> new WorkflowModel(), (level, what, detail) -> level == AgentToolContext.ConfirmationLevel.UI, entry -> {},
                 null, null, () -> {}, () -> {}, () -> {},
-                (action, arguments) -> actions.add(action + ":" + arguments.get("zoom")));
+                (action, arguments) -> { actions.add(action + ":" + arguments.get("zoom")); return true; });
         context.setPermissionSupplier(() -> "ui:allow");
         AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
         AgentToolResult result = registry.execute("ui_control",

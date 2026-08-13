@@ -3,6 +3,7 @@ package local.codenode.ui.agent;
 import local.codenode.UiTheme;
 import local.codenode.agent.AgentChatController;
 import local.codenode.agent.AgentToolCall;
+import local.codenode.agent.AgentContext;
 import local.codenode.agent.ChatEvent;
 import local.codenode.agent.ChatListener;
 import local.codenode.config.AgentConfig;
@@ -246,6 +247,21 @@ public final class AgentChatPanel extends JPanel {
     /** 当前 Agent 工作项目路径。 */
     public String projectPath() {
         return config.defaultProjectPath();
+    }
+
+    /** Replace the visible transcript when switching to another .cnode document. */
+    public void showContext(AgentContext context) {
+        transcript.setText("");
+        reasoning.clear();
+        if (context == null) { refreshContext(); return; }
+        for (java.util.Map<String, Object> message : context.messages()) {
+            String role = String.valueOf(message.getOrDefault("role", ""));
+            Object content = message.get("content");
+            if (content == null || String.valueOf(content).isBlank()) continue;
+            Color color = "user".equals(role) ? USER : "tool".equals(role) ? TOOL : TEXT;
+            append(("user".equals(role) ? "❯ " : role + "：") + content + "\n\n", color);
+        }
+        refreshContext();
     }
 
     private void doSend() {

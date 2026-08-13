@@ -10,13 +10,14 @@ import java.util.*;
 import java.util.zip.*;
 import local.codenode.agent.AgentContext;
 import local.codenode.agent.AgentInfoSnapshot;
+import local.codenode.agent.knowledge.KnowledgeGraph;
 
 public final class CnodeProjectCodec {
     public static final String FORMAT_VERSION="1.1";
     public static final String MIME="application/vnd.codenode.project+zip";
     private static final int MAX_NODES=10_000,MAX_EDGES=50_000,MAX_ENTRY=20*1024*1024,MAX_TOTAL=100*1024*1024,MAX_PROMPT=1024*1024;
     private static final Set<String> REQUIRED=Set.of("mimetype","manifest.json","graph.json","workspace.json","output-profiles.json","integrity.json");
-    private static final Set<String> OPTIONAL=Set.of("agent-context.json","agent-info.json");
+    private static final Set<String> OPTIONAL=Set.of("agent-context.json","agent-info.json","knowledge-graph.dsl","knowledge-meta.json");
 
     public record Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId,List<String> selectedNodeIds,String currentGroupId) {
         public Settings(WorkflowModel.Mode mode,String language,String executablePath,String markdownPath,String entryNodeId,int panX,int panY,double zoom,String selectedNodeId){this(mode,language,executablePath,markdownPath,entryNodeId,panX,panY,zoom,selectedNodeId,selectedNodeId==null?List.of():List.of(selectedNodeId),"");}
@@ -27,15 +28,20 @@ public final class CnodeProjectCodec {
     public record Loaded(WorkflowModel model,Metadata metadata,boolean readOnly) {}
 
     public void save(Path target,WorkflowModel model,Metadata metadata) throws IOException {
-        save(target, model, metadata, null, null);
+        save(target, model, metadata, null, null, null);
     }
 
     public void save(Path target, WorkflowModel model, Metadata metadata, AgentContext agentContext, AgentInfoSnapshot agentInfo) throws IOException {
+        save(target, model, metadata, agentContext, agentInfo, null);
+    }
+
+    public void save(Path target, WorkflowModel model, Metadata metadata, AgentContext agentContext,
+                     AgentInfoSnapshot agentInfo, KnowledgeGraph knowledgeGraph) throws IOException {
         Objects.requireNonNull(target);Objects.requireNonNull(model);Objects.requireNonNull(metadata);validateModel(model);
         Path absolute=target.toAbsolutePath().normalize();Path parent=absolute.getParent();if(parent==null)throw new IOException("工程文件缺少父目录");Files.createDirectories(parent);
         Path temporary=parent.resolve(absolute.getFileName()+".tmp-"+UUID.randomUUID());
         try{
-            writeArchive(temporary,model,metadata,agentContext,agentInfo);
+            writeArchive(temporary,model,metadata,agentContext,agentInfo,knowledgeGraph);
             try(FileChannel channel=FileChannel.open(temporary,StandardOpenOption.WRITE)){channel.force(true);}
             load(temporary);
             if(Files.exists(absolute))Files.copy(absolute,backupPath(absolute),StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.COPY_ATTRIBUTES);
@@ -61,17 +67,26 @@ public final class CnodeProjectCodec {
     public static Path backupPath(Path project){return project.resolveSibling(project.getFileName()+".bak");}
 
     public Optional<AgentContext> loadAgentContext(Path source) throws IOException {
-        Map<String,byte[]> entries=readArchive(source); byte[] data=entries.get("agent-context.json");
-        return data==null ? Optional.empty() : Optional.of(AgentContext.fromMap(Json.object(new String(data, StandardCharsets.UTF_8))));
+        Map<String,byte[]> entries=readVerifiedArchive(source); byte[] data=entries.get("agent-context.json");
+        if(data==null)return Optional.empty();
+        try{return Optional.of(AgentContext.fromMap(Json.object(new String(data,StandardCharsets.UTF_8))));}
+        catch(RuntimeException e){throw new IOException("agent-context.json 无效",e);}
     }
     public Optional<AgentInfoSnapshot> loadAgentInfo(Path source) throws IOException {
-        Map<String,byte[]> entries=readArchive(source); byte[] data=entries.get("agent-info.json");
-        return data==null ? Optional.empty() : Optional.of(AgentInfoSnapshot.fromJson(Json.object(new String(data, StandardCharsets.UTF_8))));
+        Map<String,byte[]> entries=readVerifiedArchive(source); byte[] data=entries.get("agent-info.json");
+        if(data==null)return Optional.empty();
+        try{return Optional.of(AgentInfoSnapshot.fromJson(Json.object(new String(data,StandardCharsets.UTF_8))));}
+        catch(RuntimeException e){throw new IOException("agent-info.json 无效",e);}
+    }
+    public KnowledgeGraph loadKnowledgeGraph(Path source) throws IOException {
+        Map<String,byte[]> entries=readArchive(source); byte[] data=entries.get("knowledge-graph.dsl");
+        return data==null ? new KnowledgeGraph() : KnowledgeGraph.parse(new String(data, StandardCharsets.UTF_8));
     }
     public static byte[] encodeAgentContext(AgentContext context) { return context == null ? new byte[0] : context.toJsonBytes(); }
-    public static AgentContext decodeAgentContext(byte[] bytes) throws IOException { if (bytes == null) throw new IOException("agent-context 为空"); return AgentContext.fromMap(Json.object(new String(bytes, StandardCharsets.UTF_8))); }
+    public static AgentContext decodeAgentContext(byte[] bytes) throws IOException { if (bytes == null) throw new IOException("agent-context 为空"); try{return AgentContext.fromMap(Json.object(new String(bytes,StandardCharsets.UTF_8)));}catch(RuntimeException e){throw new IOException("agent-context 无效",e);} }
 
-    private void writeArchive(Path target,WorkflowModel model,Metadata metadata,AgentContext agentContext,AgentInfoSnapshot agentInfo) throws IOException {
+    private void writeArchive(Path target,WorkflowModel model,Metadata metadata,AgentContext agentContext,
+                              AgentInfoSnapshot agentInfo, KnowledgeGraph knowledgeGraph) throws IOException {
         Settings settings=metadata.settings();Instant now=Instant.now();
         LinkedHashMap<String,byte[]> files=new LinkedHashMap<>();
         files.put("manifest.json",bytes(Json.stringify(manifest(metadata,now))));
@@ -80,6 +95,15 @@ public final class CnodeProjectCodec {
         files.put("output-profiles.json",bytes(Json.stringify(profiles(settings))));
         if (agentContext != null) files.put("agent-context.json", agentContext.toJsonBytes());
         if (agentInfo != null) files.put("agent-info.json", agentInfo.toJsonBytes());
+        if (knowledgeGraph != null && !knowledgeGraph.isEmpty()) {
+            files.put("knowledge-graph.dsl", bytes(knowledgeGraph.toDsl()));
+            files.put("knowledge-meta.json", bytes(Json.stringify(Map.of(
+                    "schemaVersion", 1,
+                    "cache", true,
+                    "generatedAt", now.toString(),
+                    "elementCount", knowledgeGraph.size(),
+                    "roots", knowledgeGraph.roots()))));
+        }
         files.put("integrity.json",bytes(Json.stringify(integrity(files))));
         try(OutputStream raw=Files.newOutputStream(target,StandardOpenOption.CREATE_NEW);ZipOutputStream zip=new ZipOutputStream(raw,StandardCharsets.UTF_8)){
             byte[] mime=bytes(MIME);CRC32 crc=new CRC32();crc.update(mime);ZipEntry marker=new ZipEntry("mimetype");marker.setMethod(ZipEntry.STORED);marker.setSize(mime.length);marker.setCompressedSize(mime.length);marker.setCrc(crc.getValue());zip.putNextEntry(marker);zip.write(mime);zip.closeEntry();
@@ -197,6 +221,13 @@ public final class CnodeProjectCodec {
         return entries;
     }
     private static void safeEntry(String name) throws IOException {if(name.isBlank()||name.startsWith("/")||name.startsWith("\\")||name.contains("..")||name.contains(":")||name.contains("\\"))throw new IOException("非法 ZIP 路径："+name);if(!REQUIRED.contains(name)&&!OPTIONAL.contains(name)&&!name.startsWith("assets/")&&!name.startsWith("extensions/"))throw new IOException("未知的工程条目："+name);}
+    private static Map<String,byte[]> readVerifiedArchive(Path source) throws IOException {
+        Map<String,byte[]> entries=readArchive(source);
+        if(!entries.keySet().containsAll(REQUIRED))throw new IOException(".cnode missing required entries: "+missing(entries.keySet()));
+        if(!MIME.equals(text(entries,"mimetype")))throw new IOException("Invalid CodeNode project file");
+        verifyIntegrity(entries);
+        return entries;
+    }
     private static void verifyIntegrity(Map<String,byte[]> entries) throws IOException {Map<String,Object> integrity=Json.object(text(entries,"integrity.json"));if(!"SHA-256".equals(integrity.get("algorithm")))throw new IOException("不支持的摘要算法");Map<String,Object> hashes=object(integrity,"files");for(var entry:entries.entrySet()){String name=entry.getKey();if(name.equals("mimetype")||name.equals("integrity.json"))continue;if(!sha256(entry.getValue()).equals(hashes.get(name)))throw new IOException("工程文件摘要校验失败："+name);}for(String name:hashes.keySet())if(!entries.containsKey(name))throw new IOException("摘要引用不存在的工程条目："+name);}
     private static void validateModel(WorkflowModel model) throws IOException {if(model.nodes().size()>MAX_NODES||model.edges().size()>MAX_EDGES||model.reroutes().size()>50_000)throw new IOException("工程规模超过限制");Set<String> ids=new HashSet<>();for(WorkflowModel.Node node:model.nodes()){requiredId(node.id,"node.id");if(!ids.add(node.id))throw new IOException("重复节点 ID："+node.id);if(bytes(node.prompt).length>MAX_PROMPT)throw new IOException("节点 Prompt 超过 1 MiB："+node.id);relative(node.artifact,"artifact");if(node.nodeKind==WorkflowModel.NodeKind.FILE&&!node.rangeMode||node.nodeKind==WorkflowModel.NodeKind.ASSET)relative(node.relativePath,"relativePath");if(!NodeRegistry.isKnown(node.classificationKey))throw new IOException("未知节点分类："+node.classificationKey);Set<String> ports=new HashSet<>();for(WorkflowModel.Port port:node.inputs)if(!ports.add(requiredId(port.id,"port.id")))throw new IOException("重复端口 ID："+node.id+"/"+port.id);ports.clear();for(WorkflowModel.Port port:node.outputs)if(!ports.add(requiredId(port.id,"port.id")))throw new IOException("重复端口 ID："+node.id+"/"+port.id);}for(WorkflowModel.Node node:model.nodes()){if(!node.parentScopeId.isBlank()){WorkflowModel.Node parent=model.byId(node.parentScopeId);if(parent==null||(parent.nodeKind!=WorkflowModel.NodeKind.SCOPE&&parent.nodeKind!=WorkflowModel.NodeKind.GROUP))throw new IOException("父范围不存在："+node.id);validateScopeChain(model,node);}if(!node.fileNodeId.isBlank()){WorkflowModel.Node file=model.byId(node.fileNodeId);if(file==null||(file.nodeKind!=WorkflowModel.NodeKind.FILE&&file.nodeKind!=WorkflowModel.NodeKind.ASSET&&file.nodeKind!=WorkflowModel.NodeKind.ASSET_BUNDLE&&file.nodeKind!=WorkflowModel.NodeKind.GROUP)||file==node)throw new IOException("文件归属不存在："+node.id);}}for(WorkflowModel.Edge edge:model.edges()){WorkflowModel.Node from=model.byId(edge.source()),to=model.byId(edge.target());if(from==null||to==null||model.output(from,edge.sourcePort())==null||model.input(to,edge.targetPort())==null)throw new IOException("连线引用不存在的节点或端口："+edge.id());}for(WorkflowModel.Reroute point:model.reroutes())requiredId(point.id,"reroute.id");}
     private static void validateScopeChain(WorkflowModel model,WorkflowModel.Node node) throws IOException {Set<String> seen=new HashSet<>();WorkflowModel.Node current=node;while(current!=null&&!current.parentScopeId.isBlank()){if(!seen.add(current.id))throw new IOException("范围包含形成循环："+node.id);current=model.byId(current.parentScopeId);}if(current!=null&&!seen.add(current.id))throw new IOException("范围包含形成循环："+node.id);}

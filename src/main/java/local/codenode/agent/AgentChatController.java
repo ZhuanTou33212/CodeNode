@@ -28,6 +28,9 @@ import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.AgentToolResult;
 import local.codenode.agent.tools.AgentToolSpec;
+import local.codenode.agent.knowledge.ConversationGraphParser;
+import local.codenode.agent.knowledge.KnowledgeGraph;
+import local.codenode.agent.knowledge.TextSummarizer;
 import local.codenode.config.AgentConfig;
 
 /**
@@ -57,7 +60,7 @@ public final class AgentChatController {
     private final AgentExecutionTimeline timeline = new AgentExecutionTimeline();
     private final List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
     private final ExecutorService toolExecutor = Executors.newCachedThreadPool();
-    private final String sessionId = UUID.randomUUID().toString();
+    private String sessionId = UUID.randomUUID().toString();
     private String sessionSummary = "";
     private volatile AgentProvider.SessionState state = AgentProvider.SessionState.IDLE;
     private volatile boolean stopRequested;
@@ -90,24 +93,48 @@ public final class AgentChatController {
     }
 
     public void reset() {
+        deleteSessionFile();
         this.messages.clear();
         this.sessionSummary = "";
+        this.sessionId = UUID.randomUUID().toString();
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
         this.toolContext.clearToolStop();
         this.toolContext.permissionMemory().clear();
-        deleteSessionFile();
+    }
+
+    /** Clear the active conversation without deleting project-scoped knowledge. */
+    public void clearForDocumentSwitch() {
+        this.messages.clear();
+        this.sessionSummary = "";
+        this.sessionId = UUID.randomUUID().toString();
+        this.state = AgentProvider.SessionState.IDLE;
+        this.stopRequested = false;
+        this.toolContext.clearToolStop();
+        this.toolContext.permissionMemory().clear();
+    }
+
+    public AgentContext snapshotContext() {
+        return AgentContext.of(this.sessionId, this.sessionSummary,
+                this.messages.stream().filter(m -> !"system".equals(m.get("role"))).toList());
     }
 
     /** Restore a document-level context while retaining the current live system prompt. */
     public void restoreContext(AgentContext context) {
+        clearForDocumentSwitch();
         if (context == null) return;
-        this.messages.clear(); this.messages.add(this.systemPrompt());
+        this.sessionId = context.sessionId().isBlank() ? UUID.randomUUID().toString() : context.sessionId();
+        this.messages.add(this.systemPrompt());
         this.sessionSummary = context.summary();
-        this.messages.addAll(context.messages());
+        context.messages().stream()
+                .filter(message -> !"system".equals(String.valueOf(message.get("role"))))
+                .forEach(this.messages::add);
     }
     public List<Map<String, Object>> messageHistory() {
-        return List.copyOf(this.messages);
+        return this.messages.stream()
+                .filter(message -> !"system".equals(String.valueOf(message.get("role"))))
+                .map(Map::copyOf)
+                .toList();
     }
 
     public String summary() {
@@ -192,6 +219,7 @@ public final class AgentChatController {
         StringBuilder sb = new StringBuilder();
         sb.append(this.sessionSummary.isBlank() ? "" : this.sessionSummary + "\n");
         List<Map<String, Object>> early = nonSystem.subList(0, keepFrom);
+        StringBuilder source = new StringBuilder();
         for (Map<String, Object> message : early) {
             String role = String.valueOf(message.get("role"));
             String content = String.valueOf(message.getOrDefault("content", ""));
@@ -203,8 +231,19 @@ public final class AgentChatController {
                 toolName = "[调用工具]";
             }
             sb.append(role).append(toolName).append(": ").append(content.length() > 300 ? content.substring(0, 300) + "…" : content).append("\n");
+            if (!content.isBlank()) source.append(role).append(": ").append(content).append('\n');
         }
-        this.sessionSummary = sb.length() > 4000 ? sb.substring(0, 4000) + "…" : sb.toString();
+        TextSummarizer.Summary precise = new TextSummarizer().summarize(source.toString());
+        String local = "主题：" + precise.title() + "\n摘要：" + precise.summary()
+                + "\n关键词：" + String.join(",", precise.keywords());
+        this.sessionSummary = local.length() > 4000 ? local.substring(0, 4000) + "…" : local;
+        if (!source.isEmpty()) {
+            try {
+                KnowledgeGraph fragment = new ConversationGraphParser().parse(source.toString(), "", "conversation:compacted");
+                this.toolContext.knowledgeGraph().merge(fragment);
+                this.toolContext.saveProject();
+            } catch (RuntimeException ignored) { }
+        }
         // 裁剪消息：保留 system + 最近窗口（确保窗口首条不是孤立的 tool 消息）
         List<Map<String, Object>> kept = new ArrayList<Map<String, Object>>();
         for (Map<String, Object> message : this.messages) {
@@ -301,6 +340,9 @@ public final class AgentChatController {
         sb.append("19. 分析结果用 write_analysis_md 写成 Markdown 分析节点（缺省自动从画布生成项目架构），落在已分析项目上供后续节点调用。\n");
         sb.append("20. 需要操控软件本体（缩放/平移/聚焦/查看全部/调整窗口/切换面板/新建内容节点）用 ui_control；节点库按分类切换：资产类节点（图片/模型等）用软件现有预设（create_nodes nodeKind=asset/bundle），程序类用文件节点（nodeKind=file），所有文件节点创建时引用相对路径。\n");
         sb.append("21. 实时数据分析流程：先 scan_project 全量扫描 → write_analysis_md 生成架构 → runtime_trace/compile_run 依据实时运行输出判断应用了什么代码/程序/资产 → 再 write_analysis_md 更新总体架构 md 节点。\n");
+        sb.append("长期知识规则：用户提供长文本或要求长期记住时调用 graph_summarize；查找既有知识先 graph_query，再用 graph_path 定位，禁止根据 DSL 名称猜测文件或工具参数。graph_* 返回的结构化字段才是调用依据。\n");
+        KnowledgeGraph knowledge = this.toolContext.knowledgeGraph();
+        if (!knowledge.isEmpty()) sb.append("【当前项目长期知识】").append(knowledge.overview()).append("\n");
         sb.append("\n").append(AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider()).toText()).append("\n");
         if (this.config.extraHarnessPrompt() != null && !this.config.extraHarnessPrompt().isBlank()) {
             sb.append("\n【用户自定义附加规则】\n").append(this.config.extraHarnessPrompt()).append("\n");

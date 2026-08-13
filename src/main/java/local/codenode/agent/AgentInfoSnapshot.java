@@ -9,8 +9,8 @@ import java.util.Map;
 
 /** A bounded, deliberately allow-listed snapshot injected into the Agent harness. */
 public final class AgentInfoSnapshot {
-    public static final int MAX_CHARS = 256_000;
-    private static final String[] ALLOWED = {"version", "formatVersion", "mode", "language", "projectRoot", "projectName", "openDocuments", "currentDocument", "canvasNodes", "canvasEdges", "groups", "assetBundles", "selectedNodes", "selectedNodeId", "workbenchTab", "documentTab", "windowWidth", "windowHeight", "toolCount", "jdk", "gradle", "maven", "uiActions", "capturedAt"};
+    public static final int MAX_CHARS = 256 * 1024;
+    private static final String[] ALLOWED = {"version", "formatVersion", "mode", "language", "projectRoot", "projectName", "openDocuments", "currentDocument", "canvasNodes", "canvasEdges", "groups", "assetBundles", "selectedNodes", "selectedNodeId", "workbenchTab", "documentTab", "windowWidth", "windowHeight", "toolCount", "jdk", "gradle", "maven", "uiActions", "runConfig", "panelVisibility", "capturedAt"};
     private final Map<String, Object> values;
 
     public AgentInfoSnapshot(Map<String, ?> software, Map<String, ?> environment) {
@@ -30,8 +30,26 @@ public final class AgentInfoSnapshot {
         }
         return out.length() > MAX_CHARS ? out.substring(0, MAX_CHARS) + "…" : out.toString();
     }
-    public byte[] toJsonBytes() { return Json.stringify(values).getBytes(java.nio.charset.StandardCharsets.UTF_8); }
-    public static AgentInfoSnapshot fromJson(Map<String, Object> values) { return new AgentInfoSnapshot(values, Map.of()); }
+    public byte[] toJsonBytes() {
+        LinkedHashMap<String, Object> document = new LinkedHashMap<>();
+        document.put("schemaVersion", 1);
+        document.put("generator", "CodeNode Desktop " + values.getOrDefault("version", "unknown"));
+        document.putAll(values);
+        byte[] encoded = Json.stringify(document).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (encoded.length <= MAX_CHARS) return encoded;
+        LinkedHashMap<String, Object> bounded = new LinkedHashMap<>();
+        bounded.put("schemaVersion", 1); bounded.put("generator", document.get("generator"));
+        for (var entry : values.entrySet()) {
+            String value = String.valueOf(entry.getValue());
+            bounded.put(entry.getKey(), value.substring(0, Math.min(value.length(), 2048)));
+        }
+        return Json.stringify(bounded).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+    public static AgentInfoSnapshot fromJson(Map<String, Object> values) {
+        Object schema = values.get("schemaVersion");
+        if (!(schema instanceof Number number) || number.intValue() != 1) throw new IllegalArgumentException("不支持的 agent-info schemaVersion：" + schema);
+        return new AgentInfoSnapshot(values, Map.of());
+    }
     private static void copyAllowed(Map<String, Object> out, Map<String, ?> source) {
         if (source == null) return;
         for (String key : ALLOWED) {

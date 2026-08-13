@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -23,6 +24,25 @@ import static org.junit.jupiter.api.Assertions.*;
  * Stage4.7+4.8 合并验证：工程识别 / 构建运行 / 错误定位 / JFR 追踪摘要。
  */
 public class ProjectBuildRunTest {
+
+    @Test
+    void interruptCancelsBlockingProcessRunner() throws Exception {
+        Path root = Files.createTempDirectory("pj-cancel");
+        try {
+            AtomicReference<ProcessRunner.RunOutcome> outcome = new AtomicReference<>();
+            Thread runner = Thread.ofPlatform().start(() -> outcome.set(ProcessRunner.run(
+                    List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"),
+                    root, 60, line -> {})));
+            Thread.sleep(400);
+            runner.interrupt();
+            runner.join(5_000);
+            assertFalse(runner.isAlive(), "取消后不应继续等待子进程");
+            assertNotNull(outcome.get());
+            assertEquals(-1, outcome.get().exitCode());
+        } finally {
+            deleteRecursive(root);
+        }
+    }
 
     private static void deleteRecursive(Path dir) {
         if (dir == null || !Files.exists(dir)) return;

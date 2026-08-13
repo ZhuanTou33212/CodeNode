@@ -1,5 +1,8 @@
 package local.codenode;
 
+import local.codenode.agent.AgentContext;
+import local.codenode.agent.AgentInfoSnapshot;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -64,6 +67,19 @@ class CnodeProjectCodecTest {
     @Test void rejectsTamperedContentAndUnsafePaths() throws Exception {
         Path file=save("tampered.cnode");Map<String,byte[]> entries=read(file);entries.put("graph.json","{\"nodes\":[],\"edges\":[]}".getBytes(StandardCharsets.UTF_8));write(file,entries);IOException integrity=assertThrows(IOException.class,()->codec.load(file));assertTrue(integrity.getMessage().contains("摘要校验失败"));
         WorkflowModel unsafe=model();unsafe.nodes().getFirst().artifact="../escape.java";assertThrows(IOException.class,()->codec.save(temp.resolve("unsafe.cnode"),unsafe,metadata(unsafe)));
+    }
+
+    @Test void optionalAgentAccessorsVerifyIntegrity() throws Exception {
+        Path file = temp.resolve("agent-tampered.cnode");
+        WorkflowModel model = model();
+        codec.save(file, model, metadata(model),
+                AgentContext.of("session", "summary", List.of(Map.of("role", "user", "content", "hello"))),
+                new AgentInfoSnapshot(Map.of("version", "0.16"), Map.of("jdk", "21")));
+        Map<String, byte[]> entries = read(file);
+        entries.put("agent-context.json", "{\"schemaVersion\":1}".getBytes(StandardCharsets.UTF_8));
+        write(file, entries);
+        assertThrows(IOException.class, () -> codec.loadAgentContext(file));
+        assertThrows(IOException.class, () -> codec.loadAgentInfo(file));
     }
 
     @Test void newerMajorVersionLoadsReadOnlyAndRecoveryFindsNewerCheckpoint() throws Exception {

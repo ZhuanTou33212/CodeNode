@@ -3,6 +3,7 @@ package local.codenode.agent.tools.impl;
 import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.AgentToolResult;
+import local.codenode.project.ProcessRunner;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -67,11 +68,13 @@ public final class ExecuteShellTool {
         ProcessBuilder builder = new ProcessBuilder(tokens);
         builder.directory(context.projectRoot().toFile());
         builder.redirectErrorStream(true);
+        Process process = null;
         try {
-            Process process = builder.start();
+            process = builder.start();
+            final Process runningProcess = process;
             StringBuilder output = new StringBuilder();
             Thread reader = new Thread(() -> {
-                try (var in = process.getInputStream()) {
+                try (var in = runningProcess.getInputStream()) {
                     byte[] buffer = new byte[4096];
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
@@ -84,7 +87,7 @@ public final class ExecuteShellTool {
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
             int exitCode;
             if (!finished) {
-                process.destroyForcibly();
+                ProcessRunner.terminateTree(process);
                 process.waitFor(2, TimeUnit.SECONDS);
                 exitCode = -1;
                 output.append("\n…（执行超时，已强制终止）");
@@ -95,7 +98,12 @@ public final class ExecuteShellTool {
             context.audit("execute_shell " + command + " exit=" + exitCode);
             String text = "退出码 " + exitCode + "\n" + output.toString().trim();
             return new AgentToolResult(true, text, Map.of("exitCode", exitCode, "command", command));
+        } catch (InterruptedException e) {
+            ProcessRunner.terminateTree(process);
+            Thread.currentThread().interrupt();
+            return AgentToolResult.error("执行已取消");
         } catch (Exception e) {
+            ProcessRunner.terminateTree(process);
             return AgentToolResult.error("执行失败：" + e.getMessage());
         }
     }

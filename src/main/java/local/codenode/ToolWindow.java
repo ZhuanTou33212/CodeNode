@@ -95,6 +95,7 @@ public final class ToolWindow extends JPanel {
     }
     public void shutdown(){pendingDock=null;if(dockTimer!=null)dockTimer.stop();if(dockPreview!=null){dockPreview.dispose();dockPreview=null;}if(dialog!=null){dialog.dispose();dialog=null;}}
     public boolean isCollapsed(){return collapsed;}
+    public boolean isFloating(){return dialog!=null;}
     public String title(){return title;}
     public void setArrangementHorizontal(boolean horizontal){arrange.setText(horizontal?"↔":"↕");}
 }

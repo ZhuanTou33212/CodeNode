@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import local.codenode.agent.PermissionMemory;
 import local.codenode.agent.AgentResultStore;
 import local.codenode.agent.SoftwareInfoProvider;
+import local.codenode.agent.knowledge.KnowledgeGraph;
 import local.codenode.WorkflowModel;
 
 public final class AgentToolContext {
@@ -34,6 +35,7 @@ public final class AgentToolContext {
     private final PermissionMemory permissionMemory = new PermissionMemory();
     private volatile boolean rememberApprovals = true;
     private final AgentResultStore resultStore = new AgentResultStore();
+    private Supplier<KnowledgeGraph> knowledgeGraphSupplier = KnowledgeGraph::new;
 
     public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, null, null, null, null, null);
@@ -103,7 +105,7 @@ public final class AgentToolContext {
         String mode = permissionMode(category);
         if (mode.matches("deny|disabled|off")) return false;
         if (mode.matches("allow|enabled") || level == ConfirmationLevel.LOW) return true;
-        String signature = PermissionMemory.signature(category + ":" + level, what + "\n" + detail);
+        String signature = PermissionMemory.signature(projectRoot().toAbsolutePath().normalize() + "|" + category + ":" + level, what + "\n" + detail);
         if (rememberApprovals) {
             Boolean remembered = permissionMemory.get(signature);
             if (remembered != null) return remembered;
@@ -184,8 +186,26 @@ public final class AgentToolContext {
         if (this.uiAction == null || action == null || action.isBlank()) {
             return false;
         }
-        this.uiAction.perform(action, arguments);
-        return true;
+        try {
+            if (javax.swing.SwingUtilities.isEventDispatchThread()) {
+                return this.uiAction.perform(action, arguments);
+            } else {
+                java.util.concurrent.atomic.AtomicReference<RuntimeException> failure = new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.atomic.AtomicBoolean applied = new java.util.concurrent.atomic.AtomicBoolean(false);
+                javax.swing.SwingUtilities.invokeAndWait(() -> {
+                    try { applied.set(this.uiAction.perform(action, arguments)); }
+                    catch (RuntimeException e) { failure.set(e); }
+                });
+                if (failure.get() != null) throw failure.get();
+                return applied.get();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception e) {
+            audit("ui_control failed action=" + action + " error=" + e.getMessage());
+            return false;
+        }
     }
 
     /** 设置会话消息历史提供者（供总结等工具读取）。 */
@@ -231,7 +251,7 @@ public final class AgentToolContext {
 
     @FunctionalInterface
     public static interface UiAction {
-        public void perform(String var1, Map<String, Object> var2);
+        public boolean perform(String var1, Map<String, Object> var2);
     }
 
     @FunctionalInterface
@@ -253,6 +273,13 @@ public final class AgentToolContext {
     public void setRememberApprovals(boolean remember) { this.rememberApprovals = remember; if (!remember) permissionMemory.clear(); }
     public boolean rememberApprovals() { return rememberApprovals; }
     public AgentResultStore resultStore() { return resultStore; }
+    public void setKnowledgeGraphSupplier(Supplier<KnowledgeGraph> supplier) {
+        this.knowledgeGraphSupplier = supplier == null ? KnowledgeGraph::new : supplier;
+    }
+    public KnowledgeGraph knowledgeGraph() {
+        KnowledgeGraph graph = knowledgeGraphSupplier.get();
+        return graph == null ? new KnowledgeGraph() : graph;
+    }
 
     /** 文件变更通知器（Agent 写/改/删文件后回调）。 */
     @FunctionalInterface

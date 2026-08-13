@@ -20,7 +20,7 @@
 | Stage 6 | 固定文件分析 + 文件类型解析指引 + harness/工具设置 | ✅ 已实现 |
 | Stage 4.7 | 实时运行追踪（工程构建运行 + JFR 追踪） | ✅ JFR 外部采样与解析已验证 |
 | Stage 4.8 | 文件浏览器 + 多文档 tab + 右侧面板可拖拽 + 工程构建运行 | ◑ 主体完成，调试/打包/测试运行器仍待补 |
-| Stage 4.9 | Agent 权限、动态上下文、.cnode 预留、UI 控制、工具取消与状态时间线 | ◑ 主体完成，知识图谱/长期记忆/子代理属于 Stage 4.10 |
+| Stage 4.9 | Agent 权限、动态上下文、.cnode 会话/长期知识、UI 控制、工具取消与状态时间线 | ◑ 主体完成；分层知识图谱、长期记忆与多项目隔离已完成，子代理/任务清单/多对话窗口待后续 |
 
 ---
 
@@ -65,6 +65,14 @@
 ### 5.2 短期记忆（Stage4.6，已实现）
 - 滑动窗口（发送前 system + 最近 20 条 + 历史摘要占位）
 - 消息 > 阈值触发摘要（模型摘要，失败回退本地规则摘要）
+
+### 5.3 项目长期知识（Stage4.9，已实现）
+- `TextSummarizer`：离线提取标题、摘要、关键词、代码实体与文件/URL 引用
+- `ConversationGraphParser`：按标题、段落、编号项和代码块拆分长文本，生成分层 `parent(child...)` DSL
+- `KnowledgeGraph`：严格父子层级、循环/多父校验、关键词查询、遍历与定位
+- `graph_root/query/traverse/path/summarize` 已注册为 Agent 工具；参数由 JSON Schema 在执行前校验
+- `.cnode` 保存 `knowledge-graph.dsl` / `knowledge-meta.json` 并纳入 integrity；重启后从 DSL 恢复
+- 文档标签独立持有 `AgentContext + KnowledgeGraph`，切换时快照/恢复，防止跨项目串记忆
 - 会话持久化到 `.codenode/agent-sessions/<sessionId>.json`；新建/继续会话
 - 工具结果截断到 4000 字符
 
@@ -167,6 +175,5 @@
 4. **4.7 字节码插桩**未做（仅 JFR 采样）
 5. **4.8 打包/调试/测试运行器/代码辅助**未做
 6. **4.9 全量 ui_control action**未做（当前 7 个基础 action）
-7. **4.9 .cnode 预留条目**未做（agent-context.json / agent-info.json / knowledge-graph.dsl / knowledge-meta.json）
-8. **4.9 图谱/记忆/子代理/任务清单/多对话窗口**均未做（并入自原 4.10）
+7. **4.9 子代理/任务清单/同项目多对话窗口**未做；项目级会话隔离与长期图谱已完成
 9. **存储与项目文件栏共享**：需核实是否为真 bug（Stage4.9 需求）

@@ -13,6 +13,7 @@ public final class AgentSettingsPanel extends JPanel {
     private final JTextField model = new JTextField(24);
     private final JTextField projectPath = new JTextField(24);
     private final JPasswordField apiKey = new JPasswordField(24);
+    private final JTextField permissions = new JTextField(24);
     private final JLabel feedback = new JLabel(" ");
 
     public AgentSettingsPanel(AgentConfig config) {
@@ -32,12 +33,16 @@ public final class AgentSettingsPanel extends JPanel {
         body.add(field("默认项目路径", projectPath, "工具 scan_project 等的默认根目录"));
 
         baseUrl.setText(config.apiBase());
+        body.add(Box.createVerticalStrut(8));
+        body.add(field("Agent 权限", permissions, "如 ui:allow,write:confirm,execute:confirm,system:enabled"));
+
         model.setText(config.model());
         projectPath.setText(config.defaultProjectPath());
         apiKey.setText(config.apiKey());
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         actions.setOpaque(false);
+        permissions.setText(config.permissions());
         JButton save = new JButton("保存配置");
         save.addActionListener(e -> saveSettings());
         JButton close = new JButton("关闭");
@@ -78,6 +83,7 @@ public final class AgentSettingsPanel extends JPanel {
         config.setModel(model.getText());
         config.setDefaultProjectPath(projectPath.getText());
         config.setApiKey(new String(apiKey.getPassword()));
+        config.setPermissions(permissions.getText());
         try {
             config.save();
             feedback.setForeground(new Color(58, 116, 73));
