@@ -80,6 +80,16 @@ public final class UiTheme {
         } else if (component instanceof JScrollBar bar) {
             bar.setUI(new BasicScrollBarUI(){
                 @Override protected void configureScrollBarColors(){thumbColor=Color.WHITE;thumbHighlightColor=Color.WHITE;thumbDarkShadowColor=Color.WHITE;trackColor=BACKGROUND;trackHighlightColor=BACKGROUND;}
+                @Override protected void paintThumb(Graphics g, JComponent c, Rectangle thumbBounds) {
+                    if (thumbBounds.width <= 0 || thumbBounds.height <= 0) return;
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    try {
+                        g2.setColor(Color.WHITE);
+                        g2.fillRoundRect(thumbBounds.x, thumbBounds.y, thumbBounds.width, thumbBounds.height, 6, 6);
+                    } finally {
+                        g2.dispose();
+                    }
+                }
                 @Override protected JButton createDecreaseButton(int orientation){return zeroButton();}
                 @Override protected JButton createIncreaseButton(int orientation){return zeroButton();}
                 private JButton zeroButton(){JButton button=new JButton();button.setPreferredSize(new Dimension(0,0));button.setMinimumSize(new Dimension(0,0));button.setMaximumSize(new Dimension(0,0));return button;}
