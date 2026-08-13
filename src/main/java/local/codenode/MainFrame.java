@@ -429,7 +429,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.workbenchTabs = new JTabbedPane();
         this.workbenchTabs.addTab("节点图", canvasPanel);
         this.workbenchTabs.addTab("代码审查", this.reviewPanel());
-        this.agentChatPanel = new AgentChatPanel(this.agentChatController, this.agentConfig, this::openAgentSettings);
+        this.agentChatPanel = new AgentChatPanel(this.agentChatController, this.agentConfig, this::openAgentSettings, activity -> this.status.setText(activity == null || activity.isBlank() ? "  就绪" : "  Agent 正在执行：" + activity));
         this.workbenchTabs.addTab("内嵌 Agent", this.agentChatPanel);
         UiTheme.apply(this.workbenchTabs);
         this.editor = this.workbenchTabs;
@@ -1126,7 +1126,9 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         info.put("canvasNodes", model.nodes().size()); info.put("canvasEdges", model.edges().size());
         info.put("groups", model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.GROUP).count());
         info.put("assetBundles", model.nodes().stream().filter(n -> n.nodeKind == WorkflowModel.NodeKind.ASSET_BUNDLE).count());
-        info.put("selectedNodes", canvas.selected() == null ? 0 : 1); info.put("toolCount", agentTools == null ? 0 : agentTools.listTools().size());
+        info.put("selectedNodes", canvas.selected() == null ? 0 : 1); info.put("selectedNodeId", canvas.selected() == null ? "" : canvas.selected().id);
+        info.put("workbenchTab", workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()); info.put("documentTab", documentTabs == null ? -1 : documentTabs.getSelectedIndex());
+        info.put("windowWidth", getWidth()); info.put("windowHeight", getHeight()); info.put("toolCount", agentTools == null ? 0 : agentTools.listTools().size());
         info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state"));
         return info;
     }
@@ -1196,6 +1198,16 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.refreshDocumentTitle();
         this.status.setText((String)(this.projectReadOnly ? "  使用更高格式版本，只读打开" : "  已加载  |  " + String.valueOf(file)));
         this.canvas.repaint();
+    }
+
+    private Map<String, Object> uiStateSnapshot() {
+        LinkedHashMap<String, Object> state = new LinkedHashMap<>();
+        state.put("workbenchTab", workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex());
+        state.put("documentTab", documentTabs == null ? -1 : documentTabs.getSelectedIndex());
+        state.put("width", getWidth()); state.put("height", getHeight());
+        state.put("selectedNode", canvas.selected() == null ? "" : canvas.selected().id);
+        state.put("runConfig", projectRunPanel == null ? Map.of() : projectRunPanel.runConfigSnapshot());
+        return state;
     }
 
     private void agentUiAction(String action, Map<String, Object> arguments) {
@@ -1307,14 +1319,17 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 case "close_document": { closeDocument(documentTabs.getSelectedIndex()); break; }
                 case "save_document": { saveProject(); break; }
                 case "select_node": { String id = String.valueOf(arguments.getOrDefault("nodeId", "")); WorkflowModel.Node selected = model.byId(id); if (selected != null) canvas.select(selected); break; }
-                case "read_ui_state": { append("[Agent UI] tab=" + (workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()) + " size=" + getWidth() + "x" + getHeight()); break; }
+                case "read_ui_state": { append("[Agent UI] " + uiStateSnapshot()); break; }
                 case "open_menu": { dispatchMenuAction(String.valueOf(arguments.getOrDefault("menu", ""))); break; }
                 case "dock_panel": { dockAgentPanel(String.valueOf(arguments.getOrDefault("panel", "")), String.valueOf(arguments.getOrDefault("position", ""))); break; }
                 case "run_config", "build_project", "run_project", "stop_run": {
                     openProjectRun();
                     if (this.projectRunPanel != null) {
-                        if ("build_project".equals(action)) this.projectRunPanel.requestBuild();
-                        else if ("run_project".equals(action) || "run_config".equals(action)) this.projectRunPanel.requestRun();
+                        if ("run_config".equals(action)) {
+                            this.projectRunPanel.applyRunConfig(arguments);
+                            append("[Agent UI] 运行配置=" + this.projectRunPanel.runConfigSnapshot());
+                        } else if ("build_project".equals(action)) this.projectRunPanel.requestBuild();
+                        else if ("run_project".equals(action)) this.projectRunPanel.requestRun();
                         else this.projectRunPanel.requestStop();
                     }
                     break;
@@ -2602,9 +2617,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
 
     private boolean confirmAgentTool(local.codenode.agent.tools.AgentToolContext.ConfirmationLevel level, String what, String detail) {
-        // 低/中风险：项目内常规操作直接放行，不打扰用户（记录审计）
-        if (level == local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.LOW
-                || level == local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.WRITE) {
+        // 只读低风险操作直接放行；WRITE/EXECUTE/UI 是否确认由 agent.permissions 决定。
+        if (level == local.codenode.agent.tools.AgentToolContext.ConfirmationLevel.LOW) {
             this.append("[Agent] " + what);
             return true;
         }

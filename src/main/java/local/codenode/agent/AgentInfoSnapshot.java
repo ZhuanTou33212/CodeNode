@@ -10,7 +10,7 @@ import java.util.Map;
 /** A bounded, deliberately allow-listed snapshot injected into the Agent harness. */
 public final class AgentInfoSnapshot {
     public static final int MAX_CHARS = 256_000;
-    private static final String[] ALLOWED = {"version", "formatVersion", "mode", "language", "projectRoot", "projectName", "openDocuments", "currentDocument", "canvasNodes", "canvasEdges", "groups", "assetBundles", "selectedNodes", "toolCount", "jdk", "gradle", "maven", "uiActions", "capturedAt"};
+    private static final String[] ALLOWED = {"version", "formatVersion", "mode", "language", "projectRoot", "projectName", "openDocuments", "currentDocument", "canvasNodes", "canvasEdges", "groups", "assetBundles", "selectedNodes", "selectedNodeId", "workbenchTab", "documentTab", "windowWidth", "windowHeight", "toolCount", "jdk", "gradle", "maven", "uiActions", "capturedAt"};
     private final Map<String, Object> values;
 
     public AgentInfoSnapshot(Map<String, ?> software, Map<String, ?> environment) {

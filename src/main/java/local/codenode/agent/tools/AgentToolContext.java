@@ -32,6 +32,7 @@ public final class AgentToolContext {
     private java.util.function.Supplier<String> permissionSupplier = () -> "";
     private final AtomicBoolean toolStopRequested = new AtomicBoolean(false);
     private final PermissionMemory permissionMemory = new PermissionMemory();
+    private volatile boolean rememberApprovals = true;
     private final AgentResultStore resultStore = new AgentResultStore();
 
     public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
@@ -92,11 +93,24 @@ public final class AgentToolContext {
      * 低风险（项目内 write_file 等）默认放行。确认文案用自然语言解释"在做什么"。
      */
     public boolean confirm(ConfirmationLevel level, String what, String detail) {
-        if (level == ConfirmationLevel.UI && permissionMode("ui").matches("deny|disabled|off")) return false;
-        if (this.confirmation == null) {
-            return true;
+        if (!permissionAllowed("system")) return false;
+        String category = switch (level) {
+            case UI -> "ui";
+            case WRITE -> "write";
+            case HIGH -> "execute";
+            case LOW -> "read";
+        };
+        String mode = permissionMode(category);
+        if (mode.matches("deny|disabled|off")) return false;
+        if (mode.matches("allow|enabled") || level == ConfirmationLevel.LOW) return true;
+        String signature = PermissionMemory.signature(category + ":" + level, what + "\n" + detail);
+        if (rememberApprovals) {
+            Boolean remembered = permissionMemory.get(signature);
+            if (remembered != null) return remembered;
         }
-        return this.confirmation.confirm(level, what, detail);
+        boolean allowed = this.confirmation == null || this.confirmation.confirm(level, what, detail);
+        if (rememberApprovals) permissionMemory.remember(signature, allowed);
+        return allowed;
     }
 
     public void setPermissionSupplier(java.util.function.Supplier<String> supplier) { this.permissionSupplier = supplier == null ? () -> "" : supplier; }
@@ -106,7 +120,7 @@ public final class AgentToolContext {
         for (String item : raw.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) return pair[1].trim().toLowerCase(java.util.Locale.ROOT); }
         return "";
     }
-    private boolean permissionAllowed(String category) {
+    public boolean permissionAllowed(String category) {
         String raw = permissionSupplier.get();
         if (raw == null || raw.isBlank()) return true;
         for (String item : raw.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) { String value = pair[1].trim().toLowerCase(java.util.Locale.ROOT); return value.equals("allow") || value.equals("enabled") || value.equals("confirm"); } }
@@ -236,6 +250,8 @@ public final class AgentToolContext {
     public void clearToolStop() { toolStopRequested.set(false); }
     public boolean toolStopRequested() { return toolStopRequested.get(); }
     public PermissionMemory permissionMemory() { return permissionMemory; }
+    public void setRememberApprovals(boolean remember) { this.rememberApprovals = remember; if (!remember) permissionMemory.clear(); }
+    public boolean rememberApprovals() { return rememberApprovals; }
     public AgentResultStore resultStore() { return resultStore; }
 
     /** 文件变更通知器（Agent 写/改/删文件后回调）。 */

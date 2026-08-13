@@ -383,6 +383,7 @@ public final class AgentChatController {
                 } catch (Exception toolFailure) {
                     result = AgentToolResult.error("工具执行异常: " + toolFailure.getMessage());
                 }
+                listener.onEvent(ChatEvent.state(AgentProvider.SessionState.ACTIVE_RUNNING));
                 String resultText = result.ok() ? result.text() : "失败：" + result.text();
                 String resultId = this.toolContext.resultStore().store(name, result);
                 String structured = this.toolContext.resultStore().modelPayload(resultId, name, result, MAX_TOOL_RESULT_CHARS);
@@ -552,6 +553,7 @@ public final class AgentChatController {
     }
 
     public void requestToolStop() { this.toolContext.requestToolStop(); }
+    public void setRememberApprovals(boolean remember) { this.toolContext.setRememberApprovals(remember); }
     public AgentInfoSnapshot infoSnapshot() { return AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider());
     }
 

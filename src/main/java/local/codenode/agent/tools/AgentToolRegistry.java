@@ -34,6 +34,9 @@ public final class AgentToolRegistry {
     }
 
     public AgentToolResult execute(String name, Map<String, Object> arguments, AgentToolContext context) {
+        if (context != null && !context.permissionAllowed("system")) {
+            return AgentToolResult.error("Agent 工具总开关已关闭（agent.permissions system:disabled）");
+        }
         RegisteredTool tool = tools.get(name);
         if (tool == null) return AgentToolResult.error("未知工具：" + name);
         try {

@@ -28,12 +28,15 @@ public final class AgentChatPanel extends JPanel {
     private final AgentChatController controller;
     private final AgentConfig config;
     private final Runnable openSettings;
+    private final java.util.function.Consumer<String> activitySink;
 
     private final JTextPane transcript = new JTextPane();
     private final StyledDocument document;
     private final JTextArea input = new JTextArea(2, 20);
     private final JButton send = new JButton("发送");
     private final JButton stop = new JButton("停止");
+    private final JButton cancelTool = new JButton("取消当前工具");
+    private final JCheckBox rememberApprovals = new JCheckBox("本次会话记住批准", true);
     private final JComboBox<String> model = new JComboBox<>();
     private final JLabel status = new JLabel("空闲");
     private final JLabel context = new JLabel(" ");
@@ -44,10 +47,16 @@ public final class AgentChatPanel extends JPanel {
     private final ChatListener listener = event -> SwingUtilities.invokeLater(() -> onEvent(event));
 
     public AgentChatPanel(AgentChatController controller, AgentConfig config, Runnable openSettings) {
+        this(controller, config, openSettings, activity -> {});
+    }
+
+    public AgentChatPanel(AgentChatController controller, AgentConfig config, Runnable openSettings,
+                          java.util.function.Consumer<String> activitySink) {
         super(new BorderLayout());
         this.controller = controller;
         this.config = config;
         this.openSettings = openSettings;
+        this.activitySink = activitySink == null ? activity -> {} : activitySink;
         this.timelinePanel = new AgentTimelinePanel(controller.timeline());
         this.workspaceBar = new WorkspaceContextBar(this::projectPath, this::setProjectPath);
         setBackground(UiTheme.PANEL);
@@ -156,14 +165,18 @@ public final class AgentChatPanel extends JPanel {
         });
         inputRow.add(input, BorderLayout.CENTER);
 
-        JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0));
+        JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
         buttons.setOpaque(false);
         send.setFocusPainted(false);
         send.addActionListener(e -> doSend());
         stop.setFocusPainted(false);
         stop.setEnabled(false);
         stop.addActionListener(e -> controller.requestStop());
+        cancelTool.setFocusPainted(false);
+        cancelTool.setEnabled(false);
+        cancelTool.addActionListener(e -> controller.requestToolStop());
         buttons.add(send);
+        buttons.add(cancelTool);
         buttons.add(stop);
         inputRow.add(buttons, BorderLayout.EAST);
 
@@ -174,6 +187,11 @@ public final class AgentChatPanel extends JPanel {
         status.setForeground(UiTheme.MUTED);
         status.setFont(status.getFont().deriveFont(11f));
         statusRow.add(status, BorderLayout.WEST);
+        rememberApprovals.setOpaque(false);
+        rememberApprovals.setForeground(UiTheme.MUTED);
+        rememberApprovals.setFont(rememberApprovals.getFont().deriveFont(11f));
+        rememberApprovals.addActionListener(e -> controller.setRememberApprovals(rememberApprovals.isSelected()));
+        statusRow.add(rememberApprovals, BorderLayout.CENTER);
         context.setForeground(UiTheme.MUTED);
         context.setFont(context.getFont().deriveFont(11f));
         statusRow.add(context, BorderLayout.EAST);
@@ -272,10 +290,14 @@ public final class AgentChatPanel extends JPanel {
 
     private void updateState(String stateName, String activity) {
         boolean running = "ACTIVE_RUNNING".equals(stateName) || "ACTIVE_CANCELLED".equals(stateName);
+        boolean toolActive = activity != null && !activity.isBlank();
         status.setText("IDLE".equals(stateName) ? "空闲"
+                : toolActive ? "Agent 正在执行：" + activity
                 : "ACTIVE_RUNNING".equals(stateName) ? "生成中…" : stateName);
         send.setEnabled(!running);
         stop.setEnabled(running);
+        cancelTool.setEnabled(running && toolActive);
+        activitySink.accept(toolActive ? activity : "");
     }
 
     private void append(String text, Color color) {

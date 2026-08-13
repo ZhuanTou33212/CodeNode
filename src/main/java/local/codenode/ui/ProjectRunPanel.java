@@ -202,6 +202,22 @@ public final class ProjectRunPanel extends JPanel implements Scrollable {
     }
 
     /** Agent/UI action entry points. */
+    public Map<String, Object> runConfigSnapshot() {
+        return Map.of(
+                "projectPath", projectPath.getText(),
+                "mainClass", String.valueOf(mainClass.getSelectedItem()),
+                "buildTask", String.valueOf(taskCombo.getSelectedItem()),
+                "runTask", String.valueOf(runTaskCombo.getSelectedItem()),
+                "trace", traceCheck.isSelected());
+    }
+    public void applyRunConfig(Map<String, Object> config) {
+        if (config == null) return;
+        Object path = config.get("path"); if (path != null && !String.valueOf(path).isBlank()) setProjectPath(String.valueOf(path));
+        Object main = config.get("mainClass"); if (main != null) mainClass.setSelectedItem(String.valueOf(main));
+        Object buildTask = config.get("buildTask"); if (buildTask != null) taskCombo.setSelectedItem(String.valueOf(buildTask));
+        Object runTask = config.get("runTask"); if (runTask != null) runTaskCombo.setSelectedItem(String.valueOf(runTask));
+        Object trace = config.get("trace"); if (trace instanceof Boolean enabled) traceCheck.setSelected(enabled);
+    }
     public void requestBuild() { buildProject(); }
     public void requestRun() { runProject(); }
     public void requestStop() {
