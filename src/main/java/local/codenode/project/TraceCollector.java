@@ -1,6 +1,8 @@
 package local.codenode.project;
 
 import jdk.jfr.consumer.RecordedEvent;
+import jdk.jfr.consumer.RecordedFrame;
+import jdk.jfr.consumer.RecordedStackTrace;
 import jdk.jfr.consumer.RecordingFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,10 +36,9 @@ public final class TraceCollector {
                         Object method = event.getValue("method");
                         if (method != null) methodName = method.toString();
                     } catch (RuntimeException ignored) {
-                        try {
-                            Object stack = event.getValue("stackTrace");
-                            if (stack != null) methodName = stack.toString();
-                        } catch (RuntimeException ignoredAgain) { }
+                        // JDK 21 的 jdk.ExecutionSample 没有 method 字段（字段为 startTime/sampledThread/stackTrace/state），
+                        // 回退到堆栈顶帧：取 "类.方法(描述符)" 作为方法名，保证人类可读。
+                        methodName = topFrameName(event);
                     }
                     methodSamples.merge(methodName, 1, Integer::sum);
                 } else if ("jdk.JavaExceptionThrow".equals(typeName)) {
@@ -62,5 +63,28 @@ public final class TraceCollector {
             result.put("traceError", "JFR 解析失败: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return result;
         }
+    }
+
+    /** 从执行采样事件的堆栈顶帧提取方法名（JDK 21 的 ExecutionSample 无 method 字段时的回退路径）。 */
+    private static String topFrameName(RecordedEvent event) {
+        try {
+            Object stack = event.getValue("stackTrace");
+            if (stack instanceof RecordedStackTrace trace) {
+                List<RecordedFrame> frames = trace.getFrames();
+                if (frames != null && !frames.isEmpty()) {
+                    RecordedFrame top = frames.getFirst();
+                    jdk.jfr.consumer.RecordedMethod method = top.getMethod();
+                    if (method != null) {
+                        String owner = method.getType() == null ? "" : method.getType().getName();
+                        String name = owner + "." + method.getName() + method.getDescriptor();
+                        int line = top.getLineNumber();
+                        return line > 0 ? name + " line:" + line : name;
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 保持 "(unknown)" 兜底
+        }
+        return "(unknown)";
     }
 }
