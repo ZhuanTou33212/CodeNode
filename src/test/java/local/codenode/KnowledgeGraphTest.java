@@ -39,4 +39,17 @@ class KnowledgeGraphTest {
         assertTrue(summary.refs().contains("src/App.java"));
         assertTrue(summary.keywords().contains("minecraft"));
     }
+
+    @Test void conflictingMetadataIsRecordedAndOnlyAppliedAfterResolution() {
+        KnowledgeGraph graph = new KnowledgeGraph();
+        KnowledgeGraph initial = new ConversationGraphParser().parse("# Auth\nUse provider A", "", "memory.md");
+        KnowledgeGraph update = new ConversationGraphParser().parse("# Auth\nUse provider B", "", "memory.md");
+        graph.merge(initial);
+        graph.merge(update);
+        var conflicts = graph.pendingConflicts();
+        assertFalse(conflicts.isEmpty());
+        var resolved = graph.resolveConflict(conflicts.getFirst().conflictId(), true);
+        assertEquals("accepted", resolved.status());
+        assertTrue(graph.get(conflicts.getFirst().elementId()).summary().contains("provider B"));
+    }
 }

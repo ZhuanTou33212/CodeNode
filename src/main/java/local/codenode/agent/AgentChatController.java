@@ -384,6 +384,16 @@ public final class AgentChatController {
         sb.append("21. 实时数据分析流程：先 scan_project 全量扫描 → write_analysis_md 生成架构 → runtime_trace/compile_run 依据实时运行输出判断应用了什么代码/程序/资产 → 再 write_analysis_md 更新总体架构 md 节点。\n");
         sb.append("长期知识规则：用户提供长文本或要求长期记住时调用 graph_summarize；查找既有知识先 graph_query，再用 graph_path 定位，禁止根据 DSL 名称猜测文件或工具参数。graph_* 返回的结构化字段才是调用依据。\n");
         KnowledgeGraph knowledge = this.toolContext.knowledgeGraph();
+        if (!knowledge.pendingConflicts().isEmpty()) {
+            sb.append("\n【待确认的长期知识冲突】\n");
+            for (KnowledgeGraph.Conflict conflict : knowledge.pendingConflicts()) {
+                sb.append("- ").append(conflict.conflictId()).append(" ").append(conflict.field())
+                        .append(": ").append(conflict.currentValue()).append(" -> ")
+                        .append(conflict.proposedValue()).append("; source ")
+                        .append(conflict.currentSource()).append(" -> ").append(conflict.proposedSource()).append('\n');
+            }
+            sb.append("不要宣称长期知识已更新；先向用户说明冲突，并使用 graph_conflicts/graph_resolve_conflict。\n");
+        }
         if (!knowledge.isEmpty()) sb.append("【当前项目长期知识】").append(knowledge.overview()).append("\n");
         List<TaskManager.Task> tasks = this.toolContext.taskManager().list();
         if (!tasks.isEmpty()) {

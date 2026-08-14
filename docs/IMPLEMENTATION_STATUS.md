@@ -11,6 +11,8 @@ Agent context work is complete: `.cnode` now persists multi-session schema v2 wh
 
 Implemented tools: `spawn_subagent`, `subagent_wait`, `subagent_list`, `subagent_cancel`, `todo_list`, `todo_add`, `todo_update`, and `todo_clear`. Tasks persist atomically under `.codenode/tasks/<documentId>.json` and are injected into the live harness. UI control also supports `new_agent_tab`, `close_agent_tab`, and `switch_agent_tab`.
 
+Memory conflict handling is now complete: knowledge elements carry source, capture time, and state; conflicting `graph_summarize` updates are blocked until confirmation; `graph_conflicts` and `graph_resolve_conflict` expose auditable accept/reject decisions; metadata and conflict history persist in `knowledge-meta.json` while legacy DSL projects remain readable.
+
 ---
 
 ## 一、阶段总览

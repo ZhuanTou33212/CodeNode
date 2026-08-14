@@ -3,6 +3,7 @@ package local.codenode.agent.knowledge;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.time.Instant;
 
 /** Converts long conversation text into a deterministic hierarchical graph without a network call. */
 public final class ConversationGraphParser {
@@ -16,10 +17,12 @@ public final class ConversationGraphParser {
         TextSummarizer.Summary whole = summarizer.summarize(value);
         String rootId = stableId("topic", whole.title(), value.hashCode());
         KnowledgeGraph graph = new KnowledgeGraph();
+        String source = sourceLocation == null || sourceLocation.isBlank() ? "conversation" : sourceLocation;
+        Instant capturedAt = Instant.now();
         List<String> rootKeywords = new ArrayList<>(whole.keywords());
         if (canvasContext != null && !canvasContext.isBlank()) rootKeywords.add("canvas");
         graph.put(new KnowledgeGraph.Element(rootId, whole.title(), whole.summary(), rootKeywords,
-                sourceLocation == null ? "conversation" : sourceLocation, "", List.of()));
+                source, "", List.of(), source, capturedAt, "active"));
         graph.addRoot(rootId);
         for (int i = 0; i < chunks.size(); i++) {
             String chunk = chunks.get(i);
@@ -29,14 +32,14 @@ public final class ConversationGraphParser {
             String location = (sourceLocation == null || sourceLocation.isBlank() ? "conversation" : sourceLocation)
                     + "#chunk=" + (i + 1);
             graph.put(new KnowledgeGraph.Element(id, summary.title(), summary.summary(),
-                    summary.keywords(), location, "", List.of()));
+                    summary.keywords(), location, "", List.of(), source, capturedAt, "active"));
             graph.connect(rootId, id);
         }
         if (canvasContext != null && !canvasContext.isBlank()) {
             TextSummarizer.Summary summary = summarizer.summarize(canvasContext);
             String id = stableId("canvas", summary.title(), canvasContext.hashCode());
             graph.put(new KnowledgeGraph.Element(id, "画布上下文", summary.summary(),
-                    summary.keywords(), "canvas", "", List.of()));
+                    summary.keywords(), "canvas", "", List.of(), "canvas", capturedAt, "active"));
             graph.connect(rootId, id);
         }
         return graph;

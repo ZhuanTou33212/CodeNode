@@ -80,7 +80,13 @@ public final class CnodeProjectCodec {
     }
     public KnowledgeGraph loadKnowledgeGraph(Path source) throws IOException {
         Map<String,byte[]> entries=readVerifiedArchive(source); byte[] data=entries.get("knowledge-graph.dsl");
-        return data==null ? new KnowledgeGraph() : KnowledgeGraph.parse(new String(data, StandardCharsets.UTF_8));
+        KnowledgeGraph graph = data==null ? new KnowledgeGraph() : KnowledgeGraph.parse(new String(data, StandardCharsets.UTF_8));
+        byte[] metadata = entries.get("knowledge-meta.json");
+        if (metadata != null) {
+            try { graph.applyMetadata(Json.object(new String(metadata, StandardCharsets.UTF_8))); }
+            catch (RuntimeException failure) { throw new IOException("knowledge-meta.json 鏃犳晥", failure); }
+        }
+        return graph;
     }
     public static byte[] encodeAgentContext(AgentContext context) { return context == null ? new byte[0] : context.toJsonBytes(); }
     public static AgentContext decodeAgentContext(byte[] bytes) throws IOException { if (bytes == null) throw new IOException("agent-context 为空"); try{return AgentContext.fromMap(Json.object(new String(bytes,StandardCharsets.UTF_8)));}catch(RuntimeException e){throw new IOException("agent-context 无效",e);} }
@@ -97,12 +103,7 @@ public final class CnodeProjectCodec {
         if (agentInfo != null) files.put("agent-info.json", agentInfo.toJsonBytes());
         if (knowledgeGraph != null && !knowledgeGraph.isEmpty()) {
             files.put("knowledge-graph.dsl", bytes(knowledgeGraph.toDsl()));
-            files.put("knowledge-meta.json", bytes(Json.stringify(Map.of(
-                    "schemaVersion", 1,
-                    "cache", true,
-                    "generatedAt", now.toString(),
-                    "elementCount", knowledgeGraph.size(),
-                    "roots", knowledgeGraph.roots()))));
+            files.put("knowledge-meta.json", bytes(Json.stringify(knowledgeGraph.toMetadataMap())));
         }
         files.put("integrity.json",bytes(Json.stringify(integrity(files))));
         try(OutputStream raw=Files.newOutputStream(target,StandardOpenOption.CREATE_NEW);ZipOutputStream zip=new ZipOutputStream(raw,StandardCharsets.UTF_8)){
