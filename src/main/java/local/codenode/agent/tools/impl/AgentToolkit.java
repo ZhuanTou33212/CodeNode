@@ -85,5 +85,7 @@ public final class AgentToolkit {
         BulkEditTool.register(registry);
         AnalyzeProjectTool.register(registry);
         GraphTools.register(registry);
+        TodoTools.register(registry);
+        SubagentTools.register(registry);
     }
 }

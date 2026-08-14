@@ -26,6 +26,20 @@ import java.util.zip.ZipFile;
 import static org.junit.jupiter.api.Assertions.*;
 
 class Stage49Test {
+    @Test void multiSessionContextRoundTripPreservesTabsAndFiltersSystemMessages() throws Exception {
+        AgentContext one = AgentContext.multi("s2", List.of(
+                new AgentContext.SessionContext("s1", "Conversation 1", "first", Instant.now(),
+                        List.of(Map.of("role", "system", "content", "secret prompt"), Map.of("role", "user", "content", "one"))),
+                new AgentContext.SessionContext("s2", "Review", "second", Instant.now(),
+                        List.of(Map.of("role", "assistant", "content", "two")))));
+        AgentContext restored = AgentContext.fromMap(Json.object(new String(one.toJsonBytes(), StandardCharsets.UTF_8)));
+        assertEquals(2, restored.allSessions().size());
+        assertEquals("s2", restored.activeSessionId());
+        assertEquals(List.of("Conversation 1", "Review"), restored.allSessions().stream().map(AgentContext.SessionContext::title).toList());
+        assertTrue(restored.allSessions().stream().flatMap(s -> s.messages().stream())
+                .noneMatch(m -> "system".equals(m.get("role"))));
+        assertTrue(restored.toJsonBytes().length <= AgentContext.MAX_CHARS);
+    }
     @TempDir Path temp;
 
     @Test
@@ -212,6 +226,6 @@ class Stage49Test {
 
     @Test
     void agentContextRejectsUnknownSchemaVersion() {
-        assertThrows(IllegalArgumentException.class, () -> AgentContext.fromMap(Map.of("schemaVersion", 2)));
+        assertThrows(IllegalArgumentException.class, () -> AgentContext.fromMap(Map.of("schemaVersion", 99)));
     }
 }

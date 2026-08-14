@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenode.local/schemas/agent-tasks-1.schema.json",
+  "title": "CodeNode agent task list",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "schemaVersion", "documentId", "tasks"],
+  "properties": {
+    "format": { "const": "codenode-tasks" },
+    "schemaVersion": { "const": 1 },
+    "documentId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "desc", "status", "note"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "desc": { "type": "string", "minLength": 1 },
+          "status": {
+            "enum": ["pending", "in_progress", "blocked", "done", "cancelled"]
+          },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

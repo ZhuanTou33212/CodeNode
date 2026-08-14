@@ -39,11 +39,13 @@ class MainFrameMultiProjectTest {
             assertFalse(toolContext(frame).knowledgeGraph().query("alphaknowledge", null).isEmpty());
 
             SwingUtilities.invokeAndWait(() -> frame.openProject(beta));
+            controller = field(frame, "agentChatController", AgentChatController.class);
             assertTrue(controller.messageHistory().stream().anyMatch(m -> String.valueOf(m.get("content")).contains("BetaKnowledge")));
             assertFalse(toolContext(frame).knowledgeGraph().query("betaknowledge", null).isEmpty());
             assertTrue(toolContext(frame).knowledgeGraph().query("alphaknowledge", null).isEmpty());
 
             SwingUtilities.invokeAndWait(() -> frame.openProject(alpha));
+            controller = field(frame, "agentChatController", AgentChatController.class);
             assertTrue(controller.messageHistory().stream().anyMatch(m -> String.valueOf(m.get("content")).contains("UNSAVED_ALPHA_MESSAGE")),
                     "reselecting an open tab must not reload stale disk context");
             assertFalse(toolContext(frame).knowledgeGraph().query("alphaknowledge", null).isEmpty());

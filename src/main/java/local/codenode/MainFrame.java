@@ -111,6 +111,8 @@ import local.codenode.ToolWindow;
 import local.codenode.UiTheme;
 import local.codenode.WorkflowModel;
 import local.codenode.agent.AgentChatController;
+import local.codenode.agent.AgentSessionManager;
+import local.codenode.agent.TaskManager;
 import local.codenode.agent.knowledge.KnowledgeGraph;
 import local.codenode.agent.AgentContext;
 import local.codenode.agent.AgentInfoSnapshot;
@@ -118,8 +120,8 @@ import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.impl.AgentToolkit;
+import local.codenode.ui.agent.AgentSessionPanel;
 import local.codenode.config.AgentConfig;
-import local.codenode.ui.agent.AgentChatPanel;
 import local.codenode.ui.settings.AgentSettingsPanel;
 
 public final class MainFrame extends JFrame implements SoftwareInfoProvider {
@@ -156,6 +158,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private final JTabbedPane documentTabs = new JTabbedPane();
     private final List<DocumentSession> documents = new ArrayList<DocumentSession>();
     private final KnowledgeGraph detachedKnowledgeGraph = new KnowledgeGraph();
+    private final TaskManager detachedTaskManager = new TaskManager();
     private int activeDocumentIndex = -1;
     private final CnodeProjectCodec projectCodec = new CnodeProjectCodec();
     private final CnodeRecoveryService recovery = new CnodeRecoveryService(this.projectCodec);
@@ -165,7 +168,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private AgentToolContext agentToolContext;
     private AgentToolRegistry agentTools;
     private AgentChatController agentChatController;
-    private AgentChatPanel agentChatPanel;
+    private AgentSessionManager agentSessionManager;
+    private AgentSessionPanel agentSessionPanel;
     private NodeControlApi nodeControlApi;
     private final Preferences preferences = Preferences.userNodeForPackage(MainFrame.class);
     private final List<Path> recentProjects = new ArrayList<Path>();
@@ -261,6 +265,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.agentToolContext.setSoftwareInfoProvider(this);
         this.agentToolContext.setPermissionSupplier(this.agentConfig::permissions);
         this.agentToolContext.setKnowledgeGraphSupplier(this::currentKnowledgeGraph);
+        this.agentToolContext.setTaskManagerSupplier(this::currentTaskManager);
         this.agentToolContext.setQuestionHandler((question, options) -> {
             String[] result = new String[]{""};
             try {
@@ -275,7 +280,9 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             return result[0];
         });
         this.agentTools = AgentToolkit.buildDefaultRegistry(this.agentToolContext, this.agentConfig);
-        this.agentChatController = new AgentChatController(this.agentConfig, this.agentTools, this.agentToolContext);
+        this.agentSessionManager = new AgentSessionManager(() ->
+                new AgentChatController(this.agentConfig, this.agentTools, this.agentToolContext));
+        this.agentChatController = this.agentSessionManager.activeSession().controller();
         this.agentToolContext.setConversationSupplier(this.agentChatController::messageHistory);
         this.agentToolContext.setFileChangeNotifier((relative, kind, detail) -> SwingUtilities.invokeLater(() -> {
             if (this.fileChangePanel != null) {
@@ -434,8 +441,12 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.workbenchTabs = new JTabbedPane();
         this.workbenchTabs.addTab("节点图", canvasPanel);
         this.workbenchTabs.addTab("代码审查", this.reviewPanel());
-        this.agentChatPanel = new AgentChatPanel(this.agentChatController, this.agentConfig, this::openAgentSettings, activity -> this.status.setText(activity == null || activity.isBlank() ? "  就绪" : "  Agent 正在执行：" + activity));
-        this.workbenchTabs.addTab("内嵌 Agent", this.agentChatPanel);
+        // Document-scoped multi-session Agent workbench.
+        this.agentSessionPanel = new AgentSessionPanel(this.agentSessionManager, this.agentConfig,
+                this::openAgentSettings,
+                activity -> this.status.setText(activity == null || activity.isBlank() ? "  就绪" : "  Agent 正在执行：" + activity),
+                this::setActiveAgentController);
+        this.workbenchTabs.addTab("内嵌 Agent", this.agentSessionPanel);
         UiTheme.apply(this.workbenchTabs);
         this.editor = this.workbenchTabs;
         this.editor.setMinimumSize(new Dimension(260, 220));
@@ -460,6 +471,15 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.canvas.onFileDropped((file, point) -> this.dropFileToCanvas(file, point));
         this.rebuildDockLayout();
         return this.dockRoot;
+    }
+
+    /** Keep tool callbacks bound to the currently selected conversation tab. */
+    private void setActiveAgentController(AgentChatController controller) {
+        if (controller == null) return;
+        this.agentChatController = controller;
+        if (this.agentToolContext != null) {
+            this.agentToolContext.setConversationSupplier(controller::messageHistory);
+        }
     }
 
     private void dock(ToolWindow tool, ToolWindow.DockRequest request) {
@@ -1108,7 +1128,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         info.put("selectedNodes", canvas.selectedNodes().size()); info.put("selectedNodeId", canvas.selected() == null ? "" : canvas.selected().id);
         info.put("workbenchTab", workbenchTabs == null ? -1 : workbenchTabs.getSelectedIndex()); info.put("documentTab", documentTabs == null ? -1 : documentTabs.getSelectedIndex());
         info.put("windowWidth", getWidth()); info.put("windowHeight", getHeight()); info.put("toolCount", agentTools == null ? 0 : agentTools.listTools().size());
-        info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","new_content","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state"));
+        info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","new_content","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state","new_agent_tab","close_agent_tab","switch_agent_tab"));
         info.put("runConfig", projectRunPanel == null ? Map.of() : projectRunPanel.runConfigSnapshot());
         info.put("panelVisibility", panelVisibility());
         info.put("capturedAt", Instant.now().toString());
@@ -1126,6 +1146,20 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 "changes", panelState(changeTool),
                 "queue", panelState(queueTool),
                 "projectRun", Map.of("visible", panelVisible(inspectorTool) && inspectorTabs != null && inspectorTabs.getSelectedIndex() == 1, "floating", inspectorTool != null && inspectorTool.isFloating()));
+    }
+
+    private TaskManager currentTaskManager() {
+        DocumentSession session = currentDocument();
+        return session == null ? detachedTaskManager : session.taskManager;
+    }
+
+    private void bindCurrentTaskManager() {
+        DocumentSession session = currentDocument();
+        if (session == null || session.taskManager.isBound()) return;
+        Path root = session.file == null ? null : session.file.getParent();
+        if (root == null || session.documentId == null || session.documentId.isBlank()) return;
+        try { session.taskManager.bind(root, session.documentId); }
+        catch (Exception failure) { append("[Agent] 任务清单加载失败：" + failure.getMessage()); }
     }
 
     private static Map<String, Object> panelState(ToolWindow panel) {
@@ -1163,8 +1197,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 if (session != null) {
                     session.agentContext = this.projectCodec.loadAgentContext(file).orElse(null);
                     session.knowledgeGraph = this.projectCodec.loadKnowledgeGraph(file);
-                    this.agentChatController.restoreContext(session.agentContext);
-                    if (this.agentChatPanel != null) this.agentChatPanel.showContext(session.agentContext);
+                    if (this.agentSessionPanel != null) this.agentSessionPanel.restoreContext(session.agentContext);
                 }
             } catch (Exception contextFailure) {
                 this.append("[Agent] 工程上下文恢复失败：" + contextFailure.getMessage());
@@ -1201,6 +1234,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         session.panY = settings.panY();
         session.zoom = settings.zoom();
         session.currentGroupId = settings.currentGroupId();
+        try { session.taskManager.bind(session.file.getParent(), session.documentId); }
+        catch (Exception taskFailure) { this.append("[Agent] 任务清单加载失败：" + taskFailure.getMessage()); }
         this.documents.add(session);
         int index = this.documents.size() - 1;
         String tabTitle = file.getFileName() == null ? "工程" : file.getFileName().toString();
@@ -1226,6 +1261,11 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         state.put("width", getWidth()); state.put("height", getHeight());
         state.put("selectedNode", canvas.selected() == null ? "" : canvas.selected().id);
         state.put("runConfig", projectRunPanel == null ? Map.of() : projectRunPanel.runConfigSnapshot());
+        state.put("agentSessions", agentSessionManager == null ? List.of() : agentSessionManager.sessions().stream()
+                .map(s -> Map.of("sessionId", s.sessionId(), "title", s.title(),
+                        "active", s.sessionId().equals(agentSessionManager.activeSession().sessionId())))
+                .toList());
+        state.put("tasks", currentTaskManager().list().stream().map(TaskManager.Task::toMap).toList());
         return state;
     }
 
@@ -1348,6 +1388,25 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
                 }
                 case "select_node": { String id = String.valueOf(arguments.getOrDefault("nodeId", "")); WorkflowModel.Node selected = model.byId(id); if (selected == null) throw new IllegalArgumentException("节点不存在：" + id); canvas.select(selected); break; }
                 case "read_ui_state": { append("[Agent UI] " + uiStateSnapshot()); break; }
+                case "new_agent_tab": {
+                    if (agentSessionPanel == null) throw new IllegalStateException("Agent session panel unavailable");
+                    agentSessionPanel.createSession();
+                    break;
+                }
+                case "close_agent_tab", "switch_agent_tab": {
+                    if (agentSessionPanel == null) throw new IllegalStateException("Agent session panel unavailable");
+                    String id = String.valueOf(arguments.getOrDefault("tab", ""));
+                    if (id.isBlank() && arguments.get("index") instanceof Number n) {
+                        int index = n.intValue();
+                        List<AgentSessionManager.AgentSession> tabs = agentSessionManager.sessions();
+                        if (index < 0 || index >= tabs.size()) throw new IllegalArgumentException("Invalid Agent tab index: " + index);
+                        id = tabs.get(index).sessionId();
+                    }
+                    boolean applied = "close_agent_tab".equals(action)
+                            ? agentSessionPanel.closeSession(id) : agentSessionPanel.activateSession(id);
+                    if (!applied) throw new IllegalArgumentException("Agent tab action failed: " + id);
+                    break;
+                }
                 case "open_menu": { dispatchMenuAction(String.valueOf(arguments.getOrDefault("menu", ""))); break; }
                 case "dock_panel": { dockAgentPanel(String.valueOf(arguments.getOrDefault("panel", "")), String.valueOf(arguments.getOrDefault("position", ""))); break; }
                 case "run_config", "build_project", "run_project", "stop_run": {
@@ -1477,7 +1536,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             target = target.toAbsolutePath().normalize();
             this.saveInspector();
             this.storeActiveOutput();
-            AgentContext context = this.agentChatController.snapshotContext();
+            AgentContext context = this.agentSessionManager.snapshot();
             this.projectCodec.save(target, this.model, this.metadata(this.projectName(target)), context,
                     this.agentChatController.infoSnapshot(), this.currentKnowledgeGraph());
             this.currentProjectFile = target;
@@ -1490,6 +1549,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             DocumentSession session = this.currentDocument();
             if (session != null) {
                 session.file = target;
+                this.bindCurrentTaskManager();
                 session.dirty = false;
                 session.executableOutput = this.executableOutput;
                 session.markdownOutput = this.markdownOutput;
@@ -1521,7 +1581,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.storeActiveOutput();
             Path root = this.currentProjectFile.getParent();
             this.recovery.saveCheckpoint(root, this.model, this.metadata());
-            AgentContext context = this.agentChatController.snapshotContext();
+            AgentContext context = this.agentSessionManager.snapshot();
             this.projectCodec.save(this.currentProjectFile, this.model, this.metadata(), context,
                     this.agentChatController.infoSnapshot(), this.currentKnowledgeGraph());
             DocumentSession session = this.currentDocument();
@@ -1623,7 +1683,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         if (projectDir == null) {
             if (this.fileBrowserPanel != null) this.fileBrowserPanel.setRoot(null);
             if (this.projectRunPanel != null) this.projectRunPanel.setProjectPathSilent("");
-            if (this.agentChatPanel != null) this.agentChatPanel.setProjectPath("");
+            if (this.agentSessionPanel != null) this.agentSessionPanel.setProjectPath("");
             return;
         }
         Path root = projectDir.toAbsolutePath().normalize();
@@ -1634,8 +1694,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.projectRunPanel.setProjectPathSilent(root.toString());
         }
         // Agent 工作环境随当前项目迁移（不再使用写死的默认路径）
-        if (this.agentChatPanel != null) {
-            this.agentChatPanel.setProjectPath(root.toString());
+        if (this.agentSessionPanel != null) {
+            this.agentSessionPanel.setProjectPath(root.toString());
         }
     }
 
@@ -3068,6 +3128,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         double zoom = 1.0;
         String currentGroupId = "";
         KnowledgeGraph knowledgeGraph = new KnowledgeGraph();
+        TaskManager taskManager = new TaskManager();
         List<String> selectedNodeIds = List.of();
     }
 
@@ -3135,8 +3196,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.displayedMode = session.mode;
             this.mode.setSelectedItem((Object)session.mode);
             this.output.setText(session.mode == WorkflowModel.Mode.EXECUTABLE ? session.executableOutput : session.markdownOutput);
-            this.agentChatController.restoreContext(session.agentContext);
-            if (this.agentChatPanel != null) this.agentChatPanel.showContext(session.agentContext);
+            if (this.agentSessionPanel != null) this.agentSessionPanel.restoreContext(session.agentContext);
+            this.bindCurrentTaskManager();
             this.loadInspector(null);
             this.refreshDocumentTitle();
         } finally {
@@ -3175,8 +3236,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             this.queue = null;
             this.results = null;
             this.syncProjectPanels(null);
-            this.agentChatController.restoreContext(null);
-            if (this.agentChatPanel != null) this.agentChatPanel.showContext(null);
+            if (this.agentSessionPanel != null) this.agentSessionPanel.restoreContext(null);
             this.canvas.repaint();
             this.status.setText("  无打开的文档  |  新建或打开项目");
             return true;
@@ -3210,6 +3270,6 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         session.zoom = this.canvas.zoom();
         session.currentGroupId = this.canvas.currentGroupId();
         session.selectedNodeIds = this.selectedNodeIds();
-        session.agentContext = this.agentChatController.snapshotContext();
+        session.agentContext = this.agentSessionManager.snapshot();
     }
 }

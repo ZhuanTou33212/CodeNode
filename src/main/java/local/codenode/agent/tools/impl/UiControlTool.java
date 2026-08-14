@@ -9,7 +9,7 @@ import local.codenode.agent.tools.AgentToolResult;
 
 /** Full UI action gateway for the embedded Agent. */
 public final class UiControlTool {
-    private static final java.util.Set<String> ACTIONS = java.util.Set.of("view_all", "focus", "zoom", "pan", "resize", "toggle_panel", "new_content", "switch_tab", "open_document", "close_document", "save_document", "dock_panel", "run_config", "build_project", "run_project", "stop_run", "select_node", "open_menu", "read_ui_state");
+    private static final java.util.Set<String> ACTIONS = java.util.Set.of("view_all", "focus", "zoom", "pan", "resize", "toggle_panel", "new_content", "switch_tab", "open_document", "close_document", "save_document", "dock_panel", "run_config", "build_project", "run_project", "stop_run", "select_node", "open_menu", "read_ui_state", "new_agent_tab", "close_agent_tab", "switch_agent_tab");
     private static final java.util.Set<String> ARGUMENTS = java.util.Set.of("action","nodeId","x","y","zoom","width","height","name","panel","tab","index","path","position","menu","mainClass","buildTask","runTask","trace");
     private UiControlTool() {}
     public static void register(AgentToolRegistry registry) {
@@ -26,7 +26,7 @@ public final class UiControlTool {
         if (validation != null) return AgentToolResult.error(validation);
         if (!context.permissionAllowed("ui")) return AgentToolResult.error("UI 操作总开关已关闭：" + action);
         if (context.toolStopRequested()) return AgentToolResult.error("界面操控已取消");
-        AgentToolContext.ConfirmationLevel level = java.util.Set.of("open_document", "close_document", "save_document", "dock_panel", "build_project", "run_project", "open_menu").contains(action)
+        AgentToolContext.ConfirmationLevel level = java.util.Set.of("open_document", "close_document", "save_document", "dock_panel", "build_project", "run_project", "open_menu", "close_agent_tab").contains(action)
                 ? AgentToolContext.ConfirmationLevel.HIGH : AgentToolContext.ConfirmationLevel.UI;
         String detail = "Agent 请求执行 UI 动作；参数=" + arguments + "；可在 agent.permissions 中配置权限。";
         if (!context.confirm(level, "操控 CodeNode 界面：" + action, detail)) return AgentToolResult.error("UI 操作未获权限：" + action);
@@ -52,6 +52,8 @@ public final class UiControlTool {
         if ("pan".equals(action) && (!(arguments.get("x") instanceof Number) || !(arguments.get("y") instanceof Number))) return "pan 缺少整数 x/y";
         if ("resize".equals(action) && (!(arguments.get("width") instanceof Number) || !(arguments.get("height") instanceof Number))) return "resize 缺少整数 width/height";
         if ("switch_tab".equals(action) && !(arguments.get("index") instanceof Number) && blank(arguments, "tab")) return "switch_tab 缺少 index 或 tab";
+        if (java.util.Set.of("close_agent_tab", "switch_agent_tab").contains(action)
+                && !(arguments.get("index") instanceof Number) && blank(arguments, "tab")) return action + " requires index or tab";
         return null;
     }
 

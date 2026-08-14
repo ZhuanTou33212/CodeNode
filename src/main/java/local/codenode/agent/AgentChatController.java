@@ -64,6 +64,7 @@ public final class AgentChatController {
     private String sessionSummary = "";
     private volatile AgentProvider.SessionState state = AgentProvider.SessionState.IDLE;
     private volatile boolean stopRequested;
+    private SubagentManager subagents;
 
     public AgentChatController(AgentConfig config, AgentToolRegistry tools, AgentToolContext toolContext) {
         this.config = config;
@@ -90,6 +91,47 @@ public final class AgentChatController {
 
     public String sessionId() {
         return this.sessionId;
+    }
+
+    /** Background agents owned by this chat tab. */
+    public synchronized SubagentManager subagentManager() {
+        if (subagents == null) subagents = new SubagentManager(this::runSubagent);
+        return subagents;
+    }
+
+    private String runSubagent(String task, String relevantContext, SubagentManager.Cancellation cancellation) throws Exception {
+        AgentChatController child = new AgentChatController(config, tools, toolContext);
+        java.util.concurrent.CompletableFuture<String> result = new java.util.concurrent.CompletableFuture<>();
+        StringBuilder streamed = new StringBuilder();
+        String prompt = task + (relevantContext == null || relevantContext.isBlank() ? ""
+                : "\n\nRelevant context supplied by the parent agent:\n" + relevantContext);
+        child.sendMessage(prompt, event -> {
+            if (event.kind() == ChatEventKind.STREAM) streamed.append(event.text());
+            else if (event.kind() == ChatEventKind.ERROR) result.completeExceptionally(new IllegalStateException(event.error()));
+            else if (event.kind() == ChatEventKind.CANCELLED) result.completeExceptionally(new InterruptedException("subagent cancelled"));
+            else if (event.kind() == ChatEventKind.STATE && event.state() == AgentProvider.SessionState.IDLE) {
+                String text = streamed.toString().trim();
+                if (text.isBlank()) {
+                    List<Map<String, Object>> history = child.messageHistory();
+                    for (int i = history.size() - 1; i >= 0; i--) {
+                        Map<String, Object> message = history.get(i);
+                        if ("assistant".equals(message.get("role")) && message.get("content") != null) {
+                            text = String.valueOf(message.get("content")).trim(); break;
+                        }
+                    }
+                }
+                result.complete(text);
+            }
+        });
+        while (!result.isDone()) {
+            if (cancellation.isCancelled()) {
+                child.requestStop();
+                throw new InterruptedException("subagent cancelled");
+            }
+            try { return result.get(200, TimeUnit.MILLISECONDS); }
+            catch (TimeoutException ignored) { }
+        }
+        return result.get();
     }
 
     public void reset() {
@@ -343,6 +385,17 @@ public final class AgentChatController {
         sb.append("长期知识规则：用户提供长文本或要求长期记住时调用 graph_summarize；查找既有知识先 graph_query，再用 graph_path 定位，禁止根据 DSL 名称猜测文件或工具参数。graph_* 返回的结构化字段才是调用依据。\n");
         KnowledgeGraph knowledge = this.toolContext.knowledgeGraph();
         if (!knowledge.isEmpty()) sb.append("【当前项目长期知识】").append(knowledge.overview()).append("\n");
+        List<TaskManager.Task> tasks = this.toolContext.taskManager().list();
+        if (!tasks.isEmpty()) {
+            sb.append("\n【当前文档任务清单】\n");
+            for (TaskManager.Task task : tasks) {
+                sb.append("- [").append(task.status()).append("] ").append(task.id()).append(": ")
+                        .append(task.desc());
+                if (!task.note().isBlank()) sb.append(" — ").append(task.note());
+                sb.append('\n');
+            }
+            sb.append("使用 todo_add/todo_update 维护复杂任务进度；不同对话标签共享此清单。\n");
+        }
         sb.append("\n").append(AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider()).toText()).append("\n");
         if (this.config.extraHarnessPrompt() != null && !this.config.extraHarnessPrompt().isBlank()) {
             sb.append("\n【用户自定义附加规则】\n").append(this.config.extraHarnessPrompt()).append("\n");
@@ -506,7 +559,11 @@ public final class AgentChatController {
      */
     private AgentToolResult executeToolWithTimeout(String name, Map<String, Object> args, long timeoutSeconds) {
         this.toolContext.clearToolStop();
-        Future<AgentToolResult> future = this.toolExecutor.submit(() -> this.tools.execute(name, args, this.toolContext));
+        Future<AgentToolResult> future = this.toolExecutor.submit(() -> {
+            this.toolContext.setSubagentManager(this.subagentManager());
+            try { return this.tools.execute(name, args, this.toolContext); }
+            finally { this.toolContext.setSubagentManager(null); }
+        });
         try {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
             while (true) {

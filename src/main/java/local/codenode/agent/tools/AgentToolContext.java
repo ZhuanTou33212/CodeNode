@@ -13,6 +13,8 @@ import local.codenode.agent.PermissionMemory;
 import local.codenode.agent.AgentResultStore;
 import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.agent.knowledge.KnowledgeGraph;
+import local.codenode.agent.TaskManager;
+import local.codenode.agent.SubagentManager;
 import local.codenode.WorkflowModel;
 
 public final class AgentToolContext {
@@ -36,6 +38,8 @@ public final class AgentToolContext {
     private volatile boolean rememberApprovals = true;
     private final AgentResultStore resultStore = new AgentResultStore();
     private Supplier<KnowledgeGraph> knowledgeGraphSupplier = KnowledgeGraph::new;
+    private Supplier<TaskManager> taskManagerSupplier = TaskManager::new;
+    private final ThreadLocal<SubagentManager> subagentManager = new ThreadLocal<>();
 
     public AgentToolContext(Supplier<Path> projectRootSupplier, Supplier<WorkflowModel> modelSupplier, ConfirmationHandler confirmation, AuditLogger audit) {
         this(projectRootSupplier, modelSupplier, confirmation, audit, null, null, null, null, null);
@@ -280,6 +284,20 @@ public final class AgentToolContext {
         KnowledgeGraph graph = knowledgeGraphSupplier.get();
         return graph == null ? new KnowledgeGraph() : graph;
     }
+
+    public void setTaskManagerSupplier(Supplier<TaskManager> supplier) {
+        this.taskManagerSupplier = supplier == null ? TaskManager::new : supplier;
+    }
+    public TaskManager taskManager() {
+        TaskManager manager = taskManagerSupplier.get();
+        return manager == null ? new TaskManager() : manager;
+    }
+
+    /** The owning controller binds this per worker thread so subagents stay isolated by chat tab. */
+    public void setSubagentManager(SubagentManager manager) {
+        if (manager == null) subagentManager.remove(); else subagentManager.set(manager);
+    }
+    public SubagentManager subagentManager() { return subagentManager.get(); }
 
     /** 文件变更通知器（Agent 写/改/删文件后回调）。 */
     @FunctionalInterface

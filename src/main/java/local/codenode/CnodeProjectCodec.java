@@ -79,7 +79,7 @@ public final class CnodeProjectCodec {
         catch(RuntimeException e){throw new IOException("agent-info.json 无效",e);}
     }
     public KnowledgeGraph loadKnowledgeGraph(Path source) throws IOException {
-        Map<String,byte[]> entries=readArchive(source); byte[] data=entries.get("knowledge-graph.dsl");
+        Map<String,byte[]> entries=readVerifiedArchive(source); byte[] data=entries.get("knowledge-graph.dsl");
         return data==null ? new KnowledgeGraph() : KnowledgeGraph.parse(new String(data, StandardCharsets.UTF_8));
     }
     public static byte[] encodeAgentContext(AgentContext context) { return context == null ? new byte[0] : context.toJsonBytes(); }

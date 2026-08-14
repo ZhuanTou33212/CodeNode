@@ -5,6 +5,12 @@
 > 验证：`mvnw test` **148 项全部通过**（25 个测试套件）；pom/打包版本 `0.1.5`，应用分支 `0.16`
 > 说明：本清单核对"文档规划"与"代码实际实现"，区分【已实现】【部分实现】【仅方案】
 
+## Stage 4.9 / 4.10 completion update (2026-08-13)
+
+Agent context work is complete: `.cnode` now persists multi-session schema v2 while reading legacy v1; document tabs isolate conversation, knowledge, and task state. The Agent workbench supports multiple independent conversation tabs with shared project tools, TaskManager, and KnowledgeGraph.
+
+Implemented tools: `spawn_subagent`, `subagent_wait`, `subagent_list`, `subagent_cancel`, `todo_list`, `todo_add`, `todo_update`, and `todo_clear`. Tasks persist atomically under `.codenode/tasks/<documentId>.json` and are injected into the live harness. UI control also supports `new_agent_tab`, `close_agent_tab`, and `switch_agent_tab`.
+
 ---
 
 ## 一、阶段总览
