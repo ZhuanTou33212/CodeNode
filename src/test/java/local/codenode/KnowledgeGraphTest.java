@@ -63,4 +63,21 @@ class KnowledgeGraphTest {
         graph.clear();
         assertTrue(graph.conflicts().isEmpty());
     }
+
+    @Test void summarizerLevelsControlPayloadSize() {
+        String text = "# Topic\n" + "alpha beta gamma ".repeat(150);
+        TextSummarizer summarizer = new TextSummarizer();
+        assertEquals("", summarizer.summarize(text, TextSummarizer.Level.NONE).summary());
+        assertTrue(summarizer.summarize(text, TextSummarizer.Level.MINIMAL).summary().length() <= 180);
+        assertTrue(summarizer.summarize(text, TextSummarizer.Level.VERBOSE).summary().length()
+                >= summarizer.summarize(text, TextSummarizer.Level.MINIMAL).summary().length());
+    }
+
+    @Test void metadataContainsLayerAndKeywordIndexes() {
+        KnowledgeGraph graph = new ConversationGraphParser().parse("# Root\n## Child\nkeyword", "", "index.md");
+        java.util.Map<String, Object> metadata = graph.toMetadataMap();
+        assertTrue(metadata.get("layerIndex") instanceof java.util.Map<?, ?>);
+        assertTrue(metadata.get("keywordIndex") instanceof java.util.Map<?, ?>);
+        assertEquals(graph.size(), metadata.get("elementCount"));
+    }
 }

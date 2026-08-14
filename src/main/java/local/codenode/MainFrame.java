@@ -122,6 +122,8 @@ import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.impl.AgentToolkit;
 import local.codenode.ui.agent.AgentSessionPanel;
 import local.codenode.config.AgentConfig;
+import local.codenode.project.JdkManager;
+import local.codenode.project.ToolLocator;
 import local.codenode.ui.settings.AgentSettingsPanel;
 
 public final class MainFrame extends JFrame implements SoftwareInfoProvider {
@@ -1131,6 +1133,12 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         info.put("uiActions", List.of("view_all","focus","zoom","pan","resize","toggle_panel","new_content","switch_tab","open_document","close_document","save_document","dock_panel","run_config","build_project","run_project","stop_run","select_node","open_menu","read_ui_state","new_agent_tab","close_agent_tab","switch_agent_tab"));
         info.put("runConfig", projectRunPanel == null ? Map.of() : projectRunPanel.runConfigSnapshot());
         info.put("panelVisibility", panelVisibility());
+        Map<String, Object> graph = currentKnowledgeGraph().toMap();
+        info.put("graphOverview", currentKnowledgeGraph().overview());
+        info.put("graphRoots", graph.getOrDefault("roots", List.of()));
+        info.put("graphElements", currentKnowledgeGraph().size());
+        Object keywordIndex = graph.get("keywordIndex");
+        info.put("graphKeywords", keywordIndex instanceof Map<?, ?> map ? map.size() : 0);
         info.put("capturedAt", Instant.now().toString());
         return info;
     }
@@ -1167,7 +1175,15 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     }
     @Override public Map<String, Object> environmentInfo() {
         LinkedHashMap<String, Object> info = new LinkedHashMap<>();
-        info.put("jdk", System.getProperty("java.version")); info.put("gradle", "tool directory"); info.put("maven", "wrapper"); return info;
+        info.put("jdk", System.getProperty("java.version"));
+        info.put("jdkHome", JdkManager.currentJdk().toString());
+        info.put("availableJdks", JdkManager.probe().stream().map(JdkManager.JdkInfo::version).toList());
+        info.put("toolsDir", ToolLocator.toolsDir().toString());
+        Path gradle = ToolLocator.gradle(); Path maven = ToolLocator.maven(); Path javac = ToolLocator.javac();
+        info.put("gradle", gradle == null ? "unavailable" : gradle.toString());
+        info.put("maven", maven == null ? "unavailable" : maven.toString());
+        info.put("javac", javac == null ? "unavailable" : javac.toString());
+        return info;
     }
     public NodeControlApi nodeControlApi() {
         return this.nodeControlApi;
@@ -2708,6 +2724,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.resultPollTimer.stop();
         this.autoSaveTimer.stop();
         this.codexAgent.close();
+        if (this.agentToolContext != null) this.agentToolContext.closeMemoryStore();
         for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.changeTool, this.queueTool}) {
             if (tool == null) continue;
             tool.shutdown();

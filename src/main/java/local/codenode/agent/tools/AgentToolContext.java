@@ -11,6 +11,7 @@ import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicBoolean;
 import local.codenode.agent.PermissionMemory;
 import local.codenode.agent.AgentResultStore;
+import local.codenode.agent.MemoryStore;
 import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.agent.knowledge.KnowledgeGraph;
 import local.codenode.agent.TaskManager;
@@ -37,6 +38,7 @@ public final class AgentToolContext {
     private final PermissionMemory permissionMemory = new PermissionMemory();
     private volatile boolean rememberApprovals = true;
     private final AgentResultStore resultStore = new AgentResultStore();
+    private final MemoryStore memoryStore = new MemoryStore();
     private Supplier<KnowledgeGraph> knowledgeGraphSupplier = KnowledgeGraph::new;
     private Supplier<TaskManager> taskManagerSupplier = TaskManager::new;
     private final ThreadLocal<SubagentManager> subagentManager = new ThreadLocal<>();
@@ -277,6 +279,13 @@ public final class AgentToolContext {
     public void setRememberApprovals(boolean remember) { this.rememberApprovals = remember; if (!remember) permissionMemory.clear(); }
     public boolean rememberApprovals() { return rememberApprovals; }
     public AgentResultStore resultStore() { return resultStore; }
+    /** Project-local durable Markdown memory plus a transient cache. */
+    public MemoryStore memoryStore() {
+        try { memoryStore.bind(projectRoot()); }
+        catch (java.io.IOException failure) { throw new IllegalStateException("本地记忆初始化失败：" + failure.getMessage(), failure); }
+        return memoryStore;
+    }
+    public void closeMemoryStore() { memoryStore.close(); }
     public void setKnowledgeGraphSupplier(Supplier<KnowledgeGraph> supplier) {
         this.knowledgeGraphSupplier = supplier == null ? KnowledgeGraph::new : supplier;
     }

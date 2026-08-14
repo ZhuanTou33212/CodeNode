@@ -289,6 +289,7 @@ public final class AgentChatController {
             try {
                 KnowledgeGraph fragment = new ConversationGraphParser().parse(source.toString(), "", "conversation:compacted");
                 this.toolContext.knowledgeGraph().merge(fragment);
+                this.toolContext.memoryStore().remember("conversation-compacted", local, "conversation:compacted");
                 this.toolContext.saveProject();
             } catch (RuntimeException ignored) { }
         }
@@ -389,6 +390,16 @@ public final class AgentChatController {
         sb.append("20. 需要操控软件本体（缩放/平移/聚焦/查看全部/调整窗口/切换面板/新建内容节点）用 ui_control；节点库按分类切换：资产类节点（图片/模型等）用软件现有预设（create_nodes nodeKind=asset/bundle），程序类用文件节点（nodeKind=file），所有文件节点创建时引用相对路径。\n");
         sb.append("21. 实时数据分析流程：先 scan_project 全量扫描 → write_analysis_md 生成架构 → runtime_trace/compile_run 依据实时运行输出判断应用了什么代码/程序/资产 → 再 write_analysis_md 更新总体架构 md 节点。\n");
         sb.append("长期知识规则：用户提供长文本或要求长期记住时调用 graph_summarize；查找既有知识先 graph_query，再用 graph_path 定位，禁止根据 DSL 名称猜测文件或工具参数。graph_* 返回的结构化字段才是调用依据。\n");
+        try {
+            List<MemoryStore.Entry> localMemory = this.toolContext.memoryStore().recall("", 3);
+            if (!localMemory.isEmpty()) {
+                sb.append("\n[Project Markdown memory]\n");
+                for (MemoryStore.Entry entry : localMemory) {
+                    sb.append("- ").append(entry.title()).append(": ")
+                            .append(truncate(entry.content().replaceAll("\\s+", " "), 420)).append('\n');
+                }
+            }
+        } catch (RuntimeException ignored) { }
         KnowledgeGraph knowledge = this.toolContext.knowledgeGraph();
         if (!knowledge.pendingConflicts().isEmpty()) {
             sb.append("\n【待确认的长期知识冲突】\n");

@@ -16,6 +16,7 @@ public final class CnodeProjectCodec {
     public static final String FORMAT_VERSION="1.1";
     public static final String MIME="application/vnd.codenode.project+zip";
     private static final int MAX_NODES=10_000,MAX_EDGES=50_000,MAX_ENTRY=20*1024*1024,MAX_TOTAL=100*1024*1024,MAX_PROMPT=1024*1024;
+    private static final int MAX_AGENT_CONTEXT=1_000_000,MAX_AGENT_INFO=1_000_000,MAX_KNOWLEDGE_META=1024*1024;
     private static final Set<String> REQUIRED=Set.of("mimetype","manifest.json","graph.json","workspace.json","output-profiles.json","integrity.json");
     private static final Set<String> OPTIONAL=Set.of("agent-context.json","agent-info.json","knowledge-graph.dsl","knowledge-meta.json");
 
@@ -224,10 +225,22 @@ public final class CnodeProjectCodec {
     private static void safeEntry(String name) throws IOException {if(name.isBlank()||name.startsWith("/")||name.startsWith("\\")||name.contains("..")||name.contains(":")||name.contains("\\"))throw new IOException("非法 ZIP 路径："+name);if(!REQUIRED.contains(name)&&!OPTIONAL.contains(name)&&!name.startsWith("assets/")&&!name.startsWith("extensions/"))throw new IOException("未知的工程条目："+name);}
     private static Map<String,byte[]> readVerifiedArchive(Path source) throws IOException {
         Map<String,byte[]> entries=readArchive(source);
+        validateOptionalEntryLimits(entries);
         if(!entries.keySet().containsAll(REQUIRED))throw new IOException(".cnode missing required entries: "+missing(entries.keySet()));
         if(!MIME.equals(text(entries,"mimetype")))throw new IOException("Invalid CodeNode project file");
         verifyIntegrity(entries);
         return entries;
+    }
+    private static void validateOptionalEntryLimits(Map<String,byte[]> entries) throws IOException {
+        for (var entry : entries.entrySet()) {
+            int limit = switch (entry.getKey()) {
+                case "agent-context.json" -> MAX_AGENT_CONTEXT;
+                case "agent-info.json" -> MAX_AGENT_INFO;
+                case "knowledge-meta.json" -> MAX_KNOWLEDGE_META;
+                default -> MAX_ENTRY;
+            };
+            if (entry.getValue().length > limit) throw new IOException(".cnode 条目超过大小限制: " + entry.getKey());
+        }
     }
     private static void verifyIntegrity(Map<String,byte[]> entries) throws IOException {Map<String,Object> integrity=Json.object(text(entries,"integrity.json"));if(!"SHA-256".equals(integrity.get("algorithm")))throw new IOException("不支持的摘要算法");Map<String,Object> hashes=object(integrity,"files");for(var entry:entries.entrySet()){String name=entry.getKey();if(name.equals("mimetype")||name.equals("integrity.json"))continue;if(!sha256(entry.getValue()).equals(hashes.get(name)))throw new IOException("工程文件摘要校验失败："+name);}for(String name:hashes.keySet())if(!entries.containsKey(name))throw new IOException("摘要引用不存在的工程条目："+name);}
     private static void validateModel(WorkflowModel model) throws IOException {if(model.nodes().size()>MAX_NODES||model.edges().size()>MAX_EDGES||model.reroutes().size()>50_000)throw new IOException("工程规模超过限制");Set<String> ids=new HashSet<>();for(WorkflowModel.Node node:model.nodes()){requiredId(node.id,"node.id");if(!ids.add(node.id))throw new IOException("重复节点 ID："+node.id);if(bytes(node.prompt).length>MAX_PROMPT)throw new IOException("节点 Prompt 超过 1 MiB："+node.id);relative(node.artifact,"artifact");if(node.nodeKind==WorkflowModel.NodeKind.FILE&&!node.rangeMode||node.nodeKind==WorkflowModel.NodeKind.ASSET)relative(node.relativePath,"relativePath");if(!NodeRegistry.isKnown(node.classificationKey))throw new IOException("未知节点分类："+node.classificationKey);Set<String> ports=new HashSet<>();for(WorkflowModel.Port port:node.inputs)if(!ports.add(requiredId(port.id,"port.id")))throw new IOException("重复端口 ID："+node.id+"/"+port.id);ports.clear();for(WorkflowModel.Port port:node.outputs)if(!ports.add(requiredId(port.id,"port.id")))throw new IOException("重复端口 ID："+node.id+"/"+port.id);}for(WorkflowModel.Node node:model.nodes()){if(!node.parentScopeId.isBlank()){WorkflowModel.Node parent=model.byId(node.parentScopeId);if(parent==null||(parent.nodeKind!=WorkflowModel.NodeKind.SCOPE&&parent.nodeKind!=WorkflowModel.NodeKind.GROUP))throw new IOException("父范围不存在："+node.id);validateScopeChain(model,node);}if(!node.fileNodeId.isBlank()){WorkflowModel.Node file=model.byId(node.fileNodeId);if(file==null||(file.nodeKind!=WorkflowModel.NodeKind.FILE&&file.nodeKind!=WorkflowModel.NodeKind.ASSET&&file.nodeKind!=WorkflowModel.NodeKind.ASSET_BUNDLE&&file.nodeKind!=WorkflowModel.NodeKind.GROUP)||file==node)throw new IOException("文件归属不存在："+node.id);}}for(WorkflowModel.Edge edge:model.edges()){WorkflowModel.Node from=model.byId(edge.source()),to=model.byId(edge.target());if(from==null||to==null||model.output(from,edge.sourcePort())==null||model.input(to,edge.targetPort())==null)throw new IOException("连线引用不存在的节点或端口："+edge.id());}for(WorkflowModel.Reroute point:model.reroutes())requiredId(point.id,"reroute.id");}

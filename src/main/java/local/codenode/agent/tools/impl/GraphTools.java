@@ -92,6 +92,7 @@ public final class GraphTools {
             graph.merge(fragment);
         }
         context.audit("graph_summarize chars=" + text.length() + " elements=" + fragment.size());
+        context.memoryStore().remember("graph-summarize", fragment.overview(), source);
         context.saveProject();
         return AgentToolResult.ok("长期知识已摘要并固化；冲突已记录来源和替代关系。",
                 Map.of("roots", fragment.roots(), "elements", fragment.elements().stream()

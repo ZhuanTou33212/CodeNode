@@ -219,6 +219,9 @@ public final class KnowledgeGraph {
         out.put("conflicts", conflicts.values().stream().map(Conflict::toMap).toList());
         out.put("elementCount", elements.size());
         out.put("roots", List.copyOf(roots));
+        Map<String, Object> index = toMap();
+        out.put("layerIndex", index.getOrDefault("layerIndex", Map.of()));
+        out.put("keywordIndex", index.getOrDefault("keywordIndex", Map.of()));
         return out;
     }
 
