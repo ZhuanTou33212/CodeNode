@@ -52,4 +52,15 @@ class KnowledgeGraphTest {
         assertEquals("accepted", resolved.status());
         assertTrue(graph.get(conflicts.getFirst().elementId()).summary().contains("provider B"));
     }
+    @Test void currentProposalScanRecordsConflictWithoutPersistingNewValue() {
+        KnowledgeGraph graph = new KnowledgeGraph();
+        graph.merge(new ConversationGraphParser().parse("# Auth\nUse provider A", "", "memory.md"));
+        var detected = graph.detectTextConflicts("# Auth\nUse provider B；长期记住这个更新");
+        assertFalse(detected.isEmpty());
+        graph.recordConflicts(detected);
+        assertFalse(graph.pendingConflicts().isEmpty());
+        assertTrue(graph.query("provider B", null).isEmpty());
+        graph.clear();
+        assertTrue(graph.conflicts().isEmpty());
+    }
 }

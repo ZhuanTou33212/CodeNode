@@ -18,7 +18,7 @@ public final class KnowledgeGraph {
     private final LinkedHashSet<String> roots = new LinkedHashSet<>();
     private final LinkedHashMap<String, Conflict> conflicts = new LinkedHashMap<>();
 
-    public synchronized void clear() { elements.clear(); roots.clear(); }
+    public synchronized void clear() { elements.clear(); roots.clear(); conflicts.clear(); }
     public synchronized boolean isEmpty() { return elements.isEmpty(); }
     public synchronized int size() { return elements.size(); }
     public synchronized List<String> roots() { return List.copyOf(roots); }
@@ -83,6 +83,22 @@ public final class KnowledgeGraph {
             compareField(detected, existing, incoming, "keywords", oldKeywords, newKeywords);
         }
         return List.copyOf(detected);
+    }
+
+    /** Scans a current user message as a proposal without persisting it. */
+    public synchronized List<Conflict> detectTextConflicts(String text) {
+        if (text == null || text.isBlank() || !looksLikeMemoryProposal(text)) return List.of();
+        try {
+            KnowledgeGraph proposal = new ConversationGraphParser().parse(text, "", "conversation:current");
+            return detectConflicts(proposal);
+        } catch (RuntimeException ignored) {
+            return List.of();
+        }
+    }
+
+    private static boolean looksLikeMemoryProposal(String text) {
+        String value = text.toLowerCase(Locale.ROOT);
+        return value.matches("(?s).*(记住|长期|更新|修改|改为|换成|使用|不再|现在|instead|use |no longer|remember).*" );
     }
 
     /** Records conflicts without changing the active facts. */
@@ -159,11 +175,20 @@ public final class KnowledgeGraph {
         String incomingTitle = normalize(incoming.title());
         String incomingSource = sourceRoot(incoming.location());
         for (Element candidate : elements.values()) {
-            if (!incomingTitle.isBlank() && incomingTitle.equals(normalize(candidate.title()))
-                    && (!incomingSource.isBlank() && incomingSource.equals(sourceRoot(candidate.location()))
-                    || incomingSource.isBlank() && sourceRoot(candidate.location()).isBlank())) return candidate;
+            if (!incomingTitle.isBlank() && incomingTitle.equals(normalize(candidate.title()))) {
+                boolean sameSource = !incomingSource.isBlank() && incomingSource.equals(sourceRoot(candidate.location()));
+                boolean enoughKeywords = overlap(incoming.keywords(), candidate.keywords()) >= 2;
+                if (sameSource || enoughKeywords) return candidate;
+            }
         }
         return null;
+    }
+
+    private static int overlap(List<String> left, List<String> right) {
+        if (left == null || right == null) return 0;
+        java.util.HashSet<String> values = new java.util.HashSet<>(left);
+        values.retainAll(right);
+        return values.size();
     }
 
     private static void compareField(List<Conflict> out, Element existing, Element incoming,

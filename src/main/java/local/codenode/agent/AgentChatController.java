@@ -202,6 +202,12 @@ public final class AgentChatController {
         this.stopRequested = false;
         listener.onEvent(ChatEvent.state(this.state));
         this.messages.add(Map.of("role", "user", "content", userText));
+        List<KnowledgeGraph.Conflict> observedConflicts = this.toolContext.knowledgeGraph().detectTextConflicts(userText);
+        if (!observedConflicts.isEmpty()) {
+            this.toolContext.knowledgeGraph().recordConflicts(observedConflicts);
+            this.toolContext.audit("memory conflict proposal detected count=" + observedConflicts.size());
+            this.messages.set(0, this.systemPrompt());
+        }
         this.saveSessionFile();
         Thread.startVirtualThread(() -> {
             try {
