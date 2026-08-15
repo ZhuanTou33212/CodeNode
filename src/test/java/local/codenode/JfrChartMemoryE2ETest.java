@@ -7,12 +7,7 @@ import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.AgentToolResult;
 import local.codenode.agent.tools.impl.AgentToolkit;
-import local.codenode.project.BuildRunner;
 import local.codenode.project.JavaProject;
-import local.codenode.project.RunConfig;
-import local.codenode.project.RunLauncher;
-import local.codenode.project.TraceCollector;
-import local.codenode.project.ToolLocator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -102,9 +97,13 @@ public class JfrChartMemoryE2ETest {
         assertEquals(JavaProject.BuildSystem.PLAIN, JavaProject.discover(root));
         assertEquals(List.of("demo.FibApp"), JavaProject.findMainClasses(root), "应识别出入口类 demo.FibApp");
 
-        // javac 编译（CodeNode 的 BuildRunner，使用工具目录内 JDK21）
-        BuildRunner.BuildResult build = BuildRunner.build(root, List.of(), 120, line -> { });
-        assertTrue(build.ok(), "编译应成功: " + build.tail());
+        // 通过内置 Agent 工具 build_project 编译（CodeNode 的 javac 流程，使用工具目录内 JDK21）
+        AgentToolContext context = new AgentToolContext(
+                () -> root, WorkflowModel::new, (level, what, detail) -> true, line -> { });
+        AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
+        AgentToolResult build = registry.execute("build_project",
+                Map.of("path", root.toString(), "timeoutSeconds", 120), context);
+        assertTrue(build.ok(), "编译应成功: " + build.text());
         assertTrue(Files.isDirectory(root.resolve("out")), "javac 输出目录应存在");
     }
 
@@ -113,7 +112,6 @@ public class JfrChartMemoryE2ETest {
     @Test
     void req2_req3_codenodeAgentStartsProjectWithJfrAndReturnsCorrectValues() throws Exception {
         Path root = createLightweightProject("req2");
-        assertTrue(BuildRunner.build(root, List.of(), 120, line -> { }).ok(), "前置编译失败");
 
         List<String> audit = new ArrayList<>();
         AgentToolContext context = new AgentToolContext(
@@ -156,25 +154,36 @@ public class JfrChartMemoryE2ETest {
     @Test
     void req4_jfrInstrumentationReturnsCorrectNumbers() throws Exception {
         Path root = createLightweightProject("req4");
-        assertTrue(BuildRunner.build(root, List.of(), 120, line -> { }).ok(), "前置编译失败");
 
-        RunConfig config = new RunConfig("demo.FibApp", RunConfig.Kind.MAIN_CLASS, "demo.FibApp", null,
-                ToolLocator.jdk() == null ? null : ToolLocator.jdk().toString(),
-                List.of(), List.of(), root, List.of(), true);
-        RunLauncher.RunOutcome outcome = RunLauncher.run(config, 45, line -> { });
-        assertEquals(0, outcome.exitCode(), outcome.output());
+        // 通过内置 Agent 工具启动：run_project trace=true（自动编译 + JFR 实时插桩）
+        List<String> audit = new ArrayList<>();
+        AgentToolContext context = new AgentToolContext(
+                () -> root, WorkflowModel::new, (level, what, detail) -> true, audit::add);
+        AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
+        AgentToolResult result = registry.execute("run_project", Map.of(
+                "mainClass", "demo.FibApp",
+                "trace", true,
+                "timeoutSeconds", 45), context);
+        assertTrue(result.ok(), "run_project 应成功: " + result.text());
 
-        Map<String, Object> trace = outcome.trace();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.data();
+        assertEquals(0, ((Number) data.get("exitCode")).intValue(), "退出码应为 0");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = (Map<String, Object>) data.get("trace");
+        assertNotNull(trace, "应返回 JFR 追踪摘要");
         assertTrue(((Number) trace.get("events")).intValue() > 0, "应采集到 JFR 事件: " + trace);
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> methods = (List<Map<String, Object>>) trace.get("methods");
         assertNotNull(methods);
-        assertFalse(methods.isEmpty(), "应有方法采样");
-        int totalSamples = methods.stream().mapToInt(m -> ((Number) m.get("samples")).intValue()).sum();
-        assertTrue(totalSamples > 0, "采样总数应 > 0");
+        assertFalse(methods.isEmpty(), "应采集到方法采样: " + trace);
+        assertTrue(Files.isRegularFile(Path.of(String.valueOf(trace.get("jfrFile")))),
+                "JFR 文件应落盘: " + trace.get("jfrFile"));
 
         // 插桩数值自洽：事件总数 >= 方法采样总数；每个方法采样数非负
+        int totalSamples = methods.stream().mapToInt(m -> ((Number) m.get("samples")).intValue()).sum();
+        assertTrue(totalSamples > 0, "采样总数应 > 0");
         assertTrue(((Number) trace.get("events")).intValue() >= totalSamples,
                 "事件数 " + trace.get("events") + " 应 >= 采样总数 " + totalSamples);
         assertTrue(methods.stream().allMatch(m -> ((Number) m.get("samples")).intValue() > 0),
@@ -193,10 +202,17 @@ public class JfrChartMemoryE2ETest {
         assertTrue(((List<?>) trace.get("exceptions")).isEmpty(),
                 "不应有异常事件: " + trace.get("exceptions"));
 
-        // 重新解析同一 JFR 文件，结果应可复现（数值稳定）
-        Map<String, Object> reparsed = TraceCollector.summarizeJfr(Path.of(String.valueOf(trace.get("jfrFile"))));
+        // 重新解析同一 JFR 文件（内置 Agent 工具 jfr_reparse），结果应可复现（数值稳定）
+        AgentToolResult reparsedResult = registry.execute("jfr_reparse",
+                Map.of("file", String.valueOf(trace.get("jfrFile"))), context);
+        assertTrue(reparsedResult.ok(), "jfr_reparse 应成功: " + reparsedResult.text());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reparsed = (Map<String, Object>) reparsedResult.data();
         assertEquals(trace.get("events"), reparsed.get("events"), "重复解析事件数应一致");
         assertEquals(methods.size(), ((List<?>) reparsed.get("methods")).size(), "重复解析方法数应一致");
+
+        assertTrue(audit.stream().anyMatch(line -> line.contains("jfr_reparse")),
+                "应写 jfr_reparse 审计日志: " + audit);
     }
 
     // ---------- 验收 4：图表绘制 + 自动整理为人类可读排列 ----------
@@ -204,11 +220,18 @@ public class JfrChartMemoryE2ETest {
     @Test
     void req5_chartDrawnAndAutoArrangedForHumans() throws Exception {
         Path root = createLightweightProject("req5");
-        assertTrue(BuildRunner.build(root, List.of(), 120, line -> { }).ok(), "前置编译失败");
-        RunConfig config = new RunConfig("demo.FibApp", RunConfig.Kind.MAIN_CLASS, "demo.FibApp", null,
-                ToolLocator.jdk() == null ? null : ToolLocator.jdk().toString(),
-                List.of(), List.of(), root, List.of(), true);
-        Map<String, Object> trace = RunLauncher.run(config, 45, line -> { }).trace();
+        // 通过内置 Agent 工具获取 JFR 插桩数据（run_project trace=true）
+        AgentToolContext context = new AgentToolContext(
+                () -> root, WorkflowModel::new, (level, what, detail) -> true, line -> { });
+        AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
+        AgentToolResult result = registry.execute("run_project", Map.of(
+                "mainClass", "demo.FibApp",
+                "trace", true,
+                "timeoutSeconds", 45), context);
+        assertTrue(result.ok(), "run_project 应成功: " + result.text());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = (Map<String, Object>) ((Map<String, Object>) result.data()).get("trace");
+        assertNotNull(trace, "应返回 JFR 追踪摘要");
 
         // 绘制条形图：按采样数降序自动排列（人类可读的排名形式），输出 PNG
         Files.createDirectories(ARTIFACT_DIR);
@@ -359,12 +382,22 @@ public class JfrChartMemoryE2ETest {
     @Test
     void req8_shortTermMemorySummarizedAndRuntimeExplainedInNaturalLanguage() throws Exception {
         Path root = createLightweightProject("req8");
-        assertTrue(BuildRunner.build(root, List.of(), 120, line -> { }).ok(), "前置编译失败");
-        RunConfig config = new RunConfig("demo.FibApp", RunConfig.Kind.MAIN_CLASS, "demo.FibApp", null,
-                ToolLocator.jdk() == null ? null : ToolLocator.jdk().toString(),
-                List.of(), List.of(), root, List.of(), true);
-        RunLauncher.RunOutcome outcome = RunLauncher.run(config, 45, line -> { });
-        Map<String, Object> trace = outcome.trace();
+        // 通过内置 Agent 工具获取 JFR 插桩数据（run_project trace=true）
+        AgentToolContext context = new AgentToolContext(
+                () -> root, WorkflowModel::new, (level, what, detail) -> true, line -> { });
+        AgentToolRegistry registry = AgentToolkit.buildDefaultRegistry(context);
+        AgentToolResult result = registry.execute("run_project", Map.of(
+                "mainClass", "demo.FibApp",
+                "trace", true,
+                "timeoutSeconds", 45), context);
+        assertTrue(result.ok(), "run_project 应成功: " + result.text());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.data();
+        int exitCode = ((Number) data.get("exitCode")).intValue();
+        String output = String.valueOf(data.get("output"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> trace = (Map<String, Object>) data.get("trace");
+        assertNotNull(trace, "应返回 JFR 追踪摘要");
 
         // 短期记忆：会话文本（用户请求 + 工具返回的即时结果）
         String sessionText = """
@@ -380,7 +413,7 @@ public class JfrChartMemoryE2ETest {
         assertTrue(summary.entities().contains("FibApp"), "应识别实体类: " + summary.entities());
 
         // 自然语言解释运行逻辑：由真实插桩数值生成
-        String explanation = explainRuntime(trace, outcome.exitCode(), outcome.output());
+        String explanation = explainRuntime(trace, exitCode, output);
         assertFalse(explanation.isBlank(), "解释不应为空");
         assertTrue(explanation.contains("退出码 0"), "应包含真实退出码: " + explanation);
         assertTrue(explanation.contains(String.valueOf(trace.get("events"))),

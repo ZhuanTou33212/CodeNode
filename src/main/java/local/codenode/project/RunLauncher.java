@@ -110,6 +110,15 @@ public final class RunLauncher {
 
     /** 阻塞式运行配置；用于需要等待结束的快速任务（纯 Java 入口类）。 */
     public static RunOutcome run(RunConfig config, long timeoutSeconds, Consumer<String> logSink) {
+        // beforeLaunch 前置步骤：compile → 先用 CodeNode 构建流程编译（run_project 自动编译依赖此步骤）
+        if (config.beforeLaunch() != null && config.beforeLaunch().contains("compile")) {
+            BuildRunner.BuildResult build = BuildRunner.build(
+                    config.workingDir(), List.of(), Math.max(30, timeoutSeconds), logSink);
+            if (!build.ok()) {
+                return new RunOutcome(build.exitCode(), build.timedOut(),
+                        "编译失败（beforeLaunch=compile）:\n" + build.tail(), Map.of());
+            }
+        }
         List<String> command = buildCommand(config);
         if (command.isEmpty()) {
             return new RunOutcome(-1, false, "运行配置无效", Map.of());
