@@ -106,10 +106,22 @@ public final class AgentConfig {
         return parseList(properties.getProperty("tools.enabled", ""));
     }
 
-    /** 追加到系统提示末尾的自定义提示（多行可用 \n 转义）。 */
+    /** 追加到系统提示末尾的自定义提示（多行可用 \\n 转义）。 */
     public String extraHarnessPrompt() {
         String value = properties.getProperty("harness.extra_prompt", "");
         return value.replace("\\n", "\n").trim();
+    }
+
+    // ---------- 外部 MCP server 配置（P1） ----------
+
+    /** 启用的 MCP server 名列表（mcp.servers，逗号分隔；空=不启用）。 */
+    public List<String> mcpServers() {
+        return parseList(properties.getProperty("mcp.servers", ""));
+    }
+
+    /** 指定 MCP server 的命令行（mcp.server.<name>，| 分隔命令与参数）。 */
+    public String mcpServerCommand(String name) {
+        return properties.getProperty("mcp.server." + name, "");
     }
 
     /** read_file 默认最大行数。 */

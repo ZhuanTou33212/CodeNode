@@ -76,6 +76,7 @@ public final class AgentToolkit {
         SaveProjectTool.register(registry);
         CompileRunTool.register(registry);
         RuntimeTraceTool.register(registry);
+        JfrReparseTool.register(registry);
         WriteAnalysisMdTool.register(registry);
         UiControlTool.register(registry);
         ProjectInfoTool.register(registry);
@@ -87,5 +88,6 @@ public final class AgentToolkit {
         GraphTools.register(registry);
         TodoTools.register(registry);
         SubagentTools.register(registry);
+        UserMemoryTool.register(registry);
     }
 }

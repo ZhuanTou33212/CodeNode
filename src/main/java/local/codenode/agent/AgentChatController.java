@@ -42,6 +42,8 @@ public final class AgentChatController {
     private static final int MAX_TOOL_LOOP = 10;
     /** 工具失败/空结果后主动提示继续尝试的上限（避免死循环）。 */
     private static final int MAX_TOOL_RETRY = 5;
+    /** 规划层：每完成 N 个工具步骤注入一次进度检查（对照任务清单）。 */
+    private static final int PLAN_CHECK_INTERVAL = 3;
     /** 单个工具执行的最大等待秒数（外层兜底超时，防止工具阻塞卡死）。 */
     private static final int DEFAULT_TOOL_TIMEOUT_SECONDS = 60;
     /** 长耗时工具（构建/运行/编译）的默认超时秒数。 */
@@ -54,7 +56,7 @@ public final class AgentChatController {
     private static final int MAX_TOOL_RESULT_CHARS = 4000;
 
     private final AgentConfig config;
-    private final OpenAiChatClient client;
+    private ChatClient client;
     private final AgentToolRegistry tools;
     private final AgentToolContext toolContext;
     private final AgentExecutionTimeline timeline = new AgentExecutionTimeline();
@@ -65,12 +67,24 @@ public final class AgentChatController {
     private volatile AgentProvider.SessionState state = AgentProvider.SessionState.IDLE;
     private volatile boolean stopRequested;
     private SubagentManager subagents;
+    /** 本会话（tab）独立的可变状态：工具停止标志与权限确认记忆。 */
+    private final AgentSessionScope sessionScope = new AgentSessionScope();
+    /** 执行 trace 写入器（.codenode/agent-traces/<sessionId>.jsonl，每轮会话重建）。 */
+    private volatile AgentTraceWriter trace;
 
     public AgentChatController(AgentConfig config, AgentToolRegistry tools, AgentToolContext toolContext) {
         this.config = config;
         this.client = new OpenAiChatClient(config);
         this.tools = tools;
         this.toolContext = toolContext;
+    }
+
+    /** 测试/评估构造：注入脚本化 ChatClient，harness 行为可确定性验证。 */
+    public AgentChatController(AgentToolRegistry tools, AgentToolContext toolContext, ChatClient client) {
+        this.config = new AgentConfig();
+        this.tools = tools;
+        this.toolContext = toolContext;
+        this.client = java.util.Objects.requireNonNull(client, "client");
     }
 
     public AgentExecutionTimeline timeline() {
@@ -81,7 +95,7 @@ public final class AgentChatController {
         return this.state;
     }
 
-    public OpenAiChatClient client() {
+    public ChatClient client() {
         return this.client;
     }
 
@@ -141,8 +155,8 @@ public final class AgentChatController {
         this.sessionId = UUID.randomUUID().toString();
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
-        this.toolContext.clearToolStop();
-        this.toolContext.permissionMemory().clear();
+        this.sessionScope.clearToolStop();
+        this.sessionScope.permissionMemory().clear();
     }
 
     /** Clear the active conversation without deleting project-scoped knowledge. */
@@ -152,8 +166,8 @@ public final class AgentChatController {
         this.sessionId = UUID.randomUUID().toString();
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
-        this.toolContext.clearToolStop();
-        this.toolContext.permissionMemory().clear();
+        this.sessionScope.clearToolStop();
+        this.sessionScope.permissionMemory().clear();
     }
 
     public AgentContext snapshotContext() {
@@ -201,6 +215,8 @@ public final class AgentChatController {
         this.timeline.beginTask(userText);
         this.stopRequested = false;
         listener.onEvent(ChatEvent.state(this.state));
+        this.trace = new AgentTraceWriter(this.toolContext.projectRoot(), this.sessionId);
+        this.trace.event("session_start", Map.of("task", userText));
         this.messages.add(Map.of("role", "user", "content", userText));
         List<KnowledgeGraph.Conflict> observedConflicts = this.toolContext.knowledgeGraph().detectTextConflicts(userText);
         if (!observedConflicts.isEmpty()) {
@@ -215,20 +231,53 @@ public final class AgentChatController {
             }
             catch (InterruptedException interrupted) {
                 this.timeline.cancelTask();
+                this.traceEvent("error", Map.of("kind", "cancelled", "message", interrupted.getMessage()));
                 listener.onEvent(ChatEvent.cancelled());
             }
             catch (Exception failure) {
                 this.timeline.failTask();
+                this.traceEvent("error", Map.of("kind", "exception",
+                        "message", failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
                 listener.onEvent(ChatEvent.error(failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
             }
             finally {
                 if (!this.stopRequested && this.timeline.snapshot().taskState() != AgentExecutionTimeline.TaskState.FAILED) {
                     this.timeline.completeTask();
                 }
+                this.traceEvent("session_end", Map.of("state", String.valueOf(this.timeline.snapshot().taskState()),
+                        "steps", this.timeline.snapshot().steps().size()));
                 this.state = AgentProvider.SessionState.IDLE;
                 listener.onEvent(ChatEvent.state(this.state));
             }
         });
+    }
+
+    private void traceEvent(String type, Map<String, Object> fields) {
+        AgentTraceWriter writer = this.trace;
+        if (writer != null) writer.event(type, fields);
+    }
+
+    /** 规划层进度检查提示：已完成步骤 + 任务清单，要求模型对照目标继续。 */
+    private String planCheckPrompt(int doneSteps) {
+        StringBuilder sb = new StringBuilder("【进度检查】任务尚未完成。当前已完成 ")
+                .append(doneSteps).append(" 步工具调用，最近步骤：\n");
+        List<AgentExecutionTimeline.Step> steps = this.timeline.snapshot().steps();
+        int from = Math.max(0, steps.size() - 8);
+        for (int i = steps.size() - 1; i >= from; i--) {
+            AgentExecutionTimeline.Step step = steps.get(i);
+            sb.append("- ").append(step.tool()).append(" [").append(step.state()).append("] ")
+                    .append(AgentChatController.truncate(step.summary(), 100)).append('\n');
+        }
+        List<TaskManager.Task> tasks = this.toolContext.taskManager().list();
+        if (!tasks.isEmpty()) {
+            sb.append("任务清单：\n");
+            for (TaskManager.Task task : tasks) {
+                sb.append("- [").append(task.status()).append("] ").append(task.id()).append(": ")
+                        .append(task.desc()).append('\n');
+            }
+        }
+        sb.append("请对照任务目标评估进度：目标已完成的步骤直接继续推进；发现偏离时先说明调整理由，再用下一步工具调用继续，不要重复已完成的工作。");
+        return sb.toString();
     }
 
     /** 发送给 API 的消息列表：system + 摘要占位 + 最近 N 条（滑动窗口短期记忆）。 */
@@ -400,6 +449,11 @@ public final class AgentChatController {
                 }
             }
         } catch (RuntimeException ignored) { }
+        String userMemory = new UserMemoryStore().read();
+        if (!userMemory.isBlank()) {
+            sb.append("\n[User memory]（跨项目用户级记忆，来自 ~/.codenode/user-memory.md；需要更新时用 user_memory_save）\n")
+                    .append(truncate(userMemory, 1500)).append('\n');
+        }
         KnowledgeGraph knowledge = this.toolContext.knowledgeGraph();
         if (!knowledge.pendingConflicts().isEmpty()) {
             sb.append("\n【待确认的长期知识冲突】\n");
@@ -436,8 +490,14 @@ public final class AgentChatController {
         boolean executedTool = false;
         boolean lastRoundHadIssue = false;
         int retryNudges = 0;
+        int nextPlanCheckAt = PLAN_CHECK_INTERVAL;
         while (!this.stopRequested && guard++ < MAX_TOOL_LOOP) {
+            long chatStart = System.currentTimeMillis();
             Map<String, Object> assistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
+            long chatDuration = System.currentTimeMillis() - chatStart;
+            Map<String, Object> usage = this.client.lastUsage();
+            this.traceEvent("llm_call", Map.of("round", guard, "durationMs", chatDuration,
+                    "usage", usage == null ? Map.of() : usage));
             this.messages.add(assistant);
             Object rawCalls = assistant.get("tool_calls");
             if (!(rawCalls instanceof List<?>) || ((List<?>)rawCalls).isEmpty()) {
@@ -446,6 +506,7 @@ public final class AgentChatController {
                 if (lastRoundHadIssue && !this.stopRequested && retryNudges < MAX_TOOL_RETRY) {
                     retryNudges++;
                     lastRoundHadIssue = false;
+                    this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "empty_turn_after_issue"));
                     this.messages.add(Map.of("role", "user",
                             "content", "【系统提示】上一轮工具执行失败或返回了空结果，任务尚未完成。请换一种思路继续：尝试不同的工具、不同的参数或更小的步骤，直到真正拿到结果；确实无法完成时再向用户说明。"));
                     this.saveSessionFile();
@@ -497,6 +558,7 @@ public final class AgentChatController {
                 // 工具执行：带超时保护 + 单工具异常兜底，回写错误给模型
                 String stepId = this.timeline.beginStep(name, "tool call");
                 local.codenode.WorkflowModel beforeWorkbench = isWorkbenchMutation(name) ? this.toolContext.snapshotWorkbench() : null;
+                long toolStart = System.currentTimeMillis();
                 AgentToolResult result;
                 try {
                     listener.onEvent(ChatEvent.toolProgress(name));
@@ -505,6 +567,9 @@ public final class AgentChatController {
                 } catch (Exception toolFailure) {
                     result = AgentToolResult.error("工具执行异常: " + toolFailure.getMessage());
                 }
+                this.traceEvent("tool_call", Map.of("tool", name, "ok", result.ok(),
+                        "durationMs", System.currentTimeMillis() - toolStart,
+                        "preview", AgentChatController.truncate(result.text(), 200)));
                 listener.onEvent(ChatEvent.state(AgentProvider.SessionState.ACTIVE_RUNNING));
                 String resultText = result.ok() ? result.text() : "失败：" + result.text();
                 String resultId = this.toolContext.resultStore().store(name, result);
@@ -539,8 +604,17 @@ public final class AgentChatController {
             if (lastRoundHadIssue && !this.stopRequested && retryNudges < MAX_TOOL_RETRY) {
                 retryNudges++;
                 lastRoundHadIssue = false;
+                this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "tool_issue"));
                 this.messages.add(Map.of("role", "user",
                         "content", "【系统提示】刚才的工具调用失败或返回空结果，任务尚未完成。请重新思考：换一种工具、调整参数、缩小步骤或换个思路重试，直到真正取得结果；只有多种方案都失败时才向用户说明。"));
+                this.saveSessionFile();
+            }
+            // 规划层：每完成 PLAN_CHECK_INTERVAL 步注入进度检查，防止长任务中途偏离目标
+            int doneSteps = this.timeline.snapshot().steps().size();
+            if (!this.stopRequested && doneSteps >= nextPlanCheckAt) {
+                nextPlanCheckAt = doneSteps + PLAN_CHECK_INTERVAL;
+                this.traceEvent("plan_check", Map.of("steps", doneSteps));
+                this.messages.add(Map.of("role", "user", "content", this.planCheckPrompt(doneSteps)));
                 this.saveSessionFile();
             }
             if (this.messages.size() > SUMMARY_THRESHOLD) {
@@ -585,16 +659,17 @@ public final class AgentChatController {
      * 超时结果回写为"工具执行超时"，让模型重新思考换方案。
      */
     private AgentToolResult executeToolWithTimeout(String name, Map<String, Object> args, long timeoutSeconds) {
-        this.toolContext.clearToolStop();
+        this.sessionScope.clearToolStop();
         Future<AgentToolResult> future = this.toolExecutor.submit(() -> {
             this.toolContext.setSubagentManager(this.subagentManager());
+            this.toolContext.setSessionScope(this.sessionScope);
             try { return this.tools.execute(name, args, this.toolContext); }
-            finally { this.toolContext.setSubagentManager(null); }
+            finally { this.toolContext.setSessionScope(null); this.toolContext.setSubagentManager(null); }
         });
         try {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
             while (true) {
-                if (this.stopRequested || this.toolContext.toolStopRequested()) { future.cancel(true); return AgentToolResult.error("工具已取消：" + name); }
+                if (this.stopRequested || this.sessionScope.toolStopRequested()) { future.cancel(true); return AgentToolResult.error("工具已取消：" + name); }
                 long remaining = deadline - System.nanoTime();
                 if (remaining <= 0) throw new TimeoutException();
                 try { return future.get(Math.min(TimeUnit.NANOSECONDS.toMillis(remaining), 250), TimeUnit.MILLISECONDS); }
@@ -674,11 +749,11 @@ public final class AgentChatController {
         }
         this.stopRequested = true;
         this.timeline.cancelTask();
-        this.toolContext.requestToolStop();
+        this.sessionScope.requestToolStop();
         this.client.abort();
     }
 
-    public void requestToolStop() { this.toolContext.requestToolStop(); }
+    public void requestToolStop() { this.sessionScope.requestToolStop(); }
     public void setRememberApprovals(boolean remember) { this.toolContext.setRememberApprovals(remember); }
     public AgentInfoSnapshot infoSnapshot() { return AgentInfoSnapshot.capture(this.toolContext.softwareInfoProvider());
     }

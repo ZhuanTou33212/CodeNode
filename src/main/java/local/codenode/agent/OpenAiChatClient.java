@@ -21,12 +21,21 @@ import java.util.function.Consumer;
  * OpenAI 兼容 chat.completions 流式客户端（SSE）。使用 AgentConfig 的 baseUrl / apiKey / model。
  * 支持 delta.content（正式回复）、delta.reasoning_content（推理）与 delta.tool_calls（工具调用）。
  */
-public final class OpenAiChatClient {
+public final class OpenAiChatClient implements ChatClient {
     private final AgentConfig config;
     private volatile HttpURLConnection activeConnection;
+    /** 最近一次 chat 的 token 用量（读后清除；trace 用，不进入消息历史）。 */
+    private volatile Map<String, Object> lastUsage;
 
     public OpenAiChatClient(AgentConfig config) {
         this.config = config;
+    }
+
+    /** 最近一次请求的 usage（prompt/completion tokens），读后清除。 */
+    public Map<String, Object> lastUsage() {
+        Map<String, Object> usage = lastUsage;
+        lastUsage = null;
+        return usage;
     }
 
     public boolean isConfigured() {
@@ -109,6 +118,9 @@ public final class OpenAiChatClient {
                     chunk = Json.object(data);
                 } catch (RuntimeException ignored) {
                     continue;
+                }
+                if (chunk.get("usage") instanceof Map<?, ?> usage) {
+                    lastUsage = toStringMap(usage);
                 }
                 Object choicesObj = chunk.get("choices");
                 if (!(choicesObj instanceof List<?> choices) || choices.isEmpty()) continue;

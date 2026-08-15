@@ -11,6 +11,7 @@ import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicBoolean;
 import local.codenode.agent.PermissionMemory;
 import local.codenode.agent.AgentResultStore;
+import local.codenode.agent.AgentSessionScope;
 import local.codenode.agent.MemoryStore;
 import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.agent.knowledge.KnowledgeGraph;
@@ -34,8 +35,11 @@ public final class AgentToolContext {
     private FileChangeNotifier fileChangeNotifier;
     private SoftwareInfoProvider softwareInfoProvider;
     private java.util.function.Supplier<String> permissionSupplier = () -> "";
-    private final AtomicBoolean toolStopRequested = new AtomicBoolean(false);
-    private final PermissionMemory permissionMemory = new PermissionMemory();
+    /** 会话级可变状态（ThreadLocal 绑定）：工具停止标志与权限确认记忆，按对话 tab 隔离。 */
+    private final ThreadLocal<AgentSessionScope> sessionScope = new ThreadLocal<>();
+    /** 无会话绑定时的共享兜底（如 MCP bridge 等非会话场景）。 */
+    private final AtomicBoolean sharedToolStopRequested = new AtomicBoolean(false);
+    private final PermissionMemory sharedPermissionMemory = new PermissionMemory();
     private volatile boolean rememberApprovals = true;
     private final AgentResultStore resultStore = new AgentResultStore();
     private final MemoryStore memoryStore = new MemoryStore();
@@ -113,11 +117,11 @@ public final class AgentToolContext {
         if (mode.matches("allow|enabled") || level == ConfirmationLevel.LOW) return true;
         String signature = PermissionMemory.signature(projectRoot().toAbsolutePath().normalize() + "|" + category + ":" + level, what + "\n" + detail);
         if (rememberApprovals) {
-            Boolean remembered = permissionMemory.get(signature);
+            Boolean remembered = permissionMemory().get(signature);
             if (remembered != null) return remembered;
         }
         boolean allowed = this.confirmation == null || this.confirmation.confirm(level, what, detail);
-        if (rememberApprovals) permissionMemory.remember(signature, allowed);
+        if (rememberApprovals) permissionMemory().remember(signature, allowed);
         return allowed;
     }
 
@@ -137,10 +141,10 @@ public final class AgentToolContext {
 
     /** Confirm once per session for a stable tool/action signature. */
     public boolean confirmRemembered(ConfirmationLevel level, String what, String detail, String signature) {
-        Boolean remembered = permissionMemory.get(signature);
+        Boolean remembered = permissionMemory().get(signature);
         if (remembered != null) return remembered;
         boolean allowed = confirm(level, what, detail);
-        if (allowed) permissionMemory.remember(signature, true);
+        if (allowed) permissionMemory().remember(signature, true);
         return allowed;
     }
     public void audit(String entry) {
@@ -272,11 +276,36 @@ public final class AgentToolContext {
 
     public void setSoftwareInfoProvider(SoftwareInfoProvider provider) { this.softwareInfoProvider = provider; }
     public SoftwareInfoProvider softwareInfoProvider() { return softwareInfoProvider; }
-    public void requestToolStop() { toolStopRequested.set(true); }
-    public void clearToolStop() { toolStopRequested.set(false); }
-    public boolean toolStopRequested() { return toolStopRequested.get(); }
-    public PermissionMemory permissionMemory() { return permissionMemory; }
-    public void setRememberApprovals(boolean remember) { this.rememberApprovals = remember; if (!remember) permissionMemory.clear(); }
+
+    /** 绑定当前线程的会话作用域（工具执行前由 controller 设置，执行后置空）。 */
+    public void setSessionScope(AgentSessionScope scope) {
+        if (scope == null) sessionScope.remove(); else sessionScope.set(scope);
+    }
+
+    /** 当前线程绑定的会话作用域；未绑定时返回 null（调用方使用共享兜底）。 */
+    public AgentSessionScope sessionScope() {
+        return sessionScope.get();
+    }
+
+    public void requestToolStop() {
+        AgentSessionScope scope = sessionScope.get();
+        if (scope != null) scope.requestToolStop(); else sharedToolStopRequested.set(true);
+    }
+    public void clearToolStop() {
+        AgentSessionScope scope = sessionScope.get();
+        if (scope != null) scope.clearToolStop(); else sharedToolStopRequested.set(false);
+    }
+    public boolean toolStopRequested() {
+        AgentSessionScope scope = sessionScope.get();
+        return scope != null ? scope.toolStopRequested() : sharedToolStopRequested.get();
+    }
+
+    /** 当前作用域（或共享兜底）的权限确认记忆。 */
+    public PermissionMemory permissionMemory() {
+        AgentSessionScope scope = sessionScope.get();
+        return scope != null ? scope.permissionMemory() : sharedPermissionMemory;
+    }
+    public void setRememberApprovals(boolean remember) { this.rememberApprovals = remember; if (!remember) sharedPermissionMemory.clear(); }
     public boolean rememberApprovals() { return rememberApprovals; }
     public AgentResultStore resultStore() { return resultStore; }
     /** Project-local durable Markdown memory plus a transient cache. */

@@ -37,6 +37,14 @@ final class CodeNodeMcpServer {
 
     static void main(Path projectRoot) throws IOException { new CodeNodeMcpServer(projectRoot).run(System.in, System.out); }
 
+    /** 标准命令行入口：java local.codenode.CodeNodeMcpServer <projectRoot>。 */
+    public static void main(String[] args) throws IOException {
+        if (args == null || args.length < 1 || args[0] == null || args[0].isBlank()) {
+            throw new IllegalArgumentException("用法: java local.codenode.CodeNodeMcpServer <projectRoot>");
+        }
+        main(Path.of(args[0]));
+    }
+
     void run(InputStream input, OutputStream output) throws IOException {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
              BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8))) {

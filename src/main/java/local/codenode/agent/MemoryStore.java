@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Project-local memory with an explicit durable/temporary split.
@@ -29,6 +31,11 @@ public final class MemoryStore implements AutoCloseable {
     public static final long DEFAULT_MAX_BYTES = 8L * 1024 * 1024;
     public static final int DEFAULT_MAX_ENTRIES = 256;
     public static final Duration DEFAULT_TTL = Duration.ofDays(30);
+
+    /** 英文/数字关键词（≥2 字符）。 */
+    private static final Pattern WORD_PATTERN = Pattern.compile("[A-Za-z0-9_]{2,}");
+    /** 连续汉字段（用于生成 2-gram）。 */
+    private static final Pattern HAN_PATTERN = Pattern.compile("[\\u4e00-\\u9fff]+");
 
     private final long maxBytes;
     private final int maxEntries;
@@ -113,16 +120,55 @@ public final class MemoryStore implements AutoCloseable {
         }
     }
 
+    /**
+     * 按相关性召回记忆：query 非空时提取关键词（英文词 + 中文 2-gram），
+     * 按 title 命中 ×3 / content 命中 ×1 打分排序；无相关命中时退回最新条目。
+     * 空 query 保持时间降序（原行为）。
+     */
     public synchronized List<Entry> recall(String query, int limit) {
-        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         int max = Math.max(1, Math.min(50, limit));
-        return list().stream()
-                .filter(entry -> needle.isBlank()
-                        || entry.title().toLowerCase(Locale.ROOT).contains(needle)
-                        || entry.content().toLowerCase(Locale.ROOT).contains(needle))
+        List<Entry> entries = list();
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        if (needle.isBlank()) return entries.stream().limit(max).toList();
+        List<String> tokens = tokenize(needle);
+        if (tokens.isEmpty()) return entries.stream().limit(max).toList();
+        List<Entry> scored = entries.stream()
+                .map(entry -> new Scored(entry, score(entry, tokens)))
+                .filter(item -> item.score() > 0)
+                .sorted(Comparator.comparingInt(Scored::score).reversed()
+                        .thenComparing(Comparator.comparing((Scored item) -> item.entry().updatedAt()).reversed()))
+                .map(Scored::entry)
                 .limit(max)
                 .toList();
+        if (!scored.isEmpty()) return scored;
+        return entries.stream().limit(max).toList();
     }
+
+    /** 提取查询关键词：英文/数字词（≥2 字符）+ 中文 2-gram，去重后最多 30 个。 */
+    private static List<String> tokenize(String text) {
+        List<String> tokens = new ArrayList<>();
+        Matcher words = WORD_PATTERN.matcher(text);
+        while (words.find()) tokens.add(words.group().toLowerCase(Locale.ROOT));
+        Matcher han = HAN_PATTERN.matcher(text);
+        while (han.find()) {
+            String run = han.group();
+            for (int i = 0; i + 1 < run.length(); i++) tokens.add(run.substring(i, i + 2));
+        }
+        return tokens.stream().distinct().limit(30).toList();
+    }
+
+    private static int score(Entry entry, List<String> tokens) {
+        String title = entry.title().toLowerCase(Locale.ROOT);
+        String content = entry.content().toLowerCase(Locale.ROOT);
+        int score = 0;
+        for (String token : tokens) {
+            if (title.contains(token)) score += 3;
+            if (content.contains(token)) score += 1;
+        }
+        return score;
+    }
+
+    private record Scored(Entry entry, int score) {}
 
     /** Delete temporary cache files only; durable Markdown remains intact. */
     public synchronized void clearTransientCache() {
