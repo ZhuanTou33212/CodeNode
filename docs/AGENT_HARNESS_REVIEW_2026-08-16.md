@@ -26,15 +26,35 @@
 
 ## 三、劣势
 
+### 架构与演进
+
 1. **自研协议实现有天花板**：只支持 OpenAI 兼容协议——无 Anthropic/Gemini 适配、无请求重试/退避、无并发请求管理；遇到 reasoning 类模型的非标准行为要自己跟进协议。
 2. **核心循环单文件过重**：`AgentChatController` 775 行把 issue 判定、nudge、窗口调整、摘要、子代理全塞在一个类里，后续加特性（并行工具、human-in-the-loop 中断恢复）会越来越难。
-3. **记忆是关键词打分，不是真正的检索**：`MemoryStore.recall` 是英文词 + 中文 2-gram 打分，无向量化；长会话压缩用本地 `TextSummarizer`（非 LLM 摘要），信息损失明显。
-4. **并发模型仍有残留风险**：context 里 `toolStopRequested`/`permissionMemory` 历史上是跨 tab 共享的（一个 tab 停止会取消所有 tab），P0 已用 `AgentSessionScope` + ThreadLocal 修复，但 MCP bridge 无绑定线程仍回退到共享兜底——多 tab 并发是已知薄弱面。
-5. **无生态红利**：新集成（新的 MCP server 类型、新记忆后端、新的模型供应商协议）都要手写，不像 LangChain 有现成集成。
-6. **子代理是简化实现**：共享同一 context 与工具，无独立记忆/权限隔离，只是"嵌套 controller"，编排能力有限。
+3. **无生态红利**：新集成（新的 MCP server 类型、新记忆后端、新的模型供应商协议）都要手写，不像 LangChain 有现成集成。
+4. **子代理是简化实现**：共享同一 context 与工具，无独立记忆/权限隔离，只是"嵌套 controller"，编排能力有限。
+
+### 安全与并发
+
+5. **权限模型是 fail-open 的**：`permissionAllowed` 在权限配置为空或未匹配类别时默认返回 true（AgentToolContext :136-139）；`confirmation` 处理器为 null 时直接放行（:123）。默认安全姿态是"允许"，实际防护依赖配置正确 + 用户弹窗判断，配置漏写即全线放行。
+6. **无进程/网络级沙箱**：工具（execute_shell、run_project 等）运行在应用 JVM 内，`execute_shell` 仅有命令白名单（mvn/git/java/go/python 等）+ 危险命令分级确认，无 CPU/内存/网络资源限额，无子进程树清理保证——恶意或失控的 prompt 理论上可触达宿主机全部能力。
+7. **工具串行执行，长任务阻塞循环**：一轮返回的多个 tool_calls 也是 for 循环逐个执行；build/run 类 300s 长任务期间整个对话循环阻塞，无并行工具执行、无中途进度间插。
+8. **并发模型仍有残留风险**：context 里 `toolStopRequested`/`permissionMemory` 历史上是跨 tab 共享的（一个 tab 停止会取消所有 tab），P0 已用 `AgentSessionScope` + ThreadLocal 修复，但 MCP bridge 无绑定线程仍回退到共享兜底——多 tab 并发是已知薄弱面。
+
+### 能力与体验
+
+9. **记忆是关键词打分，不是真正的检索**：`MemoryStore.recall` 是英文词 + 中文 2-gram 打分，无向量化；长会话压缩用本地 `TextSummarizer`（非 LLM 摘要），信息损失明显。
+10. **上下文与轮次硬限制**：`MAX_TOOL_LOOP=10` 轮上限、窗口仅保留最近 20 条消息；复杂任务 10 轮内完不成只能被强制总结收尾，长任务连续性依赖摘要质量。
+11. **工具结果回传截断**：模型侧默认只收到截断到 4000 字符的结果（`MAX_TOOL_RESULT_CHARS`），大文件/大扫描结果的全貌不可见；虽有 resultStore + read_tool_result 可补救，但依赖模型自己"想起来"去读。
+12. **eval 只验证 harness 逻辑，不覆盖真实模型**：`AgentEvalSuite` 用 ScriptedChatClient 确定性回归的是循环/重试/规划等框架行为，真实模型的工具选择与推理质量没有自动化回归，只能靠人工端到端。
+13. **文档切换即断上下文**：`clearForDocumentSwitch`/`restoreContext` 使记忆与任务按文档隔离（TaskManager 按 documentId 存储），跨文档的连续任务上下文会丢失，多文档协作场景受限。
+14. **无成本/token 预算控制**：会话无 per-session token/费用上限，长任务或失控循环可能消耗超出预期的调用量。
 
 ## 四、总结
 
 作为「嵌入桌面产品、驱动真实工作台操作」的专用 agent，这个自研 harness 在工程护栏和产品耦合上做得比通用框架好；代价是协议兼容面窄、核心循环演进压力大、记忆与编排能力朴素。
 
-如果后续要支持多模型供应商或复杂多智能体编排，会是在 `ChatClient` 抽象和 `AgentChatController` 重构上投入的时机。
+**最值得优先投入的方向**（按风险排序）：
+1. 安全姿态从 fail-open 改为显式配置（默认 deny 或启动时校验配置完整性）；
+2. `AgentChatController` 拆分（循环/历史/规划/子代理各自成类），为并行工具与中断恢复铺路；
+3. eval 增加真实模型冒烟回归（固定 prompt + 固定工具集，记录工具选择轨迹）；
+4. 长会话记忆升级（LLM 摘要或向量检索）以支撑跨文档任务。
