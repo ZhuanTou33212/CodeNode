@@ -210,12 +210,12 @@ class Stage49Test {
         assertEquals(1, controller.messageHistory().size());
         assertEquals("user", controller.messageHistory().getFirst().get("role"));
 
-        java.lang.reflect.Field messagesField = AgentChatController.class.getDeclaredField("messages");
-        messagesField.setAccessible(true);
-        @SuppressWarnings("unchecked") List<Map<String, Object>> internal = (List<Map<String, Object>>) messagesField.get(controller);
-        assertEquals(2, internal.size());
-        assertEquals("system", internal.getFirst().get("role"));
-        assertFalse(String.valueOf(internal.getFirst().get("content")).contains("stale"));
+        java.lang.reflect.Field historyField = AgentChatController.class.getDeclaredField("history");
+        historyField.setAccessible(true);
+        local.codenode.agent.MessageHistory internal = (local.codenode.agent.MessageHistory) historyField.get(controller);
+        assertEquals(2, internal.messages().size());
+        assertEquals("system", internal.messages().getFirst().get("role"));
+        assertFalse(String.valueOf(internal.messages().getFirst().get("content")).contains("stale"));
 
         java.lang.reflect.Method systemPrompt = AgentChatController.class.getDeclaredMethod("systemPrompt");
         systemPrompt.setAccessible(true);

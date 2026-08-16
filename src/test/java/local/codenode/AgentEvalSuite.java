@@ -37,6 +37,7 @@ class AgentEvalSuite {
         private final List<Map<String, Object>> script;
         private final List<List<Map<String, Object>>> messageLog = new ArrayList<>();
         private final AtomicInteger index = new AtomicInteger();
+        private volatile Map<String, Object> lastUsage;
 
         ScriptedChatClient(List<Map<String, Object>> script) {
             this.script = script;
@@ -48,10 +49,24 @@ class AgentEvalSuite {
             messageLog.add(List.copyOf(messages));
             int i = index.getAndIncrement();
             Map<String, Object> response = i < script.size() ? script.get(i) : textResponse("（脚本耗尽）");
+            if (response.get("usage") instanceof Map<?, ?> usage) {
+                Map<String, Object> converted = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : usage.entrySet()) {
+                    converted.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+                lastUsage = converted;
+            }
             if (response.get("content") instanceof String text) {
                 events.accept(ChatEvent.stream(text));
             }
             return response;
+        }
+
+        @Override
+        public Map<String, Object> lastUsage() {
+            Map<String, Object> usage = lastUsage;
+            lastUsage = null;
+            return usage;
         }
 
         List<List<Map<String, Object>>> messageLog() {
@@ -63,6 +78,13 @@ class AgentEvalSuite {
         }
 
         static Map<String, Object> toolCallResponse(String callId, String name, Map<String, Object> args) {
+            return toolCallResponse(callId, name, args, null);
+        }
+
+        static Map<String, Object> toolCallResponse(String callId, String name, Map<String, Object> args,
+                                                    Map<String, Object> usage) {
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("role", "assistant");
             Map<String, Object> function = new LinkedHashMap<>();
             function.put("name", name);
             function.put("arguments", local.codenode.Json.stringify(args == null ? Map.of() : args).replace("\n", ""));
@@ -70,7 +92,9 @@ class AgentEvalSuite {
             call.put("id", callId);
             call.put("type", "function");
             call.put("function", function);
-            return Map.of("role", "assistant", "tool_calls", List.of(call));
+            response.put("tool_calls", List.of(call));
+            if (usage != null) response.put("usage", usage);
+            return response;
         }
     }
 
@@ -220,5 +244,38 @@ class AgentEvalSuite {
 
         assertEquals(List.of("fake_fail", "fake_fail", "fake_ok"), toolCallSequence(controller),
                 "连续失败也应持续收到提示并最终成功");
+    }
+
+    @Test
+    void tokenBudgetStopsToolLoopButStillForcesSummary(@TempDir Path root) throws Exception {
+        // 第一轮工具调用即耗尽预算（limit=10，usage=10）；第二轮应被预算拦截，不再执行工具，
+        // 但仍应强制总结收尾，用户必收最终答案。
+        ScriptedChatClient client = new ScriptedChatClient(List.of(
+                ScriptedChatClient.toolCallResponse("call_1", "fake_ok", Map.of(),
+                        Map.of("prompt_tokens", 5, "completion_tokens", 5)),
+                ScriptedChatClient.textResponse("总结：预算已用尽，当前进度如下")));
+        AgentChatController controller = new AgentChatController(evalRegistry(), evalContext(root), client);
+        controller.tokenBudget().setLimit(10);
+        controller.sendMessage("执行任务", events -> {});
+        awaitIdle(controller, 20_000);
+
+        assertEquals(List.of("fake_ok"), toolCallSequence(controller),
+                "预算超限后不应再执行任何工具");
+        assertTrue(logContains(client.messageLog(), "token 预算已用尽"),
+                "应注入预算用尽提示");
+        assertTrue(logContains(client.messageLog(), "请基于以上工具执行结果"),
+                "预算拦截后仍应强制总结");
+        assertEquals(10, controller.tokenBudget().used(), "预算应精确累加 usage");
+    }
+
+    @Test
+    void truncatedToolResultCarriesReadToolResultHint(@TempDir Path root) throws Exception {
+        AgentToolContext context = evalContext(root);
+        AgentToolResult big = AgentToolResult.ok("x".repeat(10_000));
+        String payload = context.resultStore().modelPayload("result_abc", "fake_tool", big, 1000);
+        assertTrue(payload.length() <= 1000, "payload 不应超过上限，实际 " + payload.length());
+        assertTrue(payload.contains("已截断"), "截断处应标注截断");
+        assertTrue(payload.contains("read_tool_result"), "截断处应提示 read_tool_result 取全量");
+        assertTrue(payload.contains("result_abc"), "提示应携带 resultId");
     }
 }

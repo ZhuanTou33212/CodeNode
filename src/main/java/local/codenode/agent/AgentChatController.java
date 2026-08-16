@@ -48,22 +48,17 @@ public final class AgentChatController {
     private static final int DEFAULT_TOOL_TIMEOUT_SECONDS = 60;
     /** 长耗时工具（构建/运行/编译）的默认超时秒数。 */
     private static final int LONG_TOOL_TIMEOUT_SECONDS = 300;
-    /** 发送给 API 前保留的最大消息数（system 除外）。 */
-    private static final int MAX_HISTORY_MESSAGES = 20;
-    /** 触发摘要压缩的历史消息阈值。 */
-    private static final int SUMMARY_THRESHOLD = 40;
-    /** 工具结果发送给模型的最大字符数。 */
-    private static final int MAX_TOOL_RESULT_CHARS = 4000;
+    /** 窗口/摘要/截断策略已迁移至 MessageHistory 与 AgentConfig。 */
 
     private final AgentConfig config;
     private ChatClient client;
     private final AgentToolRegistry tools;
     private final AgentToolContext toolContext;
     private final AgentExecutionTimeline timeline = new AgentExecutionTimeline();
-    private final List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
+    /** 会话消息历史（滑动窗口/摘要/卫生/持久化，P1-2 拆分）。 */
+    private final MessageHistory history;
     private final ExecutorService toolExecutor = Executors.newCachedThreadPool();
     private String sessionId = UUID.randomUUID().toString();
-    private String sessionSummary = "";
     private volatile AgentProvider.SessionState state = AgentProvider.SessionState.IDLE;
     private volatile boolean stopRequested;
     private SubagentManager subagents;
@@ -77,6 +72,10 @@ public final class AgentChatController {
         this.client = createChatClient(config);
         this.tools = tools;
         this.toolContext = toolContext;
+        // P1-9a：harness.llm_summary=true 时启用 LLM 会话摘要（失败自动回退本地规则版）
+        this.history = new MessageHistory(toolContext,
+                config.llmSummaryEnabled() ? new LlmConversationSummarizer(this.client) : null);
+        this.sessionScope.budget().setLimit(config.maxTokensPerSession());
     }
 
     /** 按配置的 api_provider 创建生产 client，并套重试退避装饰器。 */
@@ -92,6 +91,7 @@ public final class AgentChatController {
         this.config = new AgentConfig();
         this.tools = tools;
         this.toolContext = toolContext;
+        this.history = new MessageHistory(toolContext);
         this.client = java.util.Objects.requireNonNull(client, "client");
     }
 
@@ -105,6 +105,11 @@ public final class AgentChatController {
 
     public ChatClient client() {
         return this.client;
+    }
+
+    /** 会话级 token 预算（测试可直接设置上限验证预算拦截行为）。 */
+    public local.codenode.agent.TokenBudget tokenBudget() {
+        return this.sessionScope.budget();
     }
 
     public AgentToolRegistry tools() {
@@ -158,29 +163,30 @@ public final class AgentChatController {
 
     public void reset() {
         deleteSessionFile();
-        this.messages.clear();
-        this.sessionSummary = "";
+        this.history.clear();
+        this.history.setSummary("");
         this.sessionId = UUID.randomUUID().toString();
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
         this.sessionScope.clearToolStop();
         this.sessionScope.permissionMemory().clear();
+        this.sessionScope.budget().reset();
     }
 
     /** Clear the active conversation without deleting project-scoped knowledge. */
     public void clearForDocumentSwitch() {
-        this.messages.clear();
-        this.sessionSummary = "";
+        this.history.clear();
+        this.history.setSummary("");
         this.sessionId = UUID.randomUUID().toString();
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
         this.sessionScope.clearToolStop();
         this.sessionScope.permissionMemory().clear();
+        this.sessionScope.budget().reset();
     }
 
     public AgentContext snapshotContext() {
-        return AgentContext.of(this.sessionId, this.sessionSummary,
-                this.messages.stream().filter(m -> !"system".equals(m.get("role"))).toList());
+        return AgentContext.of(this.sessionId, this.history.summary(), this.history.nonSystemMessages());
     }
 
     /** Restore a document-level context while retaining the current live system prompt. */
@@ -188,21 +194,18 @@ public final class AgentChatController {
         clearForDocumentSwitch();
         if (context == null) return;
         this.sessionId = context.sessionId().isBlank() ? UUID.randomUUID().toString() : context.sessionId();
-        this.messages.add(this.systemPrompt());
-        this.sessionSummary = context.summary();
+        this.history.add(this.systemPrompt());
+        this.history.setSummary(context.summary());
         context.messages().stream()
                 .filter(message -> !"system".equals(String.valueOf(message.get("role"))))
-                .forEach(this.messages::add);
+                .forEach(this.history::add);
     }
     public List<Map<String, Object>> messageHistory() {
-        return this.messages.stream()
-                .filter(message -> !"system".equals(String.valueOf(message.get("role"))))
-                .map(Map::copyOf)
-                .toList();
+        return this.history.nonSystemMessages();
     }
 
     public String summary() {
-        return this.sessionSummary;
+        return this.history.summary();
     }
 
     public void sendMessage(String userText, ChatListener listener) {
@@ -213,11 +216,11 @@ public final class AgentChatController {
         if (userText == null || userText.isBlank()) {
             return;
         }
-        if (this.messages.isEmpty()) {
-            this.messages.add(this.systemPrompt());
+        if (this.history.size() == 0) {
+            this.history.add(this.systemPrompt());
             this.loadSessionFile();
         } else {
-            this.messages.set(0, this.systemPrompt());
+            this.history.setSystemPrompt(this.systemPrompt());
         }
         this.state = AgentProvider.SessionState.ACTIVE_RUNNING;
         this.timeline.beginTask(userText);
@@ -225,12 +228,12 @@ public final class AgentChatController {
         listener.onEvent(ChatEvent.state(this.state));
         this.trace = new AgentTraceWriter(this.toolContext.projectRoot(), this.sessionId);
         this.trace.event("session_start", Map.of("task", userText));
-        this.messages.add(Map.of("role", "user", "content", userText));
+        this.history.add(Map.of("role", "user", "content", userText));
         List<KnowledgeGraph.Conflict> observedConflicts = this.toolContext.knowledgeGraph().detectTextConflicts(userText);
         if (!observedConflicts.isEmpty()) {
             this.toolContext.knowledgeGraph().recordConflicts(observedConflicts);
             this.toolContext.audit("memory conflict proposal detected count=" + observedConflicts.size());
-            this.messages.set(0, this.systemPrompt());
+            this.history.setSystemPrompt(this.systemPrompt());
         }
         this.saveSessionFile();
         Thread.startVirtualThread(() -> {
@@ -274,7 +277,7 @@ public final class AgentChatController {
         for (int i = steps.size() - 1; i >= from; i--) {
             AgentExecutionTimeline.Step step = steps.get(i);
             sb.append("- ").append(step.tool()).append(" [").append(step.state()).append("] ")
-                    .append(AgentChatController.truncate(step.summary(), 100)).append('\n');
+                    .append(MessageHistory.truncate(step.summary(), 100)).append('\n');
         }
         List<TaskManager.Task> tasks = this.toolContext.taskManager().list();
         if (!tasks.isEmpty()) {
@@ -288,124 +291,26 @@ public final class AgentChatController {
         return sb.toString();
     }
 
-    /** 发送给 API 的消息列表：system + 摘要占位 + 最近 N 条（滑动窗口短期记忆）。 */
+    /** 发送给 API 的消息列表：system + 摘要占位 + 最近 N 条（滑动窗口短期记忆，委托 MessageHistory）。 */
     private List<Map<String, Object>> requestMessages() {
-        this.sanitizeToolMessages();
-        List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
-        for (Map<String, Object> message : this.messages) {
-            if ("system".equals(message.get("role"))) {
-                result.add(message);
-                break;
-            }
-        }
-        if (!this.sessionSummary.isBlank()) {
-            LinkedHashMap<String, Object> summary = new LinkedHashMap<String, Object>();
-            summary.put("role", "system");
-            summary.put("content", "【早期会话摘要】" + this.sessionSummary + "\n（以下为最近对话）");
-            result.add(summary);
-        }
-        List<Map<String, Object>> recent = this.messages.stream()
-                .filter(m -> !"system".equals(m.get("role")))
-                .toList();
-        int from = AgentChatController.adjustWindowStart(recent, recent.size() - MAX_HISTORY_MESSAGES);
-        for (int i = from; i < recent.size(); i++) {
-            result.add(recent.get(i));
-        }
-        return result;
+        return this.history.requestMessages();
     }
 
-    /** 会话摘要：messages 超阈值时，把早期消息压缩为一段摘要（本地规则版，避免额外 API 调用与失败风险）。 */
+    /** 会话摘要：messages 超阈值时压缩早期消息（委托 MessageHistory；LLM 摘要失败自动回退本地规则版）。 */
     private void compactHistory() {
-        List<Map<String, Object>> nonSystem = this.messages.stream()
-                .filter(m -> !"system".equals(m.get("role")))
-                .toList();
-        if (nonSystem.size() <= SUMMARY_THRESHOLD) return;
-        int keepFrom = AgentChatController.adjustWindowStart(nonSystem, nonSystem.size() - MAX_HISTORY_MESSAGES);
-        StringBuilder sb = new StringBuilder();
-        sb.append(this.sessionSummary.isBlank() ? "" : this.sessionSummary + "\n");
-        List<Map<String, Object>> early = nonSystem.subList(0, keepFrom);
-        StringBuilder source = new StringBuilder();
-        for (Map<String, Object> message : early) {
-            String role = String.valueOf(message.get("role"));
-            String content = String.valueOf(message.getOrDefault("content", ""));
-            String toolName = "";
-            if ("tool".equals(role) && message.get("tool_call_id") instanceof String) {
-                // 工具结果：压缩为短摘要
-                if (content.length() > 200) content = content.substring(0, 200) + "…";
-            } else if ("assistant".equals(role) && message.get("tool_calls") instanceof List) {
-                toolName = "[调用工具]";
-            }
-            sb.append(role).append(toolName).append(": ").append(content.length() > 300 ? content.substring(0, 300) + "…" : content).append("\n");
-            if (!content.isBlank()) source.append(role).append(": ").append(content).append('\n');
-        }
-        TextSummarizer.Summary precise = new TextSummarizer().summarize(source.toString());
-        String local = "主题：" + precise.title() + "\n摘要：" + precise.summary()
-                + "\n关键词：" + String.join(",", precise.keywords());
-        this.sessionSummary = local.length() > 4000 ? local.substring(0, 4000) + "…" : local;
-        if (!source.isEmpty()) {
-            try {
-                KnowledgeGraph fragment = new ConversationGraphParser().parse(source.toString(), "", "conversation:compacted");
-                this.toolContext.knowledgeGraph().merge(fragment);
-                this.toolContext.memoryStore().remember("conversation-compacted", local, "conversation:compacted");
-                this.toolContext.saveProject();
-            } catch (RuntimeException ignored) { }
-        }
-        // 裁剪消息：保留 system + 最近窗口（确保窗口首条不是孤立的 tool 消息）
-        List<Map<String, Object>> kept = new ArrayList<Map<String, Object>>();
-        for (Map<String, Object> message : this.messages) {
-            if ("system".equals(message.get("role"))) {
-                kept.add(message);
-            }
-        }
-        kept.addAll(nonSystem.subList(keepFrom, nonSystem.size()));
-        this.messages.clear();
-        this.messages.addAll(kept);
+        this.history.compactHistory();
     }
 
     private void saveSessionFile() {
-        try {
-            Path root = this.toolContext.projectRoot();
-            Path dir = root.resolve(".codenode/agent-sessions");
-            Files.createDirectories(dir);
-            LinkedHashMap<String, Object> record = new LinkedHashMap<String, Object>();
-            record.put("sessionId", this.sessionId);
-            record.put("summary", this.sessionSummary);
-            record.put("messages", this.messages.stream()
-                    .filter(m -> !"system".equals(m.get("role")))
-                    .toList());
-            Files.writeString(dir.resolve(this.sessionId + ".json"), Json.stringify(record),
-                    StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-        } catch (IOException ignored) {
-            // 持久化失败不阻断会话
-        }
+        this.history.saveSessionFile(this.toolContext.projectRoot(), this.sessionId);
     }
 
     private void loadSessionFile() {
-        try {
-            Path root = this.toolContext.projectRoot();
-            Path file = root.resolve(".codenode/agent-sessions").resolve(this.sessionId + ".json");
-            if (!Files.isRegularFile(file)) return;
-            Map<String, Object> record = Json.object(Files.readString(file, StandardCharsets.UTF_8));
-            if (record.get("summary") instanceof String summary && !summary.isBlank()) {
-                this.sessionSummary = summary;
-            }
-            if (record.get("messages") instanceof List<?> list) {
-                for (Object item : list) {
-                    if (item instanceof Map<?, ?> map) {
-                        this.messages.add(AgentChatController.toStringMap(map));
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-            // 恢复失败忽略
-        }
+        this.history.loadSessionFile(this.toolContext.projectRoot(), this.sessionId);
     }
 
     private void deleteSessionFile() {
-        try {
-            Path file = this.toolContext.projectRoot().resolve(".codenode/agent-sessions").resolve(this.sessionId + ".json");
-            Files.deleteIfExists(file);
-        } catch (IOException ignored) {}
+        this.history.deleteSessionFile(this.toolContext.projectRoot(), this.sessionId);
     }
 
     private Map<String, Object> systemPrompt() {
@@ -453,14 +358,14 @@ public final class AgentChatController {
                 sb.append("\n[Project Markdown memory]\n");
                 for (MemoryStore.Entry entry : localMemory) {
                     sb.append("- ").append(entry.title()).append(": ")
-                            .append(truncate(entry.content().replaceAll("\\s+", " "), 420)).append('\n');
+                            .append(MessageHistory.truncate(entry.content().replaceAll("\\s+", " "), 420)).append('\n');
                 }
             }
         } catch (RuntimeException ignored) { }
         String userMemory = new UserMemoryStore().read();
         if (!userMemory.isBlank()) {
             sb.append("\n[User memory]（跨项目用户级记忆，来自 ~/.codenode/user-memory.md；需要更新时用 user_memory_save）\n")
-                    .append(truncate(userMemory, 1500)).append('\n');
+                    .append(MessageHistory.truncate(userMemory, 1500)).append('\n');
         }
         KnowledgeGraph knowledge = this.toolContext.knowledgeGraph();
         if (!knowledge.pendingConflicts().isEmpty()) {
@@ -500,13 +405,24 @@ public final class AgentChatController {
         int retryNudges = 0;
         int nextPlanCheckAt = PLAN_CHECK_INTERVAL;
         while (!this.stopRequested && guard++ < MAX_TOOL_LOOP) {
+            // 会话 token 预算检查：超限后停止工具调用，直接进入收尾总结（防失控循环超额消耗）
+            if (this.sessionScope.budget().exceeded()) {
+                this.traceEvent("budget_exceeded", Map.of("round", guard,
+                        "used", this.sessionScope.budget().used(), "limit", this.sessionScope.budget().limit()));
+                this.history.add(Map.of("role", "user", "content",
+                        "【系统提示】会话 token 预算已用尽（" + this.sessionScope.budget().used() + "/"
+                                + this.sessionScope.budget().limit() + "），请停止调用工具，直接总结当前进度与结论。"));
+                this.saveSessionFile();
+                break;
+            }
             long chatStart = System.currentTimeMillis();
             Map<String, Object> assistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
             long chatDuration = System.currentTimeMillis() - chatStart;
             Map<String, Object> usage = this.client.lastUsage();
             this.traceEvent("llm_call", Map.of("round", guard, "durationMs", chatDuration,
                     "usage", usage == null ? Map.of() : usage));
-            this.messages.add(assistant);
+            this.sessionScope.budget().record(usage);
+            this.history.add(assistant);
             Object rawCalls = assistant.get("tool_calls");
             if (!(rawCalls instanceof List<?>) || ((List<?>)rawCalls).isEmpty()) {
                 // 模型没有继续调用工具：若上一轮工具失败/空结果且未耗尽重试次数，提示继续思考其他方案，
@@ -515,7 +431,7 @@ public final class AgentChatController {
                     retryNudges++;
                     lastRoundHadIssue = false;
                     this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "empty_turn_after_issue"));
-                    this.messages.add(Map.of("role", "user",
+                    this.history.add(Map.of("role", "user",
                             "content", "【系统提示】上一轮工具执行失败或返回了空结果，任务尚未完成。请换一种思路继续：尝试不同的工具、不同的参数或更小的步骤，直到真正拿到结果；确实无法完成时再向用户说明。"));
                     this.saveSessionFile();
                     continue;
@@ -577,12 +493,12 @@ public final class AgentChatController {
                 }
                 this.traceEvent("tool_call", Map.of("tool", name, "ok", result.ok(),
                         "durationMs", System.currentTimeMillis() - toolStart,
-                        "preview", AgentChatController.truncate(result.text(), 200)));
+                        "preview", MessageHistory.truncate(result.text(), 200)));
                 listener.onEvent(ChatEvent.state(AgentProvider.SessionState.ACTIVE_RUNNING));
                 String resultText = result.ok() ? result.text() : "失败：" + result.text();
                 String resultId = this.toolContext.resultStore().store(name, result);
-                String structured = this.toolContext.resultStore().modelPayload(resultId, name, result, MAX_TOOL_RESULT_CHARS);
-                String preview = AgentChatController.truncate(resultText, 1200);
+                String structured = this.toolContext.resultStore().modelPayload(resultId, name, result, this.config.maxToolResultChars());
+                String preview = MessageHistory.truncate(resultText, 1200);
                 boolean reversible = beforeWorkbench != null && result.ok() && this.toolContext.model() != null && this.toolContext.model().revision() != beforeWorkbench.revision();
                 // 判定本轮是否出现失败/空结果/超时：失败、空文本、取消、超时都视为未取得有效结果
                 boolean issue = !result.ok() || result.text() == null || result.text().isBlank()
@@ -605,7 +521,7 @@ public final class AgentChatController {
                 toolMessage.put("role", "tool");
                 toolMessage.put("tool_call_id", callId);
                 toolMessage.put("content", structured);
-                this.messages.add(toolMessage);
+                this.history.add(toolMessage);
             }
             this.saveSessionFile();
             // 本轮执行了工具且存在失败：立即注入"重新思考"提示并继续，而不是等模型主动停下
@@ -613,7 +529,7 @@ public final class AgentChatController {
                 retryNudges++;
                 lastRoundHadIssue = false;
                 this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "tool_issue"));
-                this.messages.add(Map.of("role", "user",
+                this.history.add(Map.of("role", "user",
                         "content", "【系统提示】刚才的工具调用失败或返回空结果，任务尚未完成。请重新思考：换一种工具、调整参数、缩小步骤或换个思路重试，直到真正取得结果；只有多种方案都失败时才向用户说明。"));
                 this.saveSessionFile();
             }
@@ -622,10 +538,10 @@ public final class AgentChatController {
             if (!this.stopRequested && doneSteps >= nextPlanCheckAt) {
                 nextPlanCheckAt = doneSteps + PLAN_CHECK_INTERVAL;
                 this.traceEvent("plan_check", Map.of("steps", doneSteps));
-                this.messages.add(Map.of("role", "user", "content", this.planCheckPrompt(doneSteps)));
+                this.history.add(Map.of("role", "user", "content", this.planCheckPrompt(doneSteps)));
                 this.saveSessionFile();
             }
-            if (this.messages.size() > SUMMARY_THRESHOLD) {
+            if (this.history.needsCompaction()) {
                 this.compactHistory();
                 this.saveSessionFile();
             }
@@ -636,16 +552,16 @@ public final class AgentChatController {
             this.timeline.verify();
             Map<String, Object> summaryRequest = Map.of("role", "user",
                     "content", "请基于以上工具执行结果与用户提供的回答，总结本次任务的结论，并给出清晰、完整的最终答案回复给用户。注意：你的回复内容本身就会直接展示给用户，请务必把最终答案写在回复正文（content）中，不要只放在推理里。");
-            this.messages.add(summaryRequest);
+            this.history.add(summaryRequest);
             if (guard < MAX_TOOL_LOOP) {
                 Map<String, Object> finalAssistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
-                this.messages.add(finalAssistant);
+                this.history.add(finalAssistant);
                 this.saveSessionFile();
             }
-        } else if (!this.stopRequested && !this.messages.isEmpty()) {
+        } else if (!this.stopRequested && this.history.size() > 0) {
             // 未调用工具也检查：若最后一条 assistant 只有推理没有正文，把推理结论作为正式答案输出，
             // 避免"想出了答案却不显示"。
-            Map<String, Object> last = this.messages.get(this.messages.size() - 1);
+            Map<String, Object> last = this.history.last();
             if ("assistant".equals(last.get("role"))
                     && (last.get("content") == null || String.valueOf(last.get("content")).isBlank())
                     && last.get("reasoning") != null
@@ -656,11 +572,7 @@ public final class AgentChatController {
         }
     }
 
-    private static String truncate(String text, int max) {
-        if (text == null) return "";
-        if (text.length() <= max) return text;
-        return text.substring(0, max) + "\n…（已截断，共 " + text.length() + " 字符）";
-    }
+    /** 移除已迁移到 MessageHistory 的静态工具方法（truncate/adjustWindowStart/sanitize 已委托）。 */
 
     /**
      * 带超时执行单个工具：在独立线程运行，超过 timeoutSeconds 未返回则视为超时失败。
@@ -670,9 +582,8 @@ public final class AgentChatController {
         this.sessionScope.clearToolStop();
         Future<AgentToolResult> future = this.toolExecutor.submit(() -> {
             this.toolContext.setSubagentManager(this.subagentManager());
-            this.toolContext.setSessionScope(this.sessionScope);
-            try { return this.tools.execute(name, args, this.toolContext); }
-            finally { this.toolContext.setSessionScope(null); this.toolContext.setSubagentManager(null); }
+            try { return this.tools.execute(name, args, this.toolContext, this.sessionScope); }
+            finally { this.toolContext.setSubagentManager(null); }
         });
         try {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
@@ -714,42 +625,7 @@ public final class AgentChatController {
         return DEFAULT_TOOL_TIMEOUT_SECONDS;
     }
 
-    /**
-     * 调整滑动窗口起点：若窗口首条是 role=tool 的消息（其 assistant.tool_calls 前驱会被裁掉，
-     * 违反 OpenAI "tool 必须紧跟 tool_calls" 约束），则向前移动起点包含其前驱；
-     * 若起点本身是 assistant（可能含 tool_calls，后续 tool 跟随），保持不变。
-     */
-    private static int adjustWindowStart(List<Map<String, Object>> recent, int from) {
-        if (recent == null || recent.isEmpty()) return 0;
-        from = Math.max(0, Math.min(from, recent.size()));
-        // 若首条是 tool，向前推进到它前面的 assistant（含 tool_calls）
-        while (from > 0 && "tool".equals(recent.get(from).get("role"))) {
-            from--;
-        }
-        return from;
-    }
-
-    /** 防御：移除 messages 中孤立的 tool 消息（前面没有 assistant.tool_calls 前驱），避免 API 400。 */
-    private void sanitizeToolMessages() {
-        boolean expectingToolResponse = false;
-        List<Map<String, Object>> clean = new ArrayList<Map<String, Object>>();
-        for (Map<String, Object> message : this.messages) {
-            String role = String.valueOf(message.get("role"));
-            if ("assistant".equals(role)) {
-                expectingToolResponse = message.get("tool_calls") instanceof List<?> && !((List<?>)message.get("tool_calls")).isEmpty();
-                clean.add(message);
-            } else if ("tool".equals(role)) {
-                if (!expectingToolResponse) continue; // 丢弃孤立的 tool 消息
-                clean.add(message);
-            } else {
-                clean.add(message);
-            }
-        }
-        if (clean.size() != this.messages.size()) {
-            this.messages.clear();
-            this.messages.addAll(clean);
-        }
-    }
+    /** 防御：移除 messages 中孤立的 tool 消息（已委托 MessageHistory.sanitizeToolMessages）。 */
 
     public void requestStop() {
         if (this.state != AgentProvider.SessionState.ACTIVE_RUNNING) {

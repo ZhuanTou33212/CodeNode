@@ -97,7 +97,11 @@ public final class AgentToolContext {
 
     /** 请求用户确认（旧签名，低风险默认询问）。 */
     public boolean confirm(String message) {
-        return this.confirmation == null || this.confirmation.confirm(ConfirmationLevel.WRITE, message, "");
+        if (this.confirmation == null) {
+            audit("确认处理器缺失，默认拒绝（fail-closed）：" + message);
+            return false;
+        }
+        return this.confirmation.confirm(ConfirmationLevel.WRITE, message, "");
     }
 
     /**
@@ -105,7 +109,7 @@ public final class AgentToolContext {
      * 低风险（项目内 write_file 等）默认放行。确认文案用自然语言解释"在做什么"。
      */
     public boolean confirm(ConfirmationLevel level, String what, String detail) {
-        if (!permissionAllowed("system")) return false;
+        if (!systemEnabled()) return false;
         String category = switch (level) {
             case UI -> "ui";
             case WRITE -> "write";
@@ -120,7 +124,12 @@ public final class AgentToolContext {
             Boolean remembered = permissionMemory().get(signature);
             if (remembered != null) return remembered;
         }
-        boolean allowed = this.confirmation == null || this.confirmation.confirm(level, what, detail);
+        if (this.confirmation == null) {
+            // fail-closed：无确认处理器时拒绝而非放行（原实现 null 直接放行）
+            audit("确认处理器缺失，默认拒绝（fail-closed）：level=" + level + " what=" + what);
+            return false;
+        }
+        boolean allowed = this.confirmation.confirm(level, what, detail);
         if (rememberApprovals) permissionMemory().remember(signature, allowed);
         return allowed;
     }
@@ -132,10 +141,37 @@ public final class AgentToolContext {
         for (String item : raw.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) return pair[1].trim().toLowerCase(java.util.Locale.ROOT); }
         return "";
     }
+    /**
+     * 权限类别是否放行（fail-closed）：
+     * <ul>
+     *   <li>配置完全为空时仅 {@code system} 总开关默认开启（逃生门语义），其余类别一律拒绝；</li>
+     *   <li>类别未在配置中声明时默认拒绝（deny-by-default）并记审计——配置漏写不再静默放行；</li>
+     *   <li>显式声明 allow/enabled/confirm 才放行。</li>
+     * </ul>
+     */
     public boolean permissionAllowed(String category) {
         String raw = permissionSupplier.get();
-        if (raw == null || raw.isBlank()) return true;
+        if (raw == null || raw.isBlank()) return "system".equalsIgnoreCase(category);
         for (String item : raw.split(",")) { String[] pair = item.trim().split(":", 2); if (pair.length == 2 && pair[0].trim().equalsIgnoreCase(category)) { String value = pair[1].trim().toLowerCase(java.util.Locale.ROOT); return value.equals("allow") || value.equals("enabled") || value.equals("confirm"); } }
+        audit("权限类别未配置，默认拒绝（deny-by-default）：category=" + category);
+        return false;
+    }
+
+    /**
+     * 系统总开关：仅显式 {@code system:deny/disabled/off} 才关闭；
+     * 未声明 system 时默认开启（逃生门语义，与类别授权的 fail-closed 正交——
+     * 用户只声明了 ui/write 等类别时不应被隐式当作总开关关闭）。
+     */
+    public boolean systemEnabled() {
+        String raw = permissionSupplier.get();
+        if (raw == null || raw.isBlank()) return true;
+        for (String item : raw.split(",")) {
+            String[] pair = item.trim().split(":", 2);
+            if (pair.length == 2 && pair[0].trim().equalsIgnoreCase("system")) {
+                String value = pair[1].trim().toLowerCase(java.util.Locale.ROOT);
+                return value.equals("allow") || value.equals("enabled") || value.equals("confirm");
+            }
+        }
         return true;
     }
 
@@ -280,6 +316,23 @@ public final class AgentToolContext {
     /** 绑定当前线程的会话作用域（工具执行前由 controller 设置，执行后置空）。 */
     public void setSessionScope(AgentSessionScope scope) {
         if (scope == null) sessionScope.remove(); else sessionScope.set(scope);
+    }
+
+    /**
+     * 在指定会话作用域下执行动作（P2-8 显式参数化）：执行期间绑定 scope 到当前线程，
+     * 结束后恢复原绑定。MCP bridge 等跨线程调用点通过它显式传递调用方的 scope，
+     * 不再依赖「恰好运行在已绑定线程」的隐式假设。
+     */
+    public <T> T runWithScope(AgentSessionScope scope, java.util.function.Supplier<T> action) {
+        if (scope == null) return action.get();
+        AgentSessionScope previous = sessionScope.get();
+        sessionScope.set(scope);
+        try {
+            return action.get();
+        } finally {
+            if (previous != null) sessionScope.set(previous);
+            else sessionScope.remove();
+        }
     }
 
     /** 当前线程绑定的会话作用域；未绑定时返回 null（调用方使用共享兜底）。 */

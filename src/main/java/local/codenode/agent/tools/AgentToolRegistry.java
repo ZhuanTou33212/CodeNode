@@ -1,5 +1,7 @@
 package local.codenode.agent.tools;
 
+import local.codenode.agent.AgentSessionScope;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,7 +36,7 @@ public final class AgentToolRegistry {
     }
 
     public AgentToolResult execute(String name, Map<String, Object> arguments, AgentToolContext context) {
-        if (context != null && !context.permissionAllowed("system")) {
+        if (context != null && !context.systemEnabled()) {
             return AgentToolResult.error("Agent 工具总开关已关闭（agent.permissions system:disabled）");
         }
         RegisteredTool tool = tools.get(name);
@@ -47,6 +49,16 @@ public final class AgentToolRegistry {
         } catch (Exception e) {
             return AgentToolResult.error("工具 " + name + " 执行失败：" + e.getMessage());
         }
+    }
+
+    /**
+     * 显式指定会话作用域执行工具（P2-8）：跨线程调用点（MCP bridge、子代理等）
+     * 传入调用方的 {@code AgentSessionScope}，由 context 在执行期间绑定，
+     * 不依赖 ThreadLocal 恰好已绑定；scope 为 null 时等价于无 scope 版本（共享兜底）。
+     */
+    public AgentToolResult execute(String name, Map<String, Object> arguments, AgentToolContext context, AgentSessionScope scope) {
+        if (scope == null) return execute(name, arguments, context);
+        return context.runWithScope(scope, () -> execute(name, arguments, context));
     }
 
     private static String validate(Map<String, Object> schema, Map<String, Object> arguments) {

@@ -35,7 +35,10 @@ public final class AgentResultStore {
         String json = Json.stringify(payload);
         if (json.length() <= maxChars) return json;
         int textBudget = Math.max(600, maxChars / 2);
-        payload.put("text", truncate(result.text(), textBudget));
+        String raw = result.text() == null ? "" : result.text();
+        // 截断处显式标记：模型不必“想起来”，提示直接引导 read_tool_result 取全量
+        payload.put("text", truncate(raw, textBudget)
+                + "\n…（结果已截断，共 " + raw.length() + " 字符；如需完整内容，请调用 read_tool_result resultId=" + resultId + " 获取）");
         return Json.stringify(payload);
     }
 

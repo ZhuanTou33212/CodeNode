@@ -109,7 +109,7 @@ final class CodeNodeMcpServer {
         if (toolBridge == null || !toolBridge.contains(name)) {
             throw new IllegalArgumentException("Unknown CodeNode tool: " + name);
         }
-        AgentToolResult result = toolBridge.execute(name, arguments, bridgeContext);
+        AgentToolResult result = toolBridge.execute(name, arguments, bridgeContext, bridgeContext.sessionScope());
         return Map.of("content", List.of(Map.of("type", "text", "text", result.toJson())), "isError", !result.ok());
     }
 

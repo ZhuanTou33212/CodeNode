@@ -268,6 +268,16 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         }, () -> SwingUtilities.invokeLater(this::saveProject), () -> SwingUtilities.invokeLater(this::undo), () -> SwingUtilities.invokeLater(this::redo), this::agentUiAction);
         this.agentToolContext.setSoftwareInfoProvider(this);
         this.agentToolContext.setPermissionSupplier(this.agentConfig::permissions);
+        // 启动校验：agent.permissions 配置完整性（fail-closed 兜底）。缺类别时给出可见警告。
+        {
+            String permRaw = this.agentConfig.permissions();
+            String missing = java.util.Arrays.stream(new String[]{"system", "ui", "write", "execute"})
+                    .filter(cat -> !permRaw.toLowerCase().contains(cat + ":"))
+                    .reduce((a, b) -> a + "," + b).orElse("");
+            if (!missing.isBlank()) {
+                this.append("[Agent] 警告：agent.permissions 未声明类别（" + missing + "），这些类别将默认拒绝（deny-by-default）。当前配置：" + permRaw);
+            }
+        }
         this.agentToolContext.setKnowledgeGraphSupplier(this::currentKnowledgeGraph);
         this.agentToolContext.setTaskManagerSupplier(this::currentTaskManager);
         this.agentToolContext.setQuestionHandler((question, options) -> {

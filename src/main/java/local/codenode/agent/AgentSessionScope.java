@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class AgentSessionScope {
     private final AtomicBoolean toolStopRequested = new AtomicBoolean(false);
     private final PermissionMemory permissionMemory = new PermissionMemory();
+    /** 会话级 token 预算（防失控循环超额消耗；limit=0 不限）。 */
+    private final TokenBudget budget = new TokenBudget();
 
     public void requestToolStop() {
         toolStopRequested.set(true);
@@ -28,5 +30,9 @@ public final class AgentSessionScope {
 
     public PermissionMemory permissionMemory() {
         return permissionMemory;
+    }
+
+    public TokenBudget budget() {
+        return budget;
     }
 }

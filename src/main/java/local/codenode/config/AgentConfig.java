@@ -111,6 +111,20 @@ public final class AgentConfig {
 
     // ---------- harness 与工具设置（Stage6） ----------
 
+    /** 会话级 token 预算上限（agent.budget.max_tokens_per_session；0=不限）。 */
+    public long maxTokensPerSession() {
+        try {
+            return Long.parseLong(properties.getProperty("agent.budget.max_tokens_per_session", "0").trim());
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** 工具结果回传给模型的最大字符数（tools.max_result_chars；缺省 4000）。 */
+    public int maxToolResultChars() {
+        return parseInt(properties.getProperty("tools.max_result_chars", "4000"), 4000);
+    }
+
     /** 禁用的工具名列表（逗号分隔；空=全部启用）。禁用优先级高于 {@link #enabledTools()}。 */
     public List<String> disabledTools() {
         return parseList(properties.getProperty("tools.disabled", ""));
@@ -125,6 +139,11 @@ public final class AgentConfig {
     public String extraHarnessPrompt() {
         String value = properties.getProperty("harness.extra_prompt", "");
         return value.replace("\\n", "\n").trim();
+    }
+
+    /** 是否启用 LLM 会话摘要（harness.llm_summary=true；默认 false=本地规则版，避免额外 API 调用）。 */
+    public boolean llmSummaryEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("harness.llm_summary", "false").trim());
     }
 
     // ---------- 外部 MCP server 配置（P1） ----------

@@ -24,6 +24,9 @@ public final class ExecuteShellTool {
         "go", "python", "python3", "node", "npm", "nuget"
     );
 
+    /** 输出累计上限（字符）：防失控输出撑爆内存（P2-6）。 */
+    private static final int MAX_OUTPUT_CHARS = 2_000_000;
+
     private ExecuteShellTool() {}
 
     public static void register(AgentToolRegistry registry) {
@@ -78,7 +81,14 @@ public final class ExecuteShellTool {
                     byte[] buffer = new byte[4096];
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
-                        output.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+                        String chunk = new String(buffer, 0, read, StandardCharsets.UTF_8);
+                        if (output.length() < MAX_OUTPUT_CHARS) {
+                            int room = MAX_OUTPUT_CHARS - output.length();
+                            output.append(chunk.length() <= room ? chunk : chunk.substring(0, room));
+                            if (output.length() >= MAX_OUTPUT_CHARS) {
+                                output.append("\n…（输出超过 ").append(MAX_OUTPUT_CHARS).append(" 字符，已截断）");
+                            }
+                        }
                     }
                 } catch (IOException ignored) {}
             });

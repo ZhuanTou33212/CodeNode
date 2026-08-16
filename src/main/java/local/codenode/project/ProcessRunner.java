@@ -78,13 +78,22 @@ public final class ProcessRunner {
         if (process.isAlive()) process.destroyForcibly();
     }
 
+    /** 子进程输出累计上限（字符）：防失控输出撑爆内存/回传超限（P2-6）。 */
+    private static final int MAX_OUTPUT_CHARS = 2_000_000;
+
     private static void pipe(InputStream in, StringBuilder out, Consumer<String> logSink) {
         try (var stream = in) {
             byte[] buffer = new byte[4096];
             int read;
             while ((read = stream.read(buffer)) >= 0) {
                 String chunk = new String(buffer, 0, read, StandardCharsets.UTF_8);
-                out.append(chunk);
+                if (out.length() < MAX_OUTPUT_CHARS) {
+                    int room = MAX_OUTPUT_CHARS - out.length();
+                    out.append(chunk.length() <= room ? chunk : chunk.substring(0, room));
+                    if (out.length() >= MAX_OUTPUT_CHARS) {
+                        out.append("\n…（输出超过 ").append(MAX_OUTPUT_CHARS).append(" 字符，已截断）");
+                    }
+                }
                 if (logSink != null) {
                     int from = 0;
                     int nl;
