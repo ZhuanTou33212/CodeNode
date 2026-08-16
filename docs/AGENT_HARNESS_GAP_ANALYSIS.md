@@ -149,6 +149,18 @@
 - MCP client 仅支持 stdio transport（HTTP/SSE transport 未实现）。
 - Gemini 原生协议未单独实现（其 OpenAI 兼容端点可覆盖）；如遇兼容问题再补适配。
 
+### review 整改：安全/预算/截断/拆分/摘要/进程/冒烟/scope（2026-08-16，对应 AGENT_HARNESS_REVIEW_2026-08-16.md 劣势项）
+按 review 优先级路线实施（P0→P2），全部有确定性回归覆盖（`AgentEvalSuite` 8 场景 + 新增单测）：
+
+- **P0-5 权限 fail-closed（劣势 #5）**：`AgentToolContext.permissionAllowed` 未配置类别时由放行改为默认拒绝并记审计（仅 `system` 总开关在配置完全为空时默认开，逃生门语义）；`confirm`（新旧签名）在 `ConfirmationHandler` 为 null 时由放行改为拒绝 + 审计；`MainFrame` 装配处启动校验 `agent.permissions` 四类别完整性，缺失打可见警告。测试回归：`AgentEvalSuite`（handler 注入 `-> true`）不受影响。
+- **P0-14 会话 token 预算（劣势 #14）**：新增 `agent/TokenBudget.java`（会话级，挂 `AgentSessionScope` 随 tab 隔离；`limit=0` 不限）；`AgentChatController` 每轮 `chat` 后累加 usage（OpenAI/Anthropic 键已统一），超限后注入「预算用尽」提示并停止工具循环，仍强制总结收尾；`reset/clearForDocumentSwitch` 重置预算。配置 `agent.budget.max_tokens_per_session`。测试：`TokenBudgetTest`（4 项）+ `AgentEvalSuite.tokenBudgetStopsToolLoopButStillForcesSummary`。
+- **P1-11 截断显式标记（劣势 #11）**：`AgentResultStore.modelPayload` 截断处追加「结果已截断，共 N 字符；请调用 read_tool_result resultId=xxx 获取完整内容」显式提示（不再依赖模型"想起来"）；上限改为可配 `tools.max_result_chars`（缺省 4000）。测试：`AgentEvalSuite.truncatedToolResultCarriesReadToolResultHint`。
+- **P1-2 controller 拆分（劣势 #2，第一步）**：新增 `agent/MessageHistory.java`，从 `AgentChatController`（775 行）抽出消息列表/滑动窗口/摘要压缩/消息卫生/持久化（约 200 行），controller 保留循环与工具调度并委托；窗口/摘要常量随之迁移。`AgentEnhancementTest` 的 5 个反射测试改写为直接测 `MessageHistory`。后续可继续拆 `ToolLoop`/`Planner`/`SubagentRunner`。
+- **P1-9a LLM 会话摘要（劣势 #9，第一步）**：新增 `agent/ConversationSummarizer.java`（策略接口）+ `agent/LlmConversationSummarizer.java`（复用现有 `ChatClient` 压缩早期会话，失败/空输出回退本地 `TextSummarizer`）；配置 `harness.llm_summary=true` 启用（默认 false 保持本地规则版，避免默认增加 API 调用）。测试：`LlmConversationSummarizerTest`（5 项）。
+- **P2-6 进程输出钳制（劣势 #6，进程级部分）**：确认 `ProcessRunner.terminateTree`（ProcessHandle.descendants 递归强杀）已覆盖全部子进程路径（BuildRunner/RunLauncher/ExecuteShellTool）；补输出钳制：`ProcessRunner.pipe` 与 `ExecuteShellTool` 输出累计超 200 万字符截断并标注，防失控输出撑爆内存。
+- **P2-12 真实模型冒烟（劣势 #12）**：新增 `src/test/.../AgentModelSmokeSuite.java`（手动 profile）：固定任务 + 真实模型 + 判定工作台模型终态/timeline 工具轨迹（非模型自述）；默认跳过（`-Dcodenode.smoke=true` 开启，`-Dcodenode.config=` 指定配置文件），CI 无 key 不受影响。
+- **P2-8 scope 显式参数化（劣势 #8）**：`AgentToolContext.runWithScope(scope, action)` + `AgentToolRegistry.execute(name, args, context, scope)` 重载；controller 工具执行与 `CodeNodeMcpServer` bridge 调用点显式传调用方 scope，不再依赖「恰好运行在已绑定线程」；无会话场景（外部 MCP 客户端）仍回退共享兜底。
+
 ## 相关文件索引
 
 - `src/main/java/local/codenode/agent/tools/AgentToolContext.java`
