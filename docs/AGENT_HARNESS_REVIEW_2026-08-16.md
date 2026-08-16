@@ -28,7 +28,7 @@
 
 ### 架构与演进
 
-1. **自研协议实现有天花板**：只支持 OpenAI 兼容协议——无 Anthropic/Gemini 适配、无请求重试/退避、无并发请求管理；遇到 reasoning 类模型的非标准行为要自己跟进协议。
+1. **自研协议实现有天花板**：~~只支持 OpenAI 兼容协议——无 Anthropic/Gemini 适配、无请求重试/退避、无并发请求管理~~ **已解决（2026-08-16，P5）**：`AnthropicChatClient`（Messages API 流式 + tool use）与 `OpenAiChatClient` 并列，`api_provider` 配置切换；`RetryingChatClient` 装饰器对网络错误/429/5xx 指数退避重试（4xx 与配置错误不重试，退避可中断）。剩余：Gemini 原生协议未单独实现（OpenAI 兼容端点可覆盖）、无并发请求管理（单会话循环天然串行，多 tab 各持独立 client 已互不干扰）。
 2. **核心循环单文件过重**：`AgentChatController` 775 行把 issue 判定、nudge、窗口调整、摘要、子代理全塞在一个类里，后续加特性（并行工具、human-in-the-loop 中断恢复）会越来越难。
 3. **无生态红利**：新集成（新的 MCP server 类型、新记忆后端、新的模型供应商协议）都要手写，不像 LangChain 有现成集成。
 4. **子代理是简化实现**：共享同一 context 与工具，无独立记忆/权限隔离，只是"嵌套 controller"，编排能力有限。

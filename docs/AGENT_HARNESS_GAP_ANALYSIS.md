@@ -77,7 +77,7 @@
 
 | 缺口 | 现状 | 影响 | 建议 |
 |------|------|------|------|
-| 仅支持 OpenAI chat.completions 协议 | `OpenAiChatClient` 单一协议 | 换 Anthropic/Gemini 原生 API 要自写 client | 可接受（baseUrl 可配已覆盖大部分兼容端点）；如需再抽象 `ChatClient` 接口 |
+| 仅支持 OpenAI chat.completions 协议 | `OpenAiChatClient` 单一协议 | 换 Anthropic/Gemini 原生 API 要自写 client | ✅ 已实现：`AnthropicChatClient`（Messages API）+ `ChatClient` 接口 + `api_provider` 配置；Gemini 走 OpenAI 兼容端点即可 |
 | 无多模态输入 | 工具结果与消息均为文本 | agent 看不到截图/画布渲染结果 | 若需，先支持 `ui_control` 截图回传 + vision 参数 |
 | 无结构化输出约束 | 工具参数有 schema 校验，模型自由文本无约束 | 分析类任务的输出格式不稳定 | 对 `analyze_project`/`write_analysis_md` 等加"要求模型输出 JSON"的 harness 级二次校验（失败重试） |
 | 本地摘要器为规则版 | `TextSummarizer` 本地实现（刻意避免额外 API 调用） | 长会话压缩质量有限，早期细节丢失 | 可接受；若质量成为瓶颈，改为可配置的 LLM 摘要通道 |
@@ -96,6 +96,7 @@
 | **P3** | eval 任务集（缺口 6） | 后续所有改动的度量依据 | ✅ 已实现 |
 | **P3** | 规划层（缺口 3）、记忆检索（缺口 5） | 能力增强 | ✅ 已实现（低成本方案） |
 | **P4** | 全局用户记忆 | 跨项目偏好复用 | ✅ 已实现 |
+| **P5** | 请求重试退避 + Anthropic 协议适配 | 网络/限流抖动自愈；多协议接入 | ✅ 已实现 |
 
 ## 实施记录（2026-08-15）
 
@@ -135,9 +136,18 @@
 - 新增工具 `user_memory_save`（WRITE 级确认），注册进 `AgentToolkit`；`systemPrompt` 注入 `[User memory]` 段（截断 1500 字符）。
 - 测试：`UserMemoryTest`（4 项）。
 
+### P5：请求重试退避 + Anthropic 协议适配（2026-08-16）
+- 新增 `agent/ChatHttpException.java`：带 HTTP 状态码（0=配置类错误不可重试；429/5xx 可重试）；`OpenAiChatClient` 与 `AnthropicChatClient` 统一抛它。
+- 新增 `agent/RetryingChatClient.java`（ChatClient 装饰器）：网络层 IOException、HTTP 429/5xx 指数退避重试（base 1s ×2^n + 0~30% 抖动，上限 15s，默认 3 次）；4xx/配置错误/InterruptedException 不重试；重试前推送 `ChatEvent.system` 提示（新增 SYSTEM 事件，灰色展示），退避等待可中断（停止按钮立即打断）；abort/lastUsage 转发底层。
+- 新增 `agent/AnthropicChatClient.java`：Anthropic Messages API 流式客户端（/v1/messages，x-api-key + anthropic-version 头）。转换：system 消息→顶层 system 参数；assistant tool_calls→content 块 tool_use；role=tool 消息→user 消息的 tool_result 块；工具 schema parameters→input_schema；首条非 user 自动前置空 user 消息。SSE 解析 message_start（usage 转 OpenAI 风格键）/content_block_start（tool_use id/name）/content_block_delta（text_delta、thinking_delta、input_json_delta）/error（rate_limit→429、overloaded→529）。max_tokens 必填（`AgentConfig.maxTokens()`，默认 8192）。
+- `AgentConfig` 新增 `api_provider`（openai|anthropic，默认 openai）与 `max_tokens`；`AgentChatController` 按 provider 装配 client 并统一套 `RetryingChatClient`；`AgentSettingsPanel` 增加服务商下拉。
+- 测试：`RetryingChatClientTest`（10 项：429/5xx/网络错误重试、4xx/配置错误不重试、退避递增、中断传播、转发）；`AnthropicChatClientTest`（10 项：SSE 解析、请求体/头转换、错误映射，本地 HttpServer 模拟对端）。
+- 注意：本机 `HttpServer` 的 chunked 响应（sendResponseHeaders(-1)）在 `HttpURLConnection` 下读不到数据，测试须用固定 Content-Length。
+
 ### 已知取舍（未实现）
-- 多模态输入、Anthropic 原生协议、结构化输出二次校验：文档 P4 小缺口表中标注"可接受"，未实施。
+- 多模态输入、结构化输出二次校验：文档小缺口表中标注"可接受"，未实施。
 - MCP client 仅支持 stdio transport（HTTP/SSE transport 未实现）。
+- Gemini 原生协议未单独实现（其 OpenAI 兼容端点可覆盖）；如遇兼容问题再补适配。
 
 ## 相关文件索引
 
