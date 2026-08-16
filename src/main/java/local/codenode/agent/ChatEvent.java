@@ -21,4 +21,6 @@ public record ChatEvent(ChatEventKind kind, String text, AgentToolCall toolCall,
     public static ChatEvent cancelled() { return new ChatEvent(ChatEventKind.CANCELLED, "", null, "", null); }
     public static ChatEvent state(AgentProvider.SessionState state) { return new ChatEvent(ChatEventKind.STATE, "", null, "", state); }
     public static ChatEvent toolProgress(String tool) { return new ChatEvent(ChatEventKind.STATE, "", null, "", AgentProvider.SessionState.ACTIVE_RUNNING, tool); }
+    /** 系统级提示（如 API 失败自动重试），灰色展示、不进入消息历史。 */
+    public static ChatEvent system(String text) { return new ChatEvent(ChatEventKind.SYSTEM, text, null, "", null); }
 }

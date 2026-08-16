@@ -10,6 +10,7 @@ import java.awt.*;
 public final class AgentSettingsPanel extends JPanel {
     private final AgentConfig config;
     private final JTextField baseUrl = new JTextField(24);
+    private final JComboBox<String> provider = new JComboBox<>(new String[]{"openai", "anthropic"});
     private final JTextField model = new JTextField(24);
     private final JTextField projectPath = new JTextField(24);
     private final JPasswordField apiKey = new JPasswordField(24);
@@ -24,7 +25,9 @@ public final class AgentSettingsPanel extends JPanel {
         body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
         body.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
-        body.add(field("API Base URL", baseUrl, "如 https://api.openai.com/v1"));
+        body.add(field("API 服务商", provider, "openai=OpenAI 兼容协议；anthropic=Anthropic Messages API"));
+        body.add(Box.createVerticalStrut(8));
+        body.add(field("API Base URL", baseUrl, "如 https://api.openai.com/v1 或 https://api.anthropic.com"));
         body.add(Box.createVerticalStrut(8));
         body.add(field("API Key（掩码显示）", apiKey, "仅存本地配置文件，不写入工程"));
         body.add(Box.createVerticalStrut(8));
@@ -33,6 +36,7 @@ public final class AgentSettingsPanel extends JPanel {
         body.add(field("默认项目路径", projectPath, "工具 scan_project 等的默认根目录"));
 
         baseUrl.setText(config.apiBase());
+        provider.setSelectedItem(config.apiProvider());
         body.add(Box.createVerticalStrut(8));
         body.add(field("Agent 权限", permissions, "如 ui:allow,write:confirm,execute:confirm,system:enabled"));
 
@@ -80,6 +84,7 @@ public final class AgentSettingsPanel extends JPanel {
 
     private void saveSettings() {
         config.setApiBase(baseUrl.getText());
+        config.setApiProvider(String.valueOf(provider.getSelectedItem()));
         config.setModel(model.getText());
         config.setDefaultProjectPath(projectPath.getText());
         config.setApiKey(new String(apiKey.getPassword()));

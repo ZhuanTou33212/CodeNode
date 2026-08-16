@@ -21,6 +21,10 @@ public final class AgentConfig {
     public static final String DEFAULT_MODEL = "deepseek-v4-flash";
     /** 默认可用模型列表（本端点两个模型：deepseek-v4-flash=ds chat，deepseek-v4-pro=ds pro）。 */
     public static final List<String> DEFAULT_MODELS = List.of("deepseek-v4-flash", "deepseek-v4-pro");
+    /** 默认模型服务商（openai=OpenAI 兼容协议；anthropic=Anthropic Messages API）。 */
+    public static final String DEFAULT_PROVIDER = "openai";
+    /** max_tokens 缺省值（Anthropic 等协议必填输出上限）。 */
+    public static final int DEFAULT_MAX_TOKENS = 8192;
 
     private final Path file;
     private final Properties properties = new Properties();
@@ -79,6 +83,17 @@ public final class AgentConfig {
     }
     public String model() { return properties.getProperty("model", DEFAULT_MODEL); }
     public String defaultProjectPath() { return properties.getProperty("default_project_path", ""); }
+
+    /** 模型服务商：openai（OpenAI 兼容协议，默认）/ anthropic（Anthropic Messages API）。 */
+    public String apiProvider() {
+        String value = properties.getProperty("api_provider", DEFAULT_PROVIDER).trim().toLowerCase();
+        return value.isBlank() ? DEFAULT_PROVIDER : value;
+    }
+
+    /** 输出 token 上限（max_tokens 属性；Anthropic 等协议必填，缺省 8192）。 */
+    public int maxTokens() {
+        return parseInt(properties.getProperty("max_tokens", String.valueOf(DEFAULT_MAX_TOKENS)), DEFAULT_MAX_TOKENS);
+    }
 
     /** 可切换的模型列表（配置文件 models 字段，逗号分隔；缺省用 DEFAULT_MODELS）。 */
     public List<String> models() {
@@ -179,5 +194,6 @@ public final class AgentConfig {
     }
     public void setModel(String value) { properties.setProperty("model", value == null || value.isBlank() ? DEFAULT_MODEL : value.trim()); }
     public void setModels(List<String> models) { properties.setProperty("models", models == null || models.isEmpty() ? "" : String.join(",", models)); }
+    public void setApiProvider(String value) { properties.setProperty("api_provider", value == null || value.isBlank() ? DEFAULT_PROVIDER : value.trim().toLowerCase()); }
     public void setDefaultProjectPath(String value) { properties.setProperty("default_project_path", value == null ? "" : value.trim()); }
 }

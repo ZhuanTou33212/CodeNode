@@ -57,7 +57,7 @@ public final class OpenAiChatClient implements ChatClient {
     public Map<String, Object> chat(List<Map<String, Object>> messages, List<Map<String, Object>> tools,
                                     Consumer<ChatEvent> events) throws IOException, InterruptedException {
         if (!config.isConfigured()) {
-            throw new IOException("未配置 Agent API（请在“内嵌 Agent → 设置”填写 baseUrl / apiKey / model）");
+            throw new ChatHttpException(0, "未配置 Agent API（请在“内嵌 Agent → 设置”填写 baseUrl / apiKey / model）");
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", config.model());
@@ -85,7 +85,7 @@ public final class OpenAiChatClient implements ChatClient {
             if (status != 200) {
                 InputStream error = connection.getErrorStream();
                 String detail = error == null ? "" : readAll(error);
-                throw new IOException("API 返回 " + status + (detail.isBlank() ? "" : "：" + detail.trim()));
+                throw new ChatHttpException(status, "API 返回 " + status + (detail.isBlank() ? "" : "：" + detail.trim()));
             }
             return parseSse(connection.getInputStream(), events);
         } finally {

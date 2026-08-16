@@ -300,6 +300,9 @@ public final class AgentChatPanel extends JPanel {
             case CANCELLED -> {
                 append("\n— 已停止\n\n", DIM);
             }
+            case SYSTEM -> {
+                append("\n· " + event.text() + "\n", DIM);
+            }
             case STATE -> updateState(event.state() != null ? event.state().name() : "IDLE", event.activity());
         }
     }

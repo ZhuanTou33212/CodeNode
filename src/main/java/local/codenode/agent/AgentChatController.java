@@ -74,9 +74,17 @@ public final class AgentChatController {
 
     public AgentChatController(AgentConfig config, AgentToolRegistry tools, AgentToolContext toolContext) {
         this.config = config;
-        this.client = new OpenAiChatClient(config);
+        this.client = createChatClient(config);
         this.tools = tools;
         this.toolContext = toolContext;
+    }
+
+    /** 按配置的 api_provider 创建生产 client，并套重试退避装饰器。 */
+    private static ChatClient createChatClient(AgentConfig config) {
+        ChatClient raw = "anthropic".equals(config.apiProvider())
+                ? new AnthropicChatClient(config)
+                : new OpenAiChatClient(config);
+        return new RetryingChatClient(raw);
     }
 
     /** 测试/评估构造：注入脚本化 ChatClient，harness 行为可确定性验证。 */
