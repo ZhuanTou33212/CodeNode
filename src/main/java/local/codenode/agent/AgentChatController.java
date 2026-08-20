@@ -28,6 +28,12 @@ import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.AgentToolResult;
 import local.codenode.agent.tools.AgentToolSpec;
+import local.codenode.agent.components.HarnessComponents;
+import local.codenode.agent.components.HarnessListener;
+import local.codenode.agent.components.LoopPolicy;
+import local.codenode.agent.components.PromptAssembler;
+import local.codenode.agent.components.PromptContext;
+import local.codenode.agent.components.TraceHarnessListener;
 import local.codenode.agent.knowledge.ConversationGraphParser;
 import local.codenode.agent.knowledge.KnowledgeGraph;
 import local.codenode.agent.knowledge.TextSummarizer;
@@ -39,21 +45,16 @@ import local.codenode.config.AgentConfig;
  * 多轮会话维护消息历史；模型触发 tool_calls 时经 AgentToolRegistry 本地执行并回传结果。
  */
 public final class AgentChatController {
-    private static final int MAX_TOOL_LOOP = 10;
-    /** 工具失败/空结果后主动提示继续尝试的上限（避免死循环）。 */
-    private static final int MAX_TOOL_RETRY = 5;
-    /** 规划层：每完成 N 个工具步骤注入一次进度检查（对照任务清单）。 */
-    private static final int PLAN_CHECK_INTERVAL = 3;
-    /** 单个工具执行的最大等待秒数（外层兜底超时，防止工具阻塞卡死）。 */
-    private static final int DEFAULT_TOOL_TIMEOUT_SECONDS = 60;
-    /** 长耗时工具（构建/运行/编译）的默认超时秒数。 */
-    private static final int LONG_TOOL_TIMEOUT_SECONDS = 300;
     /** 窗口/摘要/截断策略已迁移至 MessageHistory 与 AgentConfig。 */
 
     private final AgentConfig config;
     private ChatClient client;
     private final AgentToolRegistry tools;
     private final AgentToolContext toolContext;
+    private final HarnessComponents harness;
+    private final LoopPolicy loopPolicy;
+    private final List<HarnessListener> listeners;
+    private final int planCheckInterval;
     private final AgentExecutionTimeline timeline = new AgentExecutionTimeline();
     /** 会话消息历史（滑动窗口/摘要/卫生/持久化，P1-2 拆分）。 */
     private final MessageHistory history;
@@ -64,17 +65,24 @@ public final class AgentChatController {
     private SubagentManager subagents;
     /** 本会话（tab）独立的可变状态：工具停止标志与权限确认记忆。 */
     private final AgentSessionScope sessionScope = new AgentSessionScope();
-    /** 执行 trace 写入器（.codenode/agent-traces/<sessionId>.jsonl，每轮会话重建）。 */
-    private volatile AgentTraceWriter trace;
 
     public AgentChatController(AgentConfig config, AgentToolRegistry tools, AgentToolContext toolContext) {
-        this.config = config;
-        this.client = createChatClient(config);
-        this.tools = tools;
-        this.toolContext = toolContext;
-        // P1-9a：harness.llm_summary=true 时启用 LLM 会话摘要（失败自动回退本地规则版）
-        this.history = new MessageHistory(toolContext,
-                config.llmSummaryEnabled() ? new LlmConversationSummarizer(this.client) : null);
+        this(config, legacyHarness(config, tools, toolContext, createChatClient(config)));
+    }
+
+    /** 生产构造：使用已装配的、可配置 harness 组件。 */
+    public AgentChatController(AgentConfig config, HarnessComponents harness) {
+        this.config = java.util.Objects.requireNonNull(config, "config");
+        this.harness = java.util.Objects.requireNonNull(harness, "harness");
+        this.loopPolicy = harness.loopPolicy();
+        this.client = harness.createClient();
+        this.tools = java.util.Objects.requireNonNull(harness.tools(), "harness.tools");
+        this.toolContext = java.util.Objects.requireNonNull(harness.toolContext(), "harness.toolContext");
+        this.listeners = harness.listeners();
+        this.planCheckInterval = harness.planCheckInterval();
+        // context_length（agent.context_length）驱动 token 预算触发压缩（Codex 式，0=关闭）。
+        this.history = new MessageHistory(toolContext, harness.createCompactor(this.client),
+                config.contextLength(), harness.sessionStore());
         this.sessionScope.budget().setLimit(config.maxTokensPerSession());
     }
 
@@ -88,11 +96,25 @@ public final class AgentChatController {
 
     /** 测试/评估构造：注入脚本化 ChatClient，harness 行为可确定性验证。 */
     public AgentChatController(AgentToolRegistry tools, AgentToolContext toolContext, ChatClient client) {
-        this.config = new AgentConfig();
-        this.tools = tools;
-        this.toolContext = toolContext;
-        this.history = new MessageHistory(toolContext);
-        this.client = java.util.Objects.requireNonNull(client, "client");
+        this(new AgentConfig(), legacyHarness(new AgentConfig(), tools, toolContext,
+                java.util.Objects.requireNonNull(client, "client")));
+    }
+
+    private static HarnessComponents legacyHarness(AgentConfig config, AgentToolRegistry tools,
+                                                    AgentToolContext toolContext, ChatClient client) {
+        boolean promptEnabled = config.harnessComponents().contains(local.codenode.agent.components.HarnessAssembler.CATEGORY_PROMPT);
+        boolean compactorEnabled = config.harnessComponents().contains(local.codenode.agent.components.HarnessAssembler.CATEGORY_COMPACTOR);
+        boolean listenersEnabled = config.harnessComponents().contains(local.codenode.agent.components.HarnessAssembler.CATEGORY_LISTENERS);
+        boolean plannerEnabled = config.harnessComponents().contains(local.codenode.agent.components.HarnessAssembler.CATEGORY_PLANNER);
+        List<HarnessListener.Factory> listenerFactories = listenersEnabled && config.harnessListeners().contains("trace")
+                ? List.of(ignored -> new TraceHarnessListener(toolContext)) : List.of();
+        return new HarnessComponents(config, toolContext, client, tools,
+                promptEnabled ? PromptAssembler.fromNames(config.promptSections()) : PromptAssembler.empty(),
+                compactorEnabled && ("llm".equals(config.compactor())
+                        || "auto".equals(config.compactor()) && config.llmSummaryEnabled())
+                        ? new LlmConversationSummarizer(client) : null,
+                listenerFactories, plannerEnabled ? config.planCheckInterval() : 0,
+                List.of(), List.of());
     }
 
     public AgentExecutionTimeline timeline() {
@@ -105,6 +127,10 @@ public final class AgentChatController {
 
     public ChatClient client() {
         return this.client;
+    }
+
+    public HarnessComponents harness() {
+        return this.harness;
     }
 
     /** 会话级 token 预算（测试可直接设置上限验证预算拦截行为）。 */
@@ -127,7 +153,9 @@ public final class AgentChatController {
     }
 
     private String runSubagent(String task, String relevantContext, SubagentManager.Cancellation cancellation) throws Exception {
-        AgentChatController child = new AgentChatController(config, tools, toolContext);
+        // 子代理必须复用同一套已装配的 composition；旧的 (config, tools, context)
+        // 构造器会退回 legacy harness，导致自定义 prompt/loop/storage 被绕过。
+        AgentChatController child = new AgentChatController(config, harness);
         java.util.concurrent.CompletableFuture<String> result = new java.util.concurrent.CompletableFuture<>();
         StringBuilder streamed = new StringBuilder();
         String prompt = task + (relevantContext == null || relevantContext.isBlank() ? ""
@@ -216,6 +244,10 @@ public final class AgentChatController {
         if (userText == null || userText.isBlank()) {
             return;
         }
+        if (this.client == null) {
+            listener.onEvent(ChatEvent.error("harness 的 llm 组件未启用，请在 harness.components 中启用 llm"));
+            return;
+        }
         if (this.history.size() == 0) {
             this.history.add(this.systemPrompt());
             this.loadSessionFile();
@@ -226,8 +258,10 @@ public final class AgentChatController {
         this.timeline.beginTask(userText);
         this.stopRequested = false;
         listener.onEvent(ChatEvent.state(this.state));
-        this.trace = new AgentTraceWriter(this.toolContext.projectRoot(), this.sessionId);
-        this.trace.event("session_start", Map.of("task", userText));
+        for (HarnessListener component : this.listeners) {
+            try { component.beginSession(this.sessionId); } catch (RuntimeException ignored) { }
+        }
+        this.traceEvent("session_start", Map.of("task", userText));
         this.history.add(Map.of("role", "user", "content", userText));
         List<KnowledgeGraph.Conflict> observedConflicts = this.toolContext.knowledgeGraph().detectTextConflicts(userText);
         if (!observedConflicts.isEmpty()) {
@@ -257,6 +291,9 @@ public final class AgentChatController {
                 }
                 this.traceEvent("session_end", Map.of("state", String.valueOf(this.timeline.snapshot().taskState()),
                         "steps", this.timeline.snapshot().steps().size()));
+                for (HarnessListener component : this.listeners) {
+                    try { component.endSession(); } catch (RuntimeException ignored) { }
+                }
                 this.state = AgentProvider.SessionState.IDLE;
                 listener.onEvent(ChatEvent.state(this.state));
             }
@@ -264,8 +301,9 @@ public final class AgentChatController {
     }
 
     private void traceEvent(String type, Map<String, Object> fields) {
-        AgentTraceWriter writer = this.trace;
-        if (writer != null) writer.event(type, fields);
+        for (HarnessListener component : this.listeners) {
+            try { component.onEvent(type, fields); } catch (RuntimeException ignored) { }
+        }
     }
 
     /** 规划层进度检查提示：已完成步骤 + 任务清单，要求模型对照目标继续。 */
@@ -313,7 +351,15 @@ public final class AgentChatController {
         this.history.deleteSessionFile(this.toolContext.projectRoot(), this.sessionId);
     }
 
+    /** 由 prompt 组件按配置选择/排序系统提示分段。 */
     private Map<String, Object> systemPrompt() {
+        return this.harness.promptAssembler().render(
+                PromptContext.of(this.config, this.tools, this.toolContext));
+    }
+
+    /** 旧版内联提示保留为迁移参考；运行时统一走上面的 PromptAssembler。 */
+    @SuppressWarnings("unused")
+    private Map<String, Object> legacySystemPrompt() {
         StringBuilder sb = new StringBuilder();
         sb.append("你是 CodeNode 桌面工作台的内嵌 Agent（运行在 Windows 上），帮助用户操作工作台节点图、扫描与分析项目、读写文件、执行命令和代码审查。\n");
         sb.append("可用的本地工具：\n");
@@ -403,8 +449,8 @@ public final class AgentChatController {
         boolean executedTool = false;
         boolean lastRoundHadIssue = false;
         int retryNudges = 0;
-        int nextPlanCheckAt = PLAN_CHECK_INTERVAL;
-        while (!this.stopRequested && guard++ < MAX_TOOL_LOOP) {
+        int nextPlanCheckAt = this.planCheckInterval <= 0 ? Integer.MAX_VALUE : this.planCheckInterval;
+        while (!this.stopRequested && guard++ < this.loopPolicy.maxToolRounds()) {
             // 会话 token 预算检查：超限后停止工具调用，直接进入收尾总结（防失控循环超额消耗）
             if (this.sessionScope.budget().exceeded()) {
                 this.traceEvent("budget_exceeded", Map.of("round", guard,
@@ -416,9 +462,12 @@ public final class AgentChatController {
                 break;
             }
             long chatStart = System.currentTimeMillis();
-            Map<String, Object> assistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
+            List<Map<String, Object>> request = this.requestMessages();
+            this.traceEvent("model_request", Map.of("round", guard, "messages", request, "tools", toolSchema));
+            Map<String, Object> assistant = this.client.chat(request, toolSchema, listener::onEvent);
             long chatDuration = System.currentTimeMillis() - chatStart;
             Map<String, Object> usage = this.client.lastUsage();
+            this.traceEvent("model_response", Map.of("round", guard, "message", assistant));
             this.traceEvent("llm_call", Map.of("round", guard, "durationMs", chatDuration,
                     "usage", usage == null ? Map.of() : usage));
             this.sessionScope.budget().record(usage);
@@ -427,7 +476,7 @@ public final class AgentChatController {
             if (!(rawCalls instanceof List<?>) || ((List<?>)rawCalls).isEmpty()) {
                 // 模型没有继续调用工具：若上一轮工具失败/空结果且未耗尽重试次数，提示继续思考其他方案，
                 // 而不是直接停下。
-                if (lastRoundHadIssue && !this.stopRequested && retryNudges < MAX_TOOL_RETRY) {
+                if (lastRoundHadIssue && !this.stopRequested && retryNudges < this.loopPolicy.maxToolRetries()) {
                     retryNudges++;
                     lastRoundHadIssue = false;
                     this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "empty_turn_after_issue"));
@@ -486,14 +535,15 @@ public final class AgentChatController {
                 AgentToolResult result;
                 try {
                     listener.onEvent(ChatEvent.toolProgress(name));
-                    long toolTimeout = this.resolveToolTimeout(name, args);
+                    long toolTimeout = this.loopPolicy.resolveToolTimeout(name, args);
                     result = this.executeToolWithTimeout(name, args, toolTimeout);
                 } catch (Exception toolFailure) {
                     result = AgentToolResult.error("工具执行异常: " + toolFailure.getMessage());
                 }
                 this.traceEvent("tool_call", Map.of("tool", name, "ok", result.ok(),
                         "durationMs", System.currentTimeMillis() - toolStart,
-                        "preview", MessageHistory.truncate(result.text(), 200)));
+                        "arguments", args,
+                        "result", MessageHistory.truncate(result.text(), this.config.maxToolResultChars())));
                 listener.onEvent(ChatEvent.state(AgentProvider.SessionState.ACTIVE_RUNNING));
                 String resultText = result.ok() ? result.text() : "失败：" + result.text();
                 String resultId = this.toolContext.resultStore().store(name, result);
@@ -525,7 +575,7 @@ public final class AgentChatController {
             }
             this.saveSessionFile();
             // 本轮执行了工具且存在失败：立即注入"重新思考"提示并继续，而不是等模型主动停下
-            if (lastRoundHadIssue && !this.stopRequested && retryNudges < MAX_TOOL_RETRY) {
+            if (lastRoundHadIssue && !this.stopRequested && retryNudges < this.loopPolicy.maxToolRetries()) {
                 retryNudges++;
                 lastRoundHadIssue = false;
                 this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "tool_issue"));
@@ -533,10 +583,10 @@ public final class AgentChatController {
                         "content", "【系统提示】刚才的工具调用失败或返回空结果，任务尚未完成。请重新思考：换一种工具、调整参数、缩小步骤或换个思路重试，直到真正取得结果；只有多种方案都失败时才向用户说明。"));
                 this.saveSessionFile();
             }
-            // 规划层：每完成 PLAN_CHECK_INTERVAL 步注入进度检查，防止长任务中途偏离目标
+            // 规划层：按 planner 组件配置的间隔注入进度检查，防止长任务中途偏离目标
             int doneSteps = this.timeline.snapshot().steps().size();
-            if (!this.stopRequested && doneSteps >= nextPlanCheckAt) {
-                nextPlanCheckAt = doneSteps + PLAN_CHECK_INTERVAL;
+            if (this.planCheckInterval > 0 && !this.stopRequested && doneSteps >= nextPlanCheckAt) {
+                nextPlanCheckAt = doneSteps + this.planCheckInterval;
                 this.traceEvent("plan_check", Map.of("steps", doneSteps));
                 this.history.add(Map.of("role", "user", "content", this.planCheckPrompt(doneSteps)));
                 this.saveSessionFile();
@@ -553,7 +603,7 @@ public final class AgentChatController {
             Map<String, Object> summaryRequest = Map.of("role", "user",
                     "content", "请基于以上工具执行结果与用户提供的回答，总结本次任务的结论，并给出清晰、完整的最终答案回复给用户。注意：你的回复内容本身就会直接展示给用户，请务必把最终答案写在回复正文（content）中，不要只放在推理里。");
             this.history.add(summaryRequest);
-            if (guard < MAX_TOOL_LOOP) {
+            if (guard < this.loopPolicy.maxToolRounds()) {
                 Map<String, Object> finalAssistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
                 this.history.add(finalAssistant);
                 this.saveSessionFile();
@@ -611,20 +661,6 @@ public final class AgentChatController {
      * 根据工具名与参数解析合理超时：优先取参数 timeoutSeconds（Agent 可自行设定），
      * 长耗时工具（构建/运行/编译/抓包/扫描）给长默认值，其余给短默认值。
      */
-    private long resolveToolTimeout(String name, Map<String, Object> args) {
-        Object explicit = args == null ? null : args.get("timeoutSeconds");
-        if (explicit instanceof Number n) {
-            return Math.max(1, Math.min(600, n.longValue()));
-        }
-        String lower = name == null ? "" : name.toLowerCase();
-        if (lower.contains("build") || lower.contains("run") || lower.contains("compile")
-                || lower.contains("trace") || lower.contains("scan") || lower.contains("fetch")
-                || lower.contains("shell") || lower.contains("url")) {
-            return LONG_TOOL_TIMEOUT_SECONDS;
-        }
-        return DEFAULT_TOOL_TIMEOUT_SECONDS;
-    }
-
     /** 防御：移除 messages 中孤立的 tool 消息（已委托 MessageHistory.sanitizeToolMessages）。 */
 
     public void requestStop() {

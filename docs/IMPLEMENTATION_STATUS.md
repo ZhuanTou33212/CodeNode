@@ -114,7 +114,8 @@ Memory conflict handling is now complete: knowledge elements carry source, captu
 - `FileTypeDetector`：magic bytes 校验（PNG/.class/ZIP/PDF 等 26 种）+ 文本/二进制判定
 - `FileContentAnalyzer`：analyzeFile 统一入口（二进制拒绝/大文件截断/YAML-MD-properties 摘要），Java 类/函数/变量/imports 提取
 - read_file 读前类型检测，二进制拒绝给解析建议；analyze=true 结构化摘要
-- AgentConfig：tools.enabled/disabled、read_file.max_lines、file_analysis.max_lines、harness.extra_prompt
+- AgentConfig：tools.enabled/disabled、tools.sources、harness.components、harness.prompt_sections、harness.compactor、harness.storage、harness.loop、harness.listeners、read_file.max_lines、file_analysis.max_lines、harness.extra_prompt
+- HarnessAssembler：配置驱动装配 LLM、工具源、提示词分段、会话压缩、会话存储、loop policy、trace 监听器与规划组件；支持 ServiceLoader 扩展，MCP 生命周期由 harness 统一管理
 
 ---
 

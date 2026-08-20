@@ -71,7 +71,7 @@ public class AgentEnhancementTest {
 
     @Test
     void requestMessagesSlidesWindowWithSummary() {
-        // 构造大量消息，验证 requestMessages 只保留最近窗口（P1-2 拆分后直接测 MessageHistory）
+        // 构造大量消息，验证压缩后 Codex 式重组：system + 全部用户消息原文 + 摘要为最后一条 user（P1-2 拆分后直接测 MessageHistory）
         try {
             Path root = Files.createTempDirectory("agent-window");
             AgentToolContext ctx = new AgentToolContext(() -> root, () -> null, (level, what, detail) -> false, entry -> {});
@@ -79,9 +79,14 @@ public class AgentEnhancementTest {
             history.add(Map.of("role", "system", "content", "sys"));
             for (int i = 0; i < 50; i++) {
                 history.add(Map.of("role", "user", "content", "消息 " + i));
+                history.add(Map.of("role", "assistant", "content", "回复 " + i));
             }
             history.compactHistory();
-            assertEquals(1 + 20, history.messages().size(), "压缩后应保留 system + 最近 20 条");
+            // Codex 式：保留全部用户消息原文（预算内）+ 摘要作为最后一条 user 消息；丢弃 assistant/tool
+            assertEquals(1 + 50 + 1, history.messages().size(), "压缩后应保留 system + 全部用户消息 + 摘要消息");
+            Map<String, Object> last = history.messages().get(history.messages().size() - 1);
+            assertEquals("user", last.get("role"), "摘要应为最后一条 user 消息");
+            assertTrue(String.valueOf(last.get("content")).startsWith(MessageHistory.SUMMARY_PREFIX), "摘要消息应以固定前缀开头");
             assertFalse(history.summary().isBlank(), "应有摘要");
         } catch (Exception e) {
             fail("MessageHistory 测试失败: " + e);

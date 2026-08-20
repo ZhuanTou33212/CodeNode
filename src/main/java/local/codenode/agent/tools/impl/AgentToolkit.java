@@ -44,6 +44,11 @@ public final class AgentToolkit {
         return AgentToolkit.filterByConfig(registry, config);
     }
 
+    /** 供 ToolSource 组件使用：把全部内置工具注册进既有注册表（不创建新注册表）。 */
+    public static void registerAllInto(AgentToolRegistry registry) {
+        AgentToolkit.registerAll(registry);
+    }
+
     public static AgentToolRegistry filterByConfig(AgentToolRegistry registry, AgentConfig config) {
         if (config == null) {
             return registry;

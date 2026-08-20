@@ -8,6 +8,29 @@ agent.permissions=ui:allow,write:confirm,execute:confirm,system:enabled
 default_project_path=
 
 # ---- harness 与工具设置（Stage6）----
+# 组件类别（逗号分隔；空=启用全部内置组件）
+# 可选：llm,prompt,tools,compactor,storage,loop,listeners,planner
+# harness.components=llm,prompt,tools,compactor,storage,loop,listeners,planner
+# 工具来源（可配置多个；builtin=内置工具，mcp=MCP server 工具）
+# tools.sources=builtin,mcp
+# 系统提示分段及顺序（可按需删除/重排）
+# harness.prompt_sections=role,file_rules,scan_rules,knowledge_rules,project_memory,user_memory,knowledge_state,tasks,agent_info,extra
+# 压缩策略：auto / llm / local / none
+# harness.compactor=auto
+# 会话存储：file（默认）/ memory / 第三方扩展名
+# harness.storage=file
+# 监听器：trace 将执行事件写入 .codenode/agent-traces/
+# harness.listeners=trace
+# 规划组件每多少个工具步骤检查一次；0=关闭
+# harness.plan_check_interval=3
+# Agent loop 策略与默认限制（第三方可注册其他 loop policy）
+# harness.loop=default
+# harness.loop.max_rounds=10
+# harness.loop.max_retries=5
+# harness.loop.default_timeout_seconds=60
+# harness.loop.long_timeout_seconds=300
+# 上下文窗口 token 上限；0=关闭按 token 自动压缩
+# agent.context_length=128000
 # 仅启用的工具（逗号分隔；空=全部启用）
 # tools.enabled=read_file,find_files,search_files,list_directory
 # 禁用的工具（逗号分隔；优先级高于 tools.enabled）

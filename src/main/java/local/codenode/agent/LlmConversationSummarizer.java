@@ -24,7 +24,7 @@ public final class LlmConversationSummarizer implements ConversationSummarizer {
     public String summarize(String source) {
         if (source == null || source.isBlank()) return null;
         String trimmed = source.length() > MAX_SOURCE_CHARS ? source.substring(0, MAX_SOURCE_CHARS) + "\n…（超长截断）" : source;
-        String prompt = "请把下面这段 agent 会话记录压缩为一段结构化摘要（中文），必须包含：任务目标、已完成的步骤、关键结论、未完成事项、涉及的文件/节点/工具。不要编造记录中没有的信息。\n\n"
+        String prompt = "你在执行一次「上下文交接压缩」（Codex 式 CONTEXT CHECKPOINT COMPACTION）。请把下面这段 agent 会话记录压缩为一份交接摘要，供另一个模型继续完成同一任务。必须覆盖：①当前进度与关键决策；②重要上下文/约束/偏好；③尚未完成的事项；④关键数据、示例与文件/节点/工具引用。要求简洁、结构化（分点列出），不要编造记录中没有的信息，不要保留对话寒暄。\n\n"
                 + "会话记录：\n" + trimmed;
         try {
             StringBuilder out = new StringBuilder();

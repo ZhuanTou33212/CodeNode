@@ -20,7 +20,8 @@ public final class UserMemoryStore {
     private final Path home;
 
     public UserMemoryStore() {
-        this(Path.of(System.getProperty("user.home", ".")));
+        // 测试/嵌入场景可用 codenode.user.home 覆盖用户主目录（UserMemoryTest 契约）
+        this(Path.of(System.getProperty("codenode.user.home", System.getProperty("user.home", "."))));
     }
 
     public UserMemoryStore(Path home) {

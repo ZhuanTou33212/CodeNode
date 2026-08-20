@@ -10,6 +10,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 import java.util.Optional;
+import local.codenode.agent.components.HarnessAssembler;
+import local.codenode.agent.components.PromptAssembler;
 
 /**
  * 内嵌 Agent 的本地配置文件（默认 {@code config/agent.properties}，启动自动生成）。
@@ -120,6 +122,15 @@ public final class AgentConfig {
         }
     }
 
+    /** 模型上下文窗口 token 上限（agent.context_length；缺省 128000，0=关闭 token 触发自动压缩）。 */
+    public long contextLength() {
+        try {
+            return Long.parseLong(properties.getProperty("agent.context_length", "128000").trim());
+        } catch (Exception e) {
+            return 128000;
+        }
+    }
+
     /** 工具结果回传给模型的最大字符数（tools.max_result_chars；缺省 4000）。 */
     public int maxToolResultChars() {
         return parseInt(properties.getProperty("tools.max_result_chars", "4000"), 4000);
@@ -145,6 +156,58 @@ public final class AgentConfig {
     public boolean llmSummaryEnabled() {
         return Boolean.parseBoolean(properties.getProperty("harness.llm_summary", "false").trim());
     }
+
+    /** 启用的 harness 组件类别；空值使用全部内置组件。 */
+    public List<String> harnessComponents() {
+        List<String> configured = parseList(properties.getProperty("harness.components", ""));
+        return configured.isEmpty() ? HarnessAssembler.DEFAULT_COMPONENTS : configured;
+    }
+
+    /** 工具来源组件；默认启用内置工具与已配置的 MCP 来源。 */
+    public List<String> toolsSources() {
+        List<String> configured = parseList(properties.getProperty("tools.sources", ""));
+        return configured.isEmpty() ? List.of("builtin", "mcp") : configured;
+    }
+
+    /** 系统提示分段组件的启用顺序。 */
+    public List<String> promptSections() {
+        List<String> configured = parseList(properties.getProperty("harness.prompt_sections", ""));
+        return configured.isEmpty() ? PromptAssembler.DEFAULT_SECTIONS : configured;
+    }
+
+    /** 会话压缩组件：auto / llm / local / none。 */
+    public String compactor() {
+        String value = properties.getProperty("harness.compactor", "auto").trim().toLowerCase();
+        return value.isBlank() ? "auto" : value;
+    }
+
+    /** 会话存储组件：file / memory / 第三方扩展名。 */
+    public String sessionStore() {
+        String value = properties.getProperty("harness.storage", "file").trim().toLowerCase();
+        return value.isBlank() ? "file" : value;
+    }
+
+    /** harness 监听器组件列表，默认启用 trace。 */
+    public List<String> harnessListeners() {
+        List<String> configured = parseList(properties.getProperty("harness.listeners", ""));
+        return configured.isEmpty() ? List.of("trace") : configured;
+    }
+
+    /** 规划组件每隔多少个工具步骤检查一次；0=禁用。 */
+    public int planCheckInterval() {
+        return Math.max(0, parseInt(properties.getProperty("harness.plan_check_interval", "3"), 3));
+    }
+
+    /** Agent loop 策略名称。 */
+    public String loopPolicy() {
+        String value = properties.getProperty("harness.loop", "default").trim().toLowerCase();
+        return value.isBlank() ? "default" : value;
+    }
+
+    public int loopMaxRounds() { return parseInt(properties.getProperty("harness.loop.max_rounds", "10"), 10); }
+    public int loopMaxRetries() { return parseInt(properties.getProperty("harness.loop.max_retries", "5"), 5); }
+    public int loopDefaultTimeoutSeconds() { return parseInt(properties.getProperty("harness.loop.default_timeout_seconds", "60"), 60); }
+    public int loopLongTimeoutSeconds() { return parseInt(properties.getProperty("harness.loop.long_timeout_seconds", "300"), 300); }
 
     // ---------- 外部 MCP server 配置（P1） ----------
 
@@ -215,4 +278,21 @@ public final class AgentConfig {
     public void setModels(List<String> models) { properties.setProperty("models", models == null || models.isEmpty() ? "" : String.join(",", models)); }
     public void setApiProvider(String value) { properties.setProperty("api_provider", value == null || value.isBlank() ? DEFAULT_PROVIDER : value.trim().toLowerCase()); }
     public void setDefaultProjectPath(String value) { properties.setProperty("default_project_path", value == null ? "" : value.trim()); }
+
+    public void setHarnessComponents(List<String> value) { setList("harness.components", value); }
+    public void setToolsSources(List<String> value) { setList("tools.sources", value); }
+    public void setPromptSections(List<String> value) { setList("harness.prompt_sections", value); }
+    public void setCompactor(String value) { properties.setProperty("harness.compactor", value == null || value.isBlank() ? "auto" : value.trim().toLowerCase()); }
+    public void setSessionStore(String value) { properties.setProperty("harness.storage", value == null || value.isBlank() ? "file" : value.trim().toLowerCase()); }
+    public void setHarnessListeners(List<String> value) { setList("harness.listeners", value); }
+    public void setPlanCheckInterval(int value) { properties.setProperty("harness.plan_check_interval", String.valueOf(Math.max(0, value))); }
+    public void setLoopPolicy(String value) { properties.setProperty("harness.loop", value == null || value.isBlank() ? "default" : value.trim().toLowerCase()); }
+    public void setLoopMaxRounds(int value) { properties.setProperty("harness.loop.max_rounds", String.valueOf(value)); }
+    public void setLoopMaxRetries(int value) { properties.setProperty("harness.loop.max_retries", String.valueOf(value)); }
+    public void setLoopDefaultTimeoutSeconds(int value) { properties.setProperty("harness.loop.default_timeout_seconds", String.valueOf(value)); }
+    public void setLoopLongTimeoutSeconds(int value) { properties.setProperty("harness.loop.long_timeout_seconds", String.valueOf(value)); }
+
+    private void setList(String key, List<String> value) {
+        properties.setProperty(key, value == null || value.isEmpty() ? "" : String.join(",", value));
+    }
 }

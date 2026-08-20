@@ -119,7 +119,8 @@ import local.codenode.agent.AgentInfoSnapshot;
 import local.codenode.agent.SoftwareInfoProvider;
 import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
-import local.codenode.agent.tools.impl.AgentToolkit;
+import local.codenode.agent.components.HarnessAssembler;
+import local.codenode.agent.components.HarnessComponents;
 import local.codenode.ui.agent.AgentSessionPanel;
 import local.codenode.config.AgentConfig;
 import local.codenode.project.JdkManager;
@@ -169,8 +170,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private final AgentConfig agentConfig = AgentConfig.load();
     private AgentToolContext agentToolContext;
     private AgentToolRegistry agentTools;
-    /** 已连接的外部 MCP server client（退出时逐个关闭）。 */
-    private java.util.List<local.codenode.agent.mcp.McpStdioClient> mcpClients = java.util.List.of();
+    /** 当前应用级 harness 装配结果（工具源与配置生命周期由此统一管理）。 */
+    private HarnessComponents harnessComponents;
     private AgentChatController agentChatController;
     private AgentSessionManager agentSessionManager;
     private AgentSessionPanel agentSessionPanel;
@@ -293,15 +294,13 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
             }
             return result[0];
         });
-        this.agentTools = AgentToolkit.buildDefaultRegistry(this.agentToolContext, this.agentConfig);
-        try {
-            this.mcpClients = local.codenode.agent.mcp.McpToolkit.connectConfigured(this.agentConfig, this.agentTools);
-        }
-        catch (Exception e) {
-            this.append("[Agent] MCP server 连接失败（可在 agent.properties 调整 mcp.servers）：" + e.getMessage());
+        this.harnessComponents = HarnessAssembler.assembleDefaults(this.agentConfig, this.agentToolContext);
+        this.agentTools = this.harnessComponents.tools();
+        for (String warning : this.harnessComponents.warnings()) {
+            this.append("[Agent harness] " + warning);
         }
         this.agentSessionManager = new AgentSessionManager(() ->
-                new AgentChatController(this.agentConfig, this.agentTools, this.agentToolContext));
+                new AgentChatController(this.agentConfig, this.harnessComponents));
         this.agentChatController = this.agentSessionManager.activeSession().controller();
         this.agentToolContext.setConversationSupplier(this.agentChatController::messageHistory);
         this.agentToolContext.setFileChangeNotifier((relative, kind, detail) -> SwingUtilities.invokeLater(() -> {
@@ -2742,10 +2741,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         this.resultPollTimer.stop();
         this.autoSaveTimer.stop();
         this.codexAgent.close();
-        for (local.codenode.agent.mcp.McpStdioClient client : this.mcpClients) {
-            try { client.close(); } catch (RuntimeException ignored) {}
-        }
-        this.mcpClients = java.util.List.of();
+        if (this.harnessComponents != null) this.harnessComponents.close();
         if (this.agentToolContext != null) this.agentToolContext.closeMemoryStore();
         for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.changeTool, this.queueTool}) {
             if (tool == null) continue;
