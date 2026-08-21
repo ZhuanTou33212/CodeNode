@@ -14,10 +14,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import local.codenode.AgentProvider;
 import local.codenode.agent.AgentInfoSnapshot;
 import local.codenode.Json;
@@ -33,7 +33,11 @@ import local.codenode.agent.components.HarnessListener;
 import local.codenode.agent.components.LoopPolicy;
 import local.codenode.agent.components.PromptAssembler;
 import local.codenode.agent.components.PromptContext;
+import local.codenode.agent.components.SessionEvent;
+import local.codenode.agent.components.SessionEventStore;
 import local.codenode.agent.components.TraceHarnessListener;
+import local.codenode.agent.cordis.CordisEvent;
+import local.codenode.agent.cordis.CordisScope;
 import local.codenode.agent.knowledge.ConversationGraphParser;
 import local.codenode.agent.knowledge.KnowledgeGraph;
 import local.codenode.agent.knowledge.TextSummarizer;
@@ -54,14 +58,19 @@ public final class AgentChatController {
     private final HarnessComponents harness;
     private final LoopPolicy loopPolicy;
     private final List<HarnessListener> listeners;
+    private final SessionEventStore sessionEvents;
+    private AutoCloseable sessionEventBinding;
+    private CordisScope cordisScope;
     private final int planCheckInterval;
     private final AgentExecutionTimeline timeline = new AgentExecutionTimeline();
+    private final Consumer<AgentExecutionTimeline.Snapshot> timelineEventListener;
     /** 会话消息历史（滑动窗口/摘要/卫生/持久化，P1-2 拆分）。 */
     private final MessageHistory history;
-    private final ExecutorService toolExecutor = Executors.newCachedThreadPool();
+    private final ExecutorService toolExecutor;
     private String sessionId = UUID.randomUUID().toString();
     private volatile AgentProvider.SessionState state = AgentProvider.SessionState.IDLE;
     private volatile boolean stopRequested;
+    private volatile Runnable idleHook = () -> { };
     private SubagentManager subagents;
     /** 本会话（tab）独立的可变状态：工具停止标志与权限确认记忆。 */
     private final AgentSessionScope sessionScope = new AgentSessionScope();
@@ -78,7 +87,13 @@ public final class AgentChatController {
         this.client = harness.createClient();
         this.tools = java.util.Objects.requireNonNull(harness.tools(), "harness.tools");
         this.toolContext = java.util.Objects.requireNonNull(harness.toolContext(), "harness.toolContext");
+        this.toolExecutor = harness.scheduler().executor();
         this.listeners = harness.listeners();
+        this.sessionEvents = harness.sessionEventStore();
+        this.sessionEventBinding = harness.bindSession(this.sessionId, this.sessionEvents);
+        this.cordisScope = harness.openSessionScope(this.sessionId);
+        this.timelineEventListener = snapshot -> this.traceEvent("agent/status", timelineFields(snapshot));
+        this.timeline.addListener(this.timelineEventListener);
         this.planCheckInterval = harness.planCheckInterval();
         // context_length（agent.context_length）驱动 token 预算触发压缩（Codex 式，0=关闭）。
         this.history = new MessageHistory(toolContext, harness.createCompactor(this.client),
@@ -148,7 +163,10 @@ public final class AgentChatController {
 
     /** Background agents owned by this chat tab. */
     public synchronized SubagentManager subagentManager() {
-        if (subagents == null) subagents = new SubagentManager(this::runSubagent);
+        if (subagents == null) {
+            subagents = java.util.Objects.requireNonNull(
+                    harness.agentSpawner().create(this::runSubagent), "agentSpawner returned null");
+        }
         return subagents;
     }
 
@@ -190,10 +208,15 @@ public final class AgentChatController {
     }
 
     public void reset() {
+        closeSessionEventBinding();
         deleteSessionFile();
+        try { this.sessionEvents.delete(this.toolContext.projectRoot(), this.sessionId); } catch (RuntimeException ignored) { }
         this.history.clear();
         this.history.setSummary("");
         this.sessionId = UUID.randomUUID().toString();
+        this.sessionEventBinding = harness.bindSession(this.sessionId, this.sessionEvents);
+        this.closeCordisScope();
+        this.cordisScope = harness.openSessionScope(this.sessionId);
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
         this.sessionScope.clearToolStop();
@@ -203,9 +226,13 @@ public final class AgentChatController {
 
     /** Clear the active conversation without deleting project-scoped knowledge. */
     public void clearForDocumentSwitch() {
+        closeSessionEventBinding();
         this.history.clear();
         this.history.setSummary("");
         this.sessionId = UUID.randomUUID().toString();
+        this.sessionEventBinding = harness.bindSession(this.sessionId, this.sessionEvents);
+        this.closeCordisScope();
+        this.cordisScope = harness.openSessionScope(this.sessionId);
         this.state = AgentProvider.SessionState.IDLE;
         this.stopRequested = false;
         this.sessionScope.clearToolStop();
@@ -222,6 +249,10 @@ public final class AgentChatController {
         clearForDocumentSwitch();
         if (context == null) return;
         this.sessionId = context.sessionId().isBlank() ? UUID.randomUUID().toString() : context.sessionId();
+        closeSessionEventBinding();
+        this.sessionEventBinding = harness.bindSession(this.sessionId, this.sessionEvents);
+        closeCordisScope();
+        this.cordisScope = harness.openSessionScope(this.sessionId);
         this.history.add(this.systemPrompt());
         this.history.setSummary(context.summary());
         context.messages().stream()
@@ -234,6 +265,56 @@ public final class AgentChatController {
 
     public String summary() {
         return this.history.summary();
+    }
+
+    /** Releases the per-session Cordis binding and background subagents. */
+    public synchronized void close() {
+        if (this.state != AgentProvider.SessionState.IDLE) requestStop();
+        this.timeline.removeListener(this.timelineEventListener);
+        closeSessionEventBinding();
+        closeCordisScope();
+        if (this.subagents != null) {
+            try { this.subagents.close(); } catch (RuntimeException ignored) { }
+            this.subagents = null;
+        }
+        try { this.sessionEvents.close(); } catch (RuntimeException ignored) { }
+    }
+
+    /** Called after the controller reaches IDLE; used by transactional harness reload. */
+    public void setIdleHook(Runnable hook) {
+        this.idleHook = hook == null ? () -> { } : hook;
+    }
+
+    /** Current append-only trajectory, including model-visible context injections. */
+    public List<SessionEvent> sessionTrajectory() {
+        try {
+            return this.sessionEvents.read(this.toolContext.projectRoot(), this.sessionId);
+        } catch (RuntimeException ignored) {
+            return List.of();
+        }
+    }
+
+    /** Replays the current session's append-only event stream in sequence order. */
+    public void replaySession(Consumer<SessionEvent> consumer) {
+        try {
+            this.sessionEvents.replay(this.toolContext.projectRoot(), this.sessionId, consumer);
+        } catch (RuntimeException ignored) {
+            // Replay is diagnostic/recovery functionality and must not break UI state.
+        }
+    }
+
+    public List<SessionEvent> searchSession(String query) {
+        try {
+            return this.sessionEvents.search(this.toolContext.projectRoot(), this.sessionId, query);
+        } catch (RuntimeException ignored) {
+            return List.of();
+        }
+    }
+
+    /** Creates a durable branch of this conversation's event trajectory. */
+    public void forkSession(String newSessionId) {
+        if (newSessionId == null || newSessionId.isBlank()) throw new IllegalArgumentException("newSessionId is blank");
+        this.sessionEvents.fork(this.toolContext.projectRoot(), this.sessionId, newSessionId.trim());
     }
 
     public void sendMessage(String userText, ChatListener listener) {
@@ -263,6 +344,7 @@ public final class AgentChatController {
         }
         this.traceEvent("session_start", Map.of("task", userText));
         this.history.add(Map.of("role", "user", "content", userText));
+        this.traceEvent("user/message", Map.of("message", Map.of("role", "user", "content", userText)));
         List<KnowledgeGraph.Conflict> observedConflicts = this.toolContext.knowledgeGraph().detectTextConflicts(userText);
         if (!observedConflicts.isEmpty()) {
             this.toolContext.knowledgeGraph().recordConflicts(observedConflicts);
@@ -272,7 +354,7 @@ public final class AgentChatController {
         this.saveSessionFile();
         Thread.startVirtualThread(() -> {
             try {
-                this.runTurnLoop(listener);
+                this.harness.agentLoop().run(() -> this.runTurnLoop(listener));
             }
             catch (InterruptedException interrupted) {
                 this.timeline.cancelTask();
@@ -296,14 +378,75 @@ public final class AgentChatController {
                 }
                 this.state = AgentProvider.SessionState.IDLE;
                 listener.onEvent(ChatEvent.state(this.state));
+                try { this.idleHook.run(); } catch (RuntimeException ignored) { }
             }
         });
     }
 
     private void traceEvent(String type, Map<String, Object> fields) {
-        for (HarnessListener component : this.listeners) {
-            try { component.onEvent(type, fields); } catch (RuntimeException ignored) { }
+        Map<String, Object> safeFields = fields == null ? Map.of() : fields;
+        String canonicalType = canonicalSessionEventType(type);
+        CordisEvent delivered = null;
+        try {
+            delivered = this.cordisScope.emit(canonicalType, safeFields);
+        } catch (RuntimeException ignored) {
+            // A plugin observer is isolated from the agent loop.
         }
+        if (delivered == null) return;
+        for (HarnessListener component : this.listeners) {
+            try { component.onEvent(type, delivered.fields()); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    private void injectContextMessage(Map<String, Object> message, String reason) {
+        this.history.add(message);
+        this.traceEvent("context/injection", Map.of("reason", reason, "message", message));
+    }
+
+    private static Map<String, Object> timelineFields(AgentExecutionTimeline.Snapshot snapshot) {
+        List<Map<String, Object>> steps = snapshot.steps().stream().<Map<String, Object>>map(step -> {
+            LinkedHashMap<String, Object> value = new LinkedHashMap<>();
+            value.put("id", step.id());
+            value.put("tool", step.tool());
+            value.put("state", String.valueOf(step.state()));
+            value.put("summary", step.summary());
+            value.put("startedAt", step.startedAt());
+            value.put("finishedAt", step.finishedAt());
+            value.put("reversible", step.reversible());
+            value.put("resultId", step.resultId());
+            return value;
+        }).toList();
+        LinkedHashMap<String, Object> value = new LinkedHashMap<>();
+        value.put("taskState", String.valueOf(snapshot.taskState()));
+        value.put("canUndo", snapshot.canUndo());
+        value.put("steps", steps);
+        return value;
+    }
+
+    private void closeSessionEventBinding() {
+        if (this.sessionEventBinding == null) return;
+        try { this.sessionEventBinding.close(); } catch (Exception ignored) { }
+        this.sessionEventBinding = null;
+    }
+
+    private void closeCordisScope() {
+        if (this.cordisScope == null) return;
+        try { this.cordisScope.close(); } catch (RuntimeException ignored) { }
+        this.cordisScope = null;
+    }
+
+    private static String canonicalSessionEventType(String type) {
+        return switch (type) {
+            case "session_start" -> "session/start";
+            case "session_end" -> "session/end";
+            case "model_request" -> "agent/request";
+            case "model_response" -> "assistant/message";
+            case "tool_call" -> "tool/call";
+            case "tool_result" -> "tool/result";
+            case "retry_nudge" -> "agent/retry";
+            case "plan_check" -> "agent/plan-check";
+            default -> type.contains("/") ? type : "agent/" + type;
+        };
     }
 
     /** 规划层进度检查提示：已完成步骤 + 任务清单，要求模型对照目标继续。 */
@@ -345,6 +488,44 @@ public final class AgentChatController {
 
     private void loadSessionFile() {
         this.history.loadSessionFile(this.toolContext.projectRoot(), this.sessionId);
+        List<SessionEvent> trajectory = this.sessionTrajectory();
+        List<Map<String, Object>> latestRequest = latestModelRequest(trajectory);
+        if (!latestRequest.isEmpty()) {
+            // The last agent/request contains the exact model-visible context,
+            // including tool schemas and context injections. It supersedes a
+            // possibly stale message snapshot when resuming.
+            this.history.clear();
+            this.history.addAll(latestRequest);
+            this.history.setSystemPrompt(this.systemPrompt());
+            return;
+        }
+        if (this.history.nonSystemMessages().isEmpty()) {
+            // Older logs may predate agent/request; rebuild from message events.
+            for (SessionEvent event : trajectory) {
+                Object raw = event.payload().get("message");
+                if (raw instanceof Map<?, ?> map && isReplayableMessage(event.type())) {
+                    this.history.add(toStringMap(map));
+                }
+            }
+        }
+    }
+
+    private static List<Map<String, Object>> latestModelRequest(List<SessionEvent> trajectory) {
+        for (int i = trajectory.size() - 1; i >= 0; i--) {
+            SessionEvent event = trajectory.get(i);
+            if (!"agent/request".equals(event.type())) continue;
+            Object raw = event.payload().get("messages");
+            if (!(raw instanceof List<?> list)) continue;
+            List<Map<String, Object>> messages = new ArrayList<>();
+            for (Object item : list) if (item instanceof Map<?, ?> map) messages.add(toStringMap(map));
+            if (!messages.isEmpty()) return messages;
+        }
+        return List.of();
+    }
+
+    private static boolean isReplayableMessage(String type) {
+        return "user/message".equals(type) || "assistant/message".equals(type)
+                || "tool/result".equals(type) || "context/injection".equals(type);
     }
 
     private void deleteSessionFile() {
@@ -353,8 +534,18 @@ public final class AgentChatController {
 
     /** 由 prompt 组件按配置选择/排序系统提示分段。 */
     private Map<String, Object> systemPrompt() {
-        return this.harness.promptAssembler().render(
+        Map<String, Object> rendered = this.harness.promptAssembler().render(
                 PromptContext.of(this.config, this.tools, this.toolContext));
+        String content = String.valueOf(rendered.getOrDefault("content", ""));
+        if (!this.harness.skills().list().isEmpty()) {
+            StringBuilder skills = new StringBuilder("\n\n【可用技能】\n");
+            for (local.codenode.agent.cordis.SkillRegistry.Skill skill : this.harness.skills().list()) {
+                skills.append("- ").append(skill.name()).append("：").append(skill.description()).append('\n');
+                if (!skill.prompt().isBlank()) skills.append(skill.prompt()).append('\n');
+            }
+            content += skills;
+        }
+        return Map.of("role", "system", "content", content);
     }
 
     /** 旧版内联提示保留为迁移参考；运行时统一走上面的 PromptAssembler。 */
@@ -455,16 +646,18 @@ public final class AgentChatController {
             if (this.sessionScope.budget().exceeded()) {
                 this.traceEvent("budget_exceeded", Map.of("round", guard,
                         "used", this.sessionScope.budget().used(), "limit", this.sessionScope.budget().limit()));
-                this.history.add(Map.of("role", "user", "content",
+                this.injectContextMessage(Map.of("role", "user", "content",
                         "【系统提示】会话 token 预算已用尽（" + this.sessionScope.budget().used() + "/"
-                                + this.sessionScope.budget().limit() + "），请停止调用工具，直接总结当前进度与结论。"));
+                                + this.sessionScope.budget().limit() + "），请停止调用工具，直接总结当前进度与结论。"),
+                        "budget_exceeded");
                 this.saveSessionFile();
                 break;
             }
             long chatStart = System.currentTimeMillis();
             List<Map<String, Object>> request = this.requestMessages();
             this.traceEvent("model_request", Map.of("round", guard, "messages", request, "tools", toolSchema));
-            Map<String, Object> assistant = this.client.chat(request, toolSchema, listener::onEvent);
+            Map<String, Object> assistant = this.client.chat(request, toolSchema,
+                    event -> this.forwardModelEvent(listener, event));
             long chatDuration = System.currentTimeMillis() - chatStart;
             Map<String, Object> usage = this.client.lastUsage();
             this.traceEvent("model_response", Map.of("round", guard, "message", assistant));
@@ -480,8 +673,9 @@ public final class AgentChatController {
                     retryNudges++;
                     lastRoundHadIssue = false;
                     this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "empty_turn_after_issue"));
-                    this.history.add(Map.of("role", "user",
-                            "content", "【系统提示】上一轮工具执行失败或返回了空结果，任务尚未完成。请换一种思路继续：尝试不同的工具、不同的参数或更小的步骤，直到真正拿到结果；确实无法完成时再向用户说明。"));
+                    this.injectContextMessage(Map.of("role", "user",
+                            "content", "【系统提示】上一轮工具执行失败或返回了空结果，任务尚未完成。请换一种思路继续：尝试不同的工具、不同的参数或更小的步骤，直到真正拿到结果；确实无法完成时再向用户说明。"),
+                            "retry_after_empty_turn");
                     this.saveSessionFile();
                     continue;
                 }
@@ -572,6 +766,8 @@ public final class AgentChatController {
                 toolMessage.put("tool_call_id", callId);
                 toolMessage.put("content", structured);
                 this.history.add(toolMessage);
+                this.traceEvent("tool_result", Map.of("tool", name, "callId", callId,
+                        "message", new LinkedHashMap<>(toolMessage)));
             }
             this.saveSessionFile();
             // 本轮执行了工具且存在失败：立即注入"重新思考"提示并继续，而不是等模型主动停下
@@ -579,8 +775,9 @@ public final class AgentChatController {
                 retryNudges++;
                 lastRoundHadIssue = false;
                 this.traceEvent("retry_nudge", Map.of("round", guard, "reason", "tool_issue"));
-                this.history.add(Map.of("role", "user",
-                        "content", "【系统提示】刚才的工具调用失败或返回空结果，任务尚未完成。请重新思考：换一种工具、调整参数、缩小步骤或换个思路重试，直到真正取得结果；只有多种方案都失败时才向用户说明。"));
+                this.injectContextMessage(Map.of("role", "user",
+                        "content", "【系统提示】刚才的工具调用失败或返回空结果，任务尚未完成。请重新思考：换一种工具、调整参数、缩小步骤或换个思路重试，直到真正取得结果；只有多种方案都失败时才向用户说明。"),
+                        "retry_after_tool_issue");
                 this.saveSessionFile();
             }
             // 规划层：按 planner 组件配置的间隔注入进度检查，防止长任务中途偏离目标
@@ -588,7 +785,8 @@ public final class AgentChatController {
             if (this.planCheckInterval > 0 && !this.stopRequested && doneSteps >= nextPlanCheckAt) {
                 nextPlanCheckAt = doneSteps + this.planCheckInterval;
                 this.traceEvent("plan_check", Map.of("steps", doneSteps));
-                this.history.add(Map.of("role", "user", "content", this.planCheckPrompt(doneSteps)));
+                this.injectContextMessage(Map.of("role", "user", "content", this.planCheckPrompt(doneSteps)),
+                        "plan_check");
                 this.saveSessionFile();
             }
             if (this.history.needsCompaction()) {
@@ -602,9 +800,10 @@ public final class AgentChatController {
             this.timeline.verify();
             Map<String, Object> summaryRequest = Map.of("role", "user",
                     "content", "请基于以上工具执行结果与用户提供的回答，总结本次任务的结论，并给出清晰、完整的最终答案回复给用户。注意：你的回复内容本身就会直接展示给用户，请务必把最终答案写在回复正文（content）中，不要只放在推理里。");
-            this.history.add(summaryRequest);
+            this.injectContextMessage(summaryRequest, "forced_summary");
             if (guard < this.loopPolicy.maxToolRounds()) {
-                Map<String, Object> finalAssistant = this.client.chat(this.requestMessages(), toolSchema, listener::onEvent);
+                Map<String, Object> finalAssistant = this.client.chat(this.requestMessages(), toolSchema,
+                        event -> this.forwardModelEvent(listener, event));
                 this.history.add(finalAssistant);
                 this.saveSessionFile();
             }
@@ -619,6 +818,21 @@ public final class AgentChatController {
                 String fallback = String.valueOf(last.get("reasoning")).trim();
                 listener.onEvent(ChatEvent.stream("\n" + fallback + "\n"));
             }
+        }
+    }
+
+    private void forwardModelEvent(ChatListener listener, ChatEvent event) {
+        if (event == null) return;
+        listener.onEvent(event);
+        switch (event.kind()) {
+            case STREAM, REASONING, TOOL_CALL, SYSTEM -> this.traceEvent("assistant/chunk", Map.of(
+                    "kind", event.kind().name().toLowerCase(java.util.Locale.ROOT),
+                    "text", event.text(),
+                    "toolCall", event.toolCall() == null ? Map.of() : Map.of(
+                            "callId", String.valueOf(event.toolCall().callId()),
+                            "name", String.valueOf(event.toolCall().name()),
+                            "arguments", event.toolCall().arguments() == null ? Map.of() : event.toolCall().arguments())));
+            default -> { }
         }
     }
 

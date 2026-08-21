@@ -4,9 +4,11 @@ import local.codenode.AgentProvider;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Owns the independent chat controllers displayed as Agent tabs.
@@ -15,7 +17,7 @@ import java.util.Optional;
  * application creates every controller with the shared {@code AgentToolContext}, configuration
  * and tool registry, while the controller itself retains its private message history.</p>
  */
-public final class AgentSessionManager {
+public final class AgentSessionManager implements AutoCloseable {
     public static final int DEFAULT_MAX_SESSIONS = 16;
 
     @FunctionalInterface
@@ -32,9 +34,12 @@ public final class AgentSessionManager {
         }
     }
 
-    private final ControllerFactory controllerFactory;
+    private ControllerFactory controllerFactory;
     private final int maxSessions;
     private final LinkedHashMap<String, AgentSession> sessions = new LinkedHashMap<>();
+    private ControllerFactory pendingControllerFactory;
+    private final Set<String> pendingSessionIds = new LinkedHashSet<>();
+    private Runnable pendingCommit;
     private String activeSessionId;
     private int nextConversationNumber = 1;
 
@@ -66,6 +71,7 @@ public final class AgentSessionManager {
         ensureCapacity();
         AgentChatController controller = Objects.requireNonNull(controllerFactory.create(),
                 "ControllerFactory returned null");
+        bindController(controller);
         String id = requireText(controller.sessionId(), "controller.sessionId");
         if (sessions.containsKey(id)) {
             throw new IllegalStateException("ControllerFactory returned duplicate sessionId: " + id);
@@ -134,11 +140,116 @@ public final class AgentSessionManager {
             target.controller().requestStop();
         }
         sessions.remove(sessionId);
+        pendingSessionIds.remove(sessionId);
         if (sessionId.equals(activeSessionId)) {
             List<String> remaining = new ArrayList<>(sessions.keySet());
             activeSessionId = remaining.get(Math.min(closedIndex, remaining.size() - 1));
         }
+        target.controller().close();
+        finishPendingIfReady();
         return true;
+    }
+
+    /** Stages and atomically applies a new Harness controller factory. */
+    public synchronized ReloadReport requestHarnessReload(ControllerFactory replacementFactory,
+                                                           Runnable onCommitted) {
+        Objects.requireNonNull(replacementFactory, "replacementFactory");
+        if (pendingControllerFactory != null) throw new IllegalStateException("harness reload already pending");
+        List<PreparedReplacement> prepared = new ArrayList<>();
+        try {
+            for (AgentSession session : sessions.values()) {
+                if (session.controller().state() == AgentProvider.SessionState.IDLE) {
+                    prepared.add(prepareReplacement(session, replacementFactory));
+                }
+            }
+        } catch (RuntimeException failure) {
+            for (PreparedReplacement item : prepared) item.controller().close();
+            throw failure;
+        }
+        this.controllerFactory = replacementFactory;
+        this.pendingControllerFactory = replacementFactory;
+        this.pendingCommit = onCommitted;
+        this.pendingSessionIds.clear();
+        for (AgentSession session : sessions.values()) {
+            if (session.controller().state() != AgentProvider.SessionState.IDLE) {
+                pendingSessionIds.add(session.sessionId());
+            }
+        }
+        int replaced = 0;
+        for (PreparedReplacement item : prepared) {
+            commitReplacement(item);
+            replaced++;
+        }
+        boolean committed = finishPendingIfReady();
+        return new ReloadReport(replaced, pendingSessionIds.size(), committed);
+    }
+
+    /** Applies replacements for sessions that have since returned to IDLE. */
+    public synchronized ReloadReport applyPendingHarnessReload() {
+        if (pendingControllerFactory == null) return new ReloadReport(0, 0, true);
+        List<PreparedReplacement> prepared = new ArrayList<>();
+        try {
+            for (String id : List.copyOf(pendingSessionIds)) {
+                AgentSession session = sessions.get(id);
+                if (session != null && session.controller().state() == AgentProvider.SessionState.IDLE) {
+                    prepared.add(prepareReplacement(session, pendingControllerFactory));
+                }
+            }
+        } catch (RuntimeException failure) {
+            for (PreparedReplacement item : prepared) item.controller().close();
+            return new ReloadReport(0, pendingSessionIds.size(), false);
+        }
+        for (PreparedReplacement item : prepared) {
+            pendingSessionIds.remove(item.session().sessionId());
+            commitReplacement(item);
+        }
+        boolean committed = finishPendingIfReady();
+        return new ReloadReport(prepared.size(), pendingSessionIds.size(), committed);
+    }
+
+    private PreparedReplacement prepareReplacement(AgentSession session, ControllerFactory factory) {
+        AgentChatController replacement = Objects.requireNonNull(factory.create(),
+                "replacement factory returned null");
+        try {
+            replacement.restoreContext(session.controller().snapshotContext());
+            bindController(replacement);
+            return new PreparedReplacement(session, replacement);
+        } catch (RuntimeException failure) {
+            replacement.close();
+            throw failure;
+        }
+    }
+
+    private void commitReplacement(PreparedReplacement prepared) {
+        AgentSession old = prepared.session();
+        sessions.put(old.sessionId(), new AgentSession(old.sessionId(), old.title(), prepared.controller()));
+        old.controller().close();
+    }
+
+    private void bindController(AgentChatController controller) {
+        controller.setIdleHook(this::applyPendingHarnessReload);
+    }
+
+    private boolean finishPendingIfReady() {
+        if (pendingControllerFactory == null || !pendingSessionIds.isEmpty()) return false;
+        Runnable callback = pendingCommit;
+        pendingControllerFactory = null;
+        pendingCommit = null;
+        if (callback != null) {
+            try { callback.run(); } catch (RuntimeException ignored) { }
+        }
+        return true;
+    }
+
+    /** Closes every session-owned resource without closing the shared harness. */
+    @Override
+    public synchronized void close() {
+        for (AgentSession session : sessions.values()) session.controller().close();
+        sessions.clear();
+        pendingSessionIds.clear();
+        pendingControllerFactory = null;
+        pendingCommit = null;
+        activeSessionId = null;
     }
 
     /** Captures every tab in the document-level, backward-compatible AgentContext schema. */
@@ -156,6 +267,9 @@ public final class AgentSessionManager {
      * one tab through {@link AgentContext#allSessions()}.
      */
     public synchronized void restore(AgentContext context) {
+        pendingSessionIds.clear();
+        pendingControllerFactory = null;
+        pendingCommit = null;
         stopActiveControllers();
         sessions.clear();
         activeSessionId = null;
@@ -166,6 +280,7 @@ public final class AgentSessionManager {
             if (sessions.size() >= maxSessions) break;
             AgentChatController controller = Objects.requireNonNull(controllerFactory.create(),
                     "ControllerFactory returned null");
+            bindController(controller);
             AgentContext single = new AgentContext(item.sessionId(), item.summary(), item.lastUpdated(),
                     item.messages(), AgentContext.MAX_CHARS, false);
             controller.restoreContext(single);
@@ -189,6 +304,7 @@ public final class AgentSessionManager {
             if (session.controller().state() != AgentProvider.SessionState.IDLE) {
                 session.controller().requestStop();
             }
+            session.controller().close();
         }
     }
 
@@ -221,4 +337,8 @@ public final class AgentSessionManager {
         if (value == null || value.isBlank()) throw new IllegalArgumentException(name + " must not be blank");
         return value;
     }
+
+    public record ReloadReport(int replacedImmediately, int deferredUntilIdle, boolean committed) { }
+
+    private record PreparedReplacement(AgentSession session, AgentChatController controller) { }
 }

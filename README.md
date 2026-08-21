@@ -77,7 +77,7 @@ java -jar .\target\codenode-desktop.jar
 2. 填写 `api_base` / `api_key`（也可在应用内「内嵌 Agent → 设置」填写并保存）。
 3. 顶部模型下拉可在 `models` 列出的模型间切换（默认双模型 `deepseek-v4-flash` / `deepseek-v4-pro`）。
 
-Harness 组件也由同一份配置装配：`harness.components` 控制组件类别，`tools.sources` 控制内置/MCP 工具源，`harness.prompt_sections` 控制系统提示分段及顺序，`harness.compactor` 控制压缩策略，`harness.storage` 控制会话存储，`harness.loop` 控制 agent loop policy，`harness.listeners` 控制 trace 等监听器，`harness.plan_check_interval=0` 可关闭规划检查。完整示例见 `config/agent.properties.example`；修改后重启 Agent 会话生效。第三方 JAR 可实现 `HarnessExtension` 并通过 `META-INF/services/local.codenode.agent.components.HarnessExtension` 注册，启动时自动挂载。
+Harness 组件也由同一份配置装配：`harness.profile` 标识 Cordis profile，`harness.bundles` / `harness.patches` 按固定顺序叠加 properties 配置层，`harness.plugins` 可按类名把额外 Cordis 插件挂入该 profile，`harness.components` 控制 LLM、工具、Prompt、压缩、快照存储、追加式会话事件、Loop/Agent Loop、子代理、监听器、规划、sandbox、UI、scheduler、skills 等能力，`tools.sources` 控制内置/MCP 工具源，`harness.prompt_sections` 控制系统提示分段及顺序，`harness.session_log` 控制会话事件日志后端，`harness.agent_loop` / `harness.agents` 控制整轮驱动器和子代理工厂，`harness.plan_check_interval=0` 可关闭规划检查。运行时基于内置 Cordis-like Context/EventBus/Plugin 生命周期；每次模型请求、响应、工具调用、结果和上下文注入都会写入 `.codenode/agent-sessions/<sessionId>.events.jsonl`，可用于恢复、分叉和回放。通过 `MainFrame.reloadAgentHarness()` 可事务式重载：活动会话继续使用旧 Harness，回到 IDLE 后再切换；失败不提交。插件 manifest 固定 ID、版本、依赖服务和 `CordisContracts.VERSION` 契约。完整示例见 `config/agent.properties.example`；修改后重启 Agent 会话生效。第三方 JAR 可实现 `HarnessExtension` 并通过 `META-INF/services/local.codenode.agent.components.HarnessExtension` 注册；除传统工厂外，还可通过 `cordisPlugins()` 或直接声明 `META-INF/services/local.codenode.agent.cordis.CordisPlugin` 提供带依赖和可逆生命周期的完整插件。
 
 > **安全**：`api_key` 仅存本地 `config/agent.properties`，该文件已被 `.gitignore` 排除，禁止提交到仓库。
 

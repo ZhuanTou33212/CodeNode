@@ -30,6 +30,8 @@ public final class AgentConfig {
 
     private final Path file;
     private final Properties properties = new Properties();
+    private volatile List<Path> appliedHarnessConfigFiles = List.of();
+    private volatile List<String> harnessConfigWarnings = List.of();
     private final WindowsCredentialStore credentialStore = new WindowsCredentialStore();
     private volatile String apiKeyCache;
 
@@ -49,14 +51,16 @@ public final class AgentConfig {
 
     /** 从磁盘重新加载；文件不存在时保持默认（并触发 createDefaultsIfMissing）。 */
     public synchronized void reload() {
+        HarnessConfigResolver.Resolution resolution = HarnessConfigResolver.resolve(file);
         properties.clear();
+        properties.putAll(resolution.properties());
+        appliedHarnessConfigFiles = resolution.appliedFiles();
+        harnessConfigWarnings = resolution.warnings();
         apiKeyCache = null;
-        if (Files.isRegularFile(file)) {
-            try (var reader = new InputStreamReader(Files.newInputStream(file), StandardCharsets.UTF_8)) {
-                properties.load(reader);
-            } catch (IOException ignored) {}
-        }
     }
+
+    public List<Path> appliedHarnessConfigFiles() { return appliedHarnessConfigFiles; }
+    public List<String> harnessConfigWarnings() { return harnessConfigWarnings; }
 
     /** 启动时调用：确保配置文件存在，否则用默认值生成。 */
     public synchronized void createDefaultsIfMissing() throws IOException {
@@ -163,6 +167,17 @@ public final class AgentConfig {
         return configured.isEmpty() ? HarnessAssembler.DEFAULT_COMPONENTS : configured;
     }
 
+    /** Named Cordis profile used to label and compose this harness instance. */
+    public String harnessProfile() {
+        String value = properties.getProperty("harness.profile", "default").trim();
+        return value.isBlank() ? "default" : value;
+    }
+
+    /** Fully-qualified Cordis plugin classes to add to the selected profile. */
+    public List<String> cordisPlugins() {
+        return parseList(properties.getProperty("harness.plugins", ""));
+    }
+
     /** 工具来源组件；默认启用内置工具与已配置的 MCP 来源。 */
     public List<String> toolsSources() {
         List<String> configured = parseList(properties.getProperty("tools.sources", ""));
@@ -187,6 +202,12 @@ public final class AgentConfig {
         return value.isBlank() ? "file" : value;
     }
 
+    /** Append-only trajectory backend: file / memory / third-party extension. */
+    public String sessionEventStore() {
+        String value = properties.getProperty("harness.session_log", "file").trim().toLowerCase();
+        return value.isBlank() ? "file" : value;
+    }
+
     /** harness 监听器组件列表，默认启用 trace。 */
     public List<String> harnessListeners() {
         List<String> configured = parseList(properties.getProperty("harness.listeners", ""));
@@ -201,6 +222,18 @@ public final class AgentConfig {
     /** Agent loop 策略名称。 */
     public String loopPolicy() {
         String value = properties.getProperty("harness.loop", "default").trim().toLowerCase();
+        return value.isBlank() ? "default" : value;
+    }
+
+    /** Whole-turn driver name (separate from the loop policy). */
+    public String agentLoop() {
+        String value = properties.getProperty("harness.agent_loop", "default").trim().toLowerCase();
+        return value.isBlank() ? "default" : value;
+    }
+
+    /** Subagent service factory name. */
+    public String agentSpawner() {
+        String value = properties.getProperty("harness.agents", "default").trim().toLowerCase();
         return value.isBlank() ? "default" : value;
     }
 
@@ -280,13 +313,20 @@ public final class AgentConfig {
     public void setDefaultProjectPath(String value) { properties.setProperty("default_project_path", value == null ? "" : value.trim()); }
 
     public void setHarnessComponents(List<String> value) { setList("harness.components", value); }
+    public void setHarnessProfile(String value) { properties.setProperty("harness.profile", value == null || value.isBlank() ? "default" : value.trim()); }
+    public void setHarnessBundles(List<String> value) { setList("harness.bundles", value); }
+    public void setHarnessPatches(List<String> value) { setList("harness.patches", value); }
+    public void setCordisPlugins(List<String> value) { setList("harness.plugins", value); }
     public void setToolsSources(List<String> value) { setList("tools.sources", value); }
     public void setPromptSections(List<String> value) { setList("harness.prompt_sections", value); }
     public void setCompactor(String value) { properties.setProperty("harness.compactor", value == null || value.isBlank() ? "auto" : value.trim().toLowerCase()); }
     public void setSessionStore(String value) { properties.setProperty("harness.storage", value == null || value.isBlank() ? "file" : value.trim().toLowerCase()); }
+    public void setSessionEventStore(String value) { properties.setProperty("harness.session_log", value == null || value.isBlank() ? "file" : value.trim().toLowerCase()); }
     public void setHarnessListeners(List<String> value) { setList("harness.listeners", value); }
     public void setPlanCheckInterval(int value) { properties.setProperty("harness.plan_check_interval", String.valueOf(Math.max(0, value))); }
     public void setLoopPolicy(String value) { properties.setProperty("harness.loop", value == null || value.isBlank() ? "default" : value.trim().toLowerCase()); }
+    public void setAgentLoop(String value) { properties.setProperty("harness.agent_loop", value == null || value.isBlank() ? "default" : value.trim().toLowerCase()); }
+    public void setAgentSpawner(String value) { properties.setProperty("harness.agents", value == null || value.isBlank() ? "default" : value.trim().toLowerCase()); }
     public void setLoopMaxRounds(int value) { properties.setProperty("harness.loop.max_rounds", String.valueOf(value)); }
     public void setLoopMaxRetries(int value) { properties.setProperty("harness.loop.max_retries", String.valueOf(value)); }
     public void setLoopDefaultTimeoutSeconds(int value) { properties.setProperty("harness.loop.default_timeout_seconds", String.valueOf(value)); }

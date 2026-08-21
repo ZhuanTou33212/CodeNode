@@ -9,6 +9,7 @@ import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.tools.impl.AgentToolkit;
 import local.codenode.config.AgentConfig;
+import local.codenode.agent.cordis.CordisPlugin;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -36,9 +37,12 @@ import java.util.ServiceLoader;
  *       {@link SessionStore.Factory}（file / memory）；</li>
  *   <li>{@code loop} — agent loop 策略，按 {@code harness.loop} 选择
  *       {@link LoopPolicy.Factory}（default）；</li>
+ *   <li>{@code agent-loop} — 可替换的整轮 Agent 驱动器；</li>
+ *   <li>{@code agents} — 子代理调度/创建服务；</li>
  *   <li>{@code listeners} — 事件监听器，按 {@code harness.listeners} 装配
  *       {@link HarnessListener}（内置 trace）；</li>
  *   <li>{@code planner} — 规划层，{@code harness.plan_check_interval} 步注入一次进度检查。</li>
+ *   <li>{@code sandbox/ui/scheduler/skills} — 项目沙箱、UI 边界、调度器和技能注册表服务。</li>
  * </ul>
  *
  * <p>第三方扩展：通过 {@link HarnessExtension} 的 ServiceLoader 或
@@ -55,23 +59,36 @@ public final class HarnessAssembler {
     public static final String CATEGORY_PROMPT = "prompt";
     public static final String CATEGORY_COMPACTOR = "compactor";
     public static final String CATEGORY_STORAGE = "storage";
+    public static final String CATEGORY_SESSION_EVENTS = "session-events";
     public static final String CATEGORY_LOOP = "loop";
+    public static final String CATEGORY_AGENT_LOOP = "agent-loop";
+    public static final String CATEGORY_AGENTS = "agents";
     public static final String CATEGORY_LISTENERS = "listeners";
     public static final String CATEGORY_PLANNER = "planner";
+    public static final String CATEGORY_SANDBOX = "sandbox";
+    public static final String CATEGORY_UI = "ui";
+    public static final String CATEGORY_SCHEDULER = "scheduler";
+    public static final String CATEGORY_SKILLS = "skills";
 
-    /** 默认启用的组件类别（与改造前行为一致）。 */
+    /** Default profile: all built-in capability plugins are enabled. */
     public static final List<String> DEFAULT_COMPONENTS = List.of(
-            CATEGORY_LLM, CATEGORY_PROMPT, CATEGORY_TOOLS, CATEGORY_COMPACTOR, CATEGORY_STORAGE, CATEGORY_LOOP,
-            CATEGORY_LISTENERS, CATEGORY_PLANNER);
+            CATEGORY_LLM, CATEGORY_PROMPT, CATEGORY_TOOLS, CATEGORY_COMPACTOR, CATEGORY_STORAGE,
+            CATEGORY_SESSION_EVENTS, CATEGORY_LOOP, CATEGORY_AGENT_LOOP, CATEGORY_AGENTS, CATEGORY_LISTENERS, CATEGORY_PLANNER,
+            CATEGORY_SANDBOX, CATEGORY_UI,
+            CATEGORY_SCHEDULER, CATEGORY_SKILLS);
 
     private final Map<String, ChatClientFactory> chatClientFactories = new LinkedHashMap<>();
     private final Map<String, ToolSource.Factory> toolSourceFactories = new LinkedHashMap<>();
     private final Map<String, PromptSection> promptSections = new LinkedHashMap<>();
     private final Map<String, CompactorFactory> compactorFactories = new LinkedHashMap<>();
     private final Map<String, SessionStore.Factory> sessionStoreFactories = new LinkedHashMap<>();
+    private final Map<String, SessionEventStore.Factory> sessionEventStoreFactories = new LinkedHashMap<>();
     private final Map<String, LoopPolicy.Factory> loopPolicyFactories = new LinkedHashMap<>();
+    private final Map<String, AgentLoop.Factory> agentLoopFactories = new LinkedHashMap<>();
+    private final Map<String, AgentSpawner.Factory> agentSpawnerFactories = new LinkedHashMap<>();
     private final Map<String, HarnessListener.Factory> listenerFactories = new LinkedHashMap<>();
     private final List<String> extensionWarnings = new ArrayList<>();
+    private final List<CordisPlugin> extensionPlugins = new ArrayList<>();
 
     public HarnessAssembler() {
         registerDefaults();
@@ -103,8 +120,24 @@ public final class HarnessAssembler {
         return this;
     }
 
+    /** Registers the append-only trajectory backend independently of message snapshots. */
+    public HarnessAssembler registerSessionEventStore(String name, SessionEventStore.Factory factory) {
+        sessionEventStoreFactories.put(name, factory);
+        return this;
+    }
+
     public HarnessAssembler registerLoopPolicy(String name, LoopPolicy.Factory factory) {
         loopPolicyFactories.put(name, factory);
+        return this;
+    }
+
+    public HarnessAssembler registerAgentLoop(String name, AgentLoop.Factory factory) {
+        agentLoopFactories.put(name, factory);
+        return this;
+    }
+
+    public HarnessAssembler registerAgentSpawner(String name, AgentSpawner.Factory factory) {
+        agentSpawnerFactories.put(name, factory);
         return this;
     }
 
@@ -119,6 +152,8 @@ public final class HarnessAssembler {
             for (HarnessExtension extension : ServiceLoader.load(HarnessExtension.class)) {
                 try {
                     extension.register(this);
+                    List<CordisPlugin> plugins = extension.cordisPlugins();
+                    if (plugins != null) extensionPlugins.addAll(plugins);
                 } catch (RuntimeException failure) {
                     extensionWarnings.add("harness 扩展 " + extension.name() + " 加载失败："
                             + (failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
@@ -126,6 +161,13 @@ public final class HarnessAssembler {
             }
         } catch (ServiceConfigurationError failure) {
             extensionWarnings.add("harness 扩展发现失败：" + failure.getMessage());
+        }
+        try {
+            for (CordisPlugin plugin : ServiceLoader.load(CordisPlugin.class)) {
+                if (plugin != null) extensionPlugins.add(plugin);
+            }
+        } catch (ServiceConfigurationError failure) {
+            extensionWarnings.add("Cordis 插件发现失败：" + failure.getMessage());
         }
         return this;
     }
@@ -144,7 +186,11 @@ public final class HarnessAssembler {
         compactorFactories.put("none", (config, client) -> null);
         sessionStoreFactories.put("file", (config, context) -> new FileSessionStore());
         sessionStoreFactories.put("memory", (config, context) -> new MemorySessionStore());
+        sessionEventStoreFactories.put("file", (config, context) -> new FileSessionEventStore());
+        sessionEventStoreFactories.put("memory", (config, context) -> new MemorySessionEventStore());
         loopPolicyFactories.put("default", DefaultLoopPolicy::new);
+        agentLoopFactories.put("default", ignored -> new DefaultAgentLoop());
+        agentSpawnerFactories.put("default", ignored -> runner -> new local.codenode.agent.SubagentManager(runner));
         listenerFactories.put("trace", TraceHarnessListener::new);
     }
 
@@ -242,9 +288,58 @@ public final class HarnessAssembler {
             loopPolicyFactory = loopPolicyFactories.get("default");
         }
 
-        return new HarnessComponents(config, toolContext, null, clientFactory, tools, prompt,
+        AgentLoop.Factory agentLoopFactory = agentLoopFactories.get(config.agentLoop());
+        if (agentLoopFactory == null) {
+            warnings.add("harness.agent_loop 引用了未注册的 Agent loop：" + config.agentLoop() + "，回退 default");
+            agentLoopFactory = agentLoopFactories.get("default");
+        }
+
+        AgentSpawner.Factory agentSpawnerFactory = agentSpawnerFactories.get(config.agentSpawner());
+        if (agentSpawnerFactory == null) {
+            warnings.add("harness.agents 引用了未注册的 subagent 工厂：" + config.agentSpawner() + "，回退 default");
+            agentSpawnerFactory = agentSpawnerFactories.get("default");
+        }
+
+        SessionEventStore.Factory sessionEventStoreFactory = sessionEventStoreFactories.get(config.sessionEventStore());
+        if (sessionEventStoreFactory == null) {
+            warnings.add("harness.session_log 引用了未注册的存储组件：" + config.sessionEventStore()
+                    + "，回退 file");
+            sessionEventStoreFactory = sessionEventStoreFactories.get("file");
+        }
+
+        List<CordisPlugin> configuredPluginList = configuredPlugins(config, warnings);
+        HarnessComponents components = new HarnessComponents(config, toolContext, null, clientFactory, tools, prompt,
                 null, compactorFactory, listeners, planCheckInterval, sources, warnings,
-                null, sessionStoreFactory, loopPolicyFactory);
+                null, sessionStoreFactory, loopPolicyFactory, null, sessionEventStoreFactory);
+        try {
+            components.replaceAgentLoop(agentLoopFactory.create(config));
+            components.replaceAgentSpawner(agentSpawnerFactory.create(config));
+            List<CordisPlugin> plugins = new ArrayList<>(extensionPlugins);
+            plugins.addAll(configuredPluginList);
+            components.mountPlugins(plugins);
+        } catch (RuntimeException failure) {
+            components.addWarning("Cordis 扩展插件装载失败：" + failure.getMessage());
+        }
+        return components;
+    }
+
+    private List<CordisPlugin> configuredPlugins(AgentConfig config, List<String> warnings) {
+        List<CordisPlugin> plugins = new ArrayList<>();
+        for (String className : config.cordisPlugins()) {
+            try {
+                Class<?> type = Class.forName(className);
+                if (!CordisPlugin.class.isAssignableFrom(type)) {
+                    warnings.add("harness.plugins 类未实现 CordisPlugin：" + className);
+                    continue;
+                }
+                Object instance = type.getDeclaredConstructor().newInstance();
+                plugins.add((CordisPlugin) instance);
+            } catch (ReflectiveOperationException | LinkageError failure) {
+                warnings.add("harness.plugins 加载失败：" + className + "（"
+                        + (failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()) + "）");
+            }
+        }
+        return plugins;
     }
 
     private PromptAssembler assemblePrompt(List<String> names, List<String> warnings) {

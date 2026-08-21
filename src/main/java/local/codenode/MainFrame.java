@@ -121,6 +121,7 @@ import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.agent.components.HarnessAssembler;
 import local.codenode.agent.components.HarnessComponents;
+import local.codenode.agent.components.HarnessReloadCoordinator;
 import local.codenode.ui.agent.AgentSessionPanel;
 import local.codenode.config.AgentConfig;
 import local.codenode.project.JdkManager;
@@ -172,6 +173,7 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
     private AgentToolRegistry agentTools;
     /** 当前应用级 harness 装配结果（工具源与配置生命周期由此统一管理）。 */
     private HarnessComponents harnessComponents;
+    private HarnessReloadCoordinator harnessReloadCoordinator;
     private AgentChatController agentChatController;
     private AgentSessionManager agentSessionManager;
     private AgentSessionPanel agentSessionPanel;
@@ -301,6 +303,8 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         }
         this.agentSessionManager = new AgentSessionManager(() ->
                 new AgentChatController(this.agentConfig, this.harnessComponents));
+        this.harnessReloadCoordinator = new HarnessReloadCoordinator(this.agentConfig, this.harnessComponents,
+                this.agentSessionManager, this.agentToolContext);
         this.agentChatController = this.agentSessionManager.activeSession().controller();
         this.agentToolContext.setConversationSupplier(this.agentChatController::messageHistory);
         this.agentToolContext.setFileChangeNotifier((relative, kind, detail) -> SwingUtilities.invokeLater(() -> {
@@ -2736,11 +2740,22 @@ public final class MainFrame extends JFrame implements SoftwareInfoProvider {
         System.exit(0);
     }
 
+    /** Applies profile/bundle/patch changes transactionally to the Agent runtime. */
+    public HarnessReloadCoordinator.ReloadResult reloadAgentHarness() {
+        if (this.harnessReloadCoordinator == null) throw new IllegalStateException("Agent harness is not initialized");
+        HarnessReloadCoordinator.ReloadResult result = this.harnessReloadCoordinator.reload();
+        this.harnessComponents = this.harnessReloadCoordinator.activeHarness();
+        this.agentTools = this.harnessComponents.tools();
+        for (String warning : result.warnings()) this.append("[Agent harness] " + warning);
+        return result;
+    }
+
     @Override
     public void dispose() {
         this.resultPollTimer.stop();
         this.autoSaveTimer.stop();
         this.codexAgent.close();
+        if (this.agentSessionManager != null) this.agentSessionManager.close();
         if (this.harnessComponents != null) this.harnessComponents.close();
         if (this.agentToolContext != null) this.agentToolContext.closeMemoryStore();
         for (ToolWindow tool : new ToolWindow[]{this.inspectorTool, this.changeTool, this.queueTool}) {

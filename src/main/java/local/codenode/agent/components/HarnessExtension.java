@@ -1,5 +1,9 @@
 package local.codenode.agent.components;
 
+import local.codenode.agent.cordis.CordisPlugin;
+
+import java.util.List;
+
 /**
  * 可由外部 JAR 通过 {@link java.util.ServiceLoader} 发现的 harness 扩展。
  *
@@ -13,4 +17,14 @@ public interface HarnessExtension {
 
     /** 向装配器注册一个或多个组件。 */
     void register(HarnessAssembler assembler);
+
+    /**
+     * Optional full Cordis plugins.  The default keeps existing extensions
+     * source-compatible while allowing extensions to contribute services,
+     * event handlers, and reversible lifecycle effects. A JAR may also list
+     * {@link CordisPlugin} directly in {@code META-INF/services}.
+     */
+    default List<CordisPlugin> cordisPlugins() {
+        return List.of();
+    }
 }

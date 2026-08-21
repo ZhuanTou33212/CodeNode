@@ -115,7 +115,7 @@ Memory conflict handling is now complete: knowledge elements carry source, captu
 - `FileContentAnalyzer`：analyzeFile 统一入口（二进制拒绝/大文件截断/YAML-MD-properties 摘要），Java 类/函数/变量/imports 提取
 - read_file 读前类型检测，二进制拒绝给解析建议；analyze=true 结构化摘要
 - AgentConfig：tools.enabled/disabled、tools.sources、harness.components、harness.prompt_sections、harness.compactor、harness.storage、harness.loop、harness.listeners、read_file.max_lines、file_analysis.max_lines、harness.extra_prompt
-- HarnessAssembler：配置驱动装配 LLM、工具源、提示词分段、会话压缩、会话存储、loop policy、trace 监听器与规划组件；支持 ServiceLoader 扩展，MCP 生命周期由 harness 统一管理
+- HarnessAssembler：配置驱动装配 LLM、工具源、提示词分段、会话压缩、快照存储、追加式会话事件、loop policy、Agent Loop、子代理、trace 监听器、规划、sandbox、UI、scheduler 与 skills；内置 Cordis-like Context/EventBus/Plugin/Profile 生命周期，支持 profile/bundle/patch 分层配置、plugin manifest/契约版本、required services、before 拦截器、session scope、ServiceLoader 扩展及 `HarnessExtension.cordisPlugins()` 完整插件；`HarnessReloadCoordinator` 提供事务式重载，活动会话延迟切换，失败回滚，MCP/调度器/会话 scope 生命周期由 harness 统一管理
 
 ---
 

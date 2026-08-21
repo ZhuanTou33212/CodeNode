@@ -33,6 +33,10 @@ class HarnessComponentsTest {
         HarnessComponents components = HarnessAssembler.assembleDefaults(config, context);
         try {
             assertEquals(HarnessAssembler.DEFAULT_COMPONENTS, config.harnessComponents());
+            assertEquals("default", components.profile().name());
+            assertTrue(components.cordisRuntime().mountedPluginIds().contains("harness.sandbox"));
+            assertTrue(components.cordisRuntime().mountedPluginIds().contains("harness.session-events"));
+            assertNotNull(components.cordisRuntime().context().get("harness.tools"));
             assertTrue(components.tools().contains("read_file"));
             assertEquals(List.of("role", "file_rules", "scan_rules", "knowledge_rules",
                     "project_memory", "user_memory", "knowledge_state", "tasks", "agent_info", "extra"),
@@ -141,6 +145,71 @@ class HarnessComponentsTest {
             assertEquals(1, custom.loopPolicy().maxToolRounds());
         } finally {
             custom.close();
+        }
+    }
+
+    @Test
+    void wholeAgentLoopIsReplaceableThroughCordisService() throws Exception {
+        Path root = Files.createTempDirectory("codenode-harness-agent-loop-");
+        AgentConfig config = new AgentConfig(root.resolve("agent.properties"));
+        config.setAgentLoop("marker");
+        AgentToolContext context = new AgentToolContext(() -> root, () -> null, null, null);
+        java.util.concurrent.atomic.AtomicBoolean invoked = new java.util.concurrent.atomic.AtomicBoolean();
+        HarnessComponents components = new HarnessAssembler()
+                .registerAgentLoop("marker", ignored -> task -> {
+                    invoked.set(true);
+                    task.run();
+                })
+                .assemble(config, context);
+        try {
+            components.agentLoop().run(() -> { });
+            assertTrue(invoked.get());
+        } finally {
+            components.close();
+        }
+    }
+
+    @Test
+    void sessionScopedCordisEventsArePersistedByTheBoundStore() throws Exception {
+        Path root = Files.createTempDirectory("codenode-harness-events-");
+        AgentConfig config = new AgentConfig(root.resolve("agent.properties"));
+        AgentToolContext context = new AgentToolContext(() -> root, () -> null, null, null);
+        HarnessComponents components = HarnessAssembler.assembleDefaults(config, context);
+        local.codenode.agent.components.SessionEventStore store =
+                new local.codenode.agent.components.MemorySessionEventStore();
+        AutoCloseable binding = components.bindSession("s1", store);
+        try {
+            components.emit(new local.codenode.agent.cordis.CordisEvent("agent/request", "s1",
+                    java.time.Instant.now(), Map.of("messages", List.of())));
+            assertEquals(List.of("agent/request"), store.read(root, "s1").stream()
+                    .map(local.codenode.agent.components.SessionEvent::type).toList());
+            assertTrue(store.read(root, "other").isEmpty());
+        } finally {
+            binding.close();
+            components.close();
+        }
+    }
+
+    @Test
+    void configuredCordisPluginIsMountedIntoTheProfile() throws Exception {
+        Path root = Files.createTempDirectory("codenode-harness-configured-plugin-");
+        AgentConfig config = new AgentConfig(root.resolve("agent.properties"));
+        config.setCordisPlugins(List.of(ConfiguredPlugin.class.getName()));
+        AgentToolContext context = new AgentToolContext(() -> root, () -> null, null, null);
+        HarnessComponents components = HarnessAssembler.assembleDefaults(config, context);
+        try {
+            assertEquals("configured", components.cordisRuntime().context().get("test.configured"));
+            assertTrue(components.cordisRuntime().mountedPluginIds().contains("test.configured-plugin"));
+        } finally {
+            components.close();
+        }
+    }
+
+    public static final class ConfiguredPlugin implements local.codenode.agent.cordis.CordisPlugin {
+        public ConfiguredPlugin() { }
+        @Override public String id() { return "test.configured-plugin"; }
+        @Override public void apply(local.codenode.agent.cordis.CordisContext context) {
+            context.provide("test.configured", "configured");
         }
     }
 

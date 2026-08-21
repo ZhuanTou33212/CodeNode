@@ -3,6 +3,10 @@ package local.codenode;
 import local.codenode.agent.AgentChatController;
 import local.codenode.agent.AgentContext;
 import local.codenode.agent.AgentSessionManager;
+import local.codenode.agent.ChatClient;
+import local.codenode.agent.ChatEvent;
+import local.codenode.agent.components.HarnessComponents;
+import local.codenode.agent.components.PromptAssembler;
 import local.codenode.agent.tools.AgentToolContext;
 import local.codenode.agent.tools.AgentToolRegistry;
 import local.codenode.config.AgentConfig;
@@ -12,6 +16,8 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -90,6 +96,83 @@ class AgentSessionManagerTest {
         IllegalStateException full = assertThrows(IllegalStateException.class, manager::createSession);
         assertTrue(full.getMessage().contains("Maximum"));
         assertThrows(IllegalArgumentException.class, () -> manager.activate("missing"));
+    }
+
+    @Test
+    void reloadReplacesIdleSessionsAtomicallyAndPreservesContext() {
+        AgentToolContext context = new AgentToolContext(() -> Path.of("."), () -> null,
+                (level, what, detail) -> false, entry -> { });
+        AgentToolRegistry registry = new AgentToolRegistry();
+        AgentConfig config = new AgentConfig(Path.of("target", "agent-reload-test.properties"));
+        AgentSessionManager manager = new AgentSessionManager(
+                () -> new AgentChatController(config, registry, context));
+        AgentSessionManager.AgentSession old = manager.activeSession();
+        old.controller().restoreContext(single(old.sessionId(), "summary", "preserve me"));
+        java.util.concurrent.atomic.AtomicBoolean committed = new java.util.concurrent.atomic.AtomicBoolean();
+
+        AgentSessionManager.ReloadReport report = manager.requestHarnessReload(
+                () -> new AgentChatController(config, registry, context), () -> committed.set(true));
+
+        assertEquals(1, report.replacedImmediately());
+        assertEquals(0, report.deferredUntilIdle());
+        assertTrue(report.committed());
+        assertTrue(committed.get());
+        assertNotSame(old.controller(), manager.activeSession().controller());
+        assertEquals("preserve me", manager.activeSession().controller().messageHistory().getFirst().get("content"));
+        manager.close();
+    }
+
+    @Test
+    void failedReloadLeavesTheActiveControllerUntouched() {
+        AgentSessionManager manager = manager(2);
+        AgentSessionManager.AgentSession old = manager.activeSession();
+        assertThrows(IllegalStateException.class, () -> manager.requestHarnessReload(
+                () -> { throw new IllegalStateException("stage failed"); }, null));
+        assertSame(old.controller(), manager.activeSession().controller());
+        manager.close();
+    }
+
+    @Test
+    void activeSessionDefersReloadUntilItReturnsToIdle() throws Exception {
+        Path root = Path.of("target", "agent-session-reload-active");
+        AgentToolContext context = new AgentToolContext(() -> root, () -> null,
+                (level, what, detail) -> false, entry -> { });
+        AgentConfig config = new AgentConfig(root.resolve("agent.properties"));
+        CountDownLatch release = new CountDownLatch(1);
+        ChatClient blocking = (messages, tools, events) -> {
+            release.await(5, TimeUnit.SECONDS);
+            events.accept(ChatEvent.stream("done"));
+            return Map.of("role", "assistant", "content", "done");
+        };
+        HarnessComponents oldHarness = new HarnessComponents(config, context, blocking,
+                new AgentToolRegistry(), PromptAssembler.defaultAssembler(), null, List.of(), 0, List.of(), List.of());
+        AgentSessionManager manager = new AgentSessionManager(() -> new AgentChatController(config, oldHarness));
+        AgentChatController oldController = manager.activeSession().controller();
+        oldController.sendMessage("blocking", event -> { });
+        long deadline = System.currentTimeMillis() + 3000;
+        while (oldController.state() == AgentProvider.SessionState.IDLE && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertEquals(AgentProvider.SessionState.ACTIVE_RUNNING, oldController.state());
+
+        HarnessComponents replacementHarness = new HarnessComponents(config, context,
+                (messages, tools, events) -> Map.of("role", "assistant", "content", "replacement"),
+                new AgentToolRegistry(), PromptAssembler.defaultAssembler(), null, List.of(), 0, List.of(), List.of());
+        AgentSessionManager.ReloadReport report = manager.requestHarnessReload(
+                () -> new AgentChatController(config, replacementHarness), null);
+        assertEquals(0, report.replacedImmediately());
+        assertEquals(1, report.deferredUntilIdle());
+        assertSame(oldController, manager.activeSession().controller());
+
+        release.countDown();
+        deadline = System.currentTimeMillis() + 5000;
+        while (manager.activeSession().controller() == oldController && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertNotSame(oldController, manager.activeSession().controller());
+        manager.close();
+        oldHarness.close();
+        replacementHarness.close();
     }
 
     private static AgentSessionManager manager(int maxSessions) {

@@ -210,6 +210,11 @@ class AgentEvalSuite {
         for (String type : List.of("session_start", "llm_call", "tool_call", "session_end")) {
             assertTrue(content.contains("\"type\": \"" + type + "\""), "trace 应包含 " + type + " 事件");
         }
+        assertTrue(controller.sessionTrajectory().stream().anyMatch(event -> "agent/request".equals(event.type())));
+        assertTrue(controller.sessionTrajectory().stream().anyMatch(event -> "tool/result".equals(event.type())));
+        assertTrue(controller.sessionTrajectory().stream().anyMatch(event -> "session/end".equals(event.type())));
+        assertTrue(controller.sessionTrajectory().stream().anyMatch(event -> "assistant/chunk".equals(event.type())));
+        assertTrue(controller.sessionTrajectory().stream().anyMatch(event -> "agent/status".equals(event.type())));
     }
 
     @Test
