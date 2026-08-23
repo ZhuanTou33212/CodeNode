@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenode.local/schema/project-1.0.json",
+  "title": "CodeNode Next Project Format 1.0",
+  "description": "Schema for .cnode 1.0 project files（重构版：Agent 工作流语义，无代码槽）",
+  "type": "object",
+  "required": ["mimetype", "manifest.json", "graph.json", "workspace.json", "integrity.json"],
+  "properties": {
+    "mimetype": {
+      "type": "string",
+      "const": "application/vnd.codenode.project+zip"
+    },
+    "manifest.json": {
+      "type": "object",
+      "required": ["format", "formatVersion", "documentId", "createdAt"],
+      "properties": {
+        "format": { "type": "string", "const": "codenode-project" },
+        "formatVersion": { "type": "string", "pattern": "^1\\.\\d+$" },
+        "documentId": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "modifiedAt": { "type": "string", "format": "date-time" },
+        "generator": {
+          "type": "object",
+          "properties": {
+            "application": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        }
+      }
+    },
+    "graph.json": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "revision": { "type": "integer" },
+        "nodes": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "position"],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "enum": ["start", "end", "task", "stage", "tool"] },
+              "position": {
+                "type": "object",
+                "required": ["x", "y"],
+                "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string" },
+                  "subtitle": { "type": "string" },
+                  "goal": { "type": "string" },
+                  "status": { "type": "string", "enum": ["pending", "running", "done", "failed", "blocked"] }
+                }
+              },
+              "selected": { "type": "boolean" },
+              "dragging": { "type": "boolean" },
+              "measured": { "type": "object" }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 50000,
+          "items": {
+            "type": "object",
+            "required": ["id", "source", "target"],
+            "properties": {
+              "id": { "type": "string" },
+              "source": { "type": "string" },
+              "target": { "type": "string" },
+              "sourceHandle": { "type": "string" },
+              "targetHandle": { "type": "string" },
+              "animated": { "type": "boolean" },
+              "selected": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "workspace.json": {
+      "type": "object",
+      "properties": {
+        "viewport": {
+          "type": "object",
+          "required": ["x", "y", "zoom"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "zoom": { "type": "number", "minimum": 0.1, "maximum": 4 }
+          }
+        }
+      }
+    },
+    "integrity.json": {
+      "type": "object",
+      "required": ["algorithm", "files"],
+      "properties": {
+        "algorithm": { "type": "string", "const": "SHA-256" },
+        "files": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    }
+  }
+}
