@@ -4,3 +4,4 @@ logs/
 *.log
 .DS_Store
 Thumbs.db
+config/agent.properties

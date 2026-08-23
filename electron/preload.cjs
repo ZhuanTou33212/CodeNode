@@ -7,6 +7,14 @@ contextBridge.exposeInMainWorld('codenode', {
   createProject: () => ipcRenderer.invoke('project:create'),
   listProject: (root) => ipcRenderer.invoke('project:list', root),
   readProjectFile: (root, relPath) => ipcRenderer.invoke('project:read', root, relPath),
-  saveProject: (root, data) => ipcRenderer.invoke('project:save', root, data),
-  loadProject: (root) => ipcRenderer.invoke('project:load', root),
+  saveProject: (target, payload) => ipcRenderer.invoke('project:save', target, payload),
+  loadProject: (target) => ipcRenderer.invoke('project:load', target),
+  agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
+  agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
+  agentChat: (payload) => ipcRenderer.invoke('agent:chat', payload),
+  onAgentDelta: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('agent:delta', listener);
+    return () => ipcRenderer.removeListener('agent:delta', listener);
+  },
 });

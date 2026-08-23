@@ -147,31 +147,34 @@ function defaultManifest(doc) {
 }
 
 // ---------- 编码 ----------
-function encodeCnode({ manifest, graph, workspace }) {
+function encodeCnode({ manifest, graph, workspace, canvases }) {
   const m = defaultManifest(manifest);
   const g = { revision: (graph && graph.revision) || 1, nodes: (graph && graph.nodes) || [], edges: (graph && graph.edges) || [] };
   const w = workspace && typeof workspace === 'object' ? workspace : {};
+  const c = canvases && typeof canvases === 'object' ? canvases : null;
   const mimeBuf = Buffer.from(MIME, 'utf-8');
   const manifestBuf = Buffer.from(JSON.stringify(m), 'utf-8');
   const graphBuf = Buffer.from(JSON.stringify(g), 'utf-8');
   const wsBuf = Buffer.from(JSON.stringify(w), 'utf-8');
+  const canvasesBuf = c ? Buffer.from(JSON.stringify(c), 'utf-8') : null;
   const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
-  const integrity = {
-    algorithm: 'SHA-256',
-    files: {
-      'manifest.json': sha(manifestBuf),
-      'graph.json': sha(graphBuf),
-      'workspace.json': sha(wsBuf),
-    },
+  const filesMap = {
+    'manifest.json': sha(manifestBuf),
+    'graph.json': sha(graphBuf),
+    'workspace.json': sha(wsBuf),
   };
+  if (canvasesBuf) filesMap['canvases.json'] = sha(canvasesBuf);
+  const integrity = { algorithm: 'SHA-256', files: filesMap };
   const integrityBuf = Buffer.from(JSON.stringify(integrity), 'utf-8');
-  return zipStore([
+  const entries = [
     { name: 'mimetype', data: mimeBuf },
     { name: 'manifest.json', data: manifestBuf },
     { name: 'graph.json', data: graphBuf },
     { name: 'workspace.json', data: wsBuf },
-    { name: 'integrity.json', data: integrityBuf },
-  ]);
+  ];
+  if (canvasesBuf) entries.push({ name: 'canvases.json', data: canvasesBuf });
+  entries.push({ name: 'integrity.json', data: integrityBuf });
+  return zipStore(entries);
 }
 
 // ---------- 解码（宽松） ----------
@@ -197,11 +200,21 @@ function decodeCnode(buf) {
   const manifest = parse('manifest.json', { format: FORMAT, formatVersion: FORMAT_VERSION });
   const graph = parse('graph.json', { revision: 0, nodes: [], edges: [] });
   const workspace = parse('workspace.json', {});
+  // canvases 为可选（旧版无），静默读取
+  const canvasesBuf = files.get('canvases.json');
+  let canvases = null;
+  if (canvasesBuf) {
+    try {
+      canvases = JSON.parse(canvasesBuf.toString('utf-8'));
+    } catch {
+      warnings.push('canvases.json 解析失败');
+    }
+  }
   const integrity = parse('integrity.json', null);
 
   if (integrity && integrity.algorithm === 'SHA-256' && integrity.files) {
     const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
-    for (const key of ['manifest.json', 'graph.json', 'workspace.json']) {
+    for (const key of ['manifest.json', 'graph.json', 'workspace.json', 'canvases.json']) {
       const expected = integrity.files[key];
       const b = files.get(key);
       if (expected && b && sha(b) !== expected) warnings.push(key + ' 完整性校验失败');
@@ -210,7 +223,7 @@ function decodeCnode(buf) {
   if (manifest.formatVersion && !manifest.formatVersion.startsWith('1.')) {
     warnings.push('工程格式版本 ' + manifest.formatVersion + ' 高于本应用支持范围，将只读打开');
   }
-  return { ok: true, manifest, graph, workspace, integrity, warnings };
+  return { ok: true, manifest, graph, workspace, canvases, integrity, warnings };
 }
 
 module.exports = { encodeCnode, decodeCnode, MIME, FORMAT, FORMAT_VERSION };

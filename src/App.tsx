@@ -24,6 +24,8 @@ export default function App() {
   const duplicateNode = useGraphStore((s) => s.duplicateNode);
   const selectedId = useGraphStore((s) => s.selectedId);
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
+  const makeGroup = useGraphStore((s) => s.makeGroup);
+  const ungroupGroup = useGraphStore((s) => s.ungroupGroup);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const { fitView } = useReactFlow();
 
@@ -39,8 +41,26 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isTypingTarget()) return;
       const mod = e.ctrlKey || e.metaKey;
+
+      // 全局保存/打开/新建：即使在输入框中也生效
+      if (mod && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void saveProject();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        void newProject();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        void openProject();
+        return;
+      }
+
+      if (isTypingTarget()) return;
 
       if (e.code === 'KeyA' && e.shiftKey && !mod) {
         e.preventDefault();
@@ -61,21 +81,18 @@ export default function App() {
         return;
       }
 
-      if (mod && e.key.toLowerCase() === 'z') {
+      if (mod && e.key.toLowerCase() === 'g' && e.shiftKey) {
+        e.preventDefault();
+        ungroupGroup();
+      } else if (mod && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        makeGroup();
+      } else if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         undo();
       } else if (mod && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         redo();
-      } else if (mod && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        void saveProject();
-      } else if (mod && e.key.toLowerCase() === 'n') {
-        e.preventDefault();
-        void newProject();
-      } else if (mod && e.key.toLowerCase() === 'o') {
-        e.preventDefault();
-        void openProject();
       } else if (mod && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         if (selectedId) duplicateNode(selectedId);
@@ -83,7 +100,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView]);
+  }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, makeGroup, ungroupGroup]);
 
   return (
     <div className="app">

@@ -1,6 +1,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
+import { useChatStore } from '../store/chatStore';
 
 const LAST_ROOT_KEY = 'codenode.lastProjectRoot';
 const LAST_FILE_KEY = 'codenode.lastProjectFile';
@@ -15,24 +16,40 @@ function nameOf(filePath: string): string {
 }
 
 function buildPayload() {
+  const doc = useGraphStore.getState().getDocument();
   return {
-    graph: useGraphStore.getState().getGraph(),
+    graph: doc.root,
+    canvases: { groups: doc.groups, viewStack: doc.viewStack },
     workspace: { viewport: useUiStore.getState().viewport },
     manifest: useProjectStore.getState().doc,
   };
 }
 
-function applyLoaded(root: string, data?: { graph?: { nodes?: unknown[]; edges?: unknown[] }; workspace?: { viewport?: { x: number; y: number; zoom: number } }; manifest?: { documentId?: string; createdAt?: string; name?: string } }): void {
+function applyLoaded(
+  _root: string,
+  data?: {
+    graph?: { nodes?: unknown[]; edges?: unknown[] };
+    canvases?: { groups?: Record<string, { nodes?: unknown[]; edges?: unknown[] }>; viewStack?: string[] };
+    workspace?: { viewport?: { x: number; y: number; zoom: number } };
+    manifest?: { documentId?: string; createdAt?: string; name?: string };
+  }
+): void {
   useProjectStore.getState().setDoc(data?.manifest || {});
   if (data?.workspace?.viewport) {
     useUiStore.getState().setPendingViewport(data.workspace.viewport);
   }
-  const g = useGraphStore.getState();
-  if (data?.graph) {
-    g.load((data.graph.nodes as never[]) || [], (data.graph.edges as never[]) || []);
-  } else {
-    g.clear();
+  const groups: Record<string, { nodes: unknown[]; edges: unknown[] }> = {};
+  for (const [gid, g] of Object.entries(data?.canvases?.groups || {})) {
+    groups[gid] = { nodes: (g.nodes as never[]) || [], edges: (g.edges as never[]) || [] };
   }
+  useGraphStore.getState().loadDocument({
+    root: {
+      nodes: ((data?.graph?.nodes as never[]) || []) as never[],
+      edges: ((data?.graph?.edges as never[]) || []) as never[],
+    },
+    groups: groups as never,
+    viewStack: data?.canvases?.viewStack || [],
+  });
 }
 
 export async function newProject(): Promise<void> {
@@ -50,7 +67,29 @@ export async function newProject(): Promise<void> {
   useProjectStore.getState().setProjectFile(res.filePath);
   useProjectStore.getState().setDoc({});
   useGraphStore.getState().clear();
+  createDefaultAgentDialog();
   useUiStore.getState().setToast('已新建项目：' + nameOf(res.filePath));
+}
+
+function createDefaultAgentDialog(): void {
+  const st = useGraphStore.getState();
+  const hasAgent = st.nodes.some((n) => n.type === 'agent');
+  if (hasAgent) return;
+  st.addNode({
+    id: 'agent-' + Date.now() + '-' + Math.floor(Math.random() * 1e4),
+    type: 'agent',
+    position: { x: 120, y: 120 },
+    data: {
+      label: 'Agent',
+      name: 'CodeNode',
+      content: '',
+      status: 'pending',
+      accent: '#22c55e',
+      greeted: false,
+      width: 360,
+    },
+  });
+  useChatStore.getState().reset();
 }
 
 export async function openProject(): Promise<void> {
@@ -107,7 +146,13 @@ export async function saveProject(): Promise<void> {
   }
   const projectFile = useProjectStore.getState().projectFile;
   const root = useProjectStore.getState().root;
-  const payload = buildPayload();
+  let payload;
+  try {
+    payload = buildPayload();
+  } catch (e) {
+    useUiStore.getState().setToast('保存失败（序列化错误）：' + String(e));
+    return;
+  }
 
   const target = projectFile || root;
   if (target) {

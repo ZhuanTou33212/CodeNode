@@ -1,5 +1,6 @@
 import { useReactFlow } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
+import { useUiStore } from '../store/uiStore';
 import { newProject, openProject, openProjectFile, saveProject } from '../lib/projectActions';
 
 export default function Toolbar() {
@@ -10,6 +11,12 @@ export default function Toolbar() {
   const duplicateNode = useGraphStore((s) => s.duplicateNode);
   const selectedId = useGraphStore((s) => s.selectedId);
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
+  const makeGroup = useGraphStore((s) => s.makeGroup);
+  const ungroupGroup = useGraphStore((s) => s.ungroupGroup);
+  const viewStackLen = useGraphStore((s) => s.viewStack.length);
+  const runFlow = useGraphStore((s) => s.runFlow);
+  const nodeCount = useGraphStore((s) => s.nodes.length);
+  const setToast = useUiStore((s) => s.setToast);
   const { fitView } = useReactFlow();
 
   return (
@@ -56,6 +63,36 @@ export default function Toolbar() {
           onClick={() => selectedId && deleteNodes([selectedId])}
         >
           删除
+        </button>
+        <button
+          title="运行数据流：按连线拓扑计算各节点输入/输出"
+          disabled={nodeCount === 0}
+          onClick={() => {
+            runFlow();
+            setToast('数据流已计算（组：仅接入组输出端子的内容会输出）');
+          }}
+        >
+          计算
+        </button>
+        <button
+          title="成组：将选中节点压缩为一个节点组 (Ctrl+G)"
+          disabled={!selectedId}
+          onClick={() => {
+            makeGroup();
+            setToast('已成组并进入组内视图');
+          }}
+        >
+          成组
+        </button>
+        <button
+          title="解组：将当前组展开回父画布 (Ctrl+Shift+G)"
+          disabled={viewStackLen === 0}
+          onClick={() => {
+            ungroupGroup();
+            setToast('已解组');
+          }}
+        >
+          解组
         </button>
         <button title="聚焦全部 (Z)" onClick={() => fitView({ padding: 0.2 })}>
           聚焦
