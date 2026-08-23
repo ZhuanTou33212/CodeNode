@@ -54,6 +54,8 @@ interface GraphState extends GraphLike {
   duplicateNode: (id: string) => void;
   updateNodeData: (id: string, patch: Record<string, unknown>) => void;
   moveNode: (id: string, position: { x: number; y: number }) => void;
+  /** 自动横向整理当前画布节点：超宽换行到下一排 */
+  layoutNodes: (maxX?: number) => void;
   undo: () => void;
   redo: () => void;
   clear: () => void;
@@ -217,6 +219,34 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   moveNode: (id, position) =>
     set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? { ...n, position } : n)) })),
+
+  layoutNodes: (maxX) => {
+    set((s) => {
+      const view = document.querySelector('.canvas-wrap');
+      const W = maxX || (view ? (view as HTMLElement).clientWidth : 0) || 1200;
+      const margin = 40;
+      const gapX = 36;
+      const gapY = 56;
+      const defW = 170;
+      const defH = 90;
+      let x = margin;
+      let y = margin;
+      let rowBottom = margin;
+      const nodes = s.nodes.map((n) => {
+        const w = (n.measured?.width as number | undefined) || defW;
+        const h = (n.measured?.height as number | undefined) || defH;
+        if (x + w > W - margin) {
+          x = margin;
+          y = rowBottom + gapY;
+        }
+        rowBottom = Math.max(rowBottom, y + h);
+        const pos = { x, y };
+        x += w + gapX;
+        return { ...n, position: pos };
+      });
+      return { nodes };
+    });
+  },
 
   undo: () =>
     set((s) => {

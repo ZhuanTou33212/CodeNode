@@ -136,7 +136,8 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide) {
       '4. 读写文件用 read_file / write_file / edit_file；查找文件用 find_files / search_files / list_directory；执行命令用 execute_shell。\n' +
       '5. 每轮工具调用的结果会作为新的消息返回给你，请据此继续推进，直到用户请求真正完成（可能需要连续多轮工具调用）。\n' +
       '6. 画布节点之间的连线表示执行顺序（DAG）。当需要制作/实现程序时，严格按画布节点的顺序组织逻辑，先完成前置节点再处理后续节点。\n' +
-      '7. 全部完成后，用文字简要总结你实际调用过的工具与最终结果。'
+      '7. 工具返回的 [data] 中已包含节点 id、label 等结构化信息，直接使用返回结果，不要重复调用 get_workbench_model 反复确认；多条连线用 workbench_connect 的 connections 参数一次完成。\n' +
+      '8. 全部完成后，用文字简要总结你实际调用过的工具与最终结果。'
   );
   return lines.join('\n\n');
 }
@@ -360,10 +361,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             data: result.data,
           };
           allToolCalls.push(record);
+          let toolContent = result.text || (result.ok ? '（空）' : '（失败）');
+          // 把结构化 data 一并回传给模型，避免模型因看不到细节而反复读取/猜测
+          if (result.data && typeof result.data === 'object' && Object.keys(result.data).length) {
+            try {
+              const dataJson = JSON.stringify(result.data);
+              toolContent += '\n[data] ' + (dataJson.length > 8000 ? dataJson.slice(0, 8000) + '…' : dataJson);
+            } catch {}
+          }
           messages.push({
             role: 'tool',
             tool_call_id: tc.id || '',
-            content: result.text || (result.ok ? '（空）' : '（失败）'),
+            content: toolContent,
           });
           onDelta && onDelta({ kind: 'tool_result', toolCalls: [record] });
         }

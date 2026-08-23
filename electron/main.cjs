@@ -385,6 +385,63 @@ function createWindow() {
             })();
             out.loadt9 = lt;
           } catch(e){ out.loadt9 = 'THREW:'+e.message; }
+          try {
+            const mt = await (async()=>{
+              const ss = window.__codenodeSession.getState();
+              const graph = window.__codenodeStore.getState();
+              graph.clear();
+              ss.reset();
+              ss.initProject('你好，我能为你做什么', '灵魂');
+              const chat = window.__codenodeChat.getState();
+              await chat.send('请创建 2 个任务节点并连线。');
+              const s1 = window.__codenodeSession.getState();
+              const c2 = s1.current();
+              await chat.send('请阅读当前画布并继续制作：在每个节点后补充一个说明节点。');
+              const s2 = window.__codenodeSession.getState();
+              const c3 = s2.current();
+              await new Promise((r)=>setTimeout(r, 1100));
+              // 检查横向自动整理
+              const nodes = window.__codenodeStore.getState().nodes;
+              const xs = nodes.map(n=>Math.round(n.position.x));
+              const ys = nodes.map(n=>Math.round(n.position.y));
+              const sorted = [...xs].sort((a,b)=>a-b);
+              const horizontal = xs.length>1 && sorted[sorted.length-1] > sorted[0];
+              const rows = new Set(ys).size;
+              return {
+                turn1Canvas: c2 ? c2.label : null,
+                turn1Nodes: c2 ? c2.doc.root.nodes.length : -1,
+                turn2Canvas: c3 ? c3.label : null,
+                turn2Nodes: c3 ? c3.doc.root.nodes.length : -1,
+                sessionCount: s2.order.length,
+                nodeCount: nodes.length,
+                horizontal: horizontal,
+                rowCount: rows
+              };
+            })();
+            out.multiturn = mt;
+          } catch(e){ out.multiturn = 'THREW:'+e.message; }
+          try {
+            const lw = await (async()=>{
+              const ss = window.__codenodeSession.getState();
+              const graph = window.__codenodeStore.getState();
+              graph.clear();
+              ss.reset();
+              ss.initProject('', '');
+              for(let i=1;i<=15;i++){
+                graph.addNode({ id:'w'+i, type:'task', position:{x:40,y:40}, data:{label:'节点'+i,status:'pending'} });
+              }
+              graph.layoutNodes();
+              await new Promise((r)=>setTimeout(r,150));
+              const nodes = window.__codenodeStore.getState().nodes;
+              const xs = nodes.map(n=>Math.round(n.position.x));
+              const ys = nodes.map(n=>Math.round(n.position.y));
+              const rows = new Set(ys).size;
+              const firstRowXs = nodes.filter(n=>Math.round(n.position.y)===ys[0]).map(n=>Math.round(n.position.x)).sort((a,b)=>a-b);
+              const ascending = firstRowXs.every((v,i)=>i===0||v>firstRowXs[i-1]);
+              return { count: nodes.length, rowCount: rows, firstRowXAscending: ascending };
+            })();
+            out.layoutwrap = lw;
+          } catch(e){ out.layoutwrap = 'THREW:'+e.message; }
           return out;
         })()`);
         require('fs').mkdirSync(path.join(__dirname, '..', 'logs'), { recursive: true });

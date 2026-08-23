@@ -308,6 +308,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const active = get().current();
     if (!active) return;
     const clean = clone(doc);
+    const oldIds = new Set(active.doc.root.nodes.map((n) => n.id));
+    const newIds = clean.root.nodes.map((n) => n.id).filter((id) => !oldIds.has(id));
     const sessions = { ...get().sessions };
     sessions[active.id] = {
       ...active,
@@ -318,6 +320,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const edgeIds = clean.root.edges.map((e) => e.id).filter(Boolean);
     const next = edgeIds.length ? { edgeIds, index: 0, running: true } : null;
     set({ sessions, progress: next });
+    // 有新节点：等 React Flow 渲染测量后，自动横向整理（超宽换行）
+    if (newIds.length > 0) {
+      setTimeout(() => {
+        const g = useGraphStore.getState();
+        g.layoutNodes();
+        g.commit();
+      }, 260);
+      setTimeout(() => {
+        const g = useGraphStore.getState();
+        g.layoutNodes();
+        g.commit();
+      }, 900);
+    }
   },
 
   setProgressIndex: (i) => {

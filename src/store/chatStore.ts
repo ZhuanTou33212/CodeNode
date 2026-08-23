@@ -10,10 +10,11 @@ interface ChatState {
   send: (prompt: string) => Promise<{ reply: string; reasoning: string; tools: ToolRecord[] }>;
 }
 
-function canvasSummary(): string {
-  const s = useGraphStore.getState();
-  const items = s.nodes.map((n) => {
-    const d = n.data as { label?: string; status?: string; goal?: string; prompt?: string; filePath?: string };
+/** 从文档生成画布节点摘要（作为 Agent 读取上下文，写入系统提示） */
+function summarizeDoc(doc: { root?: { nodes?: unknown[] } } | null | undefined): string {
+  const nodes = (doc && doc.root && doc.root.nodes) || [];
+  const items = (nodes as { id?: string; type?: string; data?: Record<string, unknown> }[]).map((n) => {
+    const d = n.data || {};
     return {
       id: n.id,
       type: n.type,
@@ -21,7 +22,6 @@ function canvasSummary(): string {
       status: d.status || '',
       goal: d.goal || '',
       prompt: d.prompt || '',
-      file: d.filePath || '',
     };
   });
   return JSON.stringify(items);
@@ -43,8 +43,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const ss = useSessionStore.getState();
     // 指令前已有的对话（作为历史传给 Agent）
     const prior = ss.messages.map((m) => ({ role: m.role, content: m.content }));
-    // 始终在当前画布上阅读并制作（不自动新建画布，保证 Agent 能读到已有内容）
-    ss.startOnCurrent(text);
+    // 当前画布内容：作为 Agent 的「读取上下文」，保证它能读到已有节点
+    const ctx = useGraphStore.getState().getDocument();
+    // 确保有当前画布（无会话时创建画布1）
+    if (!ss.current()) {
+      ss.startOnCurrent(text);
+    }
     ss.pushUser(text);
     ss.beginTurn();
 
@@ -61,14 +65,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         projectRoot: useProjectStore.getState().root,
         prompt: text,
         history: prior,
-        canvasSummary: canvasSummary(),
+        canvasSummary: summarizeDoc(ctx),
         nodeId: null,
         requestId,
-        document: useGraphStore.getState().getDocument(),
+        document: ctx,
         projectFile: useProjectStore.getState().projectFile || undefined,
       });
 
-      // Agent 改图：应用到当前（新的）输出画布
+      // Agent 改图完成：新建下一个画布作为本次输出画布，并把结果应用上去
       if (res.document) {
         const doc = res.document as {
           root?: { nodes?: unknown[]; edges?: unknown[] };
@@ -76,11 +80,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           viewStack?: unknown[];
         };
         if (doc && doc.root) {
-          useSessionStore.getState().applyAgentDoc({
+          const clean = {
             root: (doc.root as never) || { nodes: [], edges: [] },
             groups: ((doc.groups || {}) as never) || {},
             viewStack: (doc.viewStack || []) as never[],
-          });
+          };
+          useSessionStore.getState().syncActiveGraph();
+          useSessionStore.getState().beginWorkSession(text);
+          useSessionStore.getState().applyAgentDoc(clean);
         }
       }
 

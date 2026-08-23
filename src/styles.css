@@ -1378,12 +1378,21 @@ button:disabled {
   max-width: calc(100vw - 360px);
 }
 
+.cs-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
 .cs-chat-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
   border-bottom: 1px solid rgba(147, 197, 253, 0.25);
+  flex: none;
 }
 
 .cs-chat-name {
@@ -1396,7 +1405,22 @@ button:disabled {
   padding: 10px 14px;
   overflow-y: auto;
   flex: 1;
-  min-height: 80px;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(147, 197, 253, 0.45) transparent;
+}
+
+.cs-chat-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.cs-chat-body::-webkit-scrollbar-thumb {
+  background: rgba(147, 197, 253, 0.45);
+  border-radius: 4px;
+}
+
+.cs-chat-body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .cs-chat-empty {
@@ -1445,6 +1469,21 @@ button:disabled {
 .cs-tree {
   overflow-y: auto;
   max-height: min(520px, 62vh);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(147, 197, 253, 0.45) transparent;
+}
+
+.cs-tree::-webkit-scrollbar {
+  width: 8px;
+}
+
+.cs-tree::-webkit-scrollbar-thumb {
+  background: rgba(147, 197, 253, 0.45);
+  border-radius: 4px;
+}
+
+.cs-tree::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .cs-tree-title {
@@ -1587,11 +1626,11 @@ button:disabled {
   align-items: flex-end;
   gap: 8px;
   width: min(680px, 86%);
-  background: rgba(27, 30, 37, 0.92);
-  border: 1px solid var(--border);
+  background: rgba(70, 120, 200, 0.35);
+  border: 1px solid rgba(147, 197, 253, 0.4);
   border-radius: 14px;
   padding: 10px 12px;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
@@ -1612,7 +1651,7 @@ button:disabled {
   background: transparent;
   border: none;
   outline: none;
-  color: var(--text);
+  color: #ffffff;
   font-family: inherit;
   font-size: 13px;
   resize: none;
@@ -1622,7 +1661,7 @@ button:disabled {
 }
 
 .prompt-bar-input::placeholder {
-  color: var(--text-dim);
+  color: #cfe3ff;
 }
 
 .prompt-bar-btn {

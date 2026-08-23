@@ -66,10 +66,21 @@ function register(registry) {
           targetHandle: e.targetHandle || '',
         }));
       }
-      return AgentToolResult.ok(
+      // 文本里直接给出节点/连线明细，模型无需重复读取
+      const lines = [
         '工作台共 ' + stats.nodeCount + ' 个节点、' + stats.edgeCount + ' 条连线（view=' + view + '）',
-        data
-      );
+      ];
+      for (const n of shown) {
+        const extra = n.prompt ? ' · ' + String(n.prompt).slice(0, 80) : '';
+        lines.push('- ' + n.id + ': ' + (n.label || n.type) + ' [' + (n.type || 'node') + '/' + (n.status || 'pending') + ']' + extra);
+      }
+      if (view === 'full' && data.edges && data.edges.length) {
+        lines.push('连线:');
+        for (const e of data.edges) {
+          lines.push('  ' + e.source + ' → ' + e.target);
+        }
+      }
+      return AgentToolResult.ok(lines.join('\n'), data);
     }
   );
 }
