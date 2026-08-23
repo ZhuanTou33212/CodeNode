@@ -13,7 +13,10 @@ import {
 } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
+import { useSessionStore } from '../store/sessionStore';
 import { nodeTypes } from '../nodes';
+import ChatSidebar from './ChatSidebar';
+import PromptBar from './PromptBar';
 
 function Breadcrumb() {
   const viewStack = useGraphStore((s) => s.viewStack);
@@ -65,21 +68,40 @@ export default function Canvas() {
   const setDragging = useGraphStore((s) => s.setDragging);
   const enterGroup = useGraphStore((s) => s.enterGroup);
   const closeAddMenu = useUiStore((s) => s.closeAddMenu);  const setViewport = useUiStore((s) => s.setViewport);
+  const pendingViewport = useUiStore((s) => s.pendingViewport);
   const applyPendingViewport = useUiStore((s) => s.applyPendingViewport);
+  const progress = useSessionStore((s) => s.progress);
   const { getViewport, setViewport: rfSetViewport } = useReactFlow();
 
   useEffect(() => {
     const v = applyPendingViewport();
     if (v) rfSetViewport(v, { duration: 300 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pendingViewport]);
+
+  // Agent 进度扫描：沿画布连线逐条推进高亮（多段线连接动画）
+  useEffect(() => {
+    const p = useSessionStore.getState().progress;
+    if (!p || !p.running) return;
+    const t = setTimeout(() => useSessionStore.getState().setProgressIndex(p.index + 1), 380);
+    return () => clearTimeout(t);
+  }, [progress?.index, progress?.running]);
+
+  const displayEdges = edges.map((e) => {
+    if (!progress || !progress.edgeIds.length) return e;
+    const idx = progress.edgeIds.indexOf(e.id);
+    if (idx < 0) return e;
+    if (idx === progress.index) return { ...e, animated: true, style: { strokeWidth: 4, stroke: '#38bdf8' } };
+    if (idx < progress.index) return { ...e, animated: true };
+    return { ...e, animated: false, style: { strokeOpacity: 0.22 } };
+  });
 
   return (
     <div className="canvas-wrap">
       <Breadcrumb />
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={displayEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange as (changes: NodeChange[]) => void}
         onEdgesChange={onEdgesChange as (changes: EdgeChange[]) => void}
@@ -123,6 +145,8 @@ export default function Canvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#2a2f3a" />
       </ReactFlow>
+      <ChatSidebar />
+      <PromptBar />
     </div>
   );
 }

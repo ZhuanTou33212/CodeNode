@@ -11,10 +11,17 @@ contextBridge.exposeInMainWorld('codenode', {
   loadProject: (target) => ipcRenderer.invoke('project:load', target),
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
+  agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentChat: (payload) => ipcRenderer.invoke('agent:chat', payload),
   onAgentDelta: (cb) => {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('agent:delta', listener);
     return () => ipcRenderer.removeListener('agent:delta', listener);
   },
+  onToolRequest: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('tools:request', listener);
+    return () => ipcRenderer.removeListener('tools:request', listener);
+  },
+  respondToolRequest: (id, result) => ipcRenderer.send('tools:response', { id, result }),
 });

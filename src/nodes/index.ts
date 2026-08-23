@@ -1,5 +1,5 @@
 import type { NodeTypes } from '@xyflow/react';
-import type { WorkflowNodeData, ScopeData, FileData, AgentChatData, UserChatData } from '../types';
+import type { WorkflowNodeData, ScopeData, FileData } from '../types';
 import WorkflowNode from './WorkflowNode';
 import ScopeNode from './ScopeNode';
 import FileNode from './FileNode';
@@ -70,22 +70,6 @@ export const NODE_TEMPLATES: Record<string, NodeTemplate> = {
     label: '文件节点',
     subtitle: 'File',
     data: { label: '文件节点', status: 'pending', accent: '#f97316' } as FileData,
-  },
-  agent: {
-    label: 'Agent 对话',
-    subtitle: 'Chat',
-    data: {
-      label: 'Agent',
-      name: 'CodeNode',
-      content: '',
-      status: 'done',
-      accent: '#22c55e',
-    } as AgentChatData,
-  },
-  user: {
-    label: '用户输入',
-    subtitle: 'Prompt',
-    data: { label: '用户输入', content: '', status: 'pending', accent: '#f59e0b' } as UserChatData,
   },
 };
 

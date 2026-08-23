@@ -10,6 +10,8 @@ import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
 import { useUiStore } from './store/uiStore';
 import { newProject, openProject, saveProject, restoreLastProject } from './lib/projectActions';
+import { installToolListener } from './lib/toolUi';
+import ToolDialog from './components/ToolDialog';
 
 function isTypingTarget(): boolean {
   const el = document.activeElement as HTMLElement | null;
@@ -37,6 +39,8 @@ export default function App() {
 
   useEffect(() => {
     restoreLastProject();
+    const uninstall = installToolListener();
+    return uninstall;
   }, []);
 
   useEffect(() => {
@@ -112,6 +116,7 @@ export default function App() {
         <AddMenu />
       </div>
       <StatusBar />
+      <ToolDialog />
     </div>
   );
 }

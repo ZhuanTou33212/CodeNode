@@ -45,7 +45,7 @@ export type AgentChatData = BaseData & {
   content: string;
   greeted?: boolean;
   reasoning?: string;
-  tools?: { name: string; args?: unknown; result?: string }[];
+  tools?: { name: string; args?: unknown; result?: string; ok?: boolean }[];
   width?: number;
 };
 
@@ -70,4 +70,41 @@ export type FlowItem = {
 export type FlowResult = {
   input: FlowItem[];
   output: FlowItem[];
+};
+
+/** Agent 工具调用记录 */
+export type ToolRecord = {
+  name: string;
+  args?: unknown;
+  result?: string;
+  ok?: boolean;
+  data?: unknown;
+};
+
+/** 会话中的一条消息 */
+export type SessionMsg = {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  reasoning?: string;
+  tools?: ToolRecord[];
+  status?: string;
+};
+
+/** 单个画布的文档快照（根图 + 组图 + 组导航栈） */
+export type SessionDoc = {
+  root: Graph;
+  groups: Record<string, Graph>;
+  viewStack: string[];
+};
+
+/** 一个会话画布（每次 Agent 制作任务的输出画布） */
+export type SessionCanvas = {
+  id: string;
+  label: string;
+  prompt: string;
+  doc: SessionDoc;
+  status: 'active' | 'completed';
+  createdAt: number;
+  nodeCount: number;
+  summary?: string;
 };

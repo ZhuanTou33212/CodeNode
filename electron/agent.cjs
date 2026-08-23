@@ -35,6 +35,21 @@ function loadConfig(projectRoot) {
     model: cfg.model || 'deepseek-chat',
     maxTokens: Number(cfg.max_tokens) || 2048,
     soulFile: cfg.soul_file || 'config/soul.md',
+    tools: parseToolsConfig(cfg),
+  };
+}
+
+/** 解析 tools.* 配置：tools.enabled / tools.allowed(逗号分隔) / tools.deny(逗号分隔) */
+function parseToolsConfig(cfg) {
+  const split = (v) =>
+    String(v || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return {
+    toolsEnabled: cfg['tools.enabled'] == null ? true : String(cfg['tools.enabled']).toLowerCase() !== 'false',
+    toolsAllowed: split(cfg['tools.allowed']),
+    toolsDeny: split(cfg['tools.deny']),
   };
 }
 
@@ -69,12 +84,59 @@ function parseSoul(text) {
   };
 }
 
-function buildSystemPrompt(soul, canvasSummary) {
+/** 工具名称 → 一句话用途（用于系统提示词引导 Agent 调用工具） */
+const TOOL_GUIDE = {
+  get_workbench_model: '读取画布全部节点/连线/状态',
+  create_nodes: '在画布创建节点',
+  workbench_edit: '编辑节点（改名/移动/状态/删除/复制）',
+  workbench_connect: '节点连线/断开',
+  workbench_structure: '成组/解组/增删组端子',
+  scan_project: '扫描项目目录结构与统计',
+  analyze_project: '分析项目工程信息与源码结构',
+  project_info: '识别项目构建系统/入口/语言',
+  read_file: '读取项目内文本文件',
+  write_file: '写入项目内文件',
+  edit_file: '精确替换文件中的某段文本',
+  find_files: '按 glob 模式查找文件',
+  search_files: '按正则搜索文件内容',
+  list_directory: '列出项目目录',
+  execute_shell: '在项目目录执行白名单命令',
+  code_review: '本地规则引擎静态代码审查',
+  ask_user: '向用户提问并等待回答',
+  fetch_url: '抓取指定网页文本',
+  save_project: '保存当前工程到磁盘',
+  bulk_edit: '大批量创建/删除节点或写入文件',
+  ui_control: '操控软件界面（聚焦/缩放/平移等）',
+  write_analysis_md: '把分析结果写成 Markdown 分析节点',
+};
+
+/** 由注册表生成工具引导列表（名称 + 一句用途）。 */
+function buildToolGuide(toolSpecs) {
+  if (!Array.isArray(toolSpecs) || toolSpecs.length === 0) return [];
+  return toolSpecs
+    .map((spec) => ({ name: spec.name, desc: TOOL_GUIDE[spec.name] || (spec.description || '').slice(0, 40) }))
+    .filter((t) => t.name);
+}
+
+function buildSystemPrompt(soul, canvasSummary, toolGuide) {
   const lines = [];
   if (soul.raw) lines.push('【灵魂设定】\n' + soul.raw);
   if (canvasSummary) lines.push('\n【当前画布节点清单（JSON）】\n' + canvasSummary);
+  if (toolGuide && toolGuide.length) {
+    lines.push(
+      '\n【可用工具（通过 function calling 调用）】\n' +
+        toolGuide.map((t) => `- ${t.name}：${t.desc}`).join('\n')
+    );
+  }
   lines.push(
-    '\n【运行规则】\n1. 严格按照画布节点执行；\n2. 需要改变画布时用节点表达；\n3. 复杂任务先拆分子代理。'
+    '\n【运行规则】（硬性要求）\n' +
+      '1. 你是一个工具型 Agent：所有对画布/文件的实际操作都必须通过「函数调用（function calling）」完成。\n' +
+      '2. 需要读取画布时调用 get_workbench_model；需要创建节点调用 create_nodes；编辑节点调用 workbench_edit；连线调用 workbench_connect；成组/解组调用 workbench_structure。\n' +
+      '3. 禁止在回复中声称“已创建/已修改/已完成”某操作——除非你真的通过工具调用完成了它。你只能基于工具返回的结果来描述实际发生的变更。\n' +
+      '4. 读写文件用 read_file / write_file / edit_file；查找文件用 find_files / search_files / list_directory；执行命令用 execute_shell。\n' +
+      '5. 每轮工具调用的结果会作为新的消息返回给你，请据此继续推进，直到用户请求真正完成（可能需要连续多轮工具调用）。\n' +
+      '6. 画布节点之间的连线表示执行顺序（DAG）。当需要制作/实现程序时，严格按画布节点的顺序组织逻辑，先完成前置节点再处理后续节点。\n' +
+      '7. 全部完成后，用文字简要总结你实际调用过的工具与最终结果。'
   );
   return lines.join('\n\n');
 }
@@ -116,9 +178,9 @@ async function chatCompletion(cfg, messages, { signal, timeoutMs = 120000 } = {}
 }
 
 /**
- * 流式对话（SSE）：实时回调推理/内容/工具调用增量
+ * 流式对话（SSE）：实时回调推理/内容/工具调用增量。tools 为 OpenAI tools 参数（可选）。
  */
-async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs = 180000 } = {}) {
+async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools } = {}) {
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -126,16 +188,18 @@ async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs 
   signal && signal.addEventListener('abort', onAbort);
   let usage = null;
   try {
+    const body = {
+      model: cfg.model,
+      messages,
+      stream: true,
+      max_tokens: cfg.maxTokens,
+      stream_options: { include_usage: true },
+    };
+    if (tools && tools.length) body.tools = tools;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages,
-        stream: true,
-        max_tokens: cfg.maxTokens,
-        stream_options: { include_usage: true },
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -181,9 +245,10 @@ async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs 
             const idx = tc.index != null ? tc.index : 0;
             let acc = toolMap.get(idx);
             if (!acc) {
-              acc = { name: '', args: '' };
+              acc = { id: '', name: '', args: '' };
               toolMap.set(idx, acc);
             }
+            if (tc.id && !acc.id) acc.id += tc.id;
             if (tc.function) {
               if (tc.function.name) acc.name += tc.function.name;
               if (tc.function.arguments) acc.args += tc.function.arguments;
@@ -192,12 +257,12 @@ async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs 
           onEvent &&
             onEvent({
               kind: 'tool',
-              toolCalls: [...toolMap.values()].map((v) => ({ name: v.name, args: v.args })),
+              toolCalls: [...toolMap.values()].map((v) => ({ id: v.id, name: v.name, args: v.args })),
             });
         }
       }
     }
-    const toolCalls = [...toolMap.values()].map((v) => ({ name: v.name, args: v.args }));
+    const toolCalls = [...toolMap.values()].map((v) => ({ id: v.id, name: v.name, args: v.args }));
     return { content, reasoning, toolCalls, usage };
   } finally {
     clearTimeout(timer);
@@ -214,13 +279,120 @@ function logConversation(projectRoot, entry) {
   } catch {}
 }
 
+const MAX_TOOL_ITERATIONS = 12;
+
+function parseToolArgs(raw) {
+  try {
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 带工具循环的 Agent 对话（ReAct）。
+ * @param {object} opts
+ *   cfg          loadConfig 返回值
+ *   messages     已含 system 的完整消息数组（会被原地追加）
+ *   onDelta       增量回调 {kind:'start'|'reasoning'|'content'|'tool'|'tool_result'|'done'|'error', ...}
+ *   tools         { registry, context } 或 null（禁用工具）
+ *   signal        AbortSignal（可选）
+ *   timeoutMs     单轮超时（默认 180s）
+ * @returns {Promise<{content,reasoning,toolCalls,usage,error?}>}
+ */
+async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
+  onDelta && onDelta({ kind: 'start' });
+  let content = '';
+  let reasoning = '';
+  let usage = null;
+  const allToolCalls = [];
+  try {
+    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+      const payload = {
+        model: cfg.model,
+        messages,
+        stream: true,
+        max_tokens: cfg.maxTokens,
+        stream_options: { include_usage: true },
+      };
+      if (tools && tools.registry) {
+        payload.tools = tools.registry.toOpenAiTools();
+      }
+      const onEvent = (ev) => {
+        if (ev.kind === 'reasoning') {
+          reasoning += ev.text;
+          onDelta && onDelta({ kind: 'reasoning', text: ev.text });
+        } else if (ev.kind === 'content') {
+          content += ev.text;
+          onDelta && onDelta({ kind: 'content', text: ev.text });
+        } else if (ev.kind === 'tool') {
+          onDelta && onDelta({ kind: 'tool', toolCalls: ev.toolCalls });
+        }
+      };
+      const res = await chatCompletionStream(cfg, messages, onEvent, {
+        signal,
+        timeoutMs,
+        tools: payload.tools,
+      });
+      if (res.usage) usage = res.usage;
+
+      const toolCalls = res.toolCalls || [];
+      if (tools && tools.registry && toolCalls.length) {
+        if (res.content) content += res.content;
+        messages.push({
+          role: 'assistant',
+          content: res.content || '',
+          tool_calls: toolCalls.map((tc) => ({
+            id: tc.id || ('call_' + iter + '_' + Math.random().toString(36).slice(2, 8)),
+            type: 'function',
+            function: { name: tc.name, arguments: tc.args || '{}' },
+          })),
+        });
+        for (const tc of toolCalls) {
+          const args = parseToolArgs(tc.args);
+          const result = await tools.registry.execute(tc.name, args, tools.context);
+          const record = {
+            name: tc.name,
+            args: tc.args || '',
+            ok: result.ok,
+            result: result.text,
+            data: result.data,
+          };
+          allToolCalls.push(record);
+          messages.push({
+            role: 'tool',
+            tool_call_id: tc.id || '',
+            content: result.text || (result.ok ? '（空）' : '（失败）'),
+          });
+          onDelta && onDelta({ kind: 'tool_result', toolCalls: [record] });
+        }
+        continue;
+      }
+      content = content || res.content || '';
+      if (!content && reasoning) {
+        onDelta && onDelta({ kind: 'content', text: '' });
+      }
+      break;
+    }
+    onDelta && onDelta({ kind: 'done' });
+    return { content, reasoning, toolCalls: allToolCalls, usage };
+  } catch (e) {
+    onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e) });
+    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e) };
+  }
+}
+
 module.exports = {
   loadConfig,
   loadSoul,
   parseSoul,
   buildSystemPrompt,
+  buildToolGuide,
   chatCompletion,
   chatCompletionStream,
   logConversation,
   resolveSoulPath,
+  parseToolsConfig,
+  runAgentChat,
 };

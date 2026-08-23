@@ -36,7 +36,7 @@ body {
   height: 100vh;
 }
 
-/* ---------- 工具栏 ---------- */
+/* ---------- 工具�?---------- */
 .toolbar {
   display: flex;
   align-items: center;
@@ -113,7 +113,7 @@ button:disabled {
   background: var(--bg);
 }
 
-/* ---------- 项目管理器（左栏） ---------- */
+/* ---------- 项目管理器（左栏�?---------- */
 .project-manager {
   display: flex;
   flex-direction: column;
@@ -686,7 +686,7 @@ button:disabled {
   color: var(--text-dim);
 }
 
-/* ---------- 节点组 ---------- */
+/* ---------- 节点�?---------- */
 .wf-group {
   position: relative;
   background: var(--bg-panel);
@@ -755,7 +755,7 @@ button:disabled {
   color: var(--text);
 }
 
-/* ---------- 面包屑 ---------- */
+/* ---------- 面包�?---------- */
 .breadcrumb {
   position: absolute;
   top: 10px;
@@ -825,7 +825,7 @@ button:disabled {
   color: #22c55e;
 }
 
-/* ---------- 数据流徽标 ---------- */
+/* ---------- 数据流徽�?---------- */
 .wf-flow-badge {
   margin-left: 8px;
   font-size: 10px;
@@ -994,6 +994,177 @@ button:disabled {
   word-break: break-all;
 }
 
+.ct-name.ct-ok {
+  color: #22c55e;
+}
+
+.ct-name.ct-fail {
+  color: #ef4444;
+}
+
+.ct-result {
+  margin: 3px 0 0;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 140px;
+  overflow: auto;
+  user-select: text;
+}
+
+/* ---------- Agent 工具请求弹窗 ---------- */
+.tool-dialog-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(8, 10, 14, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tool-dialog {
+  width: min(520px, calc(100vw - 60px));
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.tool-dialog-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.tool-dialog-what {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.tool-dialog-detail {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.tool-dialog-level {
+  margin-top: 10px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.tool-dialog-level.lv-high {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.tool-dialog-level.lv-write {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.tool-dialog-level.lv-low {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.tool-dialog-options {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tool-dialog-opt {
+  background: var(--bg-panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tool-dialog-opt:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tool-dialog-free {
+  margin-top: 12px;
+}
+
+.tool-dialog-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.tool-dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.tool-dialog-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.tool-dialog-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tool-dialog-btn.cancel {
+  background: var(--bg-panel-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.tool-dialog-btn.allow {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.tool-dialog-btn.allow:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .chat-input {
   width: 100%;
   background: rgba(0, 0, 0, 0.25);
@@ -1054,7 +1225,7 @@ button:disabled {
   background: rgba(245, 158, 11, 0.35);
 }
 
-/* ---------- 检查器数据流/控件 ---------- */
+/* ---------- 检查器数据�?控件 ---------- */
 .flow-list {
   margin: 0;
   padding: 0;
@@ -1115,4 +1286,362 @@ button:disabled {
   user-select: text;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ---------- Agent 侧边栏（画布左上角悬浮） ---------- */
+.cs-sidebar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.cs-sidebar > * {
+  pointer-events: auto;
+}
+
+.cs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  background: rgba(56, 130, 246, 0.18);
+  border: 1px solid rgba(147, 197, 253, 0.4);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  color: #dbeafe;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.cs-badge:hover {
+  background: rgba(56, 130, 246, 0.3);
+}
+
+.cs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex: none;
+}
+
+.cs-dot-running {
+  background: #f59e0b;
+  animation: cs-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes cs-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+.cs-badge-chevron {
+  color: rgba(219, 234, 254, 0.7);
+  font-size: 10px;
+}
+
+.cs-badge-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.16);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  padding: 0 6px;
+  border-radius: 999px;
+}
+
+.cs-panel {
+  margin-top: 8px;
+  width: 380px;
+  max-width: calc(100vw - 360px);
+  max-height: min(520px, 62vh);
+  overflow: hidden;
+  background: rgba(70, 120, 200, 0.35);
+  border: 1px solid rgba(147, 197, 253, 0.35);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4);
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+}
+
+.cs-panel.is-tree {
+  width: 420px;
+  max-width: calc(100vw - 360px);
+}
+
+.cs-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(147, 197, 253, 0.25);
+}
+
+.cs-chat-name {
+  font-weight: 700;
+  font-size: 13px;
+  color: #ffffff;
+}
+
+.cs-chat-body {
+  padding: 10px 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 80px;
+}
+
+.cs-chat-empty {
+  color: #d7e6ff;
+  font-size: 12px;
+}
+
+.cs-msg {
+  margin-bottom: 12px;
+}
+
+.cs-msg-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #dbeafe;
+  margin-bottom: 3px;
+}
+
+.cs-msg-label.cs-running {
+  color: #fbbf24;
+}
+
+.cs-msg-user .cs-msg-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #dbeafe;
+  margin-bottom: 3px;
+}
+
+.cs-msg-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #ffffff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.cs-msg-user .cs-msg-text {
+  color: #ffffff;
+}
+
+/* 会话�?*/
+.cs-tree {
+  overflow-y: auto;
+  max-height: min(520px, 62vh);
+}
+
+.cs-tree-title {
+  padding: 10px 14px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #cfe3ff;
+  border-bottom: 1px solid rgba(147, 197, 253, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cs-tree-new {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.14);
+  border: 1px solid rgba(147, 197, 253, 0.3);
+  border-radius: 7px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.cs-tree-new:hover {
+  border-color: #93c5fd;
+  color: #dbeafe;
+}
+
+.cs-tree-empty {
+  padding: 18px;
+  color: #d7e6ff;
+  font-size: 12px;
+  text-align: center;
+}
+
+.cs-tree-item {
+  margin: 8px 10px;
+  padding: 10px 12px;
+  background: rgba(20, 30, 50, 0.45);
+  border: 1px solid rgba(147, 197, 253, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.cs-tree-item:hover {
+  border-color: rgba(147, 197, 253, 0.55);
+  background: rgba(30, 45, 75, 0.5);
+}
+
+.cs-tree-item.is-active {
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+
+.cs-tree-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cs-tree-label {
+  font-weight: 700;
+  font-size: 13px;
+  color: #ffffff;
+}
+
+.cs-tree-status {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.cs-tree-status.st-active {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.18);
+}
+
+.cs-tree-status.st-done {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.16);
+}
+
+.cs-tree-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: #cfe3ff;
+}
+
+.cs-tree-prompt {
+  margin-top: 7px;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 11.5px;
+}
+
+.cs-tree-prompt-label {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.14);
+  padding: 1px 6px;
+  border-radius: 5px;
+  margin-top: 1px;
+}
+
+.cs-tree-prompt-text {
+  color: #ffffff;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.cs-tree-preview {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #d7e6ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 底部 Prompt 输入�?---------- */
+.prompt-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+  z-index: 900;
+}
+
+.prompt-bar-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: min(680px, 86%);
+  background: rgba(27, 30, 37, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.prompt-bar-tag {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #93c5fd;
+  background: rgba(147, 197, 253, 0.14);
+  border: 1px solid rgba(147, 197, 253, 0.3);
+  padding: 3px 8px;
+  border-radius: 8px;
+  margin-bottom: 2px;
+}
+
+.prompt-bar-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  resize: none;
+  line-height: 1.5;
+  max-height: 120px;
+  padding: 2px 2px;
+}
+
+.prompt-bar-input::placeholder {
+  color: var(--text-dim);
+}
+
+.prompt-bar-btn {
+  flex: none;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 18px;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.prompt-bar-btn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.prompt-bar-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

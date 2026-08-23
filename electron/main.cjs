@@ -3,6 +3,10 @@ const path = require('path');
 const fsp = require('fs').promises;
 const cnode = require('./cnode.cjs');
 const agent = require('./agent.cjs');
+const toolkit = require('./tools/toolkit.cjs');
+const { GraphModel } = require('./tools/GraphModel.cjs');
+const { AgentToolContext } = require('./tools/context.cjs');
+const { makeBridge } = require('./tools/bridge.cjs');
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -213,6 +217,174 @@ function createWindow() {
             })();
             out.multigroup = mg;
           } catch(e){ out.multigroup = 'THREW:'+e.message; }
+          try {
+            const sv = await (async()=>{
+              const st = window.__codenodeStore;
+              const g = st.getState();
+              g.clear();
+              g.addNode({ id:'t1', type:'task', position:{x:50,y:50}, data:{label:'任务A',status:'pending',prompt:''} });
+              g.addNode({ id:'t2', type:'task', position:{x:300,y:50}, data:{label:'任务B',status:'done',prompt:''} });
+              g.onConnect({ source:'t1', target:'t2' });
+              // 模拟 projectActions.buildPayload()
+              const doc = st.getState().getDocument();
+              const payload = {
+                graph: doc.root,
+                canvases: { groups: doc.groups, viewStack: doc.viewStack },
+                workspace: { viewport: { x: 5, y: 6, zoom: 1 } },
+                manifest: { name: '保存链路测试', documentId: 'save-test-doc' }
+              };
+              const dir = 'E:\\\\codenode_nw\\\\logs\\\\tooltest\\\\savedir';
+              const file = dir + '\\\\proj.cnode';
+              const sDir = await window.codenode.saveProject(dir, payload);
+              const sFile = await window.codenode.saveProject(file, payload);
+              const lFile = await window.codenode.loadProject(file);
+              // 组内画布保存/读取
+              g.makeGroup(['t1','t2']);
+              const doc2 = st.getState().getDocument();
+              const payload2 = {
+                graph: doc2.root,
+                canvases: { groups: doc2.groups, viewStack: doc2.viewStack },
+                workspace: { viewport: { x: 0, y: 0, zoom: 1 } },
+                manifest: {}
+              };
+              const sGrp = await window.codenode.saveProject(file, payload2);
+              const lGrp = await window.codenode.loadProject(file);
+              return {
+                sDir: { ok: sDir.ok, filePath: sDir.filePath, err: sDir.error },
+                sFile: { ok: sFile.ok, filePath: sFile.filePath, err: sFile.error },
+                lFile: { ok: lFile.ok, nodes: lFile.data && lFile.data.graph && lFile.data.graph.nodes && lFile.data.graph.nodes.length, edges: lFile.data && lFile.data.graph && lFile.data.graph.edges && lFile.data.graph.edges.length, warn: lFile.data && lFile.data.warnings, err: lFile.error },
+                sGrp: { ok: sGrp.ok, err: sGrp.error },
+                lGrp: { ok: lGrp.ok, viewStack: lGrp.data && lGrp.data.canvases && lGrp.data.canvases.viewStack, groupIds: lGrp.data && lGrp.data.canvases && Object.keys(lGrp.data.canvases.groups||{}) }
+              };
+            })();
+            out.savetest = sv;
+          } catch(e){ out.savetest = 'THREW:'+e.message; }
+          try {
+            const sess = await (async()=>{
+              const ss = window.__codenodeSession.getState();
+              const graph = window.__codenodeStore.getState();
+              graph.clear();
+              ss.reset();
+              ss.initProject('你好，我能为你做什么', '灵魂内容');
+              const chat = window.__codenodeChat.getState();
+              const r = await chat.send('请在画布创建 2 个任务节点并连线。');
+              const s1 = window.__codenodeSession.getState();
+              const first = s1.sessions[s1.order[0]];
+              const active = s1.current();
+              return {
+                chatOk: !!r.reply || r.tools.length > 0,
+                sessionCount: s1.order.length,
+                activeLabel: active ? active.label : null,
+                activeNodes: active ? active.doc.root.nodes.length : -1,
+                completed: s1.order.filter((id)=>s1.sessions[id].status==='completed').length,
+                firstNodeCount: first ? first.doc.root.nodes.length : -1,
+                graphNodes: window.__codenodeStore.getState().nodes.length
+              };
+            })();
+            out.sessionsim = sess;
+          } catch(e){ out.sessionsim = 'THREW:'+e.message; }
+          try {
+            const sp = await (async()=>{
+              const ss = window.__codenodeSession.getState();
+              ss.syncActiveGraph();
+              const active = ss.current();
+              const sessions = ss.order.map((id)=>ss.sessions[id]).filter(Boolean).map((s)=>({
+                id: s.id, label: s.label, prompt: s.prompt, status: s.status,
+                createdAt: s.createdAt, nodeCount: s.nodeCount, summary: s.summary || '',
+                root: s.doc.root, groups: s.doc.groups, viewStack: s.doc.viewStack
+              }));
+              const file = 'E:\\\\codenode_nw\\\\logs\\\\tooltest\\\\savedir\\\\sessions.cnode';
+              const payload = {
+                graph: active ? active.doc.root : { nodes: [], edges: [] },
+                canvases: { groups: active ? active.doc.groups : {}, viewStack: active ? active.doc.viewStack : [], sessions, messages: ss.messages },
+                workspace: { viewport: { x:0, y:0, zoom:1 } },
+                manifest: { name: '会话持久化测试' }
+              };
+              const s = await window.codenode.saveProject(file, payload);
+              const l = await window.codenode.loadProject(file);
+              const sess2 = l.data && l.data.canvases && l.data.canvases.sessions;
+              return {
+                saved: s.ok,
+                loaded: l.ok,
+                stored: Array.isArray(sess2) ? sess2.length : 0,
+                lastNodes: sess2 && sess2[sess2.length-1] ? sess2[sess2.length-1].root.nodes.length : -1,
+                lastLabel: sess2 && sess2[sess2.length-1] ? sess2[sess2.length-1].label : null,
+                messages: l.data && l.data.canvases && Array.isArray(l.data.canvases.messages) ? l.data.canvases.messages.length : 0
+              };
+            })();
+            out.sesspersist = sp;
+          } catch(e){ out.sesspersist = 'THREW:'+e.message; }
+          try {
+            const rc = await (async()=>{
+              const ss = window.__codenodeSession.getState();
+              const graph = window.__codenodeStore.getState();
+              graph.clear();
+              ss.reset();
+              ss.initProject('你好，我能为你做什么', '灵魂内容');
+              // 模拟用户手动新建节点
+              graph.addNode({ id:'m1', type:'task', position:{x:40,y:40}, data:{label:'节点甲',status:'pending',prompt:''} });
+              graph.addNode({ id:'m2', type:'task', position:{x:240,y:40}, data:{label:'节点乙',status:'pending',prompt:''} });
+              const chat = window.__codenodeChat.getState();
+              const r = await chat.send('请阅读画布中的节点并制作：把两个节点连接起来，并说明每个节点应该做什么。');
+              const s1 = window.__codenodeSession.getState();
+              const active = s1.current();
+              const lastAgent = [...s1.messages].reverse().find((m)=>m.role==='assistant');
+              const toolNames = (lastAgent && lastAgent.tools ? lastAgent.tools.map(t=>t.name) : []);
+              const wbm = lastAgent && lastAgent.tools ? lastAgent.tools.find(t=>t.name==='get_workbench_model') : null;
+              return {
+                chatOk: !!r.reply || r.tools.length>0,
+                sessionCount: s1.order.length,
+                activeLabel: active ? active.label : null,
+                activeNodes: active ? active.doc.root.nodes.length : -1,
+                toolNames: toolNames.join(','),
+                wbmSawNodes: !!(wbm && JSON.stringify(wbm.data || '').indexOf('节点甲') >= 0),
+                replyHasNodes: !!(r.reply && r.reply.indexOf('节点甲') >= 0)
+              };
+            })();
+            out.readcanvas = rc;
+          } catch(e){ out.readcanvas = 'THREW:'+e.message; }
+          try {
+            const lt = await (async()=>{
+              const ss = window.__codenodeSession.getState();
+              const graph = window.__codenodeStore.getState();
+              graph.clear();
+              ss.reset();
+              // 加载用户保存的 t9.cnode（节点在画布1，画布2/3 为空）
+              const l = await window.codenode.loadProject('E:\\\\Dev_1\\\\t9.cnode');
+              const sessData = l.data && l.data.canvases && l.data.canvases.sessions;
+              if (Array.isArray(sessData)) {
+                const list = sessData.map((sd, i)=>({
+                  id: sd.id || ('c'+i), label: sd.label || ('画布'+(i+1)), prompt: sd.prompt || '',
+                  status: (sd.status==='active'||sd.status==='completed') ? sd.status : 'active',
+                  createdAt: sd.createdAt||0, nodeCount: sd.nodeCount||0, summary: sd.summary||'',
+                  doc: { root: { nodes: sd.root ? sd.root.nodes : [], edges: sd.root ? sd.root.edges : [] },
+                         groups: sd.groups || {}, viewStack: sd.viewStack || [] }
+                }));
+                ss.restoreSessions(list, (l.data.canvases.messages)||[], undefined);
+              }
+              const s1 = window.__codenodeSession.getState();
+              const active = s1.current();
+              const before = { label: active?active.label:null, nodes: active?active.doc.root.nodes.length:-1 };
+              // 让 Agent 阅读画布并制作
+              const chat = window.__codenodeChat.getState();
+              const r = await chat.send('请阅读当前画布上的全部节点并制作。');
+              const s2 = window.__codenodeSession.getState();
+              const a2 = s2.current();
+              const lastAgent = [...s2.messages].reverse().find((m)=>m.role==='assistant');
+              const wbm = lastAgent && lastAgent.tools ? lastAgent.tools.find(t=>t.name==='get_workbench_model') : null;
+              return {
+                loaded: l.ok,
+                beforeLabel: before.label,
+                beforeNodes: before.nodes,
+                afterLabel: a2 ? a2.label : null,
+                afterNodes: a2 ? a2.doc.root.nodes.length : -1,
+                sessionCount: s2.order.length,
+                wbmDataLen: wbm ? JSON.stringify(wbm.data||'').length : 0,
+                replyOk: !!r.reply
+              };
+            })();
+            out.loadt9 = lt;
+          } catch(e){ out.loadt9 = 'THREW:'+e.message; }
           return out;
         })()`);
         require('fs').mkdirSync(path.join(__dirname, '..', 'logs'), { recursive: true });
@@ -357,10 +529,44 @@ ipcMain.handle('project:load', async (_event, target) => {
   }
 });
 
+function auditLog(projectRoot, entry) {
+  try {
+    if (!projectRoot) return;
+    const dir = path.join(projectRoot, '.codenode');
+    require('fs').mkdirSync(dir, { recursive: true });
+    require('fs').appendFileSync(
+      path.join(dir, 'audit.jsonl'),
+      JSON.stringify({ ts: new Date().toISOString(), entry }) + '\n',
+      'utf-8'
+    );
+  } catch {}
+}
+
+/** 保存文档到工程文件（save_project 工具用）。 */
+function saveDoc(projectRoot, projectFile, model) {
+  const doc = model ? model.doc : null;
+  const graph = (doc && doc.root) || { nodes: [], edges: [] };
+  const canvases = doc ? { groups: doc.groups || {}, viewStack: doc.viewStack || [] } : undefined;
+  const filePath = projectFile
+    ? path.resolve(projectFile)
+    : path.join(path.resolve(projectRoot || '.'), 'workflow.cnode');
+  require('fs').mkdirSync(path.dirname(filePath), { recursive: true });
+  require('fs').writeFileSync(
+    filePath,
+    cnode.encodeCnode({
+      graph,
+      canvases,
+      workspace: {},
+      manifest: {},
+    })
+  );
+  return filePath;
+}
+
 ipcMain.handle('agent:config', async (_event, projectRoot) => {
   const cfg = agent.loadConfig(projectRoot);
   const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
-  return { configured: !!cfg.apiKey, model: cfg.model, soul };
+  return { configured: !!cfg.apiKey, model: cfg.model, soul, toolsEnabled: cfg.tools.toolsEnabled };
 });
 
 ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
@@ -369,8 +575,21 @@ ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
   return { greeting: soul.greeting, name: soul.name, configured: !!cfg.apiKey };
 });
 
+ipcMain.handle('agent:tools', async (_event, projectRoot) => {
+  const cfg = agent.loadConfig(projectRoot);
+  const registry = toolkit.buildDefaultRegistryWithConfig(cfg.tools);
+  return {
+    enabled: cfg.tools.toolsEnabled,
+    tools: registry.listTools().map((spec) => ({
+      name: spec.name,
+      description: spec.description,
+      parameters: spec.inputSchema,
+    })),
+  };
+});
+
 ipcMain.handle('agent:chat', async (event, payload) => {
-  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId } = payload || {};
+  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile } = payload || {};
   const sender = event.sender;
   const sendDelta = (d) => {
     if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
@@ -381,7 +600,14 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       return { ok: false, error: '未配置 API Key（config/agent.properties）' };
     }
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
-    const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary) }];
+
+    // 先装配工具注册表：用于系统提示中的工具引导，也用于工具循环
+    let registry = null;
+    if (cfg.tools.toolsEnabled) {
+      registry = toolkit.buildDefaultRegistryWithConfig(cfg.tools);
+    }
+    const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
+    const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary, toolGuide) }];
     for (const m of history || []) {
       if (m && m.role && m.content) messages.push({ role: m.role, content: m.content });
     }
@@ -392,22 +618,86 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       content: prompt,
       nodeId: nodeId || null,
     });
+
+    // ---- 装配工具 ----
+    let tools = null;
+    let model = null;
+    let bridge = null;
+    let dirty = false;
+    if (registry && registry.listTools().length > 0) {
+        bridge = makeBridge(sender);
+        model = new GraphModel(document || undefined);
+        const undoStack = [];
+        const redoStack = [];
+        const context = new AgentToolContext({
+          projectRoot,
+          model,
+          confirm: (level, what, detail) => bridge.confirm(level, what, detail),
+          askUser: (question, options) => bridge.askUser(question, options),
+          ui: (action, args) => bridge.ui(action, args),
+          audit: (entry) => auditLog(projectRoot, entry),
+          mutateWorkbench: async (fn) => {
+            undoStack.push(JSON.parse(JSON.stringify(model.doc)));
+            if (redoStack.length) redoStack.length = 0;
+            fn(model);
+            dirty = true;
+            return true;
+          },
+          undo: async () => {
+            if (undoStack.length) {
+              redoStack.push(JSON.parse(JSON.stringify(model.doc)));
+              model.doc = JSON.parse(JSON.stringify(undoStack.pop()));
+              dirty = true;
+            }
+          },
+          redo: async () => {
+            if (redoStack.length) {
+              undoStack.push(JSON.parse(JSON.stringify(model.doc)));
+              model.doc = JSON.parse(JSON.stringify(redoStack.pop()));
+              dirty = true;
+            }
+          },
+          saveProject: async () => {
+            const saved = saveDoc(projectRoot, projectFile, model);
+            sendDelta({ kind: 'saved', filePath: saved });
+            return saved;
+          },
+          conversationHistory: () =>
+            messages.filter((m) => m.role !== 'system').slice(-20).map((m) => ({ role: m.role, content: m.content })),
+          notifyFileChange: (rel, kind, detail) => {
+            sendDelta({ kind: 'file_change', fileChange: { path: rel, kind, detail } });
+          },
+        });
+        tools = { registry, context };
+    }
+
     sendDelta({ kind: 'start' });
-    const { content, reasoning, toolCalls, usage } = await agent.chatCompletionStream(cfg, messages, (ev) => {
-      if (ev.kind === 'reasoning') sendDelta({ kind: 'reasoning', text: ev.text });
-      else if (ev.kind === 'content') sendDelta({ kind: 'content', text: ev.text });
-      else if (ev.kind === 'tool') sendDelta({ kind: 'tool', toolCalls: ev.toolCalls });
+    const result = await agent.runAgentChat({
+      cfg,
+      messages,
+      onDelta: sendDelta,
+      tools,
     });
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),
       role: 'assistant',
-      content,
-      reasoning: reasoning || null,
-      toolCalls: toolCalls || null,
-      usage: usage || null,
+      content: result.content,
+      reasoning: result.reasoning || null,
+      toolCalls: result.toolCalls || null,
+      usage: result.usage || null,
     });
     sendDelta({ kind: 'done' });
-    return { ok: true, reply: content, reasoning, toolCalls, usage };
+    const out = {
+      ok: !result.error,
+      reply: result.content,
+      reasoning: result.reasoning,
+      toolCalls: result.toolCalls,
+      usage: result.usage,
+    };
+    if (result.error) out.error = result.error;
+    if (dirty && model) out.document = model.doc;
+    if (bridge) bridge.cleanup();
+    return out;
   } catch (e) {
     sendDelta({ kind: 'error', error: String((e && e.message) || e) });
     return { ok: false, error: String((e && e.message) || e) };

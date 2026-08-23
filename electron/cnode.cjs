@@ -146,6 +146,19 @@ function defaultManifest(doc) {
   };
 }
 
+// ---------- 安全序列化（避免循环引用 / 函数字段导致保存失败） ----------
+function safeStringify(value) {
+  const seen = new WeakSet();
+  return JSON.stringify(value, (key, val) => {
+    if (typeof val === 'function' || typeof val === 'symbol' || val === undefined) return undefined;
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) return undefined;
+      seen.add(val);
+    }
+    return val;
+  });
+}
+
 // ---------- 编码 ----------
 function encodeCnode({ manifest, graph, workspace, canvases }) {
   const m = defaultManifest(manifest);
@@ -153,10 +166,10 @@ function encodeCnode({ manifest, graph, workspace, canvases }) {
   const w = workspace && typeof workspace === 'object' ? workspace : {};
   const c = canvases && typeof canvases === 'object' ? canvases : null;
   const mimeBuf = Buffer.from(MIME, 'utf-8');
-  const manifestBuf = Buffer.from(JSON.stringify(m), 'utf-8');
-  const graphBuf = Buffer.from(JSON.stringify(g), 'utf-8');
-  const wsBuf = Buffer.from(JSON.stringify(w), 'utf-8');
-  const canvasesBuf = c ? Buffer.from(JSON.stringify(c), 'utf-8') : null;
+  const manifestBuf = Buffer.from(safeStringify(m), 'utf-8');
+  const graphBuf = Buffer.from(safeStringify(g), 'utf-8');
+  const wsBuf = Buffer.from(safeStringify(w), 'utf-8');
+  const canvasesBuf = c ? Buffer.from(safeStringify(c), 'utf-8') : null;
   const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
   const filesMap = {
     'manifest.json': sha(manifestBuf),

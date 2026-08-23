@@ -5,3 +5,15 @@ model=deepseek-chat
 max_tokens=2048
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md
+
+# ---------- Agent 工具配置 ----------
+# 总开关：false 关闭全部工具（仅纯对话）
+# tools.enabled=true
+# 白名单：非空时只允许列出的工具（逗号分隔）；留空=全部允许
+# 可用工具：get_workbench_model / create_nodes / workbench_edit / workbench_connect / workbench_structure /
+#           scan_project / analyze_project / project_info / read_file / write_file / edit_file /
+#           find_files / search_files / list_directory / execute_shell / code_review / ask_user /
+#           fetch_url / save_project / bulk_edit / ui_control / write_analysis_md
+# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,create_nodes,workbench_edit,workbench_connect,workbench_structure,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md
+# 黑名单：禁用某些工具（逗号分隔）
+# tools.deny=execute_shell,bulk_edit
