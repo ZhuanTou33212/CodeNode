@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { useGraphStore } from './graphStore';
 import { useProjectStore } from './projectStore';
 import { useUiStore } from './uiStore';
-import type { SessionCanvas, SessionDoc, SessionMsg, ToolRecord } from '../types';
+import type { RagGrounding, SessionCanvas, SessionDoc, SessionMsg, ToolRecord } from '../types';
 
 const uid = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
 
@@ -47,7 +47,7 @@ interface SessionState {
     saved?: { filePath?: string };
     error?: string;
   }) => void;
-  finishTurn: (reply: string, reasoning: string, tools: ToolRecord[]) => void;
+  finishTurn: (reply: string, reasoning: string, tools: ToolRecord[], grounding?: RagGrounding) => void;
   failTurn: (error: string) => void;
   applyAgentDoc: (doc: SessionDoc) => void;
 
@@ -277,7 +277,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ messages: msgs });
   },
 
-  finishTurn: (reply, reasoning, tools) => {
+  finishTurn: (reply, reasoning, tools, grounding) => {
     const s = get();
     const msgs = s.messages.map((m) => ({ ...m }));
     const last = msgs[msgs.length - 1];
@@ -286,6 +286,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (reasoning) last.reasoning = reasoning;
       if (tools && tools.length) last.tools = tools;
       last.status = 'done';
+      if (grounding) last.grounding = grounding;
     }
     // 当前画布标记完成并记录摘要
     let sessions = { ...s.sessions };

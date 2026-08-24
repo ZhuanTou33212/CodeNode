@@ -82,6 +82,16 @@ export type ToolRecord = {
   data?: unknown;
 };
 
+export type RagGrounding = {
+  status: 'not_required' | 'valid' | 'missing' | 'invalid';
+  valid: boolean;
+  required: boolean;
+  allowed: string[];
+  used: string[];
+  invalid: string[];
+};
+
+
 /** 会话中的一条消息 */
 export type SessionMsg = {
   role: 'user' | 'assistant' | 'system';
@@ -89,6 +99,7 @@ export type SessionMsg = {
   reasoning?: string;
   tools?: ToolRecord[];
   status?: string;
+  grounding?: RagGrounding;
 };
 
 /** 单个画布的文档快照（根图 + 组图 + 组导航栈） */

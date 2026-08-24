@@ -132,7 +132,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (res.ok && res.reply != null) {
         const rawTools = (res.toolCalls as ToolRecord[] | null) || null;
         tools = (rawTools || []).map((t) => ({ name: t.name || 'tool', args: t.args, result: t.result, ok: t.ok, data: t.data }));
-        useSessionStore.getState().finishTurn(res.reply, res.reasoning || '', tools);
+        useSessionStore.getState().finishTurn(res.reply, res.reasoning || '', tools, res.grounding);
       } else {
         useSessionStore.getState().failTurn(res.error || '未知错误');
         useUiStore.getState().setToast('Agent 调用失败：' + (res.error || '未知错误'));

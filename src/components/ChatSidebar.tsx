@@ -6,6 +6,7 @@ function MessageView({ msg }: { msg: SessionMsg }) {
   const [showReasoning, setShowReasoning] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const tools = msg.tools || [];
+  const grounding = msg.grounding;
 
   if (msg.role === 'user') {
     return (
@@ -22,6 +23,18 @@ function MessageView({ msg }: { msg: SessionMsg }) {
         CodeNode{msg.status === 'running' ? ' · 思考中…' : ''}
       </span>
       <div className="cs-msg-text">{msg.content || (msg.status === 'running' ? '…' : '')}</div>
+      {grounding && grounding.status !== 'not_required' ? (
+        <div
+          className={`rag-grounding rag-grounding-${grounding.status}`}
+          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : undefined}
+        >
+          {grounding.status === 'valid'
+            ? `✓ 来源已校验（${grounding.used.length}/${grounding.allowed.length}）`
+            : grounding.status === 'missing'
+              ? '△ 回答缺少来源引用'
+              : `! 发现 ${grounding.invalid.length} 个无效引用`}
+        </div>
+      ) : null}
       {msg.reasoning ? (
         <div className="chat-section">
           <button className="chat-section-toggle" onClick={() => setShowReasoning((v) => !v)}>

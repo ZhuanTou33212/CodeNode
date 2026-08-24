@@ -11,6 +11,7 @@ if (process.platform === 'win32') {
 
 const cnode = require('./cnode.cjs');
 const agent = require('./agent.cjs');
+const ragIndex = require('./rag/index.cjs');
 const toolkit = require('./tools/toolkit.cjs');
 const { GraphModel } = require('./tools/GraphModel.cjs');
 const { AgentToolContext } = require('./tools/context.cjs');
@@ -631,7 +632,13 @@ function saveDoc(projectRoot, projectFile, model) {
 ipcMain.handle('agent:config', async (_event, projectRoot) => {
   const cfg = agent.loadConfig(projectRoot);
   const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
-  return { configured: !!cfg.apiKey, model: cfg.model, soul, toolsEnabled: cfg.tools.toolsEnabled };
+  return {
+    configured: !!cfg.apiKey,
+    model: cfg.model,
+    soul,
+    toolsEnabled: cfg.tools.toolsEnabled,
+    ragEnabled: cfg.rag.enabled,
+  };
 });
 
 ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
@@ -642,7 +649,7 @@ ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
 
 ipcMain.handle('agent:tools', async (_event, projectRoot) => {
   const cfg = agent.loadConfig(projectRoot);
-  const registry = toolkit.buildDefaultRegistryWithConfig(cfg.tools);
+  const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
   return {
     enabled: cfg.tools.toolsEnabled,
     tools: registry.listTools().map((spec) => ({
@@ -669,7 +676,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     // 先装配工具注册表：用于系统提示中的工具引导，也用于工具循环
     let registry = null;
     if (cfg.tools.toolsEnabled) {
-      registry = toolkit.buildDefaultRegistryWithConfig(cfg.tools);
+      registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
     }
     const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
     const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary, toolGuide) }];
@@ -730,8 +737,10 @@ ipcMain.handle('agent:chat', async (event, payload) => {
           conversationHistory: () =>
             messages.filter((m) => m.role !== 'system').slice(-20).map((m) => ({ role: m.role, content: m.content })),
           notifyFileChange: (rel, kind, detail) => {
+            ragIndex.invalidateProjectIndex(projectRoot, rel);
             sendDelta({ kind: 'file_change', fileChange: { path: rel, kind, detail } });
           },
+          ragConfig: cfg.rag,
         });
         tools = { registry, context };
     }
@@ -750,6 +759,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       reasoning: result.reasoning || null,
       toolCalls: result.toolCalls || null,
       usage: result.usage || null,
+      grounding: result.grounding || null,
     });
     sendDelta({ kind: 'done' });
     const out = {
@@ -758,6 +768,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       reasoning: result.reasoning,
       toolCalls: result.toolCalls,
       usage: result.usage,
+      grounding: result.grounding,
     };
     if (result.error) out.error = result.error;
     if (dirty && model) out.document = model.doc;

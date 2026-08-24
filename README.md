@@ -2,7 +2,7 @@
 
 CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作台。
 
-> 当前里程碑：**基础画布**。采用 Electron + React + React Flow 重构原 Java/Swing 版本，
+> 当前里程碑：**Agentic RAG**。采用 Electron + React + React Flow 重构原 Java/Swing 版本，
 > 保留节点画布操作逻辑（Blender 风格），并将节点语义改为「Agent 工作流可视化」。
 > 完整重构方案见 `REFACTOR_PLAN_DSH.md`（在仓库 `codenodeNew` 分支历史/工作区）。
 
@@ -39,6 +39,16 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 ### 检查器（右上角悬浮角标）
 - 默认显示悬浮角标（节点数 / 选中提示），点击展开为检查器浮层，可编辑节点名称 / 状态 / 目标说明
 
+### Agentic RAG（本地项目检索）
+- Agent 可把主问题、符号名、业务词和技术词作为多个查询，一次完成 RRF 融合排序
+- 本地增量索引复用未变化分块；文件工具写入后显式失效，外部变化由 mtime 自动发现
+- BM25 + 路径/短语/覆盖率排序，覆盖源码符号、自然语言与中文，无需向量数据库或云服务
+- 返回高/中/低可信度、查询覆盖率、候选规模与 `path#Lx-Ly` 来源锚点
+- 低可信度会驱动 Agent 改写查询、限定目录或深读文件，不会强行把弱结果当答案
+- 检索片段被标记为不可信数据，项目文件内的提示注入不会被当作 Agent 指令
+- 默认硬排除 `.env`、SSH/证书密钥、凭据、`.codenode` 记录、依赖与构建产物
+- `rag.include` / `rag.exclude` 可配置范围，其他 `rag.*` 控制分块、Top-K、查询数与质量门槛
+
 ## 开发运行
 
 ```powershell
@@ -73,12 +83,19 @@ scripts/            冒烟测试
 node_modules\.bin\electron scripts\smoke.cjs
 # 主进程自检（验证 preload + IPC + .cnode 保存/加载/完整性）
 $env:CODENODE_TEST=1; node_modules\electron\dist\electron.exe .
+# Agentic RAG 端到端测试（多查询融合、质量诊断、范围策略、安全排除、显式/自动刷新）
+node scripts/rag-test.cjs
+# 引用白名单与提示注入防护规则测试
+node scripts/rag-grounding-test.cjs
+# 构建后验证来源校验徽标渲染
+npm run test:rag-ui
 ```
 
 ## 路线图
 
 - [x] 基础画布 + 基础 UI + `.cnode` 专属格式
-- [ ] 接入 DeepSeek Harness（DSH）：Agent 引擎 / 工具 / 摘要 / 记忆 / MCP
+- [x] Agent 引擎 + 工具循环 + 本地 Agentic RAG
+- [ ] 摘要 / 长期记忆 / MCP
 - [ ] 节点 = Agent 工作流：进度 / 顺序 / 结果摘要可视化
 - [ ] Agent 通过工具控制画布（创建 / 连线 / 推进状态）
 - [ ] 打包分发（electron-builder）与 `.cnode` 文件关联

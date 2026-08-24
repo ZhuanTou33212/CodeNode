@@ -30,6 +30,7 @@ const BUILTINS = [
   require('./impl/uiControlTool.cjs'),
   require('./impl/writeAnalysisMdTool.cjs'),
   require('./impl/projectInfoTool.cjs'),
+  require('./impl/retrieveContextTool.cjs'),
 ];
 
 function buildDefaultRegistry() {
@@ -50,6 +51,10 @@ function filterByConfig(registry, config) {
   const allowed = cfg.toolsAllowed || null; // null 或空 = 全部允许
   const deny = cfg.toolsDeny || [];
   for (const spec of registry.listTools()) {
+    if (spec.name === 'retrieve_context' && cfg.ragEnabled === false) {
+      registry.unregister(spec.name);
+      continue;
+    }
     if (deny.includes(spec.name)) {
       registry.unregister(spec.name);
       continue;
