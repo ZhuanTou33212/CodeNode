@@ -145,6 +145,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   switchSession: (id) => {
     const s = get();
     if (id === s.activeId || !s.sessions[id]) return;
+    // 先把当前画布的最新状态（含自动排版后的节点位置）保存回会话，避免切换后位置丢失/重叠
+    get().syncActiveGraph();
     const target = s.sessions[id];
     loadGraph(target.doc);
     set({ activeId: id, progress: null });
@@ -253,7 +255,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (d.kind === 'reasoning' && d.text) last.reasoning = (last.reasoning || '') + d.text;
     else if (d.kind === 'content' && d.text) last.content += d.text;
     else if (d.kind === 'tool' && d.toolCalls) {
-      const list = (d.toolCalls as { name?: string; args?: unknown }[]).map((t) => ({
+      const list = (d.toolCalls as { id?: string; name?: string; args?: unknown }[]).map((t) => ({
+        id: t.id,
         name: t.name || 'tool',
         args: t.args,
       }));
@@ -320,18 +323,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const edgeIds = clean.root.edges.map((e) => e.id).filter(Boolean);
     const next = edgeIds.length ? { edgeIds, index: 0, running: true } : null;
     set({ sessions, progress: next });
-    // 有新节点：等 React Flow 渲染测量后，自动横向整理（超宽换行）
+    // 有新节点：等 React Flow 渲染测量后，自动横向整理（超宽换行），并把排版结果持久化回会话
     if (newIds.length > 0) {
-      setTimeout(() => {
+      const targetId = get().activeId;
+      const doLayout = () => {
+        // 用户已切走画布：不再对错误画布排版
+        if (get().activeId !== targetId) return;
         const g = useGraphStore.getState();
         g.layoutNodes();
         g.commit();
-      }, 260);
-      setTimeout(() => {
-        const g = useGraphStore.getState();
-        g.layoutNodes();
-        g.commit();
-      }, 900);
+        useSessionStore.getState().syncActiveGraph();
+      };
+      setTimeout(doLayout, 260);
+      setTimeout(doLayout, 900);
     }
   },
 
@@ -350,12 +354,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null }),
 }));
 
-/** 合并工具记录：按 name+args 去重，后到者覆盖 result。 */
+/** 合并工具记录：流式增量按 id 去重（同一调用多次 chunk 只算一条）；最终结果按 name+args 回填到未定结果条目，保留每次真实调度 */
 function mergeTools(current: ToolRecord[], incoming: ToolRecord[]): ToolRecord[] {
   const next = current.map((t) => ({ ...t }));
   for (const t of incoming) {
+    if (t.id) {
+      const idx = next.findIndex((x) => x.id === t.id);
+      if (idx >= 0) next[idx] = { ...next[idx], ...t };
+      else next.push(t);
+      continue;
+    }
     const key = (x: ToolRecord) => x.name + '|' + JSON.stringify(x.args || '');
-    const idx = next.findIndex((x) => key(x) === key(t));
+    const idx = next.findIndex((x) => key(x) === key(t) && x.ok === undefined);
     if (idx >= 0) next[idx] = { ...next[idx], ...t };
     else next.push(t);
   }

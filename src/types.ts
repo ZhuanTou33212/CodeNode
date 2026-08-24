@@ -74,6 +74,7 @@ export type FlowResult = {
 
 /** Agent 工具调用记录 */
 export type ToolRecord = {
+  id?: string;
   name: string;
   args?: unknown;
   result?: string;

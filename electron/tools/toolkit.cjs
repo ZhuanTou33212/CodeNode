@@ -12,10 +12,7 @@ const { AgentToolRegistry } = require('./registry.cjs');
 
 const BUILTINS = [
   require('./impl/getWorkbenchModelTool.cjs'),
-  require('./impl/createNodesTool.cjs'),
   require('./impl/workbenchEditTool.cjs'),
-  require('./impl/workbenchConnectTool.cjs'),
-  require('./impl/workbenchStructureTool.cjs'),
   require('./impl/scanProjectTool.cjs'),
   require('./impl/readFileTool.cjs'),
   require('./impl/writeFileTool.cjs'),

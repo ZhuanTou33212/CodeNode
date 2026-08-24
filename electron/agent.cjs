@@ -33,7 +33,7 @@ function loadConfig(projectRoot) {
     apiBase: (cfg.api_base || 'https://api.deepseek.com').replace(/\/+$/, ''),
     apiKey: cfg.api_key || '',
     model: cfg.model || 'deepseek-chat',
-    maxTokens: Number(cfg.max_tokens) || 2048,
+    maxTokens: Number(cfg.max_tokens) || 8192,
     soulFile: cfg.soul_file || 'config/soul.md',
     tools: parseToolsConfig(cfg),
   };
@@ -87,14 +87,11 @@ function parseSoul(text) {
 /** 工具名称 → 一句话用途（用于系统提示词引导 Agent 调用工具） */
 const TOOL_GUIDE = {
   get_workbench_model: '读取画布全部节点/连线/状态',
-  create_nodes: '在画布创建节点',
-  workbench_edit: '编辑节点（改名/移动/状态/删除/复制）',
-  workbench_connect: '节点连线/断开',
-  workbench_structure: '成组/解组/增删组端子',
+  workbench_edit: '统一节点工具：创建/编辑/连线/成组（用 operations 批量一次完成）',
   scan_project: '扫描项目目录结构与统计',
   analyze_project: '分析项目工程信息与源码结构',
   project_info: '识别项目构建系统/入口/语言',
-  read_file: '读取项目内文本文件',
+  read_file: '读取项目内文本文件（含 PDF 文字层提取）',
   write_file: '写入项目内文件',
   edit_file: '精确替换文件中的某段文本',
   find_files: '按 glob 模式查找文件',
@@ -131,12 +128,12 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide) {
   lines.push(
     '\n【运行规则】（硬性要求）\n' +
       '1. 你是一个工具型 Agent：所有对画布/文件的实际操作都必须通过「函数调用（function calling）」完成。\n' +
-      '2. 需要读取画布时调用 get_workbench_model；需要创建节点调用 create_nodes；编辑节点调用 workbench_edit；连线调用 workbench_connect；成组/解组调用 workbench_structure。\n' +
+      '2. 需要读取画布时调用 get_workbench_model；创建/编辑/连线/成组节点统一调用 workbench_edit（用 operations 数组一次提交全部节点变更）。\n' +
       '3. 禁止在回复中声称“已创建/已修改/已完成”某操作——除非你真的通过工具调用完成了它。你只能基于工具返回的结果来描述实际发生的变更。\n' +
-      '4. 读写文件用 read_file / write_file / edit_file；查找文件用 find_files / search_files / list_directory；执行命令用 execute_shell。\n' +
-      '5. 每轮工具调用的结果会作为新的消息返回给你，请据此继续推进，直到用户请求真正完成（可能需要连续多轮工具调用）。\n' +
+      '4. 读写文件用 read_file / write_file / edit_file；查找文件用 find_files / search_files / list_directory；执行命令用 execute_shell。read_file 可直接读取 PDF（自动提取文字层）；若返回「扫描版/文字层不可用」说明该 PDF 无法提取文字，此时不要用 execute_shell 去安装 Python 库（PyPDF2/pypdf/pymupdf）或手工解析 PDF——那样读不了，直接向用户说明并请其提供文本/Word 版。\n' +
+      '5. 每轮工具调用的结果会作为新的消息返回给你，请据此继续推进，直到用户请求真正完成（可能需要连续多轮工具调用）。若工具调用失败（返回失败/报错），不要直接结束对话：先分析失败原因（参数错误/节点或文件不存在/路径越界/超时等），修正后重新调用，或换一种工具/调整方案重试，直到成功或确实无可行办法再向用户说明。\n' +
       '6. 画布节点之间的连线表示执行顺序（DAG）。当需要制作/实现程序时，严格按画布节点的顺序组织逻辑，先完成前置节点再处理后续节点。\n' +
-      '7. 工具返回的 [data] 中已包含节点 id、label 等结构化信息，直接使用返回结果，不要重复调用 get_workbench_model 反复确认；多条连线用 workbench_connect 的 connections 参数一次完成。\n' +
+      '7. 工作台节点（创建/编辑/连线/成组）统一用 workbench_edit，把一次任务需要的所有节点变更放进 operations 数组一次调用完成，避免逐个多次调用。工具返回的 [data] 中已包含节点 id、label 等结构化信息，直接使用返回结果，不要重复调用 get_workbench_model 反复确认。大文件/大目录用 read_file 的 offset、list_directory/find_files/search_files 的 offset 参数分段续读，不要重复调用同一工具相同参数（相同调用会直接复用上次结果）。\n' +
       '8. 全部完成后，用文字简要总结你实际调用过的工具与最终结果。'
   );
   return lines.join('\n\n');
@@ -281,6 +278,44 @@ function logConversation(projectRoot, entry) {
 }
 
 const MAX_TOOL_ITERATIONS = 12;
+const MAX_TOTAL_TOOL_CALLS = 100;
+const DATA_TRUNCATE_CAP = 120000;
+
+/** 只读/分析类工具：相同参数重复调用直接复用上次结果，避免模型空转 */
+const CACHEABLE_TOOLS = new Set([
+  'get_workbench_model',
+  'scan_project',
+  'analyze_project',
+  'project_info',
+  'read_file',
+  'find_files',
+  'search_files',
+  'list_directory',
+  'code_review',
+  'ask_user',
+]);
+
+/** 参数归一化：JSON 解析后按键排序重序列化，使语义相同的调用共享缓存键（消除引号转义/键顺序差异） */
+function canonicalArgs(raw) {
+  try {
+    const obj = JSON.parse(raw);
+    const sort = (o) => {
+      if (Array.isArray(o)) return o.map(sort);
+      if (o && typeof o === 'object') {
+        return Object.keys(o)
+          .sort()
+          .reduce((acc, k) => {
+            acc[k] = sort(o[k]);
+            return acc;
+          }, {});
+      }
+      return o;
+    };
+    return JSON.stringify(sort(obj));
+  } catch {
+    return String(raw || '').trim();
+  }
+}
 
 function parseToolArgs(raw) {
   try {
@@ -289,6 +324,24 @@ function parseToolArgs(raw) {
   } catch {
     return {};
   }
+}
+
+/** 追踪工具调用（时间/命中缓存/耗时/是否重复），追加到项目 .codenode/tools_trace.jsonl */
+function logToolTrace(projectRoot, entry) {
+  if (!projectRoot) return;
+  try {
+    const dir = path.join(projectRoot, '.codenode');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'tools_trace.jsonl'), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n', 'utf-8');
+  } catch {}
+}
+
+/** 终端日志转义：非 ASCII 转成 \\uXXXX，避免 Windows 终端（GBK）把中文显示成乱码 */
+function safeLog(s) {
+  return String(s || '').replace(/[^\x20-\x7E]/g, (c) => {
+    const cp = c.codePointAt(0);
+    return cp <= 0xffff ? '\\u' + cp.toString(16).padStart(4, '0') : '\\u{' + cp.toString(16) + '}';
+  });
 }
 
 /**
@@ -308,8 +361,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let reasoning = '';
   let usage = null;
   const allToolCalls = [];
+  const toolResultCache = new Map();
+  let totalToolCalls = 0;
+  let loopIterations = 0;
   try {
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+      loopIterations = iter + 1;
       const payload = {
         model: cfg.model,
         messages,
@@ -340,7 +397,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
 
       const toolCalls = res.toolCalls || [];
       if (tools && tools.registry && toolCalls.length) {
-        if (res.content) content += res.content;
+        // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
         messages.push({
           role: 'assistant',
           content: res.content || '',
@@ -350,9 +407,36 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             function: { name: tc.name, arguments: tc.args || '{}' },
           })),
         });
+        let capped = false;
+        let failedAny = false;
         for (const tc of toolCalls) {
+          if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
+            capped = true;
+            break;
+          }
+          totalToolCalls++;
+          const t0 = Date.now();
           const args = parseToolArgs(tc.args);
-          const result = await tools.registry.execute(tc.name, args, tools.context);
+          const rawArgs = (tc.args || '').trim();
+          // 检测参数 JSON 损坏：模型可能把引号转义错误，导致工具拿到空参而失败、反复重试
+          const malformed = rawArgs !== '' && rawArgs !== '{}' && Object.keys(args).length === 0;
+          let result;
+          let repeated = false;
+          const cacheKey = CACHEABLE_TOOLS.has(tc.name) ? tc.name + '\u0000' + canonicalArgs(tc.args) : null;
+          if (cacheKey) {
+            const cached = toolResultCache.get(cacheKey);
+            if (cached) {
+              result = cached;
+              repeated = true;
+            } else {
+              result = await tools.registry.execute(tc.name, args, tools.context);
+              // 只缓存成功结果：失败不缓存（文件/节点可能随后被创建，需允许重试时重新执行）
+              if (result.ok) toolResultCache.set(cacheKey, result);
+            }
+          } else {
+            result = await tools.registry.execute(tc.name, args, tools.context);
+          }
+          const elapsed = Date.now() - t0;
           const record = {
             name: tc.name,
             args: tc.args || '',
@@ -360,13 +444,24 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             result: result.text,
             data: result.data,
           };
+          if (repeated) record.repeated = true;
+          if (!result.ok) failedAny = true;
           allToolCalls.push(record);
-          let toolContent = result.text || (result.ok ? '（空）' : '（失败）');
+          let toolContent = repeated
+            ? '（相同参数已重复调用，直接复用上次结果，请勿再次重复）' + (result.text || '')
+            : result.text || (result.ok ? '（空）' : '（失败）');
+          if (malformed) {
+            toolContent = '【参数格式错误】传给 ' + tc.name + ' 的 arguments 不是合法 JSON（引号未转义等），解析后为空。请修正转义后重新调用，不要重复相同调用。\n' + toolContent;
+          }
           // 把结构化 data 一并回传给模型，避免模型因看不到细节而反复读取/猜测
           if (result.data && typeof result.data === 'object' && Object.keys(result.data).length) {
             try {
               const dataJson = JSON.stringify(result.data);
-              toolContent += '\n[data] ' + (dataJson.length > 8000 ? dataJson.slice(0, 8000) + '…' : dataJson);
+              toolContent +=
+                '\n[data] ' +
+                (dataJson.length > DATA_TRUNCATE_CAP
+                  ? dataJson.slice(0, DATA_TRUNCATE_CAP) + '…（已截断，可用 offset/更小范围参数获取剩余）'
+                  : dataJson);
             } catch {}
           }
           messages.push({
@@ -375,6 +470,46 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             content: toolContent,
           });
           onDelta && onDelta({ kind: 'tool_result', toolCalls: [record] });
+          logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+            kind: 'tool',
+            iter,
+            name: tc.name,
+            repeated,
+            malformed,
+            ok: result.ok,
+            elapsedMs: elapsed,
+            args: tc.args || '',
+          });
+          try {
+            const clean = JSON.stringify(args || {}).slice(0, 100);
+            console.log(
+              '[tool] iter=' + iter + ' ' + tc.name + (repeated ? ' (repeated, cached)' : '') +
+                (malformed ? ' (MALFORMED ARGS)' : '') + ' ok=' + result.ok + ' ' + elapsed + 'ms' +
+                (clean && clean !== '{}' ? ' args=' + safeLog(clean) : '')
+            );
+          } catch {}
+        }
+        // 工具调用失败时，提示模型重新思考解决方案而不是直接结束
+        if (failedAny && !capped) {
+          const failedTools = [...new Set(allToolCalls.slice(-toolCalls.length).filter((t) => t.ok === false).map((t) => t.name))];
+          messages.push({
+            role: 'user',
+            content:
+              '【系统提示】上述工具调用失败：' + (failedTools.join('、') || '未知') + '。' +
+              '任务尚未完成，请先分析失败原因（参数错误/节点或文件不存在/路径越界/重复操作/超时等），' +
+              '修正参数后重新调用，或改用更合适的方式继续推进；除非确认任务确实无法完成，否则不要直接结束对话。',
+          });
+        }
+        logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+          kind: 'round_end',
+          iter,
+          toolCount: toolCalls.length,
+          executed: totalToolCalls,
+          capped,
+        });
+        if (capped) {
+          if (!content) content = '已达单次任务工具调用上限（' + MAX_TOTAL_TOOL_CALLS + ' 次），已停止继续调用工具，请基于已获取的信息作答。';
+          break;
         }
         continue;
       }
@@ -385,6 +520,14 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       break;
     }
     onDelta && onDelta({ kind: 'done' });
+    logToolTrace(tools && tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+      kind: 'turn_end',
+      totalToolCalls,
+      executedUnique: allToolCalls.filter((t) => !t.repeated).length,
+      repeated: allToolCalls.filter((t) => t.repeated).length,
+      iterations: loopIterations,
+      resultLen: content.length,
+    });
     return { content, reasoning, toolCalls: allToolCalls, usage };
   } catch (e) {
     onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e) });
@@ -404,4 +547,5 @@ module.exports = {
   resolveSoulPath,
   parseToolsConfig,
   runAgentChat,
+  logToolTrace,
 };

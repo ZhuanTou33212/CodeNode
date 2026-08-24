@@ -65,7 +65,7 @@ function register(registry) {
         for (const f of result.sourceFiles) {
           data.languageSummary[f.language] = (data.languageSummary[f.language] || 0) + 1;
         }
-        data.tree = buildTree(result.files, root).slice(0, 400);
+        data.tree = buildTree(result.files, root);
 
         let applied = false;
         if (args.applyToWorkbench === true) {

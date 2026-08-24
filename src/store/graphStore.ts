@@ -225,16 +225,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       const view = document.querySelector('.canvas-wrap');
       const W = maxX || (view ? (view as HTMLElement).clientWidth : 0) || 1200;
       const margin = 40;
-      const gapX = 36;
+      const gapX = 44;
       const gapY = 56;
-      const defW = 170;
-      const defH = 90;
       let x = margin;
       let y = margin;
       let rowBottom = margin;
       const nodes = s.nodes.map((n) => {
-        const w = (n.measured?.width as number | undefined) || defW;
-        const h = (n.measured?.height as number | undefined) || defH;
+        const nd = (n.data as Record<string, unknown>) || {};
+        const w = (n.measured?.width as number | undefined) || (typeof nd.width === 'number' ? nd.width : 170);
+        const h = (n.measured?.height as number | undefined) || (typeof nd.height === 'number' ? nd.height : 90);
         if (x + w > W - margin) {
           x = margin;
           y = rowBottom + gapY;

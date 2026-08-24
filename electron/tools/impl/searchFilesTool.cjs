@@ -35,7 +35,7 @@ function register(registry) {
   registry.register(
     'search_files',
     '跨项目文件按正则搜索内容（UTF-8 文本），返回 文件:行号:内容。path 限定子目录，filePattern 限定文件 glob，' +
-      'caseSensitive 默认 false。',
+      'caseSensitive 默认 false。超过 maxResults 时截断，可用 offset 分页。',
     {
       type: 'object',
       properties: {
@@ -43,6 +43,7 @@ function register(registry) {
         path: { type: 'string', description: '项目内子目录，缺省整个项目' },
         filePattern: { type: 'string', description: '限定文件的 glob，如 *.java' },
         maxResults: { type: 'integer', description: '最多返回条数，默认 100' },
+        offset: { type: 'integer', description: '跳过前 N 条结果，用于分页，默认 0' },
         caseSensitive: { type: 'boolean', description: '是否区分大小写，默认 false' },
       },
       required: ['pattern'],
@@ -50,7 +51,8 @@ function register(registry) {
     async (context, args) => {
       const patternText = String(args.pattern || '').trim();
       if (!patternText) return AgentToolResult.error('缺少 pattern');
-      const max = typeof args.maxResults === 'number' && Number.isFinite(args.maxResults) ? Math.max(1, Math.floor(args.maxResults)) : 100;
+      const max = typeof args.maxResults === 'number' && Number.isFinite(args.maxResults) ? Math.max(1, Math.floor(args.maxResults)) : 1000;
+      const offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
       const caseSensitive = args.caseSensitive === true;
       const root = path.resolve(context.projectRoot());
       const subDir = String(args.path || '').trim();
@@ -73,9 +75,9 @@ function register(registry) {
         }
       }
       const matches = [];
-      const skipCheck = new Set();
+      const maxCollect = offset + max;
       walkFiles(start, start, fileRegex, (abs, relative) => {
-        if (matches.length >= max) return;
+        if (matches.length >= maxCollect) return;
         if (isBinaryFileName(path.basename(abs))) return;
         let size;
         try {
@@ -93,15 +95,26 @@ function register(registry) {
           return;
         }
         for (let i = 0; i < lines.length; i++) {
-          if (matches.length >= max) return;
+          if (matches.length >= maxCollect) return;
           if (regex.test(lines[i])) {
             matches.push(relative + ':' + (i + 1) + ': ' + lines[i].trim());
           }
         }
       });
-      void skipCheck;
-      if (matches.length === 0) return AgentToolResult.ok('未找到匹配内容', { count: 0 });
-      return AgentToolResult.ok('找到 ' + matches.length + ' 处匹配：\n' + matches.join('\n'), { count: matches.length });
+      const total = matches.length;
+      if (total === 0) return AgentToolResult.ok('未找到匹配内容', { count: 0, offset: 0 });
+      const page = matches.slice(offset, offset + max);
+      if (page.length === 0) {
+        return AgentToolResult.ok('找到 ' + total + ' 处匹配，但 offset=' + offset + ' 超出范围（共 ' + total + ' 条）', { count: total, offset });
+      }
+      const truncated = total > offset + max;
+      const shownRange = (offset + 1) + '-' + (offset + page.length);
+      return AgentToolResult.ok(
+        '找到 ' + total + ' 处匹配' +
+          (truncated ? '，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : '：') +
+          '\n' + page.join('\n'),
+        { count: total, offset, matches: page }
+      );
     }
   );
 }

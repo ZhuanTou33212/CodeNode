@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import type { WorkflowNodeData } from '../types';
@@ -18,6 +18,27 @@ const STATUS_TEXT: Record<string, string> = {
   failed: '失败',
   blocked: '阻塞',
 };
+
+/** prompt 自适应高度的 textarea：随内容自动撑高 */
+function AutoPrompt({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.max(el.scrollHeight, 46) + 'px';
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      className="wf-prompt nodrag"
+      rows={2}
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
 
 function WorkflowNode({ id, data, selected }: NodeProps) {
   const d = data as unknown as WorkflowNodeData;
@@ -40,12 +61,10 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
         {d.goal || d.subtitle || ''}
       </div>
       {promptable && (
-        <textarea
-          className="wf-prompt nodrag"
-          rows={2}
-          placeholder="任务 prompt…"
+        <AutoPrompt
           value={d.prompt || ''}
-          onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
+          onChange={(v) => updateNodeData(id, { prompt: v })}
+          placeholder="任务 prompt…"
         />
       )}
       <div className="wf-node-footer">

@@ -1,6 +1,14 @@
 ﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fsp = require('fs').promises;
+
+// Windows 控制台切换为 UTF-8，避免终端面板打印中文乱码
+if (process.platform === 'win32') {
+  try {
+    require('child_process').execSync('chcp 65001 >nul', { stdio: 'ignore' });
+  } catch {}
+}
+
 const cnode = require('./cnode.cjs');
 const agent = require('./agent.cjs');
 const toolkit = require('./tools/toolkit.cjs');

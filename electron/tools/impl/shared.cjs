@@ -5,7 +5,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { isBinaryFileName } = require('../toolFiles.cjs');
+const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
 
 /** 解析项目内相对路径；越界返回 null。 */
 function resolveInRoot(root, relative) {
@@ -13,6 +13,63 @@ function resolveInRoot(root, relative) {
   const full = path.resolve(resolvedRoot, relative);
   if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
   return full;
+}
+
+/** 引号归一化：把中文全角引号 “ ” ‘ ’ 与 ASCII 引号视为等价（模型常把文件名里的全角引号写成半角导致路径找不到） */
+function normalizeQuotes(s) {
+  return String(s || '').toLowerCase().replace(/[\u201C\u201D\u2018\u2019"'`]/g, '"');
+}
+
+/**
+ * 宽容解析文件路径：精确不存在时，按「引号等价」在当前目录及全项目内模糊匹配文件名。
+ * @returns {string|null} 实际存在的绝对路径；无匹配返回 null
+ */
+function resolveFileFuzzy(root, relative) {
+  const resolvedRoot = path.resolve(root);
+  const full = resolveInRoot(root, relative);
+  if (full && fs.existsSync(full) && fs.statSync(full).isFile()) return full;
+  if (!relative) return null;
+
+  const baseName = path.basename(String(relative).replace(/[\\/]+/g, '/'));
+  const dirName = path.dirname(String(relative).replace(/[\\/]+/g, '/'));
+  const wanted = normalizeQuotes(baseName);
+
+  // 1) 先按归一化名字匹配同一目录
+  const dirAbs = path.join(resolvedRoot, dirName === '.' ? '' : dirName);
+  if (fs.existsSync(dirAbs)) {
+    try {
+      for (const it of fs.readdirSync(dirAbs, { withFileTypes: true })) {
+        if (it.isFile() && normalizeQuotes(it.name) === wanted) return path.join(dirAbs, it.name);
+      }
+    } catch {}
+  }
+
+  // 2) 全项目扫描（跳过构建/缓存目录，限制遍历量）
+  let walked = 0;
+  const MAX_WALK = 20000;
+  const queue = [''];
+  while (queue.length && walked < MAX_WALK) {
+    const relDir = queue.shift();
+    const absDir = path.join(resolvedRoot, relDir);
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const it of entries) {
+      if (walked >= MAX_WALK) break;
+      walked++;
+      const rel = relDir ? relDir + '/' + it.name : it.name;
+      if (it.isDirectory()) {
+        if (relDir !== '' && shouldSkipDir(it.name)) continue;
+        queue.push(rel);
+      } else if (it.isFile() && normalizeQuotes(it.name) === wanted) {
+        return path.join(absDir, it.name);
+      }
+    }
+  }
+  return null;
 }
 
 /** 常见编程语言检测（按扩展名 + 文件名）。 */
@@ -104,4 +161,4 @@ function globToRegExp(glob) {
   return new RegExp('^' + re + '$');
 }
 
-module.exports = { resolveInRoot, detectLanguage, readTextFile, globToRegExp };
+module.exports = { resolveInRoot, resolveFileFuzzy, normalizeQuotes, detectLanguage, readTextFile, globToRegExp };

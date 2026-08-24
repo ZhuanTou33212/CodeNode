@@ -74,7 +74,7 @@ function register(registry) {
       const root = rawPath ? path.resolve(rawPath) : path.resolve(context.projectRoot());
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('项目目录不存在: ' + root);
       const analyzeFiles = args.analyzeFiles !== false;
-      const limit = typeof args.limitFiles === 'number' && Number.isFinite(args.limitFiles) ? Math.max(1, Math.min(1000, Math.floor(args.limitFiles))) : 200;
+      const limit = typeof args.limitFiles === 'number' && Number.isFinite(args.limitFiles) ? Math.max(1, Math.min(1000, Math.floor(args.limitFiles))) : 1000;
       context.audit('analyze_project root=' + root);
       try {
         const info = detectProjectInfo(root);

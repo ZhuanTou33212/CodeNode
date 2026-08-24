@@ -13,6 +13,35 @@ const ALLOWED = new Set([
   'go', 'python', 'python3', 'py', 'node', 'npm', 'npx', 'nuget', 'cmd', 'powershell', 'pwsh',
 ]);
 
+/** 兼容解码子进程输出：UTF-8 优先，含乱码则按 GBK 解码，UTF-16LE（PowerShell）按 BOM/字节特征识别 */
+function decodeOutput(buf) {
+  if (!buf || buf.length === 0) return '';
+  // UTF-16LE BOM
+  if (buf[0] === 0xff && buf[1] === 0xfe) {
+    try {
+      return new TextDecoder('utf-16le').decode(buf.subarray(2)).replace(/\u0000/g, '');
+    } catch {}
+  }
+  // 无 BOM 但高度疑似 UTF-16LE：偶数长度且奇数位多为 0
+  if (buf.length >= 4 && buf.length % 2 === 0) {
+    let zeroOdd = 0;
+    for (let i = 1; i < Math.min(buf.length, 64); i += 2) if (buf[i] === 0) zeroOdd++;
+    if (zeroOdd >= 12) {
+      try {
+        return new TextDecoder('utf-16le').decode(buf).replace(/\u0000/g, '');
+      } catch {}
+    }
+  }
+  try {
+    const utf8 = buf.toString('utf8');
+    if (!utf8.includes('\uFFFD')) return utf8;
+  } catch {}
+  try {
+    return new TextDecoder('gbk').decode(buf);
+  } catch {}
+  return buf.toString('utf8');
+}
+
 function splitCommand(command) {
   const tokens = [];
   let current = '';
@@ -60,6 +89,20 @@ function isDestructiveCommand(tokens) {
   return false;
 }
 
+/** 调整参数：让 PowerShell 输出 UTF-8，避免 UTF-16LE 乱码；其余原样 */
+function prepareArgs(base, tokens) {
+  const args = tokens.slice(1);
+  if (base === 'powershell' || base === 'pwsh') {
+    const ci = args.findIndex((a) => /^-command$/i.test(a));
+    if (ci >= 0 && args[ci + 1] != null) {
+      args[ci + 1] = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' + args[ci + 1];
+    } else {
+      args.unshift('-NoProfile', '-Command', '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' + tokens.slice(1).join(' '));
+    }
+  }
+  return args;
+}
+
 function register(registry) {
   registry.register(
     'execute_shell',
@@ -99,16 +142,17 @@ function register(registry) {
         let output = '';
         let child;
         try {
-          child = spawn(tokens[0], tokens.slice(1), { cwd: root, shell: false, windowsHide: true });
+          const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+          child = spawn(tokens[0], prepareArgs(normalized, tokens), { cwd: root, shell: false, windowsHide: true, env });
         } catch (e) {
           resolve(AgentToolResult.error('执行失败：' + ((e && e.message) || e)));
           return;
         }
         child.stdout.on('data', (d) => {
-          output += d.toString('utf-8');
+          output += decodeOutput(d);
         });
         child.stderr.on('data', (d) => {
-          output += d.toString('utf-8');
+          output += decodeOutput(d);
         });
         const timer = setTimeout(() => {
           try {
