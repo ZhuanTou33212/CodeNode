@@ -13,7 +13,23 @@ soul_file=config/soul.md
 # 可用工具：get_workbench_model / create_nodes / workbench_edit / workbench_connect / workbench_structure /
 #           scan_project / analyze_project / project_info / read_file / write_file / edit_file /
 #           find_files / search_files / list_directory / execute_shell / code_review / ask_user /
-#           fetch_url / save_project / bulk_edit / ui_control / write_analysis_md
-# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,create_nodes,workbench_edit,workbench_connect,workbench_structure,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md
+#           fetch_url / save_project / bulk_edit / ui_control / write_analysis_md / retrieve_context
+# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,create_nodes,workbench_edit,workbench_connect,workbench_structure,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md,retrieve_context
 # 黑名单：禁用某些工具（逗号分隔）
 # tools.deny=execute_shell,bulk_edit
+
+# ---------- Agentic RAG（本地、按需、增量） ----------
+# Agent 通过 retrieve_context 自主检索项目源码/文档；不上传索引，不需要向量数据库。
+# rag.enabled=true
+# rag.max_files=5000
+# rag.max_file_bytes=524288
+# rag.chunk_lines=72
+# rag.chunk_overlap=12
+# rag.top_k=6
+# rag.max_context_chars=12000
+# rag.max_queries=5
+# rag.min_coverage=0.20
+# 可选收录/排除 glob（逗号分隔）；敏感文件无论配置如何都不会收录
+# rag.include=src/**,docs/**,README*
+# rag.exclude=**/*.generated.*,fixtures/**
+# 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索

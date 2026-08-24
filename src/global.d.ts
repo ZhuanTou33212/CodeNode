@@ -84,7 +84,13 @@ interface CodenodeApi {
   loadProject: (target: string) => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   agentConfig: (
     root: string | null
-  ) => Promise<{ configured: boolean; model: string; soul: { name: string; greeting: string; style: string; raw: string }; toolsEnabled: boolean }>;
+  ) => Promise<{
+    configured: boolean;
+    model: string;
+    soul: { name: string; greeting: string; style: string; raw: string };
+    toolsEnabled: boolean;
+    ragEnabled: boolean;
+  }>;
   agentGreeting: (
     root: string | null
   ) => Promise<{ greeting: string; name: string; configured: boolean }>;
@@ -106,6 +112,14 @@ interface CodenodeApi {
     reasoning?: string;
     toolCalls?: ToolRecordDto[];
     usage?: unknown;
+    grounding?: {
+      status: 'not_required' | 'valid' | 'missing' | 'invalid';
+      valid: boolean;
+      required: boolean;
+      allowed: string[];
+      used: string[];
+      invalid: string[];
+    };
     error?: string;
     document?: { root?: unknown; groups?: Record<string, unknown>; viewStack?: unknown[] };
   }>;

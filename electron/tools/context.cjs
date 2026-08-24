@@ -12,6 +12,7 @@
  *   ui(action, args) → Promise<boolean>              界面操控
  *   conversationHistory() → Array                    会话历史
  *   notifyFileChange(rel, kind, detail)              文件变更通知
+ *   ragConfig() → object                              本地 RAG 配置
  */
 'use strict';
 
@@ -30,6 +31,7 @@ class AgentToolContext {
     this.uiAction = o.ui || null;
     this.conversationSupplier = o.conversationHistory || null;
     this.fileChangeNotifier = o.notifyFileChange || null;
+    this.ragConfigValue = o.ragConfig || {};
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
   }
@@ -110,6 +112,10 @@ class AgentToolContext {
         this.fileChangeNotifier(relative, kind, detail);
       } catch {}
     }
+  }
+
+  ragConfig() {
+    return this.ragConfigValue || {};
   }
 
   async undo() {
