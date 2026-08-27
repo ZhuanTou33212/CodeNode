@@ -1,5 +1,6 @@
-﻿const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const fsp = require('fs').promises;
 
 // Windows 控制台切换为 UTF-8，避免终端面板打印中文乱码
@@ -9,15 +10,58 @@ if (process.platform === 'win32') {
   } catch {}
 }
 
+/**
+ * 控制台日志面板：把主进程的 console.log/info/warn/error 同时写入
+ * <exe 目录>/logs/console.log。打包后的便携版 exe 没有附着控制台，配合
+ * “CodeNode 控制台.cmd”启动器（桌面快捷方式指向它）即可在独立的 cmd 面板实时查看日志。
+ */
+function setupConsoleLog() {
+  try {
+    const dir = path.join(path.dirname(process.execPath), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'console.log');
+    const stamp = () => '[' + new Date().toISOString() + '] ';
+    const toStr = (a) => {
+      if (typeof a === 'string') return a;
+      if (a instanceof Error) return String(a && a.stack ? a.stack : a);
+      try {
+        return JSON.stringify(a);
+      } catch {
+        return String(a);
+      }
+    };
+    const write = (args) => {
+      try {
+        fs.appendFileSync(file, stamp() + args.map(toStr).join(' ') + '\n', 'utf-8');
+      } catch {}
+    };
+    const hook = (original) =>
+      function (...args) {
+        write(args);
+        if (original) original.apply(console, args);
+      };
+    console.log = hook(console.log);
+    console.info = hook(console.info);
+    console.warn = hook(console.warn);
+    console.error = hook(console.error);
+  } catch {}
+}
+setupConsoleLog();
+
 const cnode = require('./cnode.cjs');
 const agent = require('./agent.cjs');
 const ragIndex = require('./rag/index.cjs');
 const toolkit = require('./tools/toolkit.cjs');
+const modelStore = require('./modelStore.cjs');
 const { GraphModel } = require('./tools/GraphModel.cjs');
 const { AgentToolContext } = require('./tools/context.cjs');
 const { makeBridge } = require('./tools/bridge.cjs');
+const { getScalarStore } = require('./scalars/index.cjs');
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+
+/** 正在运行的 Agent 请求：requestId → AbortController（用于「停止思考」） */
+const activeRequests = new Map();
 
 const IGNORE_DIRS = new Set([
   'node_modules',
@@ -112,35 +156,33 @@ function createWindow() {
                 { id:'n2', type:'task', position:{x:200,y:0}, data:{label:'任务',status:'pending'} },
                 { id:'n3', type:'end', position:{x:400,y:0}, data:{label:'结束',status:'pending'} }
               ], [ { id:'e1', source:'n1', target:'n2' }, { id:'e2', source:'n2', target:'n3' } ]);
-              g.makeGroup(['n2']);
-              await new Promise((r)=>setTimeout(r,400));
+              g.layoutNodes();
+              await new Promise((r)=>setTimeout(r,200));
               const s = st.getState();
-              const grp = s.root.nodes.find(n=>n.type==='group');
-              const sub = s.groups[grp ? grp.id : ''];
+              const xs = s.nodes.map(n=>Math.round(n.position.x)).sort((a,b)=>a-b);
+              const ys = s.nodes.map(n=>Math.round(n.position.y));
+              const rows = new Set(ys).size;
               return {
-                viewStack: s.viewStack.length,
-                groupSockets: grp ? grp.data.sockets : null,
-                inView: s.nodes.map(n=>n.type).sort().join(','),
-                subTypes: sub ? sub.nodes.map(n=>n.type).sort().join(',') : null,
-                handleCount: document.querySelectorAll('.react-flow__handle').length
+                nodeCount: s.nodes.length,
+                singleRow: rows === 1,
+                ascending: xs.every((v,i)=>i===0||v>xs[i-1]),
+                groupNodes: s.nodes.filter(n=>n.type==='group').length
               };
             })();
-            out.group = gres;
-          } catch(e){ out.group = 'THREW:'+e.message; }
+            out.layout = gres;
+          } catch(e){ out.layout = 'THREW:'+e.message; }
           try {
             const persist = await (async()=>{
               const st = window.__codenodeStore;
               const d = st.getState().getDocument();
               const save = await window.codenode.saveProject('E:\\\\codenode_nw\\\\logs\\\\testproj2\\\\g.cnode', {
-                graph: d.root,
-                canvases: { groups: d.groups, viewStack: d.viewStack }
+                graph: d,
               });
               const load = await window.codenode.loadProject('E:\\\\codenode_nw\\\\logs\\\\testproj2\\\\g.cnode');
               return {
                 saved: save.ok,
                 loaded: load.ok,
-                viewStack: load.data && load.data.canvases && load.data.canvases.viewStack,
-                groupIds: load.data && load.data.canvases && Object.keys(load.data.canvases.groups || {})
+                nodes: load.data && load.data.graph && load.data.graph.nodes && load.data.graph.nodes.length
               };
             })();
             out.persist = persist;
@@ -159,18 +201,16 @@ function createWindow() {
               const st = window.__codenodeStore;
               const g = st.getState();
               g.clear();
-              g.addNode({ id:'agent-t', type:'agent', position:{x:120,y:120}, data:{ label:'Agent', name:'', content:'', status:'pending', accent:'#22c55e', greeted:false, width:360 } });
-              await new Promise((r)=>setTimeout(r,700));
+              g.addNode({ id:'scope-t', type:'scope', position:{x:120,y:120}, data:{ label:'范围', status:'pending', width:320, height:220, childIds:[] } });
+              g.addNode({ id:'task-t', type:'task', position:{x:180,y:180}, data:{ label:'任务', status:'pending' } });
+              g.addToScope('task-t', 'scope-t');
+              await new Promise((r)=>setTimeout(r,200));
               const s = st.getState();
-              const agents = s.nodes.filter((n)=>n.type==='agent').length;
-              const users = s.nodes.filter((n)=>n.type==='user').length;
-              const ag = s.nodes.find((n)=>n.type==='agent');
-              const u = s.nodes.find((n)=>n.type==='user');
+              const scope = s.nodes.find((n)=>n.type==='scope');
               return {
-                agents, users,
-                greeting: ag ? (ag.data && ag.data.content) : null,
-                name: ag ? (ag.data && ag.data.name) : null,
-                userBelow: u && ag ? (u.position.y > ag.position.y) : false
+                scopes: s.nodes.filter((n)=>n.type==='scope').length,
+                tasks: s.nodes.filter((n)=>n.type==='task').length,
+                memberCount: scope && scope.data && scope.data.childIds ? scope.data.childIds.length : 0
               };
             })();
             out.chatwindow = cw;
@@ -180,52 +220,23 @@ function createWindow() {
               const st = window.__codenodeStore;
               const g = st.getState();
               g.clear();
-              g.addNode({ id:'a1', type:'agent', position:{x:100,y:100}, data:{label:'Agent',name:'CodeNode',content:'你好',status:'done',greeted:true,width:360,reasoning:'思考过程',tools:[{name:'read_file',args:{path:'x'}}]} });
-              g.addNode({ id:'u1', type:'user', position:{x:100,y:340}, data:{label:'用户',content:'',status:'pending',width:360,height:220} });
+              g.addNode({ id:'t1', type:'task', position:{x:100,y:100}, data:{label:'任务',status:'done'} });
+              g.addNode({ id:'s1', type:'scope', position:{x:100,y:340}, data:{label:'范围',status:'pending',width:320,height:220,childIds:['t1']} });
               const doc = st.getState().getDocument();
-              const payload = { graph: doc.root, canvases: { groups: doc.groups, viewStack: doc.viewStack }, workspace:{viewport:{x:0,y:0,zoom:1}}, manifest: {} };
+              const payload = { graph: doc, workspace:{viewport:{x:0,y:0,zoom:1}}, manifest: {} };
               const s = await window.codenode.saveProject('E:\\\\codenode_nw\\\\logs\\\\testproj3\\\\s.cnode', payload);
               const l = await window.codenode.loadProject('E:\\\\codenode_nw\\\\logs\\\\testproj3\\\\s.cnode');
               const nodes = (l.data && l.data.graph && l.data.graph.nodes) || [];
-              const ag = nodes.find((n)=>n.type==='agent');
+              const scopeNode = nodes.find((n)=>n.type==='scope');
               return {
                 saved: s.ok, loaded: l.ok, saveErr: s.error,
                 types: nodes.map((n)=>n.type).sort().join(','),
-                agentContent: ag ? (ag.data && ag.data.content) : null,
-                agentTools: ag && ag.data && ag.data.tools ? ag.data.tools.length : 0
+                taskCount: nodes.filter((n)=>n.type==='task').length,
+                scopeMembers: scopeNode && scopeNode.data && scopeNode.data.childIds ? scopeNode.data.childIds.join(',') : ''
               };
             })();
             out.savechat = sc;
           } catch(e){ out.savechat = 'THREW:'+e.message; }
-          try {
-            const mg = await (async()=>{
-              const st = window.__codenodeStore;
-              const g = st.getState();
-              g.load([
-                { id:'a', type:'task', position:{x:50,y:50}, data:{label:'A',status:'pending'} },
-                { id:'b', type:'task', position:{x:250,y:50}, data:{label:'B',status:'pending'} },
-                { id:'c', type:'task', position:{x:450,y:50}, data:{label:'C',status:'pending'} }
-              ], []);
-              g.setSelectedIds(['a','b']);
-              g.makeGroup();
-              await new Promise((r)=>setTimeout(r,300));
-              const s = st.getState();
-              const grp = s.root.nodes.find((n)=>n.type==='group');
-              const sub = s.groups[grp ? grp.id : ''];
-              const tasks = sub ? sub.nodes.filter((n)=>n.type==='task').length : 0;
-              const zc = await (async()=>{
-                const st2 = window.__codenodeStore;
-                st2.getState().exitGroup();
-                st2.getState().clear();
-                st2.getState().addNode({ id:'u9', type:'user', position:{x:0,y:0}, data:{label:'用户',content:'',width:380,height:220} });
-                st2.getState().addNode({ id:'t9', type:'task', position:{x:100,y:100}, data:{label:'T',status:'pending'} });
-                const s2 = st2.getState();
-                return { userZ: s2.nodes.find((n)=>n.id==='u9').zIndex, taskZ: s2.nodes.find((n)=>n.id==='t9').zIndex };
-              })();
-              return { viewStack: s.viewStack.length, groupExists: !!grp, subTasks: tasks, z: zc };
-            })();
-            out.multigroup = mg;
-          } catch(e){ out.multigroup = 'THREW:'+e.message; }
           try {
             const sv = await (async()=>{
               const st = window.__codenodeStore;
@@ -237,8 +248,7 @@ function createWindow() {
               // 模拟 projectActions.buildPayload()
               const doc = st.getState().getDocument();
               const payload = {
-                graph: doc.root,
-                canvases: { groups: doc.groups, viewStack: doc.viewStack },
+                graph: doc,
                 workspace: { viewport: { x: 5, y: 6, zoom: 1 } },
                 manifest: { name: '保存链路测试', documentId: 'save-test-doc' }
               };
@@ -247,23 +257,10 @@ function createWindow() {
               const sDir = await window.codenode.saveProject(dir, payload);
               const sFile = await window.codenode.saveProject(file, payload);
               const lFile = await window.codenode.loadProject(file);
-              // 组内画布保存/读取
-              g.makeGroup(['t1','t2']);
-              const doc2 = st.getState().getDocument();
-              const payload2 = {
-                graph: doc2.root,
-                canvases: { groups: doc2.groups, viewStack: doc2.viewStack },
-                workspace: { viewport: { x: 0, y: 0, zoom: 1 } },
-                manifest: {}
-              };
-              const sGrp = await window.codenode.saveProject(file, payload2);
-              const lGrp = await window.codenode.loadProject(file);
               return {
                 sDir: { ok: sDir.ok, filePath: sDir.filePath, err: sDir.error },
                 sFile: { ok: sFile.ok, filePath: sFile.filePath, err: sFile.error },
-                lFile: { ok: lFile.ok, nodes: lFile.data && lFile.data.graph && lFile.data.graph.nodes && lFile.data.graph.nodes.length, edges: lFile.data && lFile.data.graph && lFile.data.graph.edges && lFile.data.graph.edges.length, warn: lFile.data && lFile.data.warnings, err: lFile.error },
-                sGrp: { ok: sGrp.ok, err: sGrp.error },
-                lGrp: { ok: lGrp.ok, viewStack: lGrp.data && lGrp.data.canvases && lGrp.data.canvases.viewStack, groupIds: lGrp.data && lGrp.data.canvases && Object.keys(lGrp.data.canvases.groups||{}) }
+                lFile: { ok: lFile.ok, nodes: lFile.data && lFile.data.graph && lFile.data.graph.nodes && lFile.data.graph.nodes.length, edges: lFile.data && lFile.data.graph && lFile.data.graph.edges && lFile.data.graph.edges.length, warn: lFile.data && lFile.data.warnings, err: lFile.error }
               };
             })();
             out.savetest = sv;
@@ -300,12 +297,12 @@ function createWindow() {
               const sessions = ss.order.map((id)=>ss.sessions[id]).filter(Boolean).map((s)=>({
                 id: s.id, label: s.label, prompt: s.prompt, status: s.status,
                 createdAt: s.createdAt, nodeCount: s.nodeCount, summary: s.summary || '',
-                root: s.doc.root, groups: s.doc.groups, viewStack: s.doc.viewStack
+                root: s.doc.root
               }));
               const file = 'E:\\\\codenode_nw\\\\logs\\\\tooltest\\\\savedir\\\\sessions.cnode';
               const payload = {
                 graph: active ? active.doc.root : { nodes: [], edges: [] },
-                canvases: { groups: active ? active.doc.groups : {}, viewStack: active ? active.doc.viewStack : [], sessions, messages: ss.messages },
+                canvases: { sessions, messages: ss.messages },
                 workspace: { viewport: { x:0, y:0, zoom:1 } },
                 manifest: { name: '会话持久化测试' }
               };
@@ -366,8 +363,7 @@ function createWindow() {
                   id: sd.id || ('c'+i), label: sd.label || ('画布'+(i+1)), prompt: sd.prompt || '',
                   status: (sd.status==='active'||sd.status==='completed') ? sd.status : 'active',
                   createdAt: sd.createdAt||0, nodeCount: sd.nodeCount||0, summary: sd.summary||'',
-                  doc: { root: { nodes: sd.root ? sd.root.nodes : [], edges: sd.root ? sd.root.edges : [] },
-                         groups: sd.groups || {}, viewStack: sd.viewStack || [] }
+                  doc: { root: { nodes: sd.root ? sd.root.nodes : [], edges: sd.root ? sd.root.edges : [] } }
                 }));
                 ss.restoreSessions(list, (l.data.canvases.messages)||[], undefined);
               }
@@ -442,12 +438,11 @@ function createWindow() {
               graph.layoutNodes();
               await new Promise((r)=>setTimeout(r,150));
               const nodes = window.__codenodeStore.getState().nodes;
-              const xs = nodes.map(n=>Math.round(n.position.x));
+              const xs = nodes.map(n=>Math.round(n.position.x)).sort((a,b)=>a-b);
               const ys = nodes.map(n=>Math.round(n.position.y));
               const rows = new Set(ys).size;
-              const firstRowXs = nodes.filter(n=>Math.round(n.position.y)===ys[0]).map(n=>Math.round(n.position.x)).sort((a,b)=>a-b);
-              const ascending = firstRowXs.every((v,i)=>i===0||v>firstRowXs[i-1]);
-              return { count: nodes.length, rowCount: rows, firstRowXAscending: ascending };
+              const ascending = xs.every((v,i)=>i===0||v>xs[i-1]);
+              return { count: nodes.length, rowCount: rows, firstRowXAscending: ascending, singleLine: rows === 1 };
             })();
             out.layoutwrap = lw;
           } catch(e){ out.layoutwrap = 'THREW:'+e.message; }
@@ -612,7 +607,6 @@ function auditLog(projectRoot, entry) {
 function saveDoc(projectRoot, projectFile, model) {
   const doc = model ? model.doc : null;
   const graph = (doc && doc.root) || { nodes: [], edges: [] };
-  const canvases = doc ? { groups: doc.groups || {}, viewStack: doc.viewStack || [] } : undefined;
   const filePath = projectFile
     ? path.resolve(projectFile)
     : path.join(path.resolve(projectRoot || '.'), 'workflow.cnode');
@@ -621,7 +615,6 @@ function saveDoc(projectRoot, projectFile, model) {
     filePath,
     cnode.encodeCnode({
       graph,
-      canvases,
       workspace: {},
       manifest: {},
     })
@@ -632,13 +625,53 @@ function saveDoc(projectRoot, projectFile, model) {
 ipcMain.handle('agent:config', async (_event, projectRoot) => {
   const cfg = agent.loadConfig(projectRoot);
   const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
+  const store = modelStore.getModels(app.getPath('userData'), cfg);
   return {
     configured: !!cfg.apiKey,
     model: cfg.model,
     soul,
     toolsEnabled: cfg.tools.toolsEnabled,
     ragEnabled: cfg.rag.enabled,
+    models: store.models,
+    activeModelId: store.activeId,
   };
+});
+
+// ---- 多模型接入管理（models.json，userData） ----
+ipcMain.handle('models:list', async (_event) => {
+  const cfg = agent.loadConfig(null);
+  const store = modelStore.getModels(app.getPath('userData'), cfg);
+  return { models: store.models, activeId: store.activeId };
+});
+
+ipcMain.handle('models:save', async (_event, model) => {
+  if (!model || !model.id) return { ok: false, error: '缺少模型 id' };
+  const cfg = agent.loadConfig(null);
+  const userDataDir = app.getPath('userData');
+  const store = modelStore.getModels(userDataDir, cfg);
+  const models = store.models.filter((m) => m.id !== model.id);
+  models.push(model);
+  modelStore.writeModels(userDataDir, models, store.activeId || model.id);
+  return { ok: true, models, activeId: store.activeId || model.id };
+});
+
+ipcMain.handle('models:delete', async (_event, id) => {
+  const cfg = agent.loadConfig(null);
+  const userDataDir = app.getPath('userData');
+  const store = modelStore.getModels(userDataDir, cfg);
+  const models = store.models.filter((m) => m.id !== id);
+  const activeId = store.activeId === id ? (models[0] ? models[0].id : null) : store.activeId;
+  modelStore.writeModels(userDataDir, models, activeId);
+  return { ok: true, models, activeId };
+});
+
+ipcMain.handle('models:active', async (_event, id) => {
+  const cfg = agent.loadConfig(null);
+  const userDataDir = app.getPath('userData');
+  const store = modelStore.getModels(userDataDir, cfg);
+  if (!store.models.some((m) => m.id === id)) return { ok: false, error: '模型不存在' };
+  modelStore.writeModels(userDataDir, store.models, id);
+  return { ok: true, activeId: id };
 });
 
 ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
@@ -661,15 +694,26 @@ ipcMain.handle('agent:tools', async (_event, projectRoot) => {
 });
 
 ipcMain.handle('agent:chat', async (event, payload) => {
-  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile } = payload || {};
+  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
   const sender = event.sender;
   const sendDelta = (d) => {
     if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
   };
   try {
     const cfg = agent.loadConfig(projectRoot);
+    // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
+    const baseCfg = agent.loadConfig(null);
+    const sel = modelId ? modelStore.findModel(app.getPath('userData'), baseCfg, modelId) : null;
+    if (sel) {
+      if (sel.apiBase) cfg.apiBase = sel.apiBase;
+      if (sel.apiKey) cfg.apiKey = sel.apiKey;
+      if (sel.model) cfg.model = sel.model;
+    } else if (reqModel) {
+      cfg.model = reqModel;
+    }
+    if (reqEffort) cfg.reasoningEffort = reqEffort;
     if (!cfg.apiKey) {
-      return { ok: false, error: '未配置 API Key（config/agent.properties）' };
+      return { ok: false, error: '未配置 API Key（模型管理中填写或 config/agent.properties）' };
     }
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
 
@@ -699,11 +743,13 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (registry && registry.listTools().length > 0) {
         bridge = makeBridge(sender);
         model = new GraphModel(document || undefined);
+        const scalarStore = cfg.scalars && cfg.scalars.enabled !== false && projectRoot ? getScalarStore(projectRoot) : null;
         const undoStack = [];
         const redoStack = [];
         const context = new AgentToolContext({
           projectRoot,
           model,
+          scalarStore,
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),
@@ -746,12 +792,16 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     }
 
     sendDelta({ kind: 'start' });
+    const controller = new AbortController();
+    if (requestId) activeRequests.set(requestId, controller);
     const result = await agent.runAgentChat({
       cfg,
       messages,
       onDelta: sendDelta,
       tools,
+      signal: controller.signal,
     });
+    if (requestId) activeRequests.delete(requestId);
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),
       role: 'assistant',
@@ -770,6 +820,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       usage: result.usage,
       grounding: result.grounding,
     };
+    if (result.aborted) out.aborted = true;
     if (result.error) out.error = result.error;
     if (dirty && model) out.document = model.doc;
     if (bridge) bridge.cleanup();
@@ -778,6 +829,12 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     sendDelta({ kind: 'error', error: String((e && e.message) || e) });
     return { ok: false, error: String((e && e.message) || e) };
   }
+});
+
+ipcMain.handle('agent:stop', (_event, requestId) => {
+  const controller = requestId ? activeRequests.get(requestId) : null;
+  if (controller) controller.abort();
+  return { ok: true };
 });
 
 app.whenReady().then(() => {

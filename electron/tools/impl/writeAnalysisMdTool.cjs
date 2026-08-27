@@ -9,6 +9,7 @@ const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot } = require('./shared.cjs');
+const { nodeToScalarRecords } = require('../../scalars/index.cjs');
 
 function stringArg(args, key, fallback) {
   const v = args[key];
@@ -90,8 +91,11 @@ function register(registry) {
         nodeId = node.id;
       });
       if (!nodeId) return AgentToolResult.error('没有创建分析节点（工作台不可用）');
+      const model = context.model();
+      const node = model ? model.byId(nodeId) : null;
+      const stored = node ? context.storeScalars(nodeToScalarRecords(node)) : 0;
       context.audit('write_analysis_md name=' + name + ' path=' + relativePath + ' chars=' + content.length);
-      return AgentToolResult.ok('已写入分析节点 ' + name + '（' + content.length + ' 字符）→ ' + nodeId, {
+      return AgentToolResult.ok('已写入分析节点 ' + name + '（' + content.length + ' 字符）→ ' + nodeId + (stored > 0 ? '（属性已入本地标量库）' : ''), {
         nodeId,
         name,
         relativePath,

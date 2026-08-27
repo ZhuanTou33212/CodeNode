@@ -161,4 +161,30 @@ function globToRegExp(glob) {
   return new RegExp('^' + re + '$');
 }
 
-module.exports = { resolveInRoot, resolveFileFuzzy, normalizeQuotes, detectLanguage, readTextFile, globToRegExp };
+/** 节点类型 → 主色（与前端 NODE_TEMPLATES / WorkflowNode 保持一致，按类型判定而非外观） */
+const NODE_TYPE_ACCENT = {
+  start: '#22c55e',
+  end: '#ef4444',
+  task: '#3b82f6',
+  stage: '#8b5cf6',
+  tool: '#f59e0b',
+  file: '#f97316',
+  scope: '#8b5cf6',
+  object: '#06b6d4',
+};
+
+/** 按类型取节点主色，未知类型回退默认蓝。 */
+function accentForType(type) {
+  return NODE_TYPE_ACCENT[String(type || '')] || '#3b82f6';
+}
+
+module.exports = {
+  resolveInRoot,
+  resolveFileFuzzy,
+  normalizeQuotes,
+  detectLanguage,
+  readTextFile,
+  globToRegExp,
+  NODE_TYPE_ACCENT,
+  accentForType,
+};

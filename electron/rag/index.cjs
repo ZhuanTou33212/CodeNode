@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { shouldSkipDir, isBinaryFileName } = require('../tools/toolFiles.cjs');
 const { globToRegExp } = require('../tools/impl/shared.cjs');
+const { createEmbedder, cosine } = require('../embedder/index.cjs');
 
 const DEFAULTS = Object.freeze({
   enabled: true,
@@ -26,6 +27,13 @@ const DEFAULTS = Object.freeze({
   minCoverage: 0.2,
   include: [],
   exclude: [],
+  embedProvider: 'local',
+  embedDim: 4096,
+  embedModel: '',
+  embedBase: '',
+  embedKey: '',
+  embedTopK: 40,
+  vectorWeight: 0.35,
 });
 
 const EXTRA_IGNORED_DIRS = new Set([
@@ -106,6 +114,13 @@ function normalizeOptions(options) {
     minCoverage: clampNumber(o.minCoverage, DEFAULTS.minCoverage, 0.05, 1),
     include: normalizePatterns(o.include),
     exclude: normalizePatterns(o.exclude),
+    embedProvider: String(o.embedProvider || DEFAULTS.embedProvider).toLowerCase().trim(),
+    embedDim: clampInteger(o.embedDim, DEFAULTS.embedDim, 256, 8192),
+    embedModel: String(o.embedModel || '').trim(),
+    embedBase: String(o.embedBase || '').trim(),
+    embedKey: String(o.embedKey || '').trim(),
+    embedTopK: clampInteger(o.embedTopK, DEFAULTS.embedTopK, 5, 500),
+    vectorWeight: clampNumber(o.vectorWeight, DEFAULTS.vectorWeight, 0, 1),
   };
 }
 
@@ -319,7 +334,56 @@ class LocalRagIndex {
     this.forceRefresh = false;
     this.chunks = [];
     this.lastRefresh = null;
+    this.embedder = null;
+    this.chunkVectors = new Map();
     this.stats = { indexedFiles: 0, chunks: 0, skippedFiles: 0, changedFiles: 0, removedFiles: 0, invalidatedFiles: 0, truncated: false };
+  }
+
+  ensureEmbedder() {
+    if (this.embedder) return this.embedder;
+    const provider = (this.options.embedProvider || 'none').toLowerCase();
+    if (provider === 'none') {
+      this.embedder = null;
+      return null;
+    }
+    this.embedder = createEmbedder(this.options);
+    return this.embedder;
+  }
+
+  async chunkVector(chunk) {
+    let vec = this.chunkVectors.get(chunk.id);
+    if (!vec) {
+      const emb = this.ensureEmbedder();
+      if (!emb) return null;
+      const [computed] = await emb.embed([chunk.path + '\n' + chunk.content]);
+      if (!computed) return null;
+      this.chunkVectors.set(chunk.id, computed);
+      vec = computed;
+    }
+    return vec;
+  }
+
+  /** 查询向量 vs 候选块向量的余弦相似度。local 提供方按块记忆化；API 提供方批量一次请求。 */
+  async vectorScores(query, candidates) {
+    const emb = this.ensureEmbedder();
+    if (!emb || !candidates.length) return new Map();
+    const out = new Map();
+    if (emb.isLocal()) {
+      const [queryVec] = await emb.embed([query]);
+      if (!queryVec) return out;
+      for (const chunk of candidates) {
+        const vec = await this.chunkVector(chunk);
+        if (vec) out.set(chunk.id, Math.max(0, cosine(queryVec, vec)));
+      }
+    } else {
+      const vectors = await emb.embed([query, ...candidates.map((chunk) => chunk.path + '\n' + chunk.content)]);
+      const queryVec = vectors[0];
+      for (let i = 0; i < candidates.length; i++) {
+        const vec = vectors[i + 1];
+        if (queryVec && vec) out.set(candidates[i].id, Math.max(0, cosine(queryVec, vec)));
+      }
+    }
+    return out;
   }
 
   accepts(relative, size) {
@@ -470,10 +534,11 @@ class LocalRagIndex {
     return { query, terms, ranked };
   }
 
-  retrieve(query, options) {
+  async retrieve(query, options) {
     const opts = options || {};
     const started = Date.now();
     const stats = this.refresh(opts.refresh === true);
+    const mode = String(opts.mode || 'auto').toLowerCase();
     const queries = normalizeQueries(query, opts.queries, this.options.maxQueries);
     if (!queries.length || this.chunks.length === 0) {
       return { query: String(query || '').trim(), queries, results: [], quality: confidenceFor([], queries.map((item) => ({ query: item, ranked: [] })), this.options.minCoverage), stats };
@@ -513,8 +578,28 @@ class LocalRagIndex {
     });
 
     const ranked = [...fused.values()];
+    // 向量层：对 BM25 预筛的候选做语义余弦，按 mode 调节融合权重（local 默认本地哈希向量）
+    let vectorScoresMap = new Map();
+    const provider = (this.options.embedProvider || 'none').toLowerCase();
+    const vectorEnabled = provider !== 'none' && (mode === 'auto' || mode === 'hybrid' || mode === 'vector');
+    if (vectorEnabled) {
+      const topCandidates = ranked.slice(0, this.options.embedTopK).map((item) => item.chunk);
+      try {
+        vectorScoresMap = await this.vectorScores(queries[0], topCandidates);
+      } catch {
+        vectorScoresMap = new Map();
+      }
+    }
+    const vectorWeight =
+      mode === 'vector' ? 1 : mode === 'file' ? 0 : this.options.vectorWeight;
     for (const item of ranked) {
-      item.rankScore = item.fusion * 1000 + Math.min(item.score, 100) * 0.02 + item.coverage * 2 + (item.exactPhrase ? 1 : 0);
+      item.vectorScore = vectorScoresMap.get(item.chunk.id) || 0;
+      item.rankScore =
+        item.fusion * 1000 +
+        Math.min(item.score, 100) * 0.02 +
+        item.coverage * 2 +
+        (item.exactPhrase ? 1 : 0) +
+        item.vectorScore * 100 * vectorWeight;
     }
     ranked.sort((a, b) => b.rankScore - a.rankScore || b.score - a.score || a.chunk.path.localeCompare(b.chunk.path));
 
@@ -538,6 +623,7 @@ class LocalRagIndex {
         fusionScore: Number(item.rankScore.toFixed(4)),
         coverage: Number(item.coverage.toFixed(4)),
         exactPhrase: item.exactPhrase,
+        vectorScore: Number(item.vectorScore.toFixed(4)),
         matchedQueries: [...new Set(item.matchedQueries)],
         matchedTerms: [...item.matchedTerms].slice(0, 16),
         excerpt,
@@ -569,7 +655,11 @@ class LocalRagIndex {
         ...stats,
         candidateChunks: candidates.length,
         fusedCandidates: ranked.length,
-        retrievalDurationMs: Date.now() - started,
+        vector: {
+          provider: vectorEnabled ? this.options.embedProvider : 'none',
+          weight: vectorWeight,
+          rankedWithVector: vectorScoresMap.size,
+        },        retrievalDurationMs: Date.now() - started,
       },
     };
   }

@@ -14,24 +14,20 @@
  *   duplicate                 nodeId + offsetX/offsetY
  *   connect                   sourceId + targetId，或 connections=[{sourceId,targetId}] 批量
  *   disconnect                sourceId/targetId
- *   group                     nodeIds + name
- *   ungroup                   nodeId
- *   add_port / remove_port    nodeId + direction(input|output) [+ portId]
  */
 'use strict';
 
 const { AgentToolResult } = require('../result.cjs');
-
-const uid = (p) => `${p}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
-const eid = () => 'e' + Math.random().toString(36).slice(2, 10);
+const { nodeToScalarRecords } = require('../../scalars/index.cjs');
+const { accentForType } = require('./shared.cjs');
 
 const MAX_CREATE_COUNT = 50;
 
 const KIND_TO_TYPE = {
   regular: 'task', calculation: 'task', condition: 'task', capture: 'task',
-  bundle: 'group', asset: 'file', group: 'group', file: 'file', task: 'task',
-  stage: 'stage', tool: 'tool', start: 'start', end: 'end', agent: 'agent',
-  user: 'user', scope: 'scope',
+  asset: 'file', file: 'file', task: 'task',
+  stage: 'stage', tool: 'tool', start: 'start', end: 'end', scope: 'scope',
+  object: 'object',
 };
 
 const STATUS_ALLOWED = ['pending', 'running', 'done', 'failed', 'blocked'];
@@ -67,19 +63,36 @@ function opCreate(model, args, ctx, errors, created) {
   const type = KIND_TO_TYPE[kind] || 'task';
   const relativePath = stringArg(args, 'relativePath', '');
   const connect = args.connect === true;
-  const baseX = intArg(args, 'x', 120);
-  const baseY = intArg(args, 'y', 120);
+  const customId = stringArg(args, 'id', '');
+  const initialMembers = Array.isArray(args.members) ? args.members.map((m) => String(m).trim()).filter(Boolean) : [];
+  // 未显式给坐标时自动错位，避免所有节点堆在 (120,120)（重启后聚到画面中心）
+  let baseX = intArg(args, 'x', -1);
+  let baseY = intArg(args, 'y', -1);
+  if (baseX < 0) baseX = nextFreeX(model, 120);
+  if (baseY < 0) baseY = 120;
   const nodes = [];
   for (let i = 0; i < n; i++) {
     const nodeName = n === 1 ? baseName : baseName + (i + 1);
-    const data = { label: nodeName, status: 'pending', prompt };
+    const data = { label: nodeName, status: 'pending', prompt, accent: accentForType(type) };
     if (type === 'file') data.filePath = relativePath || nodeName;
-    if (type === 'group') data.accent = '#06b6d4';
+    if (type === 'object') data.objectName = stringArg(args, 'objectName', '') || nodeName;
     if (type === 'scope') {
       data.width = 320; data.height = 200; data.fill = '#3b2f6b';
       data.opacity = 0.16; data.accent = '#8b5cf6';
+      if (initialMembers.length) data.childIds = initialMembers.slice();
     }
-    const node = model.addNode(type, data, baseX, baseY + i * 110);
+    // 自定义 id：允许同一批次内用该 id 连线/把节点放进范围节点
+    const node = model.addNode(type, data, baseX, baseY + i * 110, n === 1 ? customId : '');
+    if (type === 'scope' && initialMembers.length) {
+      for (const m of initialMembers) {
+        const member = model.byId(m);
+        if (member) {
+          member.data = member.data || {};
+          member.data.parentId = node.id;
+          member.data.memberBadge = 'in:' + node.data.label;
+        }
+      }
+    }
     nodes.push(node);
     created.push(node.id);
   }
@@ -87,6 +100,16 @@ function opCreate(model, args, ctx, errors, created) {
     for (let i = 0; i + 1 < nodes.length; i++) model.connect(nodes[i], nodes[i + 1]);
   }
   void ctx;
+}
+
+/** 未指定 x 时：取画布中最大的节点右缘 + 间距，作为新节点落点，避免重叠/聚中心。 */
+function nextFreeX(model, fallback) {
+  let maxX = 0;
+  for (const n of model.nodes()) {
+    const w = (n.measured && n.measured.width) || (n.data && n.data.width) || 170;
+    maxX = Math.max(maxX, (n.position && n.position.x) + w);
+  }
+  return maxX > 0 ? Math.round(maxX + 80) : fallback;
 }
 
 function opRename(model, args, errors, affected) {
@@ -117,12 +140,97 @@ function opMove(model, args, errors, affected) {
 function opDelete(model, args, errors, affected) {
   const ids = nodeIdList(args);
   if (!ids.length) { errors.push('缺少要删除的 nodeId'); return; }
+  const idSet = new Set(ids);
   for (const id of ids) {
     const node = model.byId(id);
     if (!node) { errors.push('节点不存在: ' + id); continue; }
     model.removeNode(node);
+    // 同步清理父子对象集：从其他 scope childIds 移除，并让被删 scope 的子节点恢复顶层
+    for (const other of model.nodes()) {
+      if (other.data) {
+        const beforeChild = Array.isArray(other.data.childIds) ? other.data.childIds.length : 0;
+        if (Array.isArray(other.data.childIds)) {
+          other.data.childIds = other.data.childIds.filter((m) => !idSet.has(m));
+        }
+        if (other.data.parentId && idSet.has(other.data.parentId)) {
+          other.data.parentId = null;
+          other.data.memberBadge = null;
+        }
+        const afterChild = Array.isArray(other.data.childIds) ? other.data.childIds.length : 0;
+        if (beforeChild !== afterChild) affected.push(other.id);
+      }
+    }
     affected.push(id);
   }
+}
+
+/** 提取 memberIds/members 参数为去重 id 列表。 */
+function memberIdList(args) {
+  const out = [];
+  const push = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const m of arr) {
+      const s = String(m || '').trim();
+      if (s && !out.includes(s)) out.push(s);
+    }
+  };
+  push(args.memberIds);
+  push(args.members);
+  return out;
+}
+
+/**
+ * 范围节点成员操作：set_members / add_members / remove_members。
+ * 用于把节点放进 scope（条件/循环子链路）或从中移出。
+ */
+function opMembers(model, args, errors, affected, mode) {
+  const node = model.byId(String(args.nodeId || ''));
+  if (!node) { errors.push('节点不存在: ' + (args.nodeId || '')); return; }
+  if (node.type !== 'scope') { errors.push('只有 scope（范围）节点能包含成员: ' + node.id); return; }
+  const ids = memberIdList(args);
+  if (!ids.length) { errors.push('缺少 memberIds（要放入/移出的节点 id 列表）'); return; }
+  const invalid = ids.filter((id) => !model.byId(id));
+  if (invalid.length) { errors.push('成员节点不存在: ' + invalid.join(',')); return; }
+  node.data = node.data || {};
+  const current = Array.isArray(node.data.childIds) ? node.data.childIds : [];
+  let next;
+  if (mode === 'set') next = [...ids];
+  else if (mode === 'add') next = [...new Set([...current, ...ids])];
+  else next = current.filter((m) => !ids.includes(m));
+  node.data.childIds = next;
+  // set 模式下，被移除的旧成员要清空父关系
+  if (mode === 'set') {
+    for (const oldId of current) {
+      if (ids.includes(oldId)) continue;
+      const oldMember = model.byId(oldId);
+      if (oldMember && oldMember.data && oldMember.data.parentId === node.id) {
+        oldMember.data.parentId = null;
+        oldMember.data.memberBadge = null;
+      }
+    }
+  }
+  // 同步成员节点的 parentId / memberBadge（唯一父）
+  for (const id of ids) {
+    const member = model.byId(id);
+    if (!member) continue;
+    member.data = member.data || {};
+    if (mode === 'remove') {
+      if (member.data.parentId === node.id) {
+        member.data.parentId = null;
+        member.data.memberBadge = null;
+      }
+    } else {
+      // 从旧父 scope 的 childIds 中移除，再写入新父
+      for (const other of model.nodes()) {
+        if (other.type === 'scope' && other.id !== node.id && Array.isArray(other.data.childIds)) {
+          other.data.childIds = other.data.childIds.filter((m) => m !== id);
+        }
+      }
+      member.data.parentId = node.id;
+      member.data.memberBadge = 'in:' + (node.data.label || node.id);
+    }
+  }
+  affected.push(node.id);
 }
 
 function opDuplicate(model, args, errors, affected) {
@@ -168,186 +276,6 @@ function opDisconnect(model, args, errors, affected) {
   });
   model.removeEdges(toRemove);
   affected.push('断开 ' + toRemove.length + ' 条');
-}
-
-function opGroup(model, args, errors, affected) {
-  const rawList = args.nodeIds;
-  const selected = [];
-  if (Array.isArray(rawList)) {
-    for (const item of rawList) {
-      const node = model.byId(String(item));
-      if (node) selected.push(node);
-    }
-  }
-  if (!selected.length) { errors.push('group 需要 nodeIds'); return; }
-  const name = stringArg(args, 'name', '节点组');
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of selected) {
-    const w = (n.measured && n.measured.width) || 88;
-    const h = (n.measured && n.measured.height) || 64;
-    minX = Math.min(minX, n.position.x);
-    minY = Math.min(minY, n.position.y);
-    maxX = Math.max(maxX, n.position.x + w);
-    maxY = Math.max(maxY, n.position.y + h);
-  }
-  const pad = 24;
-  const originX = minX - pad;
-  const originY = minY - pad;
-  const gid = uid('group');
-  const selSet = new Set(selected.map((n) => n.id));
-
-  const subNodes = selected.map((n) => {
-    const copy = JSON.parse(JSON.stringify(n));
-    copy.position = { x: n.position.x - originX, y: n.position.y - originY };
-    copy.selected = false;
-    return copy;
-  });
-
-  const inputs = [];
-  const outputs = [];
-  const keepEdges = [];
-  for (const e of model.edges()) {
-    const sIn = selSet.has(e.source);
-    const tIn = selSet.has(e.target);
-    if (sIn && tIn) continue;
-    if (!sIn && tIn) {
-      const sid = 'in-' + (inputs.length + 1);
-      inputs.push({ id: sid, toId: e.target });
-      keepEdges.push({ ...e, id: eid(), target: gid, targetHandle: sid });
-    } else if (sIn && !tIn) {
-      const sid = 'out-' + (outputs.length + 1);
-      outputs.push({ id: sid, fromId: e.source });
-      keepEdges.push({ ...e, id: eid(), source: gid, sourceHandle: sid });
-    } else {
-      keepEdges.push(e);
-    }
-  }
-  if (inputs.length === 0) inputs.push({ id: 'in-1', toId: '' });
-  if (outputs.length === 0) outputs.push({ id: 'out-1', fromId: '' });
-
-  const subEdges = model
-    .edges()
-    .filter((e) => selSet.has(e.source) && selSet.has(e.target))
-    .map((e) => ({ ...e }));
-
-  const giId = gid + '-gi';
-  subNodes.push({ id: giId, type: 'group-input', position: { x: 0, y: 40 }, data: { label: '组输入', socketIds: inputs.map((i) => i.id), status: 'pending', accent: '#22c55e' } });
-  for (const i of inputs) if (i.toId) subEdges.push({ id: eid(), source: giId, sourceHandle: i.id, target: i.toId, animated: true });
-  const goId = gid + '-go';
-  subNodes.push({ id: goId, type: 'group-output', position: { x: 300, y: 40 }, data: { label: '组输出', socketIds: outputs.map((o) => o.id), status: 'pending', accent: '#ef4444' } });
-  for (const o of outputs) if (o.fromId) subEdges.push({ id: eid(), source: o.fromId, target: goId, targetHandle: o.id, animated: true });
-
-  const g = model.current();
-  g.nodes = g.nodes.filter((n) => !selSet.has(n.id));
-  g.edges = keepEdges;
-  g.nodes.push({
-    id: gid,
-    type: 'group',
-    position: { x: originX, y: originY },
-    data: { label: name, status: 'pending', accent: '#06b6d4', width: maxX - originX, height: maxY - originY, sockets: { inputs, outputs } },
-  });
-  model.doc.groups = model.doc.groups || {};
-  model.doc.groups[gid] = { nodes: subNodes, edges: subEdges };
-  affected.push(gid);
-}
-
-function opUngroup(model, args, errors, affected) {
-  const group = model.byId(String(args.nodeId || ''));
-  if (!group) { errors.push('节点不存在: ' + (args.nodeId || '')); return; }
-  if (group.type !== 'group') { errors.push('不是组节点: ' + group.id); return; }
-  const sub = model.doc.groups[group.id];
-  const g = model.current();
-  if (!sub) {
-    g.nodes = g.nodes.filter((n) => n.id !== group.id);
-    delete model.doc.groups[group.id];
-    affected.push(group.id);
-    return;
-  }
-  const sockets = (group.data && group.data.sockets) || { inputs: [], outputs: [] };
-  const gx = group.position.x;
-  const gy = group.position.y;
-  const expanded = sub.nodes
-    .filter((n) => n.type !== 'group-input' && n.type !== 'group-output')
-    .map((n) => ({ ...JSON.parse(JSON.stringify(n)), position: { x: n.position.x + gx, y: n.position.y + gy } }));
-  const expandedEdges = sub.edges
-    .filter((e) => {
-      const sn = sub.nodes.find((n) => n.id === e.source);
-      const tn = sub.nodes.find((n) => n.id === e.target);
-      return sn && tn && sn.type !== 'group-input' && sn.type !== 'group-output';
-    })
-    .map((e) => ({ ...e }));
-  const parentEdges = g.edges.filter((e) => e.source !== group.id && e.target !== group.id);
-  for (const e of g.edges) {
-    if (e.target === group.id) {
-      const def = sockets.inputs.find((i) => i.id === (e.targetHandle || 'in'));
-      if (def && def.toId) parentEdges.push({ ...e, id: eid(), target: def.toId, targetHandle: null });
-    } else if (e.source === group.id) {
-      const def = sockets.outputs.find((o) => o.id === (e.sourceHandle || 'out'));
-      if (def && def.fromId) parentEdges.push({ ...e, id: eid(), source: def.fromId, sourceHandle: null });
-    }
-  }
-  g.nodes = g.nodes.filter((n) => n.id !== group.id).concat(expanded);
-  g.edges = parentEdges;
-  delete model.doc.groups[group.id];
-  affected.push(group.id);
-  void expandedEdges;
-}
-
-function opAddPort(model, args, errors, affected) {
-  const node = model.byId(String(args.nodeId || ''));
-  if (!node) { errors.push('节点不存在: ' + (args.nodeId || '')); return; }
-  if (node.type !== 'group') { errors.push('add_port 仅支持组节点'); return; }
-  const output = stringArg(args, 'direction', 'output') === 'output';
-  const gd = node.data || {};
-  const sockets = { inputs: [...((gd.sockets && gd.sockets.inputs) || [])], outputs: [...((gd.sockets && gd.sockets.outputs) || [])] };
-  const list = output ? sockets.outputs : sockets.inputs;
-  const next = (output ? 'out-' : 'in-') + (list.length + 1);
-  list.push({ id: next, ...(output ? { fromId: '' } : { toId: '' }) });
-  node.data = { ...gd, sockets: output ? { ...sockets, outputs: list } : { ...sockets, inputs: list } };
-  const sub = model.doc.groups[node.id];
-  if (sub) {
-    const termType = output ? 'group-output' : 'group-input';
-    sub.nodes = sub.nodes.map((n) =>
-      n.type === termType ? { ...n, data: { ...n.data, socketIds: [...((n.data.socketIds || [])), next] } } : n
-    );
-  }
-  affected.push(node.id + ':' + next);
-}
-
-function opRemovePort(model, args, errors, affected) {
-  const node = model.byId(String(args.nodeId || ''));
-  if (!node) { errors.push('节点不存在: ' + (args.nodeId || '')); return; }
-  if (node.type !== 'group') { errors.push('remove_port 仅支持组节点'); return; }
-  const output = stringArg(args, 'direction', 'input') === 'output';
-  const portId = stringArg(args, 'portId', '');
-  if (!portId) { errors.push('缺少 portId'); return; }
-  const gd = node.data || {};
-  const sockets = { inputs: [...((gd.sockets && gd.sockets.inputs) || [])], outputs: [...((gd.sockets && gd.sockets.outputs) || [])] };
-  const list = output ? sockets.outputs : sockets.inputs;
-  const idx = list.findIndex((x) => x.id === portId);
-  if (idx < 0) { errors.push('端口不存在: ' + portId); return; }
-  list.splice(idx, 1);
-  node.data = { ...gd, sockets: output ? { ...sockets, outputs: list } : { ...sockets, inputs: list } };
-  const sub = model.doc.groups[node.id];
-  const g = model.current();
-  if (sub) {
-    const termType = output ? 'group-output' : 'group-input';
-    const term = sub.nodes.find((n) => n.type === termType);
-    if (term) {
-      sub.edges = sub.edges.filter(
-        (e) => !(output ? e.target === term.id && (e.targetHandle || 'out') === portId : e.source === term.id && (e.sourceHandle || 'in') === portId)
-      );
-      sub.nodes = sub.nodes.map((n) =>
-        n.type === termType ? { ...n, data: { ...n.data, socketIds: (n.data.socketIds || []).filter((x) => x !== portId) } } : n
-      );
-    }
-  }
-  g.edges = g.edges.filter(
-    (e) =>
-      !(output && e.source === node.id && (e.sourceHandle || 'out') === portId) &&
-      !(!output && e.target === node.id && (e.targetHandle || 'in') === portId)
-  );
-  affected.push(node.id + ':' + portId);
 }
 
 /** 按 action 分发执行 */
@@ -397,19 +325,10 @@ function applyAction(model, args, errors, affected, created) {
     case 'disconnect':
       opDisconnect(model, args, errors, affected);
       break;
-    case 'group':
-      opGroup(model, args, errors, affected);
-      break;
-    case 'ungroup':
-    case 'ungroup_bundle':
-    case 'expand_bundle':
-      opUngroup(model, args, errors, affected);
-      break;
-    case 'add_port':
-      opAddPort(model, args, errors, affected);
-      break;
-    case 'remove_port':
-      opRemovePort(model, args, errors, affected);
+    case 'set_members':
+    case 'add_members':
+    case 'remove_members':
+      opMembers(model, args, errors, affected, args.action === 'set_members' ? 'set' : args.action === 'add_members' ? 'add' : 'remove');
       break;
     default:
       errors.push('未知 action: ' + action);
@@ -427,12 +346,19 @@ function buildSummary(args) {
 function register(registry) {
   registry.register(
     'workbench_edit',
-    '统一的工作台节点编辑工具：创建、编辑、连线、结构（成组/解组）全部用这一个工具完成，不需要再用 create_nodes / workbench_connect / workbench_structure。' +
+    '统一的工作台节点编辑工具：创建、编辑、连线全部用这一个工具完成，不需要再用 create_nodes / workbench_connect。' +
       '强烈建议用批量参数 operations=[{action, ...}, {action, ...}, ...] 一次提交全部节点变更：' +
-      'action 支持 create(新建，name/type/count/prompt/connect串联)、rename(nodeId,name)、set_prompt(nodeId,value)、' +
+      'action 支持 create(新建，name/type/count/prompt/objectName/connect串联)、rename(nodeId,name)、set_prompt(nodeId,value)、' +
       'set_status(nodeId,value)、set_category/set_goal/move/delete(nodeId)、duplicate、connect(sourceId,targetId 或 connections 批量)、' +
-      'disconnect、group(nodeIds,name)、ungroup(nodeId)、add_port/remove_port(nodeId,direction,portId)。' +
-      '把需要新建/修改/连线的所有节点一次性放进 operations，避免多次调用占用上下文。',
+      'disconnect。' +
+      '把需要新建/修改/连线的所有节点一次性放进 operations，避免多次调用占用上下文。' +
+      '【画布操作 = 你的操作】新建节点(create)、连线(connect)、移动(move)、删除(delete)、把节点放进范围节点(set_members/add_members/remove_members)、改名/设属性(rename/set_*) 全部用本工具完成，不能只停留在文字描述。' +
+      'create 支持自定义 id（如 {action:"create",id:"start-1",name:"开始",type:"start"}），同批内即可用该 id 连线或放进 scope。' +
+      '【节点建模规则】a) 一条完整链路必须有 start 与 end，且必须把 start 连线到链路的第一个执行节点、把最后一个执行节点连线到 end（start 只有输出端口，end 只有输入端口），使 start 真正作为入口、end 作为出口；' +
+      'b) 条件判断/分支/重复循环用 scope（范围）节点包裹，且必须用 add_members/set_members 把子链路节点 id 放进 scope 的 members（否则节点不会显示在范围节点内）；c) 需要子代理负责部分工作（文件探查、项目审核、独立分析等）用 stage（阶段）节点；' +
+      'd) 需要使用某个对象（数据对象/配置对象/实体名）时用 object（对象）节点并把名称填到 objectName 字段。' +
+      'e) 节点类型按语义选择，禁止一律用 task：文件→file、工具→tool、子代理→stage、条件循环→scope、对象→object。' +
+      'f) 画布为空（get_workbench_model 或当前画布节点清单为 0 个节点）时无需读取画布，直接按需求创建完整链路；画布已有节点时先 get_workbench_model 读取现状，复用已有节点 id，不重复创建；g) 需求拆分：对象→object、独立工作→stage、条件/循环→scope、具体步骤→task/tool，最后 start 开头、end 结尾连成完整链路。',
     {
       type: 'object',
       properties: {
@@ -444,11 +370,26 @@ function register(registry) {
         action: { type: 'string', description: '单操作模式（未给 operations 时）' },
         nodeId: { type: 'string' },
         nodeIds: { type: 'array', items: { type: 'string' } },
+        id: { type: 'string', description: 'create 的自定义节点 id，便于同批连线/放进 scope' },
         name: { type: 'string' },
-        type: { type: 'string', description: 'create 的节点类型：task/stage/tool/start/end/group/file/agent/user/scope' },
+        type: {
+          type: 'string',
+          description: 'create 的节点类型：start(入口，只有输出端口)/task/stage(子代理工作)/tool/end(出口，只有输入端口)/file/scope(条件循环容器)/object(对象名称)，agent/user 已废弃传入回退为 task',
+        },
         count: { type: 'integer', description: 'create 数量，默认 1，最多 50' },
         prompt: { type: 'string' },
+        objectName: { type: 'string', description: 'object 类型节点的对象名称' },
         value: { type: 'string', description: 'set_* 的新值' },
+        memberIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'add_members/set_members/remove_members 要放入/移出的节点 id 列表；scope 的 members 决定哪些节点被范围节点包裹',
+        },
+        members: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'create scope 时的初始成员节点 id 列表；也兼容 add_members/remove_members 传参',
+        },
         x: { type: 'integer' },
         y: { type: 'integer' },
         sourceId: { type: 'string' },
@@ -456,8 +397,6 @@ function register(registry) {
         connections: { type: 'array', items: { type: 'object' }, description: '批量连线 [{sourceId,targetId}]' },
         connect: { type: 'boolean', description: 'create 时是否按顺序串联成链' },
         relativePath: { type: 'string' },
-        direction: { type: 'string', description: 'add_port/remove_port 的 input|output' },
-        portId: { type: 'string' },
       },
       required: [],
     },
@@ -483,13 +422,87 @@ function register(registry) {
       const parts = [];
       if (created.length) parts.push('新建 ' + created.length + ' 个节点: ' + created.join(', '));
       if (affected.length) parts.push('操作 ' + affected.length + ' 项: ' + affected.join(', '));
-      const summary = parts.join('；') || '操作完成';
+      let summary = parts.join('；') || '操作完成';
+      // 链路完整性诊断：提示还有哪些节点没接成 start→end 完整链路（让 Agent 继续补全）
+      const chain = chainReport(context.model());
+      if (chain) summary += '；【链路提示】' + chain;
+      // 受影响节点的完整属性写入本地标量（不返回云端），Agent 需要时用 query_scalars key=node:<id> 读取
+      const stored = storeAffectedScalars(context, created, affected);
+      if (stored > 0) summary += '；节点属性已入本地标量库（' + stored + ' 条）';
       if (errors.length) {
         return AgentToolResult.ok('部分操作失败：' + errors.join('；') + '。' + summary, { created, affected, errors, applied });
       }
       return AgentToolResult.ok(summary, { created, affected, applied });
     }
   );
+}
+
+/** 把 created/affected 中的真实节点 id 对应的完整属性写入本地标量。 */
+function storeAffectedScalars(context, created, affected) {
+  const model = context.model();
+  if (!model) return 0;
+  const ids = new Set();
+  for (const id of created.concat(affected)) {
+    if (id && typeof id === 'string' && !id.includes('→')) ids.add(id);
+  }
+  if (ids.size === 0) return 0;
+  const records = [];
+  for (const id of ids) {
+    const node = model.byId(id);
+    if (node) records.push(...nodeToScalarRecords(node));
+  }
+  return context.storeScalars(records);
+}
+
+/**
+ * 链路完整性诊断：找出不在「start → … → end」任何完整路径上的节点。
+ * 返回提示文本（无问题时为空串）。用于让 Agent 知道还有节点没接成完整链路。
+ */
+function chainReport(model) {
+  if (!model || typeof model.nodes !== 'function') return '';
+  const nodes = model.nodes();
+  if (!nodes.length) return '';
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const edges = model.edges().filter((e) => byId.has(e.source) && byId.has(e.target));
+  const hasStart = nodes.some((n) => n.type === 'start');
+  const hasEnd = nodes.some((n) => n.type === 'end');
+  if (!hasStart || !hasEnd) {
+    const missing = [];
+    if (!hasStart) missing.push('start(入口)');
+    if (!hasEnd) missing.push('end(出口)');
+    return '当前画布缺 ' + missing.join('、') + ' 节点，未形成 start→end 完整链路；请补建并连线。';
+  }
+  // 从每个 start 可达的集合
+  const startReach = new Set();
+  {
+    const adj = new Map(nodes.map((n) => [n.id, []]));
+    for (const e of edges) adj.get(e.source).push(e.target);
+    const stack = nodes.filter((n) => n.type === 'start').map((n) => n.id);
+    for (const id of stack) startReach.add(id);
+    while (stack.length) {
+      const id = stack.pop();
+      for (const t of adj.get(id) || []) {
+        if (!startReach.has(t)) { startReach.add(t); stack.push(t); }
+      }
+    }
+  }
+  // 能到达某个 end 的集合（反向可达）
+  const endReach = new Set();
+  {
+    const rev = new Map(nodes.map((n) => [n.id, []]));
+    for (const e of edges) rev.get(e.target).push(e.source);
+    const stack = nodes.filter((n) => n.type === 'end').map((n) => n.id);
+    for (const id of stack) endReach.add(id);
+    while (stack.length) {
+      const id = stack.pop();
+      for (const t of rev.get(id) || []) {
+        if (!endReach.has(t)) { endReach.add(t); stack.push(t); }
+      }
+    }
+  }
+  const bad = nodes.filter((n) => n.type !== 'start' && n.type !== 'end' && (!startReach.has(n.id) || !endReach.has(n.id)));
+  if (!bad.length) return '';
+  return bad.length + ' 个节点不在 start→end 完整路径上（' + bad.map((n) => n.id).slice(0, 12).join(',') + '），请补全连线使其成为完整链路';
 }
 
 module.exports = { register };

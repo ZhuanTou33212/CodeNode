@@ -1,6 +1,7 @@
 import { memo } from 'react';
-import type { NodeProps } from '@xyflow/react';
+import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
+import { useUiStore } from '../store/uiStore';
 import { computeChildren } from '../lib/flow';
 import { useContainerAutoFit } from '../lib/useContainerAutoFit';
 import type { ScopeData } from '../types';
@@ -9,16 +10,19 @@ function ScopeNode({ id, data, selected }: NodeProps) {
   const d = data as unknown as ScopeData;
   const nodes = useGraphStore((s) => s.nodes);
   const scopeNode = useGraphStore((s) => s.nodes.find((n) => n.id === id));
+  const hoverScopeId = useUiStore((s) => s.hoverScopeId);
+  const toggleScopeCollapsed = useGraphStore((s) => s.toggleScopeCollapsed);
   const children = scopeNode ? computeChildren(scopeNode, nodes) : [];
 
   useContainerAutoFit(id, nodes, 220, 150, 20);
 
   const accent = d.accent || '#8b5cf6';
   const fill = d.fill || '#3b2f6b';
+  const collapsed = !!d.collapsed;
 
   return (
     <div
-      className={`wf-scope ${selected ? 'is-selected' : ''}`}
+      className={`wf-scope ${selected ? 'is-selected' : ''} ${hoverScopeId === id ? 'is-hover-target' : ''}`}
       style={{
         width: d.width || 320,
         height: d.height || 220,
@@ -28,8 +32,47 @@ function ScopeNode({ id, data, selected }: NodeProps) {
           .padStart(2, '0')}`,
       }}
     >
-      <div className="wf-scope-title">{d.label}</div>
-      <div className="wf-scope-sub">自适应包裹 {children.length} 个节点</div>
+      <NodeResizer
+        isVisible={true}
+        minWidth={160}
+        minHeight={120}
+        color={accent}
+        keepAspectRatio={false}
+        onResizeStart={() => useGraphStore.getState().setResizing([id])}
+        onResize={(_, params) => {
+          const st = useGraphStore.getState();
+          const node = st.nodes.find((n) => n.id === id);
+          if (!node) return;
+          if (Math.abs(params.x - node.position.x) > 0.5 || Math.abs(params.y - node.position.y) > 0.5) {
+            st.moveNode(id, { x: params.x, y: params.y });
+          }
+          st.updateNodeData(id, { width: Math.round(params.width), height: Math.round(params.height) });
+        }}
+        onResizeEnd={() => useGraphStore.getState().setResizing([])}
+      />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="wf-handle"
+        style={{ background: accent, borderColor: '#14161a' }}
+      />
+      <div className="wf-scope-title">
+        <button
+          className="wf-scope-toggle nodrag"
+          title={collapsed ? '展开成员' : '折叠成员'}
+          onClick={() => toggleScopeCollapsed(id)}
+        >
+          {collapsed ? '▸' : '▾'}
+        </button>
+        <span>{d.label}</span>
+      </div>
+      <div className="wf-scope-sub">范围 · 成员 {children.length}{collapsed ? ' · 已折叠' : ''}</div>
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="wf-handle"
+        style={{ background: accent, borderColor: '#14161a' }}
+      />
     </div>
   );
 }

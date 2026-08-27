@@ -13,6 +13,7 @@ function FileNode({ data, selected }: NodeProps) {
       <div className="wf-node-title">
         <span className="wf-file-icon">F</span>
         <span className="wf-node-label">{name}</span>
+        {d.memberBadge ? <span className="wf-member-badge" title="所属范围">{d.memberBadge}</span> : null}
       </div>
       <div className="wf-node-sub" title={d.filePath || ''}>
         {d.filePath || '未选择文件'}

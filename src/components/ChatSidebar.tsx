@@ -135,8 +135,40 @@ export default function ChatSidebar() {
 
   const [pinned, setPinned] = useState(false);
   const [hover, setHover] = useState(false);
+  const [panelH, setPanelH] = useState<number | null>(null);
   const closeTimer = useRef<number | null>(null);
+  const resizingRef = useRef(false);
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const treeOpen = hover || pinned;
+
+  /** 拖动面板底部把手调整高度；最大可到画布最底部 */
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const sidebar = sidebarRef.current;
+    const panel = panelRef.current;
+    if (!sidebar || !panel) return;
+    const maxH = Math.max(140, sidebar.getBoundingClientRect().bottom - panel.getBoundingClientRect().top);
+    const startY = e.clientY;
+    const startH = panel.getBoundingClientRect().height;
+    resizingRef.current = true;
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.max(140, Math.min(maxH, startH + (ev.clientY - startY)));
+      setPanelH(Math.round(next));
+    };
+    const onUp = () => {
+      resizingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const openTree = () => {
     if (closeTimer.current) {
@@ -147,7 +179,7 @@ export default function ChatSidebar() {
   };
 
   const scheduleClose = () => {
-    if (pinned) return;
+    if (pinned || resizingRef.current) return;
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => {
       setHover(false);
@@ -173,6 +205,7 @@ export default function ChatSidebar() {
 
   return (
     <div
+      ref={sidebarRef}
       className="cs-sidebar"
       onMouseEnter={cancelClose}
       onMouseLeave={scheduleClose}
@@ -196,7 +229,11 @@ export default function ChatSidebar() {
         <span className="cs-badge-chevron">{treeOpen ? '▾' : '▸'}</span>
       </div>
 
-      <div className={`cs-panel ${treeOpen ? 'is-tree' : ''}`}>
+      <div
+        ref={panelRef}
+        className={`cs-panel ${treeOpen ? 'is-tree' : ''}`}
+        style={panelH != null ? { flex: 'none', height: panelH + 'px' } : undefined}
+      >
         {treeOpen ? (
           <SessionTreeMemo onPick={handlePick} />
         ) : (
@@ -215,6 +252,7 @@ export default function ChatSidebar() {
             </div>
           </div>
         )}
+        <div className="cs-resize" onMouseDown={startResize} title="拖动调整高度" />
       </div>
     </div>
   );

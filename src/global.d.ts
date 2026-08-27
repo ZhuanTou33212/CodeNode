@@ -22,8 +22,6 @@ interface ProjectPayloadDto {
   workspace?: ProjectWorkspaceDto;
   manifest?: ProjectManifestDto;
   canvases?: {
-    groups?: Record<string, ProjectGraphDto>;
-    viewStack?: string[];
     sessions?: unknown[];
   };
 }
@@ -33,8 +31,6 @@ interface ProjectLoadDto {
   workspace?: ProjectWorkspaceDto;
   manifest?: ProjectManifestDto;
   canvases?: {
-    groups?: Record<string, ProjectGraphDto>;
-    viewStack?: string[];
     sessions?: unknown[];
   };
   warnings?: string[];
@@ -70,6 +66,20 @@ interface ToolRequestDto {
   args?: Record<string, unknown>;
 }
 
+interface ModelSpecDto {
+  id: string;
+  label: string;
+  model: string;
+  apiBase?: string;
+  apiKey?: string;
+  contextWindow: number;
+  priceInput: number;
+  priceInputHit: number;
+  priceOutput: number;
+  supportsEffort: boolean;
+  enabled?: boolean;
+}
+
 interface CodenodeApi {
   saveGraph: (payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   openGraph: () => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
@@ -90,7 +100,13 @@ interface CodenodeApi {
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
     ragEnabled: boolean;
+    models?: ModelSpecDto[];
+    activeModelId?: string | null;
   }>;
+  modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null }>;
+  modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
+  modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
+  modelsActive: (id: string) => Promise<{ ok: boolean; activeId?: string | null; error?: string }>;
   agentGreeting: (
     root: string | null
   ) => Promise<{ greeting: string; name: string; configured: boolean }>;
@@ -104,10 +120,14 @@ interface CodenodeApi {
     canvasSummary?: string;
     nodeId?: string | null;
     requestId?: string;
-    document?: { root?: unknown; groups?: Record<string, unknown>; viewStack?: unknown[] };
+    modelId?: string;
+    model?: string;
+    reasoningEffort?: string;
+    document?: { root?: unknown };
     projectFile?: string;
   }) => Promise<{
     ok: boolean;
+    aborted?: boolean;
     reply?: string;
     reasoning?: string;
     toolCalls?: ToolRecordDto[];
@@ -121,8 +141,9 @@ interface CodenodeApi {
       invalid: string[];
     };
     error?: string;
-    document?: { root?: unknown; groups?: Record<string, unknown>; viewStack?: unknown[] };
+    document?: { root?: unknown };
   }>;
+  stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {
     requestId?: string;
     kind?: string;

@@ -12,7 +12,12 @@ contextBridge.exposeInMainWorld('codenode', {
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
+  modelsList: () => ipcRenderer.invoke('models:list'),
+  modelsSave: (model) => ipcRenderer.invoke('models:save', model),
+  modelsDelete: (id) => ipcRenderer.invoke('models:delete', id),
+  modelsActive: (id) => ipcRenderer.invoke('models:active', id),
   agentChat: (payload) => ipcRenderer.invoke('agent:chat', payload),
+  stopAgent: (requestId) => ipcRenderer.invoke('agent:stop', requestId),
   onAgentDelta: (cb) => {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('agent:delta', listener);

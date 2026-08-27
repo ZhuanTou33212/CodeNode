@@ -80,18 +80,18 @@ async function main() {
   };
   const index = getProjectIndex(root, config);
 
-  const symbol = index.retrieve('refreshSessionToken rotating nonce');
+  const symbol = await index.retrieve('refreshSessionToken rotating nonce');
   assert.strictEqual(topPath(symbol), 'src/auth/sessionService.ts', '源码符号应排在第一位');
   assert.match(symbol.results[0].citation, /^src\/auth\/sessionService\.ts#L\d+-L\d+$/);
   assert.ok(symbol.results[0].coverage > 0.4, '高相关源码应有有效覆盖率');
-  const cached = index.retrieve('refreshSessionToken rotating nonce');
+  const cached = await index.retrieve('refreshSessionToken rotating nonce');
   assert.strictEqual(cached.stats.changedFiles, 0, '未变化文件不应重复分块');
   assert.ok(cached.stats.reusedFiles >= 3, '诊断应报告复用的缓存文件');
 
-  const chinese = index.retrieve('刷新令牌为什么采用轮换随机数');
+  const chinese = await index.retrieve('刷新令牌为什么采用轮换随机数');
   assert.strictEqual(topPath(chinese), 'docs/authentication.md', '中文自然语言应命中文档');
 
-  const fused = index.retrieve('session recovery behavior', {
+  const fused = await index.retrieve('session recovery behavior', {
     queries: ['refreshSessionToken rotatingNonce', '刷新令牌 轮换随机数'],
   });
   const fusedPaths = new Set(fused.results.map((item) => item.path));
@@ -102,13 +102,13 @@ async function main() {
   assert.ok(['medium', 'high'].includes(fused.quality.level), '多查询相关结果应可回答');
   assert.strictEqual(fused.quality.queryCount, 3, '质量诊断应覆盖全部查询');
 
-  const scoped = index.retrieve('刷新令牌', { path: 'docs' });
+  const scoped = await index.retrieve('刷新令牌', { path: 'docs' });
   assert.ok(scoped.results.length > 0, '限定目录后应有结果');
   assert.ok(scoped.results.every((item) => item.path.startsWith('docs/')), 'path 必须限制检索范围');
-  const patterned = index.retrieve('refreshSessionToken', { filePattern: '**/*.ts' });
+  const patterned = await index.retrieve('refreshSessionToken', { filePattern: '**/*.ts' });
   assert.ok(patterned.results.every((item) => item.path.endsWith('.ts')), 'filePattern 必须限制文件类型');
 
-  index.retrieve('initial index build');
+  await index.retrieve('initial index build');
   assert.ok(!index.fileCache.has('.env'), '.env 不得进入索引缓存');
   assert.ok(!index.fileCache.has('id_ed25519'), 'SSH 私钥不得进入索引缓存');
   assert.ok(!index.fileCache.has('package-lock.json'), '锁文件不得进入索引');
@@ -121,11 +121,11 @@ async function main() {
     'export function negotiateFreshSession() { return issueOneTimeChallenge("incrementalFingerprintV2"); }\n'
   );
   assert.ok(invalidateProjectIndex(root, 'src/auth/sessionService.ts') >= 1, '显式失效应命中项目索引');
-  const refreshed = index.retrieve('incrementalFingerprintV2');
+  const refreshed = await index.retrieve('incrementalFingerprintV2');
   assert.strictEqual(topPath(refreshed), 'src/auth/sessionService.ts', '失效后应读取新内容');
   assert.ok(refreshed.stats.invalidatedFiles >= 1, '诊断应报告显式失效');
 
-  const absent = index.retrieve('totallyAbsentQuantumBananaIdentifier');
+  const absent = await index.retrieve('totallyAbsentQuantumBananaIdentifier');
   assert.strictEqual(absent.results.length, 0, '完全无匹配时不得返回伪相关结果');
   assert.strictEqual(absent.quality.answerable, false, '无结果必须标记为不可回答');
   assert.strictEqual(absent.quality.level, 'none');

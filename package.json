@@ -10,10 +10,19 @@
     "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "build": "tsc --noEmit && vite build",
     "test:rag": "node scripts/rag-test.cjs && node scripts/rag-grounding-test.cjs",
+    "test:scalar": "node scripts/scalar-vector-test.cjs",
+    "test:undo": "node scripts/graph-undo-test.cjs",
+    "test:cache": "node scripts/cache-consistency-test.cjs",
+    "test:session": "node scripts/session-canvas-test.cjs",
+    "test:model": "node scripts/workbench-model-test.cjs",
+    "test:arrange": "node scripts/arrange-test.cjs",
+    "test:container": "node scripts/container-model-test.cjs",
+    "test:bg": "node scripts/background-job-test.cjs",
     "test:rag-ui": "electron scripts/rag-ui-test.cjs",
     "start": "electron .",
     "start:prod": "npm run build && electron .",
-    "dist": "npm run build && electron-builder --win portable"
+    "launcher": "node scripts/make-launcher.cjs",
+    "dist": "npm run build && electron-builder --win portable && node scripts/make-launcher.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

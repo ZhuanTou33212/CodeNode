@@ -12,8 +12,31 @@ const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot } = require('./shared.cjs');
+const { nodeToScalarRecords } = require('../../scalars/index.cjs');
 
 const MAX_BATCH = 200;
+
+function storeNodeScalars(context, ids) {
+  const model = context.model();
+  if (!model) return 0;
+  const records = [];
+  for (const id of ids) {
+    const node = model.byId(id);
+    if (node) records.push(...nodeToScalarRecords(node));
+  }
+  return context.storeScalars(records);
+}
+
+function removeNodeScalars(context, ids) {
+  const store = context.scalars();
+  if (!store) return 0;
+  let removed = 0;
+  for (const id of ids) {
+    if (store.remove('node:' + id)) removed++;
+    removed += store.removePrefix('node:' + id + ':');
+  }
+  return removed;
+}
 
 function intArg(args, key, fallback) {
   return typeof args[key] === 'number' && Number.isFinite(args[key]) ? Math.floor(args[key]) : fallback;
@@ -142,7 +165,9 @@ async function createNodes(context, args) {
     }
   });
   context.audit('bulk_edit create_nodes count=' + count);
-  return AgentToolResult.ok('已批量创建 ' + ids.length + ' 个节点', { action: 'create_nodes', nodeIds: ids, count: ids.length });
+  const stored = storeNodeScalars(context, ids);
+  const note = stored > 0 ? '；节点属性已入本地标量库（' + stored + ' 条，需要时用 query_scalars key=node:<id>）' : '';
+  return AgentToolResult.ok('已批量创建 ' + ids.length + ' 个节点' + note, { action: 'create_nodes', nodeIds: ids, count: ids.length });
 }
 
 async function createFiles(context, args) {
@@ -202,7 +227,9 @@ async function createAssets(context, args) {
     }
   });
   context.audit('bulk_edit create_assets count=' + ids.length);
-  return AgentToolResult.ok('已批量创建 ' + ids.length + ' 个文件节点', { action: 'create_assets', nodeIds: ids, count: ids.length });
+  const stored = storeNodeScalars(context, ids);
+  const note = stored > 0 ? '；节点属性已入本地标量库' : '';
+  return AgentToolResult.ok('已批量创建 ' + ids.length + ' 个文件节点' + note, { action: 'create_assets', nodeIds: ids, count: ids.length });
 }
 
 async function deleteNodes(context, args) {
@@ -222,10 +249,12 @@ async function deleteNodes(context, args) {
     }
   });
   context.audit('bulk_edit delete_nodes count=' + deleted.length);
+  const removed = removeNodeScalars(context, deleted);
+  const note = removed > 0 ? '；已同步清理本地标量 ' + removed + ' 条' : '';
   if (deleted.length === 0) return AgentToolResult.error('删除失败：' + errors.join('；'));
   const data = { action: 'delete_nodes', deleted, count: deleted.length };
   if (errors.length) data.errors = errors;
-  return AgentToolResult.ok('已批量删除 ' + deleted.length + ' 个节点' + (errors.length ? '，失败 ' + errors.length + ' 项' : ''), data);
+  return AgentToolResult.ok('已批量删除 ' + deleted.length + ' 个节点' + note + (errors.length ? '，失败 ' + errors.length + ' 项' : ''), data);
 }
 
 module.exports = { register };

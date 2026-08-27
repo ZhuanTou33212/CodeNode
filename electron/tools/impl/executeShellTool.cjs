@@ -13,6 +13,61 @@ const ALLOWED = new Set([
   'go', 'python', 'python3', 'py', 'node', 'npm', 'npx', 'nuget', 'cmd', 'powershell', 'pwsh',
 ]);
 
+/**
+ * 后台任务注册表：execute_shell async=true 启动的长任务，跨 Agent 轮次存活，
+ * 由 poll_job 轮询进度/取结果。任务结束后在 poll 时清理；超过 1 小时的陈旧任务自动回收。
+ */
+const BACKGROUND_JOBS = new Map(); // jobId -> { projectRoot, command, startedAt, status, output, exitCode, error, child }
+let jobSeq = 0;
+const JOB_TTL_MS = 60 * 60 * 1000;
+
+function sweepJobs() {
+  const now = Date.now();
+  for (const [jobId, job] of BACKGROUND_JOBS) {
+    if (job.status === 'running' && now - job.startedAt > JOB_TTL_MS) {
+      try { job.child && job.child.kill('SIGKILL'); } catch {}
+      job.status = 'timeout';
+      job.output += '\n…（后台任务超时，已强制终止）';
+    }
+    if (job.status !== 'running' && now - job.startedAt > 10 * 60 * 1000) {
+      BACKGROUND_JOBS.delete(jobId);
+    }
+  }
+}
+
+/** 后台启动一个白名单命令，立即返回 jobId。 */
+function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds) {
+  sweepJobs();
+  const jobId = 'job-' + Date.now().toString(36) + '-' + (++jobSeq).toString(36);
+  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  let child;
+  try {
+    child = spawn(tokens[0], prepareArgs(normalized, tokens), { cwd: root, shell: false, windowsHide: true, env, detached: process.platform !== 'win32' });
+  } catch (e) {
+    return { jobId: null, error: String((e && e.message) || e) };
+  }
+  const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', exitCode: null, error: null, child };
+  BACKGROUND_JOBS.set(jobId, job);
+  child.stdout.on('data', (d) => { job.output += decodeOutput(d); });
+  child.stderr.on('data', (d) => { job.output += decodeOutput(d); });
+  const timer = setTimeout(() => {
+    try { child.kill('SIGKILL'); } catch {}
+    job.status = 'timeout';
+    job.output += '\n…（后台任务超时，已强制终止）';
+  }, timeoutSeconds * 1000);
+  child.on('error', (e) => {
+    clearTimeout(timer);
+    job.status = 'error';
+    job.error = String((e && e.message) || e);
+  });
+  child.on('close', (exitCode) => {
+    clearTimeout(timer);
+    job.status = 'done';
+    job.exitCode = exitCode;
+  });
+  return { jobId };
+}
+
 /** 兼容解码子进程输出：UTF-8 优先，含乱码则按 GBK 解码，UTF-16LE（PowerShell）按 BOM/字节特征识别 */
 function decodeOutput(buf) {
   if (!buf || buf.length === 0) return '';
@@ -108,12 +163,14 @@ function register(registry) {
     'execute_shell',
     '在项目根目录执行白名单命令（mvn/mvnw/git/java/javac/go/python/node/npm/npx/cmd/powershell 等构建/工具命令）。' +
       '运行环境是 Windows，不要使用 ls/find/cat/~/head 等 Unix 命令（它们不可用）；探索项目用 scan_project / read_file。' +
-      '危险命令（删除/清理/强改/提交推送等）执行前需用户确认；超时自动强杀。',
+      '危险命令（删除/清理/强改/提交推送等）执行前需用户确认；超时自动强杀。' +
+      '【长任务】预估耗时超过约 30 秒的任务：用 async=true 后台执行（立即返回 jobId），再用 poll_job jobId=… waitSeconds=… 轮询进度与结果，不要一次性前台等待。',
     {
       type: 'object',
       properties: {
         command: { type: 'string', description: '要执行的命令行' },
-        timeoutSeconds: { type: 'integer', description: '超时秒数，默认 30' },
+        timeoutSeconds: { type: 'integer', description: '超时秒数，默认 30；长任务请按预估耗时调大（如 300/600）' },
+        async: { type: 'boolean', description: 'true = 后台执行立即返回 jobId（用于长任务），用 poll_job 轮询；默认 false 前台等待' },
       },
       required: ['command'],
     },
@@ -133,11 +190,23 @@ function register(registry) {
         const detail = '这是一条' + (isDestructiveCommand(tokens) ? '具有破坏性' : '可能影响系统/仓库状态') + '的命令，执行后可能不可撤销。超时 ' + timeoutSeconds + ' 秒。';
         const ok = await context.confirm(ConfirmationLevel.HIGH, what, detail);
         if (!ok) return AgentToolResult.error('已取消执行');
-      } else {
-        await context.confirm(ConfirmationLevel.LOW, '执行命令：' + command, '普通构建/查询命令，直接执行。');
       }
+      // 普通构建/查询命令属于低敏感操作，直接执行，不需要询问用户
 
       const root = context.projectRoot();
+
+      // 后台执行：长任务立即返回 jobId，用 poll_job 轮询
+      if (args.async === true) {
+        const bgTimeout = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? Math.max(10, Math.floor(args.timeoutSeconds)) : 1800;
+        const started = startBackgroundJob(root, tokens, normalized, command, bgTimeout);
+        if (!started.jobId) return AgentToolResult.error('后台启动失败：' + (started.error || ''));
+        context.audit('execute_shell async=true jobId=' + started.jobId + ' command=' + command + ' timeout=' + bgTimeout);
+        return AgentToolResult.ok(
+          '已在后台启动命令（jobId=' + started.jobId + '，超时 ' + bgTimeout + ' 秒）。用 poll_job jobId="' + started.jobId + '" waitSeconds=5 轮询进度，任务完成后再继续后续步骤。',
+          { jobId: started.jobId, async: true, command, status: 'running', timeoutSeconds: bgTimeout }
+        );
+      }
+
       return new Promise((resolve) => {
         let output = '';
         let child;
@@ -174,6 +243,51 @@ function register(registry) {
       });
     }
   );
+
+  // ---- poll_job：轮询 execute_shell async=true 启动的后台任务 ----
+  registry.register(
+    'poll_job',
+    '轮询后台任务进度与结果（execute_shell async=true 启动）。返回当前状态（running/done/error/timeout）、已输出内容与退出码；任务结束后自动清理。',
+    {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string', description: 'execute_shell async=true 返回的 jobId' },
+        waitSeconds: { type: 'integer', description: '可选：先阻塞等待 N 秒再返回（0~60），避免频繁空轮询' },
+      },
+      required: ['jobId'],
+    },
+    async (context, args) => {
+      const jobId = String(args.jobId || '').trim();
+      if (!jobId) return AgentToolResult.error('缺少 jobId');
+      sweepJobs();
+      let job = BACKGROUND_JOBS.get(jobId);
+      if (!job) return AgentToolResult.error('后台任务不存在或已清理：' + jobId);
+      const wait = typeof args.waitSeconds === 'number' && Number.isFinite(args.waitSeconds) ? Math.max(0, Math.min(60, Math.floor(args.waitSeconds))) : 0;
+      if (wait > 0 && job.status === 'running') {
+        await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+        sweepJobs();
+        job = BACKGROUND_JOBS.get(jobId);
+        if (!job) return AgentToolResult.error('后台任务已结束并被清理：' + jobId);
+      }
+      context.audit('poll_job jobId=' + jobId + ' status=' + job.status + ' elapsedMs=' + (Date.now() - job.startedAt));
+      if (job.status === 'running') {
+        return AgentToolResult.ok(
+          '后台任务仍在运行（elapsed=' + Math.round((Date.now() - job.startedAt) / 1000) + 's，已输出 ' + job.output.length + ' 字符）。可继续 poll_job 或带 waitSeconds 等待。\n' + job.output.slice(-1500),
+          { jobId, status: 'running', startedAt: job.startedAt, elapsedMs: Date.now() - job.startedAt, output: job.output.slice(-4000) }
+        );
+      }
+      BACKGROUND_JOBS.delete(jobId);
+      if (job.status === 'error') {
+        return AgentToolResult.error('后台任务执行失败：' + (job.error || '') + '\n' + job.output.trim());
+      }
+      const done = job.status === 'done';
+      const statusText = done ? '退出码 ' + job.exitCode : '超时强制终止';
+      return AgentToolResult.ok(
+        '后台任务完成：' + statusText + '\n' + job.output.trim(),
+        { jobId, status: job.status, exitCode: job.exitCode, output: job.output.slice(0, 4000) }
+      );
+    }
+  );
 }
 
-module.exports = { register };
+module.exports = { register, BACKGROUND_JOBS };

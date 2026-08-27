@@ -1,5 +1,5 @@
 import type { Node, Edge } from '@xyflow/react';
-import type { FlowItem, FlowResult, ScopeData, FileData, BaseData, Graph, GroupData } from '../types';
+import type { FlowItem, FlowResult, ScopeData, FileData, BaseData } from '../types';
 
 const EST_W = 88;
 const EST_H = 64;
@@ -11,21 +11,30 @@ export function nodeCenter(n: Node): { x: number; y: number } {
 }
 
 export function isContainer(n: Node): boolean {
-  return n.type === 'scope' || n.type === 'user';
+  return n.type === 'scope';
 }
 
-function membersOf(container: Node): string[] {
-  const m = (container.data as unknown as { members?: string[] })?.members;
-  return Array.isArray(m) ? m : [];
+/** scope 的显式成员 id 列表：优先 childIds，兼容旧 members */
+export function childIdsOf(container: Node): string[] {
+  const d = container.data as unknown as { childIds?: string[]; members?: string[] };
+  if (Array.isArray(d?.childIds)) return d.childIds;
+  if (Array.isArray(d?.members)) return d.members;
+  return [];
 }
 
-/** 成员制：容器的子节点 = 显式登记的成员（拖入即入组，仅 Alt 拖出移除） */
+/** 节点所属 scope id（唯一父，null=顶层） */
+export function parentIdOf(node: Node): string | null {
+  const d = node.data as unknown as { parentId?: string | null };
+  return d?.parentId ?? null;
+}
+
+/** 成员制：容器的子节点 = 显式登记的成员（childIds / 兼容 members） */
 export function computeChildren(container: Node, nodes: Node[]): Node[] {
-  const ids = new Set(membersOf(container));
-  return nodes.filter((n) => ids.has(n.id));
+  const ids = new Set(childIdsOf(container));
+  return nodes.filter((n) => ids.has(n.id) || parentIdOf(n) === container.id);
 }
 
-/** 位置判定：中心落在容器边界内的节点（用于拖放入组判定与实时边框包裹） */
+/** 位置判定：中心落在容器边界内的节点（仅用于候选提示/迁移，不自动成为成员） */
 export function nodesInsideBounds(container: Node, nodes: Node[]): Node[] {
   const d = container.data as unknown as { width?: number; height?: number };
   const w = d.width || 320;
@@ -38,12 +47,9 @@ export function nodesInsideBounds(container: Node, nodes: Node[]): Node[] {
   });
 }
 
-/** 实时边框包裹目标 = 成员 ∪ 当前在边界内的节点 */
+/** 自适应边界只由显式成员决定，几何路过/重叠不算成员 */
 export function liveWrapNodes(container: Node, nodes: Node[]): Node[] {
-  const ids = new Set<string>();
-  for (const n of computeChildren(container, nodes)) ids.add(n.id);
-  for (const n of nodesInsideBounds(container, nodes)) ids.add(n.id);
-  return nodes.filter((n) => ids.has(n.id));
+  return computeChildren(container, nodes);
 }
 
 function selfPayload(node: Node): FlowItem {
@@ -60,6 +66,8 @@ function selfPayload(node: Node): FlowItem {
       return { ...base, kind: 'tool', label: d.label, payload: d.prompt };
     case 'file':
       return { ...base, kind: 'file', label: d.filePath || d.label, payload: d.content };
+    case 'object':
+      return { ...base, kind: 'object', label: (d as unknown as { objectName?: string }).objectName || d.label };
     default:
       return { ...base, kind: String(node.type || 'node') };
   }
@@ -95,20 +103,10 @@ function topoOrderView(nodes: Node[], edges: Edge[]): string[] {
 }
 
 /**
- * 节点组（Blender 风格）：
- * - 组节点在外部有输入/输出端子（socket）
- * - 外部接入组端子 → 组内「组输入」节点 → 分发给组内节点
- * - 组内节点接入「组输出」节点 → 作为组输出端子内容流出
- * 递归进入子视图计算，depth 限制防嵌套死循环。
+ * 数据流计算：按拓扑顺序逐节点累计输入（来源节点的输出）并产生自身输出。
+ * depth 限制防嵌套死循环（保留给未来子图扩展，当前仅一层）。
  */
-function computeView(
-  nodes: Node[],
-  edges: Edge[],
-  groups: Record<string, Graph>,
-  depth: number,
-  seedFor: Record<string, FlowItem[]>
-): Record<string, FlowResult> {
-  if (depth > 8) return {};
+function computeView(nodes: Node[], edges: Edge[]): Record<string, FlowResult> {
   const result: Record<string, FlowResult> = {};
 
   for (const id of topoOrderView(nodes, edges)) {
@@ -116,61 +114,18 @@ function computeView(
     if (!node) continue;
     const r: FlowResult = { input: [], output: [] };
 
-    if (node.type === 'group' && groups[id]) {
-      const gd = node.data as unknown as GroupData;
-      const sub = groups[id];
-
-      // 组输入：外部接入各输入端子的数据
-      const seeds: FlowItem[] = [];
-      for (const s of gd.sockets.inputs || []) {
-        const srcs = edges
-          .filter((e) => e.target === id && (e.targetHandle || 'in') === s.id)
-          .map((e) => e.source);
-        for (const src of srcs) seeds.push(...(result[src] ? result[src].output : []));
-      }
-      r.input = seeds;
-
-      // 组输出：组内接入「组输出」端子的节点产出（按端子逐项）
-      const outItems: FlowItem[] = [];
-      const groupInputNode = sub.nodes.find((n) => n.type === 'group-input');
-      const seedForSub: Record<string, FlowItem[]> = {};
-      if (groupInputNode) seedForSub[groupInputNode.id] = seeds;
-      const subFlow = computeView(sub.nodes, sub.edges, groups, depth + 1, seedForSub);
-
-      for (const s of gd.sockets.outputs || []) {
-        const feeds = sub.edges
-          .filter(
-            (e) =>
-              sub.nodes.some((n) => n.id === e.target && n.type === 'group-output') &&
-              (e.targetHandle || 'out') === s.id
-          )
-          .map((e) => e.source);
-        for (const f of feeds) outItems.push(...(subFlow[f] ? subFlow[f].output : []));
-      }
-      r.output = outItems;
-      result[id] = r;
-      continue;
-    }
-
-    // 常规节点（含组输入/组输出终端、范围等）
     const incoming = edges.filter((e) => e.target === id).map((e) => e.source);
     r.input = incoming.flatMap((src) => (result[src] ? result[src].output : []));
 
-    if (node.type === 'group-input' && seedFor[id]) {
-      r.output = seedFor[id];
-    } else if (node.type === 'group-output') {
-      r.output = r.input;
-    } else {
-      r.output = [...r.input, selfPayload(node)];
-    }
+    r.output = [...r.input, selfPayload(node)];
     result[id] = r;
   }
 
   return result;
 }
 
-export function computeFlow(nodes: Node[], edges: Edge[], groups: Record<string, Graph>): Record<string, FlowResult> {
-  return computeView(nodes, edges, groups, 0, {});
+export function computeFlow(nodes: Node[], edges: Edge[]): Record<string, FlowResult> {
+  return computeView(nodes, edges);
 }
 
 export function flattenFilePaths(tree: { name: string; relPath: string; type: string }[]): string[] {

@@ -9,8 +9,11 @@ interface UiState {
   toast: string | null;
   viewport: { x: number; y: number; zoom: number };
   pendingViewport: { x: number; y: number; zoom: number } | null;
+  modelManagerOpen: boolean;
+  hoverScopeId: string | null;
 
   toggleLeft: () => void;
+  setHoverScopeId: (id: string | null) => void;
   setLeftWidth: (w: number) => void;
   toggleInspector: () => void;
   setInspectorOpen: (v: boolean) => void;
@@ -21,6 +24,8 @@ interface UiState {
   setViewport: (v: { x: number; y: number; zoom: number }) => void;
   setPendingViewport: (v: { x: number; y: number; zoom: number }) => void;
   applyPendingViewport: () => { x: number; y: number; zoom: number } | null;
+  openModelManager: () => void;
+  closeModelManager: () => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -34,8 +39,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   toast: null,
   viewport: { x: 0, y: 0, zoom: 1 },
   pendingViewport: null,
+  modelManagerOpen: false,
+  hoverScopeId: null,
 
   toggleLeft: () => set((s) => ({ leftOpen: !s.leftOpen })),
+  setHoverScopeId: (id) => set({ hoverScopeId: id }),
   setLeftWidth: (w) => set({ leftWidth: Math.min(540, Math.max(180, w)) }),
   toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
   setInspectorOpen: (v) => set({ inspectorOpen: v }),
@@ -54,4 +62,6 @@ export const useUiStore = create<UiState>((set, get) => ({
     if (v) set({ pendingViewport: null });
     return v;
   },
+  openModelManager: () => set({ modelManagerOpen: true }),
+  closeModelManager: () => set({ modelManagerOpen: false }),
 }));

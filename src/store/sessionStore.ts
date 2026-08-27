@@ -7,7 +7,7 @@ import type { RagGrounding, SessionCanvas, SessionDoc, SessionMsg, ToolRecord } 
 const uid = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
 
 function emptyDoc(): SessionDoc {
-  return { root: { nodes: [], edges: [] }, groups: {}, viewStack: [] };
+  return { root: { nodes: [], edges: [] } };
 }
 
 export interface ProgressState {
@@ -49,7 +49,10 @@ interface SessionState {
   }) => void;
   finishTurn: (reply: string, reasoning: string, tools: ToolRecord[], grounding?: RagGrounding) => void;
   failTurn: (error: string) => void;
+  stopTurn: () => void;
   applyAgentDoc: (doc: SessionDoc) => void;
+  /** 标记当前画布为 active（就地修改场景下保持当前画布为工作画布） */
+  markActive: () => void;
 
   setProgressIndex: (i: number) => void;
   clearProgress: () => void;
@@ -58,21 +61,15 @@ interface SessionState {
 
 function snapshotGraph(): SessionDoc {
   const g = useGraphStore.getState().getDocument();
-  return { root: g.root, groups: g.groups, viewStack: g.viewStack };
+  return { root: g };
 }
 
 function loadGraph(doc: SessionDoc) {
-  useGraphStore.getState().loadDocument({
-    root: doc.root,
-    groups: doc.groups,
-    viewStack: doc.viewStack,
-  });
+  useGraphStore.getState().loadDocument(doc.root);
 }
 
 function countNodes(doc: SessionDoc): number {
-  let n = doc.root.nodes.length;
-  for (const g of Object.values(doc.groups)) n += g.nodes.length;
-  return n;
+  return doc.root.nodes.length;
 }
 
 function clone<T>(v: T): T {
@@ -308,6 +305,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ messages: msgs, streaming: false });
   },
 
+  stopTurn: () => {
+    const s = get();
+    const msgs = s.messages.map((m) => ({ ...m }));
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'assistant') {
+      last.status = 'stopped';
+    }
+    set({ messages: msgs, streaming: false });
+  },
+
   applyAgentDoc: (doc) => {
     const active = get().current();
     if (!active) return;
@@ -324,20 +331,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const edgeIds = clean.root.edges.map((e) => e.id).filter(Boolean);
     const next = edgeIds.length ? { edgeIds, index: 0, running: true } : null;
     set({ sessions, progress: next });
-    // 有新节点：等 React Flow 渲染测量后，自动横向整理（超宽换行），并把排版结果持久化回会话
+    // 有新节点：等 React Flow 渲染测量后，按连通分量分块自动整理（而非全部排成一排），
+    // 并把排版结果持久化回会话
     if (newIds.length > 0) {
       const targetId = get().activeId;
       const doLayout = () => {
         // 用户已切走画布：不再对错误画布排版
         if (get().activeId !== targetId) return;
         const g = useGraphStore.getState();
-        g.layoutNodes();
+        g.arrangeNodes();
         g.commit();
         useSessionStore.getState().syncActiveGraph();
       };
       setTimeout(doLayout, 260);
       setTimeout(doLayout, 900);
     }
+  },
+
+  markActive: () => {
+    const active = get().current();
+    if (!active) return;
+    set((s) => ({
+      sessions: { ...s.sessions, [active.id]: { ...active, status: 'active' } },
+    }));
   },
 
   setProgressIndex: (i) => {

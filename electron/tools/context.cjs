@@ -13,6 +13,7 @@
  *   conversationHistory() → Array                    会话历史
  *   notifyFileChange(rel, kind, detail)              文件变更通知
  *   ragConfig() → object                              本地 RAG 配置
+ *   scalars() → ScalarStore|null                      本地标量存储（画布节点等精准数据）
  */
 'use strict';
 
@@ -32,6 +33,7 @@ class AgentToolContext {
     this.conversationSupplier = o.conversationHistory || null;
     this.fileChangeNotifier = o.notifyFileChange || null;
     this.ragConfigValue = o.ragConfig || {};
+    this.scalarStoreValue = o.scalarStore || null;
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
   }
@@ -45,6 +47,8 @@ class AgentToolContext {
   }
 
   async confirm(level, what, detail) {
+    // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
+    if (level === ConfirmationLevel.LOW) return true;
     if (!this.confirmHandler) return true;
     try {
       return await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '');
@@ -116,6 +120,33 @@ class AgentToolContext {
 
   ragConfig() {
     return this.ragConfigValue || {};
+  }
+
+  /** 本地标量存储；未启用时返回 null。 */
+  scalars() {
+    return this.scalarStoreValue || null;
+  }
+
+  /** 便捷：批量写入标量记录 [{key,value,kind}]，返回写入条数。 */
+  storeScalars(records) {
+    const store = this.scalars();
+    if (!store || !Array.isArray(records) || records.length === 0) return 0;
+    try {
+      return store.setMany(records);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** 便捷：标量查询 {key?, prefix?, max?} → [{key, kind, value, ts, exact}] */
+  queryScalars(query) {
+    const store = this.scalars();
+    if (!store) return [];
+    try {
+      return store.query(query || {});
+    } catch {
+      return [];
+    }
   }
 
   async undo() {

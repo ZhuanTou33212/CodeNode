@@ -1,10 +1,8 @@
 import type { NodeTypes } from '@xyflow/react';
-import type { WorkflowNodeData, ScopeData, FileData } from '../types';
+import type { WorkflowNodeData, ScopeData, FileData, ObjectData } from '../types';
 import WorkflowNode from './WorkflowNode';
 import ScopeNode from './ScopeNode';
 import FileNode from './FileNode';
-import { GroupNodeMemo, GroupInputNodeMemo, GroupOutputNodeMemo } from './GroupNode';
-import { AgentChatNodeMemo, UserChatNodeMemo } from './ChatNodes';
 
 export const nodeTypes: NodeTypes = {
   task: WorkflowNode,
@@ -14,11 +12,7 @@ export const nodeTypes: NodeTypes = {
   end: WorkflowNode,
   scope: ScopeNode,
   file: FileNode,
-  group: GroupNodeMemo,
-  'group-input': GroupInputNodeMemo,
-  'group-output': GroupOutputNodeMemo,
-  agent: AgentChatNodeMemo,
-  user: UserChatNodeMemo,
+  object: WorkflowNode,
 };
 
 export type NodeTemplate = {
@@ -70,6 +64,11 @@ export const NODE_TEMPLATES: Record<string, NodeTemplate> = {
     label: '文件节点',
     subtitle: 'File',
     data: { label: '文件节点', status: 'pending', accent: '#f97316' } as FileData,
+  },
+  object: {
+    label: '对象节点',
+    subtitle: 'Object',
+    data: { label: '对象节点', status: 'pending', objectName: '', accent: '#06b6d4' } as ObjectData,
   },
 };
 

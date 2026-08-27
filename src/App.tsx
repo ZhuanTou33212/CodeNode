@@ -12,6 +12,7 @@ import { useUiStore } from './store/uiStore';
 import { newProject, openProject, saveProject, restoreLastProject } from './lib/projectActions';
 import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
+import ModelManager from './components/ModelManager';
 
 function isTypingTarget(): boolean {
   const el = document.activeElement as HTMLElement | null;
@@ -26,8 +27,9 @@ export default function App() {
   const duplicateNode = useGraphStore((s) => s.duplicateNode);
   const selectedId = useGraphStore((s) => s.selectedId);
   const deleteNodes = useGraphStore((s) => s.deleteNodes);
-  const makeGroup = useGraphStore((s) => s.makeGroup);
-  const ungroupGroup = useGraphStore((s) => s.ungroupGroup);
+  const layoutNodes = useGraphStore((s) => s.layoutNodes);
+  const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
+  const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const { fitView } = useReactFlow();
 
@@ -73,7 +75,7 @@ export default function App() {
         return;
       }
 
-      if (e.key === 'Home' || e.key.toLowerCase() === 'z') {
+      if (e.key === 'Home' || (!mod && e.key.toLowerCase() === 'z')) {
         e.preventDefault();
         fitView({ padding: 0.2 });
         return;
@@ -85,12 +87,17 @@ export default function App() {
         return;
       }
 
-      if (mod && e.key.toLowerCase() === 'g' && e.shiftKey) {
+      if (mod && e.key.toLowerCase() === 'j') {
+        // Blender 风格：Ctrl+J 把选中的节点“加入”为一个新的范围节点
         e.preventDefault();
-        ungroupGroup();
-      } else if (mod && e.key.toLowerCase() === 'g') {
+        createScopeFromSelection();
+      } else if (mod && e.key.toLowerCase() === 'l') {
+        // 自动排版属于画布操作，不入撤销历史（撤销只记录节点操作）
         e.preventDefault();
-        makeGroup();
+        layoutNodes();
+      } else if (mod && e.key.toLowerCase() === 'a' && e.shiftKey) {
+        e.preventDefault();
+        arrangeNodes();
       } else if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         undo();
@@ -104,7 +111,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, makeGroup, ungroupGroup]);
+  }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, layoutNodes, arrangeNodes, createScopeFromSelection]);
 
   return (
     <div className="app">
@@ -117,6 +124,7 @@ export default function App() {
       </div>
       <StatusBar />
       <ToolDialog />
+      <ModelManager />
     </div>
   );
 }

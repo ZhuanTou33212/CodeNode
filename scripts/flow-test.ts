@@ -1,44 +1,27 @@
 import { computeFlow, computeChildren } from '../src/lib/flow';
 import type { Node, Edge } from '@xyflow/react';
-import type { Graph } from '../src/types';
 
 const n = (id: string, type: string, x: number, y: number, extra: Record<string, unknown> = {}): Node =>
   ({ id, type, position: { x, y }, data: { label: id, ...extra }, measured: { width: 80, height: 50 } }) as Node;
 
-// 主画布：start -> 组(in-1)，组(out-1) -> end
+// 主画布：start -> task1 -> end
 const nodes: Node[] = [
-  n('start', 'start', 0, 0),
-  n('g1', 'group', 300, 0, {
-    width: 260,
-    height: 160,
-    sockets: { inputs: [{ id: 'in-1', toId: 'task1' }], outputs: [{ id: 'out-1', fromId: 'task1' }] },
-  }),
-  n('end', 'end', 700, 60),
+  n('start', 'start', 0, 0, { goal: '开始' }),
+  n('task1', 'task', 200, 0, { goal: '任务一', prompt: '做某事' }),
+  n('task2', 'task', 400, 0, { goal: '任务二', prompt: '做另一事' }),
+  n('end', 'end', 600, 60),
 ];
 const edges: Edge[] = [
-  { id: 'e1', source: 'start', target: 'g1', targetHandle: 'in-1' },
-  { id: 'e2', source: 'g1', sourceHandle: 'out-1', target: 'end' },
+  { id: 'e1', source: 'start', target: 'task1' },
+  { id: 'e2', source: 'task1', target: 'task2' },
+  { id: 'e3', source: 'task2', target: 'end' },
 ];
 
-// 组内视图：组输入(in-1) -> task1 -> 组输出(out-1)
-const gi = n('g1-gi', 'group-input', 0, 40, { socketIds: ['in-1'] });
-const task1 = n('task1', 'task', 120, 20, { goal: '组内任务' });
-const go = n('g1-go', 'group-output', 320, 40, { socketIds: ['out-1'] });
-const groups: Record<string, Graph> = {
-  g1: {
-    nodes: [gi, task1, go],
-    edges: [
-      { id: 's1', source: 'g1-gi', sourceHandle: 'in-1', target: 'task1' },
-      { id: 's2', source: 'task1', target: 'g1-go', targetHandle: 'out-1' },
-    ],
-  },
-};
-
-const flow = computeFlow(nodes, edges, groups);
+const flow = computeFlow(nodes, edges);
 
 console.log('start.out:', flow['start'].output.map((i) => i.kind).join(','));
-console.log('group.input:', flow['g1'].input.map((i) => i.kind).join(','));
-console.log('group.output:', flow['g1'].output.map((i) => i.kind + ':' + i.label).join('|'));
+console.log('task1.in:', flow['task1'].input.map((i) => i.kind).join(','));
+console.log('task2.out:', flow['task2'].output.map((i) => i.kind + ':' + i.label).join('|'));
 console.log('end.in:', flow['end'].input.length, 'end.out:', flow['end'].output.length);
 
 // 容器成员制（computeChildren 返回显式成员）
@@ -52,11 +35,11 @@ const kids = computeChildren(scopeNodes[0], scopeNodes);
 
 const pass =
   flow['start'].output.length === 1 &&
-  flow['g1'].input.length === 1 &&
-  flow['g1'].output.length === 2 &&
-  flow['end'].input.length === 2 &&
-  flow['end'].output.length === 3 &&
+  flow['task1'].input.length === 1 &&
+  flow['task2'].output.length === 3 &&
+  flow['end'].input.length === 3 &&
+  flow['end'].output.length === 4 &&
   kids.map((k) => k.id).sort().join(',') === 'a,b';
 
-console.log(pass ? 'GROUP FLOW TEST: PASS' : 'GROUP FLOW TEST: FAIL');
+console.log(pass ? 'FLOW TEST: PASS' : 'FLOW TEST: FAIL');
 process.exit(pass ? 0 : 1);

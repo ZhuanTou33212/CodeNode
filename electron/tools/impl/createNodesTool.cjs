@@ -1,12 +1,12 @@
 /**
  * create_nodes：在工作台当前画布创建节点。count 默认 1（最多 50）；name 为名称（数量>1 自动编号）；
- * type 支持任务节点语义（task/stage/tool/start/end/group/file/agent/user/scope），
- * 兼容旧版 nodeKind 别名（regular→task、calculation/condition/capture→task、bundle→group、asset→file）。
+ * type 支持任务节点语义（task/stage/tool/start/end/file/scope），agent/user 已废弃（传入回退为 task）。
  * file 类型需 relativePath；connect=true 时按创建顺序串联成链。返回节点 id 列表。
  */
 'use strict';
 
 const { AgentToolResult } = require('../result.cjs');
+const { accentForType } = require('./shared.cjs');
 
 const MAX_COUNT = 50;
 
@@ -15,18 +15,15 @@ const KIND_TO_TYPE = {
   calculation: 'task',
   condition: 'task',
   capture: 'task',
-  bundle: 'group',
   asset: 'file',
-  group: 'group',
   file: 'file',
   task: 'task',
   stage: 'stage',
   tool: 'tool',
   start: 'start',
   end: 'end',
-  agent: 'agent',
-  user: 'user',
   scope: 'scope',
+  object: 'object',
 };
 
 function stringArg(args, key, fallback) {
@@ -40,16 +37,17 @@ function register(registry) {
   registry.register(
     'create_nodes',
     '在工作台当前画布创建节点。count 指定数量（默认1，最多50）；name 为名称（数量>1 时自动编号如 名1/名2）；' +
-      'type 支持 task/stage/tool/start/end/group/file/agent/user/scope；file 类型需 relativePath（项目内相对路径）；' +
+      'type 支持 task/stage/tool/start/end/file/scope/object（start 只有输出端口、end 只有输入端口；object 需 objectName；已废弃的 agent/user 传入回退为 task）；file 类型需 relativePath；' +
       'prompt 为节点职责说明；connect=true 时按创建顺序串联成链。创建后返回节点 id 列表。',
     {
       type: 'object',
       properties: {
         count: { type: 'integer', description: '节点数量，默认 1，最多 50' },
         name: { type: 'string', description: '节点名称或前缀' },
-        type: { type: 'string', description: 'task/stage/tool/start/end/group/file/agent/user/scope' },
-        nodeKind: { type: 'string', description: '兼容旧版：regular/calculation/condition/capture/file/asset/bundle/group' },
+        type: { type: 'string', description: 'task/stage/tool/start/end/file/scope/object（agent/user 已废弃，传入回退为 task）' },
+        nodeKind: { type: 'string', description: '兼容旧版：regular/calculation/condition/capture/file/asset' },
         prompt: { type: 'string', description: '节点职责说明' },
+        objectName: { type: 'string', description: 'object 类型节点的对象名称' },
         relativePath: { type: 'string', description: 'file 节点的项目内相对路径' },
         connect: { type: 'boolean', description: '是否按顺序串联，默认 false' },
       },
@@ -66,6 +64,7 @@ function register(registry) {
       const kind = (stringArg(args, 'nodeKind', '') || stringArg(args, 'type', 'task')).toLowerCase();
       const type = KIND_TO_TYPE[kind] || 'task';
       const relativePath = stringArg(args, 'relativePath', '');
+      const objectName = stringArg(args, 'objectName', '');
       const connect = args.connect === true;
 
       const ids = [];
@@ -73,13 +72,18 @@ function register(registry) {
       try {
         applied = await context.mutateWorkbench((model) => {
           const created = [];
-          const baseX = 120;
+          // 自动错位：未显式指定时从画布最大右缘继续，避免全部堆在 (120,120)
+          let baseX = 120;
+          for (const n of model.nodes()) {
+            const w = (n.measured && n.measured.width) || (n.data && n.data.width) || 170;
+            baseX = Math.max(baseX, Math.round((n.position && n.position.x) + w) + 80);
+          }
           const baseY = 120;
           for (let i = 0; i < count; i++) {
             const nodeName = count === 1 ? baseName : baseName + (i + 1);
-            const data = { label: nodeName, status: 'pending', prompt };
+            const data = { label: nodeName, status: 'pending', prompt, accent: accentForType(type) };
             if (type === 'file') data.filePath = relativePath || nodeName;
-            if (type === 'group') data.accent = '#06b6d4';
+            if (type === 'object') data.objectName = objectName || nodeName;
             if (type === 'scope') {
               data.width = 320;
               data.height = 200;

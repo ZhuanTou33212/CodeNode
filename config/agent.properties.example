@@ -1,8 +1,10 @@
 # CodeNode Agent 配置（本地，api_key 不入库不提交）
 api_base=https://api.deepseek.com
 api_key=
-model=deepseek-chat
+model=deepseek-v4-flash
 max_tokens=8192
+# 推理强度：low / medium / high
+# reasoning_effort=high
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md
 
@@ -10,16 +12,16 @@ soul_file=config/soul.md
 # 总开关：false 关闭全部工具（仅纯对话）
 # tools.enabled=true
 # 白名单：非空时只允许列出的工具（逗号分隔）；留空=全部允许
-# 可用工具：get_workbench_model / create_nodes / workbench_edit / workbench_connect / workbench_structure /
+# 可用工具：get_workbench_model / create_nodes / workbench_edit / workbench_connect /
 #           scan_project / analyze_project / project_info / read_file / write_file / edit_file /
 #           find_files / search_files / list_directory / execute_shell / code_review / ask_user /
 #           fetch_url / save_project / bulk_edit / ui_control / write_analysis_md / retrieve_context
-# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,create_nodes,workbench_edit,workbench_connect,workbench_structure,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md,retrieve_context
+# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,create_nodes,workbench_edit,workbench_connect,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md,retrieve_context
 # 黑名单：禁用某些工具（逗号分隔）
 # tools.deny=execute_shell,bulk_edit
 
 # ---------- Agentic RAG（本地、按需、增量） ----------
-# Agent 通过 retrieve_context 自主检索项目源码/文档；不上传索引，不需要向量数据库。
+# Agent 通过 retrieve_context 自主检索项目源码/文档；不上传索引。
 # rag.enabled=true
 # rag.max_files=5000
 # rag.max_file_bytes=524288
@@ -32,4 +34,31 @@ soul_file=config/soul.md
 # 可选收录/排除 glob（逗号分隔）；敏感文件无论配置如何都不会收录
 # rag.include=src/**,docs/**,README*
 # rag.exclude=**/*.generated.*,fixtures/**
+
+# ---------- 向量层（可插拔嵌入器） ----------
+# provider：local（默认，纯本地确定性 n-gram 哈希向量，无网络）/
+#           openai（OpenAI 兼容 /embeddings，需 embed_base+embed_key+embed_model）/
+#           ollama（本地 Ollama，需 embed_base+embed_model）/
+#           none（关闭向量层，只用 BM25）
+# rag.embed_provider=local
+# rag.embed_dim=4096            # local 向量维度
+# rag.embed_model=              # openai 用 text-embedding-3-small；ollama 用 nomic-embed-text
+# rag.embed_base=               # openai 默认 https://api.openai.com/v1；ollama 默认 http://localhost:11434
+# rag.embed_key=                # openai 需要
+# rag.embed_top_k=40            # 向量层只对 BM25 预筛的 Top-K 做语义余弦，保证效率
+# rag.vector_weight=0.35        # 向量分融合权重（0~1）
+# retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
+
+# ---------- 本地标量（画布精准数据，不入云） ----------
+# 画布节点等精准数据（prompt/goal/members/filePath）在工具执行时写入工程 .codenode/scalars.json，
+# 不随上下文返回云端；Agent 需要时用 query_scalars key=node:<id> 或 retrieve_context mode=scalar 读取。
+# scalars.enabled=true
+
+# ---------- 工具结果子代理压缩 ----------
+# 工具返回的原始结果超过阈值时，会经一次独立 LLM 调用（子代理，不共享主对话）压缩成关键信息再回上下文。
+# agent.compression.enabled=true
+# agent.compression.threshold_chars=2400   # 低于此长度的结果直接透传
+# agent.compression.budget_chars=1500      # 压缩摘要目标长度
+# agent.compression.max_calls=8            # 单轮最多压缩调用次数
+# agent.compression.exclude=               # 追加不压缩的工具（默认已有 retrieve_context,query_scalars,ask_user）
 # 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索

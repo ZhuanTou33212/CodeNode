@@ -9,6 +9,14 @@ export type BaseData = {
   prompt?: string;
   status: NodeStatus;
   accent?: string;
+  /** 所属 scope（唯一父，null=顶层） */
+  parentId?: string | null;
+  /** scope 成员列表（有序，仅 scope 非空） */
+  childIds?: string[];
+  /** 状态栏角标，如 'in:scope-1' */
+  memberBadge?: string | null;
+  /** scope 折叠状态 */
+  collapsed?: boolean;
 };
 
 export type ScopeData = BaseData & {
@@ -16,6 +24,8 @@ export type ScopeData = BaseData & {
   height: number;
   fill: string;
   opacity: number;
+  /** 兼容旧画布：members 与 childIds 等价，加载时会归一化到 childIds */
+  members?: string[];
 };
 
 export type FileData = BaseData & {
@@ -24,41 +34,19 @@ export type FileData = BaseData & {
   content?: string;
 };
 
-export type SocketDef = {
-  id: string;
-  toId?: string;
-  fromId?: string;
+/** 对象节点：专门用于表示/存储对象名称（数据对象、配置对象、实体名等） */
+export type ObjectData = BaseData & {
+  objectName?: string;
 };
 
-export type GroupData = BaseData & {
-  width: number;
-  height: number;
-  sockets: { inputs: SocketDef[]; outputs: SocketDef[] };
-};
-
-export type GroupIOData = BaseData & {
-  socketIds: string[];
-};
-
-export type AgentChatData = BaseData & {
-  name: string;
-  content: string;
-  greeted?: boolean;
-  reasoning?: string;
-  tools?: { name: string; args?: unknown; result?: string; ok?: boolean }[];
-  width?: number;
-};
-
-export type UserChatData = BaseData & {
-  content: string;
-  sent?: boolean;
-  width?: number;
-  height?: number;
-};
-
-export type WorkflowNodeData = BaseData | ScopeData | FileData | GroupData | GroupIOData | AgentChatData | UserChatData;
+export type WorkflowNodeData = BaseData | ScopeData | FileData | ObjectData;
 
 export type Graph = { nodes: Node[]; edges: Edge[] };
+
+/** 连线附加数据：waypoints 为纯几何中转点（不进入节点模型） */
+export type EdgeData = {
+  waypoints?: { x: number; y: number }[];
+};
 
 export type FlowItem = {
   nodeId: string;
@@ -102,11 +90,9 @@ export type SessionMsg = {
   grounding?: RagGrounding;
 };
 
-/** 单个画布的文档快照（根图 + 组图 + 组导航栈） */
+/** 单个画布的文档快照（仅根图，无组嵌套） */
 export type SessionDoc = {
   root: Graph;
-  groups: Record<string, Graph>;
-  viewStack: string[];
 };
 
 /** 一个会话画布（每次 Agent 制作任务的输出画布） */

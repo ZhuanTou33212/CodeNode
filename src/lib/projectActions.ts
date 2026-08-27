@@ -16,8 +16,6 @@ interface SessionPayload {
   nodeCount?: number;
   summary?: string;
   root?: { nodes?: unknown[]; edges?: unknown[] };
-  groups?: Record<string, { nodes?: unknown[]; edges?: unknown[] }>;
-  viewStack?: string[];
 }
 
 function dirOf(filePath: string): string {
@@ -45,14 +43,10 @@ function buildPayload() {
       nodeCount: s.nodeCount,
       summary: s.summary || '',
       root: s.doc.root,
-      groups: s.doc.groups,
-      viewStack: s.doc.viewStack,
     }));
   return {
     graph: active ? active.doc.root : { nodes: [], edges: [] },
     canvases: {
-      groups: active ? active.doc.groups : {},
-      viewStack: active ? active.doc.viewStack : [],
       sessions,
       messages: ss.messages,
     },
@@ -79,8 +73,6 @@ function applyLoaded(
   data?: {
     graph?: { nodes?: unknown[]; edges?: unknown[] };
     canvases?: {
-      groups?: Record<string, { nodes?: unknown[]; edges?: unknown[] }>;
-      viewStack?: string[];
       sessions?: unknown[];
       messages?: SessionMsg[];
     };
@@ -108,24 +100,19 @@ function applyLoaded(
       summary: sd.summary || '',
       doc: {
         root: { nodes: (sd.root?.nodes as never[]) || [], edges: (sd.root?.edges as never[]) || [] } as Graph,
-        groups: (sd.groups as never) || {},
-        viewStack: (sd.viewStack as never[]) || [],
       } as SessionDoc,
     }));
     ss.restoreSessions(list, messages || [], undefined);
   } else {
-    // 旧版单画布：把加载到的图作为首个会话
-    const groups: Record<string, Graph> = {};
-    for (const [gid, g] of Object.entries(data?.canvases?.groups || {})) {
-      groups[gid] = { nodes: (g.nodes as never[]) || [], edges: (g.edges as never[]) || [] };
-    }
+    // 旧版单画布：把加载到的图作为首个会话（忽略其中的组节点与组图）
     const doc: SessionDoc = {
       root: {
-        nodes: ((data?.graph?.nodes as never[]) || []) as never[],
+        nodes: ((data?.graph?.nodes as never[]) || []).filter((n) => {
+          const t = (n as { type?: string } | null)?.type;
+          return t !== 'group' && t !== 'group-input' && t !== 'group-output';
+        }) as never[],
         edges: ((data?.graph?.edges as never[]) || []) as never[],
       },
-      groups: groups as never,
-      viewStack: data?.canvases?.viewStack || [],
     };
     useSessionStore.setState({ sessions: {}, order: [], activeId: null, streaming: false, progress: null });
     void fetchSoul(_root).then(({ raw, greeting }) => {
@@ -139,7 +126,7 @@ function applyLoaded(
             prompt: raw,
             status: 'completed',
             createdAt: Date.now(),
-            nodeCount: doc.root.nodes.length + Object.values(doc.groups).reduce((n, g) => n + g.nodes.length, 0),
+            nodeCount: doc.root.nodes.length,
             doc,
           } as SessionCanvas,
         ],
