@@ -9,6 +9,7 @@
 'use strict';
 
 const { AgentToolRegistry } = require('./registry.cjs');
+const { registerProjectExtensions } = require('./extensions.cjs');
 
 const BUILTINS = [
   require('./impl/getWorkbenchModelTool.cjs'),
@@ -68,7 +69,10 @@ function filterByConfig(registry, config) {
 }
 
 function buildDefaultRegistryWithConfig(config) {
-  return filterByConfig(buildDefaultRegistry(), config);
+  const cfg = config || {};
+  const registry = buildDefaultRegistry();
+  if (cfg.projectRoot) registerProjectExtensions(registry, cfg.projectRoot);
+  return filterByConfig(registry, cfg);
 }
 
 module.exports = { buildDefaultRegistry, filterByConfig, buildDefaultRegistryWithConfig, BUILTINS };

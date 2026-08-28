@@ -14,6 +14,12 @@ export type SelectedFile = {
   truncated: boolean;
 };
 
+export type SearchMatch = {
+  path: string;
+  line: number;
+  text: string;
+};
+
 export type DocMeta = {
   documentId?: string;
   createdAt?: string;
@@ -26,12 +32,22 @@ interface ProjectState {
   tree: FileNode[];
   loading: boolean;
   selected: SelectedFile | null;
+  draft: string;
+  dirty: boolean;
+  fileFilter: string;
+  searchMatches: SearchMatch[];
+  searching: boolean;
   error: string | null;
   doc: DocMeta;
 
   choose: () => Promise<void>;
   refresh: () => Promise<void>;
   openFile: (relPath: string) => Promise<void>;
+  updateDraft: (content: string) => void;
+  saveSelected: () => Promise<boolean>;
+  revertDraft: () => void;
+  setFileFilter: (value: string) => void;
+  searchProject: (query: string) => Promise<void>;
   loadRoot: (root: string) => Promise<void>;
   setDoc: (doc: DocMeta) => void;
   setProjectFile: (filePath: string | null) => void;
@@ -89,6 +105,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   tree: [],
   loading: false,
   selected: null,
+  draft: '',
+  dirty: false,
+  fileFilter: '',
+  searchMatches: [],
+  searching: false,
   error: null,
   doc: {},
 
@@ -105,7 +126,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadRoot: async (root) => {
-    set({ root, projectFile: null, loading: true, selected: null, error: null });
+    set({ root, projectFile: null, loading: true, selected: null, draft: '', dirty: false, searchMatches: [], error: null });
     if (!window.codenode) {
       set({ tree: [], loading: false, error: '需要 Electron 环境' });
       return;
@@ -132,9 +153,43 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!root || !window.codenode) return;
     const res = await window.codenode.readProjectFile(root, relPath);
     if (res.ok) {
-      set({ selected: { relPath, content: res.content || '', truncated: !!res.truncated }, error: null });
+      const content = res.content || '';
+      set({ selected: { relPath, content, truncated: !!res.truncated }, draft: content, dirty: false, error: null });
     } else {
       set({ error: res.error || '读取失败' });
+    }
+  },
+
+  updateDraft: (content) => set((s) => ({ draft: content, dirty: !!s.selected && content !== s.selected.content })),
+
+  saveSelected: async () => {
+    const { root, selected, draft } = get();
+    if (!root || !selected || !window.codenode?.writeProjectFile) return false;
+    const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true);
+    if (!res.ok) {
+      set({ error: res.error || '保存文件失败' });
+      return false;
+    }
+    set({ selected: { ...selected, content: draft, truncated: false }, dirty: false, error: null });
+    return true;
+  },
+
+  revertDraft: () => set((s) => ({ draft: s.selected?.content || '', dirty: false })),
+
+  setFileFilter: (value) => set({ fileFilter: value }),
+
+  searchProject: async (query) => {
+    const root = get().root;
+    if (!root || !query.trim() || !window.codenode?.searchProject) {
+      set({ searchMatches: [] });
+      return;
+    }
+    set({ searching: true });
+    try {
+      const res = await window.codenode.searchProject(root, query.trim(), 80);
+      set({ searchMatches: res.ok ? res.matches || [] : [], searching: false, error: res.ok ? null : res.error || '搜索失败' });
+    } catch (e) {
+      set({ searchMatches: [], searching: false, error: String(e) });
     }
   },
 }));

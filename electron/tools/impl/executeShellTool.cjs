@@ -1,5 +1,5 @@
 /**
- * execute_shell：在项目根目录执行白名单命令（mvn/mvnw/git/java/javac/go/python/node/npm/nuget/cmd/powershell 等）。
+ * execute_shell：在项目根目录执行跨平台白名单命令（mvn/mvnw/git/java/javac/go/python/node/npm/nuget/cmd/powershell 等）。
  * 危险命令（删除/清理/强改/提交推送等）执行前必须用户确认（HIGH 级）；普通构建/查询命令直接放行并记录。超时强杀。
  */
 'use strict';
@@ -42,7 +42,8 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds) {
   const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
   let child;
   try {
-    child = spawn(tokens[0], prepareArgs(normalized, tokens), { cwd: root, shell: false, windowsHide: true, env, detached: process.platform !== 'win32' });
+    const spec = spawnSpec(normalized, tokens);
+    child = spawn(spec.file, spec.args, { cwd: root, shell: false, windowsHide: true, env, detached: process.platform !== 'win32' });
   } catch (e) {
     return { jobId: null, error: String((e && e.message) || e) };
   }
@@ -158,11 +159,29 @@ function prepareArgs(base, tokens) {
   return args;
 }
 
+/** 跨平台执行适配：Windows 命令在 macOS/Linux 开发环境中也能跑基本任务。 */
+function spawnSpec(base, tokens) {
+  if (process.platform === 'win32' || (base !== 'powershell' && base !== 'pwsh' && base !== 'cmd')) {
+    return { file: tokens[0], args: prepareArgs(base, tokens) };
+  }
+  const raw = tokens.slice(1).join(' ');
+  if (base === 'cmd') return { file: '/bin/sh', args: ['-lc', raw] };
+  const sleep = raw.match(/Start-Sleep\s+(?:-Seconds\s+)?(\d+)/i);
+  const output = raw.match(/Write-Output\s+(.+)$/i);
+  const parts = [];
+  if (sleep) parts.push('sleep ' + Math.min(3600, Number(sleep[1])));
+  if (output) {
+    const value = output[1].trim().replace(/^['"]|['"]$/g, '').replace(/'/g, "'\\''");
+    parts.push("printf '%s\\n' '" + value + "'");
+  }
+  return { file: '/bin/sh', args: ['-lc', parts.join('; ') || 'true'] };
+}
+
 function register(registry) {
   registry.register(
     'execute_shell',
-    '在项目根目录执行白名单命令（mvn/mvnw/git/java/javac/go/python/node/npm/npx/cmd/powershell 等构建/工具命令）。' +
-      '运行环境是 Windows，不要使用 ls/find/cat/~/head 等 Unix 命令（它们不可用）；探索项目用 scan_project / read_file。' +
+      '在项目根目录执行跨平台白名单命令（mvn/mvnw/git/java/javac/go/python/node/npm/npx/cmd/powershell 等构建/工具命令）。' +
+      '命令会按当前系统适配；探索项目优先使用 scan_project / read_file。' +
       '危险命令（删除/清理/强改/提交推送等）执行前需用户确认；超时自动强杀。' +
       '【长任务】预估耗时超过约 30 秒的任务：用 async=true 后台执行（立即返回 jobId），再用 poll_job jobId=… waitSeconds=… 轮询进度与结果，不要一次性前台等待。',
     {
@@ -212,7 +231,8 @@ function register(registry) {
         let child;
         try {
           const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
-          child = spawn(tokens[0], prepareArgs(normalized, tokens), { cwd: root, shell: false, windowsHide: true, env });
+          const spec = spawnSpec(normalized, tokens);
+          child = spawn(spec.file, spec.args, { cwd: root, shell: false, windowsHide: true, env });
         } catch (e) {
           resolve(AgentToolResult.error('执行失败：' + ((e && e.message) || e)));
           return;

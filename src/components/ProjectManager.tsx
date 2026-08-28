@@ -67,6 +67,23 @@ export default function ProjectManager() {
   const error = useProjectStore((s) => s.error);
   const refresh = useProjectStore((s) => s.refresh);
   const openFile = useProjectStore((s) => s.openFile);
+  const fileFilter = useProjectStore((s) => s.fileFilter);
+  const setFileFilter = useProjectStore((s) => s.setFileFilter);
+  const openDock = useUiStore((s) => s.openDock);
+
+  const visibleTree = (nodes: FileNode[]): FileNode[] => {
+    const query = fileFilter.trim().toLowerCase();
+    if (!query) return nodes;
+    return nodes.reduce<FileNode[]>((acc, node) => {
+      if (node.type === 'file') {
+        if (node.relPath.toLowerCase().includes(query)) acc.push(node);
+      } else {
+        const children = visibleTree(node.children || []);
+        if (children.length || node.name.toLowerCase().includes(query)) acc.push({ ...node, children });
+      }
+      return acc;
+    }, []);
+  };
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -116,6 +133,7 @@ export default function ProjectManager() {
         <div className="pm-root" title={root || ''}>
           {fileName ? `${fileName}` : rootName ? `${rootName}` : '未打开项目'}
         </div>
+        <div className="pm-search"><span>⌕</span><input value={fileFilter} onChange={(e) => setFileFilter(e.target.value)} placeholder="过滤文件…" /><kbd>⌘P</kbd></div>
       </header>
 
       <div className="pm-body">
@@ -127,7 +145,7 @@ export default function ProjectManager() {
           )}
           {root &&
             !loading &&
-            tree.map((n) => <TreeRow key={n.relPath} node={n} depth={0} onOpen={openFile} />)}
+            visibleTree(tree).map((n) => <TreeRow key={n.relPath} node={n} depth={0} onOpen={(path) => { void openFile(path); openDock('editor'); }} />)}
         </div>
 
         <div className="pm-preview">

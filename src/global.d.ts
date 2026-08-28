@@ -41,6 +41,20 @@ interface ProjectFileDto {
   size: number;
 }
 
+interface ProjectSearchMatchDto {
+  path: string;
+  line: number;
+  text: string;
+}
+
+interface ProjectExtensionDto {
+  name: string;
+  kind: string;
+  description?: string;
+  enabled?: boolean;
+  source?: string;
+}
+
 interface AgentToolSpecDto {
   name: string;
   description: string;
@@ -90,6 +104,23 @@ interface CodenodeApi {
     root: string,
     relPath: string
   ) => Promise<{ ok: boolean; content?: string; truncated?: boolean; error?: string }>;
+  writeProjectFile: (
+    root: string,
+    relPath: string,
+    content: string,
+    backup?: boolean
+  ) => Promise<{ ok: boolean; bytes?: number; error?: string }>;
+  searchProject: (
+    root: string,
+    query: string,
+    maxResults?: number
+  ) => Promise<{ ok: boolean; matches?: ProjectSearchMatchDto[]; error?: string }>;
+  runProjectCommand: (
+    root: string,
+    command: string,
+    timeoutSeconds?: number
+  ) => Promise<{ ok: boolean; output?: string; exitCode?: number | null; timedOut?: boolean; error?: string }>;
+  listExtensions: (root: string | null) => Promise<{ ok: boolean; extensions?: ProjectExtensionDto[]; error?: string }>;
   saveProject: (target: string, payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   loadProject: (target: string) => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   agentConfig: (

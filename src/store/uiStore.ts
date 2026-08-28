@@ -11,6 +11,8 @@ interface UiState {
   pendingViewport: { x: number; y: number; zoom: number } | null;
   modelManagerOpen: boolean;
   hoverScopeId: string | null;
+  dockOpen: boolean;
+  dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
 
   toggleLeft: () => void;
   setHoverScopeId: (id: string | null) => void;
@@ -26,6 +28,9 @@ interface UiState {
   applyPendingViewport: () => { x: number; y: number; zoom: number } | null;
   openModelManager: () => void;
   closeModelManager: () => void;
+  openDock: (tab?: UiState['dockTab']) => void;
+  closeDock: () => void;
+  setDockTab: (tab: UiState['dockTab']) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -41,6 +46,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   pendingViewport: null,
   modelManagerOpen: false,
   hoverScopeId: null,
+  dockOpen: false,
+  dockTab: 'editor',
 
   toggleLeft: () => set((s) => ({ leftOpen: !s.leftOpen })),
   setHoverScopeId: (id) => set({ hoverScopeId: id }),
@@ -64,4 +71,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   openModelManager: () => set({ modelManagerOpen: true }),
   closeModelManager: () => set({ modelManagerOpen: false }),
+  openDock: (tab) => set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
+  closeDock: () => set({ dockOpen: false }),
+  setDockTab: (tab) => set({ dockOpen: true, dockTab: tab }),
 }));

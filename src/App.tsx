@@ -13,6 +13,7 @@ import { newProject, openProject, saveProject, restoreLastProject } from './lib/
 import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
 import ModelManager from './components/ModelManager';
+import WorkbenchDock from './components/WorkbenchDock';
 
 function isTypingTarget(): boolean {
   const el = document.activeElement as HTMLElement | null;
@@ -121,6 +122,7 @@ export default function App() {
         <Canvas />
         {inspectorOpen ? <Inspector /> : <InspectorBadge />}
         <AddMenu />
+        <WorkbenchDock />
       </div>
       <StatusBar />
       <ToolDialog />

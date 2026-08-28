@@ -16,6 +16,7 @@ export default function Toolbar() {
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
   const setToast = useUiStore((s) => s.setToast);
+  const openDock = useUiStore((s) => s.openDock);
   const { fitView } = useReactFlow();
 
   return (
@@ -49,6 +50,20 @@ export default function Toolbar() {
       </div>
 
       <div className="toolbar-group">
+        <button title="打开代码编辑器" onClick={() => openDock('editor')}>
+          编辑
+        </button>
+        <button title="打开终端" onClick={() => openDock('terminal')}>
+          终端
+        </button>
+        <button
+          className="toolbar-run"
+          title="按连线拓扑连续执行工作流"
+          disabled={nodeCount === 0}
+          onClick={() => openDock('runs')}
+        >
+          运行
+        </button>
         <button
           title="复制节点 (Ctrl+D)"
           disabled={!selectedId}
@@ -91,7 +106,13 @@ export default function Toolbar() {
             setToast('数据流已计算');
           }}
         >
-          计算
+          数据流
+        </button>
+        <button title="打开检查点与恢复历史" onClick={() => openDock('checkpoints')}>
+          恢复
+        </button>
+        <button title="查看内置工具与项目扩展" onClick={() => openDock('extensions')}>
+          扩展
         </button>
         <button title="聚焦全部 (Z)" onClick={() => fitView({ padding: 0.2 })}>
           聚焦

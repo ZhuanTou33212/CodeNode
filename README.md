@@ -38,6 +38,32 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 - 选择项目目录 → 递归文件树（忽略 node_modules/.git/dist 等），点击文件预览内容
 - 面板可收起 / 拖拽调宽；`.cnode` 工程文件在树中高亮
 
+### 工程工作台（底部 Dock）
+- 代码编辑器：项目文件可直接编辑、保存，覆盖前自动生成 `.bak` 备份
+- Diff：逐行显示未保存修改；搜索：按项目内容返回文件与行号结果
+- 终端：在项目根目录执行跨平台白名单命令，可运行构建、测试与 Git 操作
+- 工作流运行：按画布 DAG 拓扑连续推进节点；Prompt 以 `run:` 或 `$` 开头时执行真实命令
+- 检查点：工作流运行前后自动保存，最近 30 个检查点可恢复
+- 扩展：内置工具与项目扩展统一显示；`.codenode/extensions.json` 可声明外部工具进程
+
+项目扩展清单示例：
+
+```json
+{
+  "extensions": [
+    {
+      "name": "project_lint",
+      "kind": "Skills",
+      "description": "运行项目自定义检查",
+      "command": "node scripts/project-lint.cjs",
+      "parameters": { "type": "object", "properties": {} }
+    }
+  ]
+}
+```
+
+扩展进程的参数同时会通过 `CODENODE_TOOL_ARGS` 环境变量传入；写入型扩展仍会经过确认、审计和项目根目录隔离。
+
 ### 检查器（右上角悬浮角标）
 - 默认显示悬浮角标（节点数 / 选中提示），点击展开为检查器浮层，可编辑节点名称 / 状态 / 目标说明
 
@@ -143,8 +169,8 @@ scripts/            冒烟测试
 ## 测试
 
 ```powershell
-# DOM 冒烟（加载 dist/，校验画布/面板/控件）
-node_modules\.bin\electron scripts\smoke.cjs
+# DOM 冒烟（加载 dist/，校验画布/面板/控件；无 GUI 的 CI 会明确跳过）
+npm run test:smoke
 # 主进程自检（验证 preload + IPC + .cnode 保存/加载/完整性）
 $env:CODENODE_TEST=1; node_modules\electron\dist\electron.exe .
 # Agentic RAG 端到端测试（多查询融合、质量诊断、范围策略、安全排除、显式/自动刷新）

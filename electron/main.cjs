@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs').promises;
@@ -110,6 +111,68 @@ async function walkProject(root) {
   }
   files.sort((a, b) => a.relPath.localeCompare(b.relPath));
   return files;
+}
+
+function safeProjectPath(root, relPath) {
+  const resolvedRoot = path.resolve(root);
+  const full = path.resolve(root, relPath);
+  return full === resolvedRoot || full.startsWith(resolvedRoot + path.sep) ? full : null;
+}
+
+function splitProjectCommand(command) {
+  const tokens = [];
+  let current = '';
+  let quote = '';
+  for (const c of String(command || '')) {
+    if ((c === '"' || c === "'") && !quote) { quote = c; continue; }
+    if (c === quote) { quote = ''; continue; }
+    if (/\s/.test(c) && !quote) {
+      if (current) { tokens.push(current); current = ''; }
+    } else current += c;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+const PROJECT_COMMANDS = new Set([
+  'npm', 'npx', 'node', 'git', 'python', 'python3', 'py', 'java', 'javac',
+  'mvn', 'mvnw', 'mvnw.cmd', 'gradle', 'gradlew', 'gradlew.bat', 'go', 'cargo',
+  'cmd', 'powershell', 'pwsh',
+]);
+
+function decodeProcessOutput(buf) {
+  try {
+    const text = Buffer.from(buf || '').toString('utf8');
+    return text.includes('\uFFFD') ? Buffer.from(buf || '').toString('latin1') : text;
+  } catch { return String(buf || ''); }
+}
+
+function runProjectCommand(root, command, timeoutSeconds = 120) {
+  const tokens = splitProjectCommand(command);
+  const base = (tokens[0] || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+  if (!tokens.length) return Promise.resolve({ ok: false, error: '命令为空' });
+  if (!PROJECT_COMMANDS.has(base)) return Promise.resolve({ ok: false, error: `命令不在白名单：${tokens[0]}` });
+  const cwd = path.resolve(root || '.');
+  let child;
+  try {
+    child = spawn(tokens[0], tokens.slice(1), { cwd, shell: false, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } });
+  } catch (e) {
+    return Promise.resolve({ ok: false, error: String((e && e.message) || e) });
+  }
+  return new Promise((resolve) => {
+    let output = '';
+    let settled = false;
+    const finish = (result) => { if (settled) return; settled = true; resolve(result); };
+    const append = (data) => { output += decodeProcessOutput(data); if (output.length > 120000) output = output.slice(-120000); };
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      finish({ ok: false, output: output + '\n…（命令超时，已终止）', exitCode: -1, timedOut: true, error: '执行超时' });
+    }, Math.max(1, Number(timeoutSeconds) || 120) * 1000);
+    child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, output, exitCode: -1, error: String((e && e.message) || e) }); });
+    child.on('close', (exitCode) => { clearTimeout(timer); finish({ ok: exitCode === 0, output, exitCode }); });
+  });
 }
 
 function createWindow() {
@@ -554,6 +617,83 @@ ipcMain.handle('project:read', async (_event, root, relPath) => {
   }
 });
 
+ipcMain.handle('project:write', async (_event, root, relPath, content, backup = true) => {
+  try {
+    const full = safeProjectPath(root, relPath);
+    if (!full || !String(relPath || '').trim()) return { ok: false, error: '路径越界或为空' };
+    const value = String(content ?? '');
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    if (backup && fs.existsSync(full)) await fsp.copyFile(full, full + '.bak');
+    await fsp.writeFile(full, value, 'utf-8');
+    return { ok: true, bytes: Buffer.byteLength(value, 'utf8') };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('project:search', async (_event, root, query, maxResults = 80) => {
+  try {
+    const needle = String(query || '').trim().toLowerCase();
+    if (!needle) return { ok: true, matches: [] };
+    const files = await walkProject(root);
+    const matches = [];
+    for (const file of files) {
+      if (matches.length >= Math.max(1, Number(maxResults) || 80)) break;
+      if (file.size > 1024 * 1024) continue;
+      const full = safeProjectPath(root, file.relPath);
+      if (!full) continue;
+      let content;
+      try { content = await fsp.readFile(full, 'utf8'); } catch { continue; }
+      if (content.includes('\u0000')) continue;
+      const lines = content.split(/\r?\n/);
+      for (let i = 0; i < lines.length && matches.length < Math.max(1, Number(maxResults) || 80); i++) {
+        if (lines[i].toLowerCase().includes(needle)) {
+          matches.push({ path: file.relPath, line: i + 1, text: lines[i].trim().slice(0, 220) });
+        }
+      }
+    }
+    return { ok: true, matches };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('project:run', async (_event, root, command, timeoutSeconds) => {
+  return runProjectCommand(root || '.', command, timeoutSeconds);
+});
+
+ipcMain.handle('extensions:list', async (_event, root) => {
+  const builtins = toolkit.buildDefaultRegistryWithConfig({}).listTools().map((tool) => ({
+    name: tool.name,
+    kind: '内置工具',
+    description: tool.description,
+    enabled: true,
+    source: 'CodeNode Toolkit',
+  }));
+  const files = [
+    root && path.join(root, '.codenode', 'extensions.json'),
+    root && path.join(root, 'config', 'extensions.json'),
+  ].filter(Boolean);
+  for (const file of files) {
+    try {
+      const parsed = JSON.parse(await fsp.readFile(file, 'utf8'));
+      const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed.extensions) ? parsed.extensions : [];
+      for (const item of list) {
+        if (!item || !item.name) continue;
+        builtins.push({
+          name: String(item.name),
+          kind: String(item.kind || '项目扩展'),
+          description: String(item.description || ''),
+          enabled: item.enabled !== false,
+          source: file,
+        });
+      }
+      break;
+    } catch {}
+  }
+  return { ok: true, extensions: builtins };
+});
+
 ipcMain.handle('project:save', async (_event, target, payload) => {
   try {
     if (!target) return { ok: false, error: '未指定保存位置' };
@@ -682,7 +822,7 @@ ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
 
 ipcMain.handle('agent:tools', async (_event, projectRoot) => {
   const cfg = agent.loadConfig(projectRoot);
-  const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
+  const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
   return {
     enabled: cfg.tools.toolsEnabled,
     tools: registry.listTools().map((spec) => ({
@@ -720,7 +860,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     // 先装配工具注册表：用于系统提示中的工具引导，也用于工具循环
     let registry = null;
     if (cfg.tools.toolsEnabled) {
-      registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
+      registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
     }
     const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
     const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary, toolGuide) }];

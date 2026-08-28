@@ -18,6 +18,7 @@
     "test:arrange": "node scripts/arrange-test.cjs",
     "test:container": "node scripts/container-model-test.cjs",
     "test:bg": "node scripts/background-job-test.cjs",
+    "test:smoke": "node scripts/smoke-runner.cjs",
     "test:rag-ui": "electron scripts/rag-ui-test.cjs",
     "start": "electron .",
     "start:prod": "npm run build && electron .",
@@ -40,10 +41,26 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
     },
     "portable": {
       "artifactName": "CodeNode-${version}.exe"
@@ -61,7 +78,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
-    "electron": "^33.2.0",
+    "electron": "^44.0.0",
     "electron-builder": "^24.13.3",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",
