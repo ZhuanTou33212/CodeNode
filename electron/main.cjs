@@ -58,6 +58,8 @@ const { GraphModel } = require('./tools/GraphModel.cjs');
 const { AgentToolContext } = require('./tools/context.cjs');
 const { makeBridge } = require('./tools/bridge.cjs');
 const { getScalarStore } = require('./scalars/index.cjs');
+const memoryStore = require('./memory.cjs');
+const extensionStore = require('./tools/extensions.cjs');
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -139,6 +141,7 @@ const PROJECT_COMMANDS = new Set([
   'mvn', 'mvnw', 'mvnw.cmd', 'gradle', 'gradlew', 'gradlew.bat', 'go', 'cargo',
   'cmd', 'powershell', 'pwsh',
 ]);
+const projectProcesses = new Map();
 
 function decodeProcessOutput(buf) {
   try {
@@ -155,7 +158,7 @@ function runProjectCommand(root, command, timeoutSeconds = 120) {
   const cwd = path.resolve(root || '.');
   let child;
   try {
-    child = spawn(tokens[0], tokens.slice(1), { cwd, shell: false, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } });
+    child = spawnProjectProcess(tokens, base, cwd);
   } catch (e) {
     return Promise.resolve({ ok: false, error: String((e && e.message) || e) });
   }
@@ -173,6 +176,50 @@ function runProjectCommand(root, command, timeoutSeconds = 120) {
     child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, output, exitCode: -1, error: String((e && e.message) || e) }); });
     child.on('close', (exitCode) => { clearTimeout(timer); finish({ ok: exitCode === 0, output, exitCode }); });
   });
+}
+
+function spawnProjectProcess(tokens, base, cwd) {
+  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  if (process.platform === 'win32' || (base !== 'powershell' && base !== 'pwsh' && base !== 'cmd')) {
+    return spawn(tokens[0], tokens.slice(1), { cwd, shell: false, windowsHide: true, env });
+  }
+  const raw = tokens.slice(1).join(' ');
+  if (base === 'cmd') return spawn('/bin/sh', ['-lc', raw], { cwd, shell: false, env });
+  const sleep = raw.match(/Start-Sleep\s+(?:-Seconds\s+)?(\d+)/i);
+  const output = raw.match(/Write-Output\s+(.+)$/i);
+  const parts = [];
+  if (sleep) parts.push('sleep ' + Math.min(3600, Number(sleep[1])));
+  if (output) parts.push("printf '%s\\n' '" + output[1].trim().replace(/^['"]|['"]$/g, '').replace(/'/g, "'\\''") + "'");
+  return spawn('/bin/sh', ['-lc', parts.join('; ') || 'true'], { cwd, shell: false, env });
+}
+
+function startProjectStream(event, root, command, timeoutSeconds = 180) {
+  const tokens = splitProjectCommand(command);
+  const base = (tokens[0] || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+  if (!tokens.length) return { ok: false, error: '命令为空' };
+  if (!PROJECT_COMMANDS.has(base)) return { ok: false, error: `命令不在白名单：${tokens[0]}` };
+  const sessionId = 'term-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+  const cwd = path.resolve(root || '.');
+  let child;
+  try { child = spawnProjectProcess(tokens, base, cwd); }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  const job = { sessionId, child, timer: null, done: false };
+  projectProcesses.set(sessionId, job);
+  const send = (payload) => { try { if (!event.sender.isDestroyed()) event.sender.send('project:run:event', { sessionId, ...payload }); } catch {} };
+  const finish = (payload) => {
+    if (job.done) return;
+    job.done = true;
+    if (job.timer) clearTimeout(job.timer);
+    projectProcesses.delete(sessionId);
+    send(payload);
+  };
+  const output = (data) => send({ kind: 'output', text: decodeProcessOutput(data) });
+  child.stdout?.on('data', output);
+  child.stderr?.on('data', output);
+  job.timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish({ kind: 'done', exitCode: -1, timedOut: true, error: '执行超时' }); }, Math.max(1, Number(timeoutSeconds) || 180) * 1000);
+  child.on('error', (e) => finish({ kind: 'error', exitCode: -1, error: String((e && e.message) || e) }));
+  child.on('close', (exitCode) => finish({ kind: 'done', exitCode }));
+  return { ok: true, sessionId };
 }
 
 function createWindow() {
@@ -610,22 +657,29 @@ ipcMain.handle('project:read', async (_event, root, relPath) => {
     }
     const MAX = 1024 * 1024;
     const buf = await fsp.readFile(full, 'utf-8');
+    const stat = await fsp.stat(full);
     const truncated = buf.length > MAX;
-    return { ok: true, content: truncated ? buf.slice(0, MAX) : buf, truncated };
+    return { ok: true, content: truncated ? buf.slice(0, MAX) : buf, truncated, mtimeMs: stat.mtimeMs };
   } catch (e) {
     return { ok: false, error: '无法读取（可能为二进制文件）' };
   }
 });
 
-ipcMain.handle('project:write', async (_event, root, relPath, content, backup = true) => {
+ipcMain.handle('project:write', async (_event, root, relPath, content, backup = true, expectedMtimeMs) => {
   try {
     const full = safeProjectPath(root, relPath);
     if (!full || !String(relPath || '').trim()) return { ok: false, error: '路径越界或为空' };
     const value = String(content ?? '');
+    if (expectedMtimeMs != null && fs.existsSync(full)) {
+      const current = (await fsp.stat(full)).mtimeMs;
+      if (Math.abs(current - Number(expectedMtimeMs)) > 1) return { ok: false, conflict: true, error: '文件已被外部修改' };
+    }
     await fsp.mkdir(path.dirname(full), { recursive: true });
     if (backup && fs.existsSync(full)) await fsp.copyFile(full, full + '.bak');
     await fsp.writeFile(full, value, 'utf-8');
-    return { ok: true, bytes: Buffer.byteLength(value, 'utf8') };
+    try { ragIndex.invalidateProjectIndex(root, relPath); } catch {}
+    auditLog(root, `editor_write ${relPath} bytes=${Buffer.byteLength(value, 'utf8')}`);
+    return { ok: true, bytes: Buffer.byteLength(value, 'utf8'), mtimeMs: (await fsp.stat(full)).mtimeMs };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -660,6 +714,23 @@ ipcMain.handle('project:search', async (_event, root, query, maxResults = 80) =>
 
 ipcMain.handle('project:run', async (_event, root, command, timeoutSeconds) => {
   return runProjectCommand(root || '.', command, timeoutSeconds);
+});
+
+ipcMain.handle('project:run:start', async (event, root, command, timeoutSeconds) => {
+  return startProjectStream(event, root || '.', command, timeoutSeconds);
+});
+
+ipcMain.handle('project:run:stop', async (_event, sessionId) => {
+  const job = projectProcesses.get(String(sessionId || ''));
+  if (!job) return { ok: false };
+  try { job.child.kill('SIGTERM'); } catch {}
+  return { ok: true };
+});
+
+ipcMain.handle('project:run:input', async (_event, sessionId, input) => {
+  const job = projectProcesses.get(String(sessionId || ''));
+  if (!job || job.done || !job.child?.stdin?.writable) return { ok: false };
+  try { job.child.stdin.write(String(input ?? '') + '\n'); return { ok: true }; } catch { return { ok: false }; }
 });
 
 ipcMain.handle('extensions:list', async (_event, root) => {
@@ -863,7 +934,11 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
     }
     const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
-    const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary, toolGuide) }];
+    const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
+    const memoryText = memory.entries.slice(-30).map((entry) => `- ${entry.key ? '[' + entry.key + '] ' : ''}${entry.content}`).join('\n');
+    const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
+    const skillsText = skills.map((item) => `- ${item.name}: ${item.instructions || item.description || '按项目扩展定义执行'}`).join('\n');
+    const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText) }];
     for (const m of history || []) {
       if (m && m.role && m.content) messages.push({ role: m.role, content: m.content });
     }

@@ -12,6 +12,7 @@ export type SelectedFile = {
   relPath: string;
   content: string;
   truncated: boolean;
+  mtimeMs?: number;
 };
 
 export type SearchMatch = {
@@ -151,10 +152,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   openFile: async (relPath) => {
     const root = get().root;
     if (!root || !window.codenode) return;
+    if (get().dirty && get().selected?.relPath !== relPath && !window.confirm('当前文件有未保存修改，确定放弃并打开其他文件吗？')) return;
     const res = await window.codenode.readProjectFile(root, relPath);
     if (res.ok) {
       const content = res.content || '';
-      set({ selected: { relPath, content, truncated: !!res.truncated }, draft: content, dirty: false, error: null });
+      set({ selected: { relPath, content, truncated: !!res.truncated, mtimeMs: res.mtimeMs }, draft: content, dirty: false, error: null });
     } else {
       set({ error: res.error || '读取失败' });
     }
@@ -165,12 +167,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   saveSelected: async () => {
     const { root, selected, draft } = get();
     if (!root || !selected || !window.codenode?.writeProjectFile) return false;
-    const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true);
+    const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true, selected.mtimeMs);
     if (!res.ok) {
-      set({ error: res.error || '保存文件失败' });
+      set({ error: res.conflict ? '文件已被外部修改，请重新打开后再保存' : res.error || '保存文件失败' });
       return false;
     }
-    set({ selected: { ...selected, content: draft, truncated: false }, dirty: false, error: null });
+    set({ selected: { ...selected, content: draft, truncated: false, mtimeMs: res.mtimeMs }, dirty: false, error: null });
     return true;
   },
 

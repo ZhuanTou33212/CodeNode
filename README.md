@@ -41,10 +41,14 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 ### 工程工作台（底部 Dock）
 - 代码编辑器：项目文件可直接编辑、保存，覆盖前自动生成 `.bak` 备份
 - Diff：逐行显示未保存修改；搜索：按项目内容返回文件与行号结果
+- 编辑器支持多文件标签、基础语法着色、Tab 缩进和外部修改冲突检测
 - 终端：在项目根目录执行跨平台白名单命令，可运行构建、测试与 Git 操作
+- 终端采用主进程流式会话，支持实时输出、停止和超时终止
 - 工作流运行：按画布 DAG 拓扑连续推进节点；Prompt 以 `run:` 或 `$` 开头时执行真实命令
-- 检查点：工作流运行前后自动保存，最近 30 个检查点可恢复
-- 扩展：内置工具与项目扩展统一显示；`.codenode/extensions.json` 可声明外部工具进程
+- 工作流节点：task/stage/tool 有 Prompt 时调用 Agent，无命令或 Agent 配置时明确阻塞；失败/停止后可从 run-state 继续
+- 检查点：工作流运行前后自动保存到 `.cnode`，同时保留最近 30 个本地项目检查点
+- 长期记忆：Agent 可用 `remember` / `recall` 管理项目 `.codenode/memory.json`
+- 扩展：内置工具、项目进程扩展、MCP stdio JSON-RPC、Skills 上下文和 before/after Hooks 统一接入
 
 项目扩展清单示例：
 
@@ -62,7 +66,7 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 }
 ```
 
-扩展进程的参数同时会通过 `CODENODE_TOOL_ARGS` 环境变量传入；写入型扩展仍会经过确认、审计和项目根目录隔离。
+扩展进程的参数同时会通过 `CODENODE_TOOL_ARGS` 环境变量传入；写入型扩展仍会经过确认、审计和项目根目录隔离。MCP 扩展使用 `tools` 数组声明可调用工具，Skills 使用 `instructions` 字段注入项目上下文，Hooks 使用 `hooks.before` / `hooks.after`。
 
 ### 检查器（右上角悬浮角标）
 - 默认显示悬浮角标（节点数 / 选中提示），点击展开为检查器浮层，可编辑节点名称 / 状态 / 目标说明
@@ -139,6 +143,8 @@ npm start:prod       # 先构建再启动
 ### 打包 + 控制台面板（cmd 一起打开）
 ```powershell
 npm run dist        # 构建 + 打包 portable exe + 生成「CodeNode 控制台.cmd」
+npm run dist:mac    # macOS DMG + ZIP（需要桌面发行环境；CI 会自动使用项目级缓存）
+npm run dist:linux  # Linux AppImage + deb
 ```
 - 打包后在 `release/` 与 `release/win-unpacked/` 生成 **`CodeNode 控制台.cmd`**。
 - **桌面快捷方式指向该 .cmd**（而不是直接指向 exe），双击即可同时打开：
@@ -197,7 +203,7 @@ npm run test:rag-ui
 
 - [x] 基础画布 + 基础 UI + `.cnode` 专属格式
 - [x] Agent 引擎 + 工具循环 + 本地 Agentic RAG
-- [ ] 摘要 / 长期记忆 / MCP
-- [ ] 节点 = Agent 工作流：进度 / 顺序 / 结果摘要可视化
-- [ ] Agent 通过工具控制画布（创建 / 连线 / 推进状态）
-- [ ] 打包分发（electron-builder）与 `.cnode` 文件关联
+- [x] 长期记忆（remember / recall）
+- [x] 节点 = Agent 工作流：进度 / 顺序 / 结果摘要可视化
+- [x] Agent 通过工具控制画布（创建 / 连线 / 推进状态）
+- [x] 打包分发配置（electron-builder）与 `.cnode` 文件关联；实际签名/发布由 CI 或发行机执行

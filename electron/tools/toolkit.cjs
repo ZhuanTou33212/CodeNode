@@ -33,6 +33,7 @@ const BUILTINS = [
   require('./impl/projectInfoTool.cjs'),
   require('./impl/retrieveContextTool.cjs'),
   require('./impl/queryScalarsTool.cjs'),
+  require('./impl/memoryTool.cjs'),
 ];
 
 function buildDefaultRegistry() {

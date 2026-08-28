@@ -10,6 +10,14 @@ contextBridge.exposeInMainWorld('codenode', {
   writeProjectFile: (root, relPath, content, backup) => ipcRenderer.invoke('project:write', root, relPath, content, backup),
   searchProject: (root, query, maxResults) => ipcRenderer.invoke('project:search', root, query, maxResults),
   runProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run', root, command, timeoutSeconds),
+  startProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run:start', root, command, timeoutSeconds),
+  stopProjectCommand: (sessionId) => ipcRenderer.invoke('project:run:stop', sessionId),
+  sendProjectCommandInput: (sessionId, input) => ipcRenderer.invoke('project:run:input', sessionId, input),
+  onProjectCommandEvent: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('project:run:event', listener);
+    return () => ipcRenderer.removeListener('project:run:event', listener);
+  },
   listExtensions: (root) => ipcRenderer.invoke('extensions:list', root),
   saveProject: (target, payload) => ipcRenderer.invoke('project:save', target, payload),
   loadProject: (target) => ipcRenderer.invoke('project:load', target),

@@ -24,6 +24,7 @@ interface ProjectPayloadDto {
   canvases?: {
     sessions?: unknown[];
   };
+  checkpoints?: unknown[];
 }
 
 interface ProjectLoadDto {
@@ -33,6 +34,7 @@ interface ProjectLoadDto {
   canvases?: {
     sessions?: unknown[];
   };
+  checkpoints?: unknown[];
   warnings?: string[];
 }
 
@@ -103,13 +105,14 @@ interface CodenodeApi {
   readProjectFile: (
     root: string,
     relPath: string
-  ) => Promise<{ ok: boolean; content?: string; truncated?: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; content?: string; truncated?: boolean; mtimeMs?: number; error?: string }>;
   writeProjectFile: (
     root: string,
     relPath: string,
     content: string,
-    backup?: boolean
-  ) => Promise<{ ok: boolean; bytes?: number; error?: string }>;
+    backup?: boolean,
+    expectedMtimeMs?: number
+  ) => Promise<{ ok: boolean; bytes?: number; mtimeMs?: number; conflict?: boolean; error?: string }>;
   searchProject: (
     root: string,
     query: string,
@@ -120,6 +123,14 @@ interface CodenodeApi {
     command: string,
     timeoutSeconds?: number
   ) => Promise<{ ok: boolean; output?: string; exitCode?: number | null; timedOut?: boolean; error?: string }>;
+  startProjectCommand: (
+    root: string,
+    command: string,
+    timeoutSeconds?: number
+  ) => Promise<{ ok: boolean; sessionId?: string; error?: string }>;
+  stopProjectCommand: (sessionId: string) => Promise<{ ok: boolean }>;
+  sendProjectCommandInput: (sessionId: string, input: string) => Promise<{ ok: boolean }>;
+  onProjectCommandEvent: (cb: (data: { sessionId?: string; kind: 'output' | 'done' | 'error'; text?: string; exitCode?: number | null; timedOut?: boolean; error?: string }) => void) => () => void;
   listExtensions: (root: string | null) => Promise<{ ok: boolean; extensions?: ProjectExtensionDto[]; error?: string }>;
   saveProject: (target: string, payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   loadProject: (target: string) => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;

@@ -1,0 +1,58 @@
+name: CodeNode CI
+
+on:
+  push:
+    branches: ["n0_12"]
+  pull_request:
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:session
+      - run: npm run test:arrange
+      - run: npm run test:bg
+      - run: npm run test:rag
+      - run: npm run test:scalar
+      - name: Electron smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:smoke
+
+  package:
+    name: Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            command: npm run dist:win
+          - os: macos-latest
+            command: npm run dist:mac
+          - os: ubuntu-latest
+            command: npm run dist:linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codenode-${{ runner.os }}
+          path: release/*
+          if-no-files-found: error

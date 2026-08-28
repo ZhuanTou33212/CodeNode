@@ -3,7 +3,7 @@
  *
  * 参考原版 .cnode（codenode-desktop）：
  *  - UTF-8 ZIP 容器，`mimetype` 作为首条目（不压缩）
- *  - 条目：mimetype / manifest.json / graph.json / workspace.json / integrity.json
+ *  - 条目：mimetype / manifest.json / graph.json / workspace.json / canvases.json / checkpoints.json / integrity.json
  *  - integrity.json 记录各文件的 SHA-256，用于完整性校验
  *  - 未知字段忽略、缺失字段使用默认值（宽松读取）
  *
@@ -160,7 +160,7 @@ function safeStringify(value) {
 }
 
 // ---------- 编码 ----------
-function encodeCnode({ manifest, graph, workspace, canvases }) {
+function encodeCnode({ manifest, graph, workspace, canvases, checkpoints }) {
   const m = defaultManifest(manifest);
   const g = { revision: (graph && graph.revision) || 1, nodes: (graph && graph.nodes) || [], edges: (graph && graph.edges) || [] };
   const w = workspace && typeof workspace === 'object' ? workspace : {};
@@ -170,6 +170,7 @@ function encodeCnode({ manifest, graph, workspace, canvases }) {
   const graphBuf = Buffer.from(safeStringify(g), 'utf-8');
   const wsBuf = Buffer.from(safeStringify(w), 'utf-8');
   const canvasesBuf = c ? Buffer.from(safeStringify(c), 'utf-8') : null;
+  const checkpointsBuf = Array.isArray(checkpoints) ? Buffer.from(safeStringify(checkpoints), 'utf-8') : null;
   const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
   const filesMap = {
     'manifest.json': sha(manifestBuf),
@@ -177,6 +178,7 @@ function encodeCnode({ manifest, graph, workspace, canvases }) {
     'workspace.json': sha(wsBuf),
   };
   if (canvasesBuf) filesMap['canvases.json'] = sha(canvasesBuf);
+  if (checkpointsBuf) filesMap['checkpoints.json'] = sha(checkpointsBuf);
   const integrity = { algorithm: 'SHA-256', files: filesMap };
   const integrityBuf = Buffer.from(JSON.stringify(integrity), 'utf-8');
   const entries = [
@@ -186,6 +188,7 @@ function encodeCnode({ manifest, graph, workspace, canvases }) {
     { name: 'workspace.json', data: wsBuf },
   ];
   if (canvasesBuf) entries.push({ name: 'canvases.json', data: canvasesBuf });
+  if (checkpointsBuf) entries.push({ name: 'checkpoints.json', data: checkpointsBuf });
   entries.push({ name: 'integrity.json', data: integrityBuf });
   return zipStore(entries);
 }
@@ -223,11 +226,17 @@ function decodeCnode(buf) {
       warnings.push('canvases.json 解析失败');
     }
   }
+  let checkpoints = null;
+  const checkpointsBuf = files.get('checkpoints.json');
+  if (checkpointsBuf) {
+    try { checkpoints = JSON.parse(checkpointsBuf.toString('utf-8')); }
+    catch { warnings.push('checkpoints.json 解析失败'); }
+  }
   const integrity = parse('integrity.json', null);
 
   if (integrity && integrity.algorithm === 'SHA-256' && integrity.files) {
     const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
-    for (const key of ['manifest.json', 'graph.json', 'workspace.json', 'canvases.json']) {
+    for (const key of ['manifest.json', 'graph.json', 'workspace.json', 'canvases.json', 'checkpoints.json']) {
       const expected = integrity.files[key];
       const b = files.get(key);
       if (expected && b && sha(b) !== expected) warnings.push(key + ' 完整性校验失败');
@@ -236,7 +245,7 @@ function decodeCnode(buf) {
   if (manifest.formatVersion && !manifest.formatVersion.startsWith('1.')) {
     warnings.push('工程格式版本 ' + manifest.formatVersion + ' 高于本应用支持范围，将只读打开');
   }
-  return { ok: true, manifest, graph, workspace, canvases, integrity, warnings };
+  return { ok: true, manifest, graph, workspace, canvases, checkpoints, integrity, warnings };
 }
 
 module.exports = { encodeCnode, decodeCnode, MIME, FORMAT, FORMAT_VERSION };

@@ -21,7 +21,14 @@ if (!fs.existsSync(electronCli)) {
   process.exit(1);
 }
 
-const result = spawnSync(process.execPath, [electronCli, path.join(__dirname, 'smoke.cjs')], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, [electronCli, path.join(__dirname, 'smoke.cjs')], {
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    ELECTRON_MIRROR: process.env.ELECTRON_MIRROR || 'https://npmmirror.com/mirrors/electron/',
+    electron_config_cache: process.env.electron_config_cache || path.join(process.cwd(), '.cache', 'electron'),
+  },
+});
 if (result.error) {
   console.error('SMOKE: FAIL ' + result.error.message);
   process.exit(1);

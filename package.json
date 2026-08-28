@@ -2,12 +2,13 @@
   "name": "codenode-desktop-next",
   "version": "0.12.0",
   "private": true,
+  "author": "yimi528",
   "description": "CodeNode Agent 工作台：画布、工具循环与本地 Agentic RAG",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite",
-    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/run-electron.cjs .",
     "build": "tsc --noEmit && vite build",
     "test:rag": "node scripts/rag-test.cjs && node scripts/rag-grounding-test.cjs",
     "test:scalar": "node scripts/scalar-vector-test.cjs",
@@ -19,17 +20,24 @@
     "test:container": "node scripts/container-model-test.cjs",
     "test:bg": "node scripts/background-job-test.cjs",
     "test:smoke": "node scripts/smoke-runner.cjs",
-    "test:rag-ui": "electron scripts/rag-ui-test.cjs",
-    "start": "electron .",
-    "start:prod": "npm run build && electron .",
+    "test:rag-ui": "node scripts/run-electron.cjs scripts/rag-ui-test.cjs",
+    "start": "node scripts/run-electron.cjs .",
+    "start:prod": "npm run build && node scripts/run-electron.cjs .",
     "launcher": "node scripts/make-launcher.cjs",
-    "dist": "npm run build && electron-builder --win portable && node scripts/make-launcher.cjs"
+    "dist:win": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs",
+    "dist:mac": "node scripts/build-release.cjs mac",
+    "dist:linux": "node scripts/build-release.cjs linux",
+    "dist": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",
     "productName": "CodeNode",
     "directories": {
       "output": "release"
+    },
+    "electronDownload": {
+      "cache": ".cache/electron",
+      "mirror": "https://npmmirror.com/mirrors/electron/"
     },
     "files": [
       "dist/**/*",
@@ -62,6 +70,14 @@
       ],
       "category": "Development"
     },
+    "fileAssociations": [
+      {
+        "ext": "cnode",
+        "name": "CodeNode Workflow",
+        "description": "CodeNode 工作流工程",
+        "role": "Editor"
+      }
+    ],
     "portable": {
       "artifactName": "CodeNode-${version}.exe"
     }

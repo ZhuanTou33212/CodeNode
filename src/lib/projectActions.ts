@@ -2,6 +2,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { useSessionStore } from '../store/sessionStore';
+import { useCheckpointStore, type Checkpoint } from '../store/checkpointStore';
 import type { Graph, SessionCanvas, SessionDoc, SessionMsg } from '../types';
 
 const LAST_ROOT_KEY = 'codenode.lastProjectRoot';
@@ -52,6 +53,7 @@ function buildPayload() {
     },
     workspace: { viewport: useUiStore.getState().viewport },
     manifest: useProjectStore.getState().doc,
+    checkpoints: useCheckpointStore.getState().items,
   };
 }
 
@@ -78,9 +80,11 @@ function applyLoaded(
     };
     workspace?: { viewport?: { x: number; y: number; zoom: number } };
     manifest?: { documentId?: string; createdAt?: string; name?: string };
+    checkpoints?: unknown[];
   }
 ): void {
   useProjectStore.getState().setDoc(data?.manifest || {});
+  useCheckpointStore.getState().setProjectRoot(_root, (data?.checkpoints || []) as Checkpoint[]);
   if (data?.workspace?.viewport) {
     useUiStore.getState().setPendingViewport(data.workspace.viewport);
   }
@@ -149,6 +153,7 @@ export async function newProject(): Promise<void> {
   localStorage.setItem(LAST_ROOT_KEY, root);
   localStorage.setItem(LAST_FILE_KEY, res.filePath);
   await useProjectStore.getState().loadRoot(root);
+  useCheckpointStore.getState().setProjectRoot(root, []);
   useProjectStore.getState().setProjectFile(res.filePath);
   useProjectStore.getState().setDoc({});
   useGraphStore.getState().clear();
@@ -168,6 +173,7 @@ export async function openProject(): Promise<void> {
   localStorage.setItem(LAST_ROOT_KEY, res.root);
   localStorage.removeItem(LAST_FILE_KEY);
   await useProjectStore.getState().loadRoot(res.root);
+  useCheckpointStore.getState().setProjectRoot(res.root);
   const lr = await api.loadProject(res.root);
   if (lr.ok && lr.data && lr.filePath) {
     localStorage.setItem(LAST_FILE_KEY, lr.filePath);
@@ -199,6 +205,7 @@ export async function openProjectFile(): Promise<void> {
   localStorage.setItem(LAST_ROOT_KEY, root);
   localStorage.setItem(LAST_FILE_KEY, res.filePath);
   await useProjectStore.getState().loadRoot(root);
+  useCheckpointStore.getState().setProjectRoot(root);
   useProjectStore.getState().setProjectFile(res.filePath);
   if (res.data) applyLoaded(root, res.data);
   const warn = res.data?.warnings?.length ? '（' + res.data.warnings.join('；') + '）' : '';
