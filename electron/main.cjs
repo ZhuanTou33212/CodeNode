@@ -672,7 +672,7 @@ ipcMain.handle('project:write', async (_event, root, relPath, content, backup = 
     const value = String(content ?? '');
     if (expectedMtimeMs != null && fs.existsSync(full)) {
       const current = (await fsp.stat(full)).mtimeMs;
-      if (Math.abs(current - Number(expectedMtimeMs)) > 1) return { ok: false, conflict: true, error: '文件已被外部修改' };
+      if (Math.abs(current - Number(expectedMtimeMs)) > 1) return { ok: false, conflict: true, currentContent: await fsp.readFile(full, 'utf8'), currentMtimeMs: current, error: '文件已被外部修改' };
     }
     await fsp.mkdir(path.dirname(full), { recursive: true });
     if (backup && fs.existsSync(full)) await fsp.copyFile(full, full + '.bak');

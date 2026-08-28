@@ -112,7 +112,7 @@ interface CodenodeApi {
     content: string,
     backup?: boolean,
     expectedMtimeMs?: number
-  ) => Promise<{ ok: boolean; bytes?: number; mtimeMs?: number; conflict?: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; bytes?: number; mtimeMs?: number; conflict?: boolean; currentContent?: string; currentMtimeMs?: number; error?: string }>;
   searchProject: (
     root: string,
     query: string,

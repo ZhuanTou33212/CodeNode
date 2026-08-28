@@ -20,6 +20,7 @@ export type SearchMatch = {
   line: number;
   text: string;
 };
+export type FileConflict = { content: string; mtimeMs?: number };
 
 export type DocMeta = {
   documentId?: string;
@@ -35,6 +36,7 @@ interface ProjectState {
   selected: SelectedFile | null;
   draft: string;
   dirty: boolean;
+  conflict: FileConflict | null;
   fileFilter: string;
   searchMatches: SearchMatch[];
   searching: boolean;
@@ -46,6 +48,9 @@ interface ProjectState {
   openFile: (relPath: string) => Promise<void>;
   updateDraft: (content: string) => void;
   saveSelected: () => Promise<boolean>;
+  forceSaveSelected: () => Promise<boolean>;
+  acceptExternalFile: () => void;
+  mergeExternalFile: () => void;
   revertDraft: () => void;
   setFileFilter: (value: string) => void;
   searchProject: (query: string) => Promise<void>;
@@ -108,6 +113,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   selected: null,
   draft: '',
   dirty: false,
+  conflict: null,
   fileFilter: '',
   searchMatches: [],
   searching: false,
@@ -127,7 +133,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadRoot: async (root) => {
-    set({ root, projectFile: null, loading: true, selected: null, draft: '', dirty: false, searchMatches: [], error: null });
+    set({ root, projectFile: null, loading: true, selected: null, draft: '', dirty: false, conflict: null, searchMatches: [], error: null });
     if (!window.codenode) {
       set({ tree: [], loading: false, error: '需要 Electron 环境' });
       return;
@@ -156,7 +162,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const res = await window.codenode.readProjectFile(root, relPath);
     if (res.ok) {
       const content = res.content || '';
-      set({ selected: { relPath, content, truncated: !!res.truncated, mtimeMs: res.mtimeMs }, draft: content, dirty: false, error: null });
+      set({ selected: { relPath, content, truncated: !!res.truncated, mtimeMs: res.mtimeMs }, draft: content, dirty: false, conflict: null, error: null });
     } else {
       set({ error: res.error || '读取失败' });
     }
@@ -169,14 +175,42 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!root || !selected || !window.codenode?.writeProjectFile) return false;
     const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true, selected.mtimeMs);
     if (!res.ok) {
-      set({ error: res.conflict ? '文件已被外部修改，请重新打开后再保存' : res.error || '保存文件失败' });
+      set({ conflict: res.conflict ? { content: res.currentContent || '', mtimeMs: res.currentMtimeMs } : null, error: res.conflict ? '文件已被外部修改' : res.error || '保存文件失败' });
       return false;
     }
-    set({ selected: { ...selected, content: draft, truncated: false, mtimeMs: res.mtimeMs }, dirty: false, error: null });
+    set({ selected: { ...selected, content: draft, truncated: false, mtimeMs: res.mtimeMs }, dirty: false, conflict: null, error: null });
     return true;
   },
 
-  revertDraft: () => set((s) => ({ draft: s.selected?.content || '', dirty: false })),
+  forceSaveSelected: async () => {
+    const { root, selected, draft } = get();
+    if (!root || !selected || !window.codenode?.writeProjectFile) return false;
+    const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true);
+    if (!res.ok) { set({ error: res.error || '强制保存失败' }); return false; }
+    set({ selected: { ...selected, content: draft, truncated: false, mtimeMs: res.mtimeMs }, dirty: false, conflict: null, error: null });
+    return true;
+  },
+
+  acceptExternalFile: () => set((s) => s.conflict ? ({ selected: s.selected ? { ...s.selected, content: s.conflict.content, mtimeMs: s.conflict.mtimeMs } : s.selected, draft: s.conflict.content, dirty: false, conflict: null, error: null }) : s),
+  mergeExternalFile: () => set((s) => {
+    if (!s.conflict || !s.selected) return s;
+    const base = s.selected.content.split(/\r?\n/);
+    const local = s.draft.split(/\r?\n/);
+    const external = s.conflict.content.split(/\r?\n/);
+    const merged: string[] = [];
+    for (let i = 0; i < Math.max(base.length, local.length, external.length); i++) {
+      const b = base[i] ?? '';
+      const l = local[i] ?? '';
+      const e = external[i] ?? '';
+      if (l === e) merged.push(l);
+      else if (l === b) merged.push(e);
+      else if (e === b) merged.push(l);
+      else merged.push('<<<<<<< 当前草稿', l, '=======', e, '>>>>>>> 外部版本');
+    }
+    return { draft: merged.join('\n'), dirty: true, error: null };
+  }),
+
+  revertDraft: () => set((s) => ({ draft: s.selected?.content || '', dirty: false, conflict: null })),
 
   setFileFilter: (value) => set({ fileFilter: value }),
 

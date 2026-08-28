@@ -52,6 +52,26 @@ function highlightCode(value: string) {
   return result + escapeHtml(value.slice(last));
 }
 
+function diagnoseCode(path: string, value: string) {
+  const problems: { line: number; message: string }[] = [];
+  const stack: { char: string; line: number }[] = [];
+  const pairs: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
+  value.split(/\r?\n/).forEach((line, index) => {
+    for (const char of line) {
+      if ('([{'.includes(char)) stack.push({ char, line: index + 1 });
+      else if (')]}'.includes(char)) {
+        const top = stack.pop();
+        if (!top || top.char !== pairs[char]) problems.push({ line: index + 1, message: `括号不匹配：${char}` });
+      }
+    }
+  });
+  for (const item of stack) problems.push({ line: item.line, message: `缺少闭合括号：${item.char}` });
+  if (/\.json$/i.test(path) && value.trim()) {
+    try { JSON.parse(value); } catch (error) { problems.push({ line: 1, message: `JSON 解析失败：${String(error).replace(/^SyntaxError:\s*/, '').slice(0, 120)}` }); }
+  }
+  return problems.slice(0, 30);
+}
+
 function commandFromNode(node: Node): string | null {
   const prompt = String((node.data as Record<string, unknown> | undefined)?.prompt || '').trim();
   const explicit = prompt.match(/^(?:run:|\$)\s*(.+)$/i);
@@ -94,9 +114,15 @@ function EditorPanel() {
   const updateDraft = useProjectStore((s) => s.updateDraft);
   const saveSelected = useProjectStore((s) => s.saveSelected);
   const revertDraft = useProjectStore((s) => s.revertDraft);
+  const conflict = useProjectStore((s) => s.conflict);
+  const forceSaveSelected = useProjectStore((s) => s.forceSaveSelected);
+  const acceptExternalFile = useProjectStore((s) => s.acceptExternalFile);
+  const mergeExternalFile = useProjectStore((s) => s.mergeExternalFile);
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState('');
   const [tabs, setTabs] = useState<string[]>([]);
+  const [showCompletions, setShowCompletions] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
@@ -113,6 +139,8 @@ function EditorPanel() {
   if (!selected) return <div className="dock-empty">从左侧项目树点击文件，开始编辑。支持多文件标签、保存、撤销和 Diff 对比。</div>;
   const lines = draft.split(/\r?\n/).length;
   const language = selected.relPath.split('.').pop()?.toUpperCase() || 'TEXT';
+  const problems = useMemo(() => diagnoseCode(selected.relPath, draft), [selected.relPath, draft]);
+  const completionItems = ['const', 'function', 'return', 'async', 'await', 'if', 'else', 'for', 'try', 'catch', 'console.log'];
   const closeTab = (path: string) => {
     const next = tabs.filter((item) => item !== path);
     setTabs(next);
@@ -130,11 +158,15 @@ function EditorPanel() {
         <button className="dock-primary" onClick={() => void save()} disabled={!dirty || saving}>{saving ? '保存中…' : '保存文件'}</button>
       </div>
       {query.trim() && <div className="dock-search-results">{searchMatches.length ? searchMatches.map((match) => <button key={`${match.path}:${match.line}`} onClick={() => { void openFile(match.path); }}>{match.path}:{match.line}<span>{match.text}</span></button>) : <span>{searching ? '搜索中…' : '没有匹配结果'}</span>}</div>}
+      {conflict && <div className="dock-conflict"><span>文件在外部被修改，当前草稿未覆盖外部内容。</span><button onClick={mergeExternalFile}>三方合并</button><button onClick={acceptExternalFile}>载入外部版本</button><button className="dock-danger" onClick={() => void forceSaveSelected()}>强制覆盖外部版本</button></div>}
+      <div className="dock-problems"><strong>{problems.length ? `问题 ${problems.length}` : '无问题'}</strong>{problems.map((problem, index) => <span key={index}>L{problem.line} {problem.message}</span>)}<button onClick={() => setShowCompletions((value) => !value)}>补全 ⌘Space</button></div>
+      {showCompletions && <div className="dock-completions">{completionItems.map((item) => <button key={item} onClick={() => { const el = editorRef.current; if (!el) return; const start = el.selectionStart; updateDraft(draft.slice(0, start) + item + draft.slice(el.selectionEnd)); setShowCompletions(false); requestAnimationFrame(() => { el.focus(); el.setSelectionRange(start + item.length, start + item.length); }); }}>{item}</button>)}</div>}
       <div className="dock-code-wrap">
         <div className="dock-line-numbers" aria-hidden="true">{Array.from({ length: lines }, (_, i) => <span key={i}>{i + 1}</span>)}</div>
         <div className="dock-code-surface">
           <pre ref={highlightRef} className="dock-code-highlight" aria-hidden="true" dangerouslySetInnerHTML={{ __html: highlightCode(draft) + '\n' }} />
           <textarea
+            ref={editorRef}
             className="dock-code-editor"
             value={draft}
             spellCheck={false}
@@ -142,6 +174,7 @@ function EditorPanel() {
             onScroll={(e) => { if (highlightRef.current) { highlightRef.current.scrollTop = e.currentTarget.scrollTop; highlightRef.current.scrollLeft = e.currentTarget.scrollLeft; } }}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); }
+              if ((e.metaKey || e.ctrlKey) && e.code === 'Space') { e.preventDefault(); setShowCompletions((value) => !value); }
               if (e.key === 'Tab') { e.preventDefault(); const el = e.currentTarget; const start = el.selectionStart; const end = el.selectionEnd; updateDraft(draft.slice(0, start) + '  ' + draft.slice(end)); requestAnimationFrame(() => el.setSelectionRange(start + 2, start + 2)); }
             }}
           />
