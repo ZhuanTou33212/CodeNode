@@ -15,7 +15,7 @@ if (!targets[platform]) {
 }
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const build = spawnSync(npm, ['run', 'build'], { stdio: 'inherit', env: process.env });
+const build = spawnSync(npm, ['run', 'build'], { stdio: 'inherit', env: process.env, shell: process.platform === 'win32' });
 if (build.status !== 0) process.exit(build.status || 1);
 
 const cache = path.join(process.cwd(), '.cache', 'electron-builder');
@@ -27,5 +27,5 @@ const env = {
 const builder = process.platform === 'win32'
   ? path.join(process.cwd(), 'node_modules', '.bin', 'electron-builder.cmd')
   : path.join(process.cwd(), 'node_modules', '.bin', 'electron-builder');
-const result = spawnSync(builder, targets[platform], { stdio: 'inherit', env });
+const result = spawnSync(builder, targets[platform], { stdio: 'inherit', env, shell: process.platform === 'win32' });
 process.exit(result.status == null ? 1 : result.status);
