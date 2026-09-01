@@ -2,7 +2,7 @@
   "name": "codenode-desktop-next",
   "version": "0.12.0",
   "private": true,
-  "author": "yimi528",
+  "author": "yimi528 <2534311904@qq.com>",
   "description": "CodeNode Agent 工作台：画布、工具循环与本地 Agentic RAG",
   "main": "electron/main.cjs",
   "scripts": {
