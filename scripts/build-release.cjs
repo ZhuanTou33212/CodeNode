@@ -27,5 +27,5 @@ const env = {
 const builder = process.platform === 'win32'
   ? path.join(process.cwd(), 'node_modules', '.bin', 'electron-builder.cmd')
   : path.join(process.cwd(), 'node_modules', '.bin', 'electron-builder');
-const result = spawnSync(builder, targets[platform], { stdio: 'inherit', env, shell: process.platform === 'win32' });
+const result = spawnSync(builder, [...targets[platform], '--publish', 'never'], { stdio: 'inherit', env, shell: process.platform === 'win32' });
 process.exit(result.status == null ? 1 : result.status);
