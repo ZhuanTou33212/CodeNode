@@ -49,6 +49,7 @@ export function useContainerAutoFit(id: string, nodes: Node[], minW: number, min
       if (!node) return;
       if ((node.data as { collapsed?: boolean })?.collapsed) return;
       if (st.resizingIds.includes(id)) return;
+      if (!(node.data as { shrink?: boolean })?.shrink) return;
 
       const wrapSet = new Map<string, Node>();
       for (const c of liveWrapNodes(node, st.nodes)) wrapSet.set(c.id, c);
@@ -108,7 +109,7 @@ export function useContainerAutoFit(id: string, nodes: Node[], minW: number, min
       const height = Math.max(minH, needH);
 
       if (Math.abs(nextX - currentX) > 0.5 || Math.abs(nextY - currentY) > 0.5) {
-        st.moveNode(id, { x: nextX, y: nextY });
+        st.moveNode(id, { x: nextX, y: nextY }, { moveChildren: false });
       }
       if (Math.abs(width - currentW) > 2 || Math.abs(height - currentH) > 2) {
         st.updateNodeData(id, { width, height });

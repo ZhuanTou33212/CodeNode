@@ -17,7 +17,7 @@ import { useUiStore } from '../store/uiStore';
 import { useSessionStore } from '../store/sessionStore';
 import { nodeTypes } from '../nodes';
 import { edgeTypes } from '../edges';
-import { childIdsOf, parentIdOf } from '../lib/flow';
+import { childIdsOf, parentIdOf, isDescendantOf } from '../lib/flow';
 import ChatSidebar from './ChatSidebar';
 import PromptBar from './PromptBar';
 
@@ -101,7 +101,14 @@ export default function Canvas() {
   const progress = useSessionStore((s) => s.progress);
   const { getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
 
-  const dragState = useRef<{ id: string; startTime: number; startX: number; startY: number; parentId: string | null } | null>(null);
+  const dragState = useRef<{
+    id: string;
+    startTime: number;
+    startX: number;
+    startY: number;
+    parentId: string | null;
+    ids: string[];
+  } | null>(null);
   const hoverScope = useRef<string | null>(null);
   const lineEdit = useRef<{ mode: 'cut' | 'waypoint'; points: Pt[]; screenPts: Pt[]; hits: Map<string, Pt> } | null>(null);
   const [cutLine, setCutLine] = useState<Pt[]>([]);
@@ -139,27 +146,25 @@ export default function Canvas() {
     const st = useGraphStore.getState();
     const w = (node.measured?.width as number) || 88;
     const h = (node.measured?.height as number) || 64;
-    const nx0 = node.position.x;
-    const ny0 = node.position.y;
-    const nx1 = nx0 + w;
-    const ny1 = ny0 + h;
-    const pad = 12;
+    const cx = node.position.x + w / 2;
+    const cy = node.position.y + h / 2;
+    const candidates: { id: string; area: number }[] = [];
     for (const sc of st.nodes) {
       if (sc.type !== 'scope' || sc.id === node.id) continue;
       if ((sc.data as { collapsed?: boolean })?.collapsed) continue;
+      if (node.type === 'scope' && isDescendantOf(sc.id, node.id, st.nodes)) continue;
       const d = sc.data as { width?: number; height?: number };
       const sw = d.width || 320;
       const sh = d.height || 220;
-      const sx0 = sc.position.x - pad;
-      const sy0 = sc.position.y - pad;
-      const sx1 = sc.position.x + sw + pad;
-      const sy1 = sc.position.y + sh + pad;
+      const sx0 = sc.position.x;
+      const sy0 = sc.position.y;
+      const sx1 = sc.position.x + sw;
+      const sy1 = sc.position.y + sh;
       // 用“包围盒相交/接近”判定，而不是只取中心点，避免快速拖放时来不及包裹就松手
-      if (nx0 <= sx1 && nx1 >= sx0 && ny0 <= sy1 && ny1 >= sy0) {
-        return sc.id;
-      }
+      if (cx >= sx0 && cx <= sx1 && cy >= sy0 && cy <= sy1) candidates.push({ id: sc.id, area: sw * sh });
     }
-    return null;
+    candidates.sort((a, b) => a.area - b.area);
+    return candidates[0]?.id || null;
   };
 
   return (
@@ -244,17 +249,24 @@ export default function Canvas() {
         onMoveEnd={() => setViewport(getViewport())}
         onNodeDragStart={(e, node) => {
           commit();
+          const st = useGraphStore.getState();
+          const ids = node.type === 'scope'
+            ? [node.id]
+            : st.selectedIds.includes(node.id)
+              ? st.selectedIds
+              : [node.id];
           dragState.current = {
             id: node.id,
             startTime: Date.now(),
             startX: node.position.x,
             startY: node.position.y,
             parentId: parentIdOf(node),
+            ids,
           };
           const initialHover = findHoverScope(node);
           hoverScope.current = initialHover;
           useUiStore.getState().setHoverScopeId(initialHover);
-          setDragging([node.id]);
+          setDragging(ids);
         }}
         onNodeDrag={(e, node) => {
           if (!dragState.current || dragState.current.id !== node.id) return;
@@ -271,9 +283,13 @@ export default function Canvas() {
           const oldParent = ds?.parentId ?? null;
           // 状态机：松手时根据“是否处于 scope 候选区/是否已有父级”决定放入/移出，
           // 不再依赖按住时长，避免快速操作时来不及包裹导致节点脱离范围。
-          if (e.ctrlKey && oldParent && target !== oldParent) {
+          if (ds?.ids && ds.ids.length > 0) {
             // Ctrl + 拖出范围：从原 scope 中移出
-            st.removeFromScope(node.id);
+            for (const id of ds.ids) {
+              const current = st.nodes.find((n) => n.id === id);
+              if (current && (e.altKey || !target)) st.removeFromScope(id);
+              else if (current && target && target !== parentIdOf(current) && target !== id) st.addToScope(id, target);
+            }
           } else if (target && target !== oldParent) {
             st.addToScope(node.id, target);
           } else if (!target && oldParent) {

@@ -10,7 +10,7 @@ import {
   EdgeChange,
 } from '@xyflow/react';
 import type { FlowResult, Graph } from '../types';
-import { computeFlow, nodesInsideBounds, childIdsOf, parentIdOf } from '../lib/flow';
+import { computeFlow, childIdsOf, parentIdOf, isDescendantOf } from '../lib/flow';
 
 type GraphLike = { nodes: Node[]; edges: Edge[] };
 
@@ -29,45 +29,91 @@ function stripLegacyTypes(nodes: Node[], edges: Edge[]): Graph {
 }
 
 function withZIndex(n: Node): Node {
-  if (n.type === 'scope') return { ...n, zIndex: 0 };
+  if (n.type === 'scope') return { ...n, zIndex: 0, dragHandle: n.dragHandle || '.wf-scope-title' };
   return { ...n, zIndex: 1 };
 }
 
 const uid = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
 const eid = () => 'e' + Math.random().toString(36).slice(2, 10);
 
+function uniqueIds(ids: unknown, byId: Map<string, Node>, selfId?: string): string[] {
+  if (!Array.isArray(ids)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of ids) {
+    const id = String(raw);
+    if (id === selfId || seen.has(id) || !byId.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function setScopeChildren(data: Record<string, unknown>, ids: string[]): void {
+  const unique = [...new Set(ids)];
+  data.childIds = unique;
+  data.members = [...unique];
+}
+
+function wouldCreateParentCycle(parents: Map<string, string>, childId: string, parentId: string): boolean {
+  const visited = new Set<string>();
+  let current: string | undefined = parentId;
+  while (current && !visited.has(current)) {
+    if (current === childId) return true;
+    visited.add(current);
+    current = parents.get(current);
+  }
+  return false;
+}
+
 /** 归一化父子对象集：把旧 members 迁移到 childIds，并补全 parentId/memberBadge。 */
 function normalizeParentChild(nodes: Node[]): Node[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const childIdsByScope = new Map<string, string[]>();
+  const listedByScope = new Map<string, string[]>();
   for (const n of nodes) {
     if (n.type !== 'scope') continue;
     const d = n.data as Record<string, unknown> & { childIds?: string[]; members?: string[] };
-    const ids = Array.isArray(d.childIds)
-      ? d.childIds
-      : Array.isArray(d.members)
-        ? d.members
-        : [];
-    childIdsByScope.set(n.id, [...ids]);
+    const ids = Array.isArray(d.childIds) ? d.childIds : d.members;
+    listedByScope.set(n.id, uniqueIds(ids, byId, n.id));
   }
   // 反向补全 parentId
-  for (const [scopeId, ids] of childIdsByScope) {
-    const scope = byId.get(scopeId);
+  const parentByChild = new Map<string, string>();
+  for (const node of nodes) {
+    const parentId = parentIdOf(node);
+    if (
+      parentId &&
+      listedByScope.has(parentId) &&
+      parentId !== node.id &&
+      !wouldCreateParentCycle(parentByChild, node.id, parentId) &&
+      !(node.type === 'scope' && isDescendantOf(parentId, node.id, nodes))
+    ) {
+      parentByChild.set(node.id, parentId);
+    }
+  }
+  for (const [scopeId, ids] of listedByScope) {
     for (const childId of ids) {
-      const child = byId.get(childId);
-      if (child) {
-        const cd = child.data as Record<string, unknown> & { parentId?: string | null; memberBadge?: string | null };
-        if (!cd.parentId) cd.parentId = scopeId;
-        if (!cd.memberBadge) cd.memberBadge = 'in:' + ((scope?.data as { label?: string })?.label || scopeId);
+      if (
+        !parentByChild.has(childId) &&
+        !wouldCreateParentCycle(parentByChild, childId, scopeId) &&
+        !isDescendantOf(scopeId, childId, nodes)
+      ) {
+        parentByChild.set(childId, scopeId);
       }
     }
   }
   return nodes.map((n) => {
     const d = { ...(n.data as Record<string, unknown>) };
+    const parentId = parentByChild.get(n.id) || null;
+    d.parentId = parentId;
+    d.memberBadge = parentId
+      ? 'in:' + String((byId.get(parentId)?.data as { label?: string })?.label || parentId)
+      : null;
     if (n.type === 'scope') {
-      d.childIds = childIdsByScope.get(n.id) || [];
+      const listed = (listedByScope.get(n.id) || []).filter((id) => parentByChild.get(id) === n.id);
+      const explicitChildren = [...parentByChild.entries()].filter(([, parent]) => parent === n.id).map(([id]) => id);
+      setScopeChildren(d, [...listed, ...explicitChildren]);
     }
-    return { ...n, data: d };
+    return { ...n, data: d, ...(n.type === 'scope' ? { dragHandle: n.dragHandle || '.wf-scope-title' } : {}) };
   });
 }
 
@@ -92,6 +138,16 @@ function descendantIds(rootId: string, nodes: Node[]): string[] {
   return out;
 }
 
+function translateDescendants(nodes: Node[], scopeId: string, dx: number, dy: number, skipIds = new Set<string>): Node[] {
+  if (dx === 0 && dy === 0) return nodes;
+  const ids = new Set(descendantIds(scopeId, nodes));
+  return nodes.map((n) =>
+    ids.has(n.id) && !skipIds.has(n.id)
+      ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+      : n
+  );
+}
+
 /** 在给定 nodes 数组中设置某个节点的父容器（同时维护父子两端的 childIds/parentId）。 */
 function applyParentChange(nodes: Node[], nodeId: string, parentId: string | null): Node[] {
   const node = nodes.find((n) => n.id === nodeId);
@@ -100,6 +156,7 @@ function applyParentChange(nodes: Node[], nodeId: string, parentId: string | nul
   if (oldParent === parentId) return nodes;
   const scope = parentId ? nodes.find((n) => n.id === parentId && n.type === 'scope') : null;
   if (parentId && !scope) return nodes;
+  if (parentId && node.type === 'scope' && isDescendantOf(parentId, nodeId, nodes)) return nodes;
   return nodes.map((n) => {
     const d = { ...(n.data as Record<string, unknown>) };
     if (n.id === nodeId) {
@@ -108,15 +165,10 @@ function applyParentChange(nodes: Node[], nodeId: string, parentId: string | nul
       return { ...n, data: d };
     }
     if (n.type === 'scope') {
-      const childIds = childIdsOf(n);
-      if (n.id === parentId && !childIds.includes(nodeId)) {
-        d.childIds = [...childIds, nodeId];
-        return { ...n, data: d };
-      }
-      if (oldParent && n.id === oldParent && n.id !== parentId) {
-        d.childIds = childIds.filter((id) => id !== nodeId);
-        return { ...n, data: d };
-      }
+      const childIds = childIdsOf(n).filter((id) => id !== nodeId);
+      if (n.id === parentId) childIds.push(nodeId);
+      setScopeChildren(d, childIds);
+      return { ...n, data: d };
     }
     return n;
   });
@@ -153,7 +205,7 @@ interface GraphState extends GraphLike {
   deleteNodes: (ids: string[]) => void;
   duplicateNode: (id: string) => void;
   updateNodeData: (id: string, patch: Record<string, unknown>) => void;
-  moveNode: (id: string, position: { x: number; y: number }) => void;
+  moveNode: (id: string, position: { x: number; y: number }, options?: { moveChildren?: boolean }) => void;
   /** 自动横向整理当前画布节点：全部排在同一行，分支并列 */
   layoutNodes: () => void;
   /** 自动整理（Blender Node Arrange 风格）：按依赖分层、分支并列 */
@@ -289,6 +341,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         width: Math.max(220, Math.ceil(maxX - minX + pad * 2)),
         height: Math.max(150, Math.ceil(maxY - minY + pad * 2)),
         childIds: [...ids],
+        members: [...ids],
+        shrink: false,
       },
     });
     let nodes: Node[] = s.nodes.map((n) => ({ ...n, selected: false }));
@@ -307,6 +361,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     set((s) => {
       const hasRemove = changes.some((c) => c.type === 'remove');
       let nodes = applyNodeChanges(changes, s.nodes).map(withZIndex);
+      const explicitlyMoved = new Set(
+        changes.filter((c) => c.type === 'position' && c.position).map((c) => (c as { id: string }).id)
+      );
       for (const c of changes) {
         if (c.type === 'position' && c.position) {
           const scope = s.nodes.find((n) => n.id === c.id && n.type === 'scope');
@@ -314,12 +371,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             const dx = c.position.x - scope.position.x;
             const dy = c.position.y - scope.position.y;
             if (dx !== 0 || dy !== 0) {
-              const ids = new Set(descendantIds(scope.id, s.nodes));
-              nodes = nodes.map((n) =>
-                ids.has(n.id)
-                  ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
-                  : n
-              );
+              nodes = translateDescendants(nodes, scope.id, dx, dy, explicitlyMoved);
             }
           }
         }
@@ -372,7 +424,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           if (n.type === 'scope') {
             const childIds = childIdsOf(n).filter((m) => !idSet.has(m));
             if (childIds.length !== childIdsOf(n).length) {
-              d.childIds = childIds;
+              setScopeChildren(d, childIds);
               changed = true;
             }
           }
@@ -424,19 +476,25 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         copyData.parentId = null;
         copyData.memberBadge = null;
       }
-      if (src.type === 'scope') copyData.childIds = [];
+      if (src.type === 'scope') {
+        copyData.childIds = [];
+        copyData.members = [];
+        copyData.shrink = Boolean(copyData.shrink);
+      }
       const nodes: Node[] = s.nodes
         .map((n) => {
           if (parentId && n.id === parentId) {
             const childIds = childIdsOf(n);
             if (!childIds.includes(copy.id)) {
-              return { ...n, data: { ...(n.data as Record<string, unknown>), childIds: [...childIds, copy.id] } };
+              const nextData = { ...(n.data as Record<string, unknown>) };
+              setScopeChildren(nextData, [...childIds, copy.id]);
+              return { ...n, data: nextData };
             }
           }
           return { ...n, selected: false };
         });
       nodes.push(copy);
-      return { nodes, selectedId: copy.id, ...withHistory(s) };
+      return { nodes: nodes.map(withZIndex), selectedId: copy.id, selectedIds: [copy.id], ...withHistory(s) };
     }),
 
   updateNodeData: (id, patch) =>
@@ -446,8 +504,16 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       ),
     })),
 
-  moveNode: (id, position) =>
-    set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? { ...n, position } : n)) })),
+  moveNode: (id, position, options) =>
+    set((s) => {
+      const current = s.nodes.find((n) => n.id === id);
+      if (!current) return s;
+      const dx = position.x - current.position.x;
+      const dy = position.y - current.position.y;
+      let nodes = s.nodes.map((n) => (n.id === id ? { ...n, position } : n));
+      if (current.type === 'scope' && options?.moveChildren !== false) nodes = translateDescendants(nodes, id, dx, dy);
+      return { nodes };
+    }),
 
   /**
    * Agent 生成节点后的自动排版：所有节点排在同一行（不再因碰到边框换行）。

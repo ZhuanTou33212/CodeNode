@@ -20,6 +20,7 @@ const ALLOWED = new Set([
 const BACKGROUND_JOBS = new Map(); // jobId -> { projectRoot, command, startedAt, status, output, exitCode, error, child }
 let jobSeq = 0;
 const JOB_TTL_MS = 60 * 60 * 1000;
+const DEFAULT_OUTPUT_CHARS = 12000;
 
 function sweepJobs() {
   const now = Date.now();
@@ -63,10 +64,41 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds) {
   });
   child.on('close', (exitCode) => {
     clearTimeout(timer);
-    job.status = 'done';
+    if (job.status === 'running') job.status = 'done';
     job.exitCode = exitCode;
   });
   return { jobId };
+}
+
+function storeCompletedOutput(root, command, output, exitCode) {
+  sweepJobs();
+  const jobId = 'job-' + Date.now().toString(36) + '-' + (++jobSeq).toString(36);
+  BACKGROUND_JOBS.set(jobId, {
+    jobId,
+    projectRoot: root,
+    command,
+    startedAt: Date.now(),
+    status: 'done',
+    output,
+    exitCode,
+    error: null,
+    child: null,
+  });
+  return jobId;
+}
+
+function outputPage(output, offset, maxChars, tail) {
+  const text = String(output || '');
+  const size = Math.max(1000, Math.min(100000, Math.floor(Number(maxChars) || DEFAULT_OUTPUT_CHARS)));
+  const start = tail ? Math.max(0, text.length - size) : Math.max(0, Math.min(text.length, Math.floor(Number(offset) || 0)));
+  const chunk = text.slice(start, start + size);
+  return {
+    output: chunk,
+    offset: start,
+    nextOffset: start + chunk.length,
+    totalChars: text.length,
+    hasMore: start + chunk.length < text.length,
+  };
 }
 
 /** 兼容解码子进程输出：UTF-8 优先，含乱码则按 GBK 解码，UTF-16LE（PowerShell）按 BOM/字节特征识别 */
@@ -129,6 +161,11 @@ function isSensitiveCommand(tokens) {
     }
   }
   const base = flags[0] || '';
+  if (base === 'powershell' || base === 'pwsh' || base === 'cmd') {
+    const script = tokens.slice(1).join(' ');
+    if (/\b(remove-item|set-content|add-content|move-item|copy-item|clear-content|format-volume|stop-process|invoke-expression|start-process)\b/i.test(script)) return true;
+    if (/\b(git\s+(reset|clean|push|rebase|checkout))\b/i.test(script)) return true;
+  }
   if (base.includes('git')) {
     for (const f of flags) {
       if (['reset', 'clean', 'push', 'rebase', 'checkout', '--hard', '-f'].includes(f)) return true;
@@ -138,6 +175,8 @@ function isSensitiveCommand(tokens) {
 }
 
 function isDestructiveCommand(tokens) {
+  const script = tokens.join(' ');
+  if (/\b(remove-item|set-content|add-content|move-item|copy-item|clear-content|format-volume|stop-process|invoke-expression|start-process)\b/i.test(script)) return true;
   for (const t of tokens) {
     const f = t.toLowerCase();
     if (['rm', 'del', 'rmdir', 'clean', 'reset', '--hard', 'push'].includes(f)) return true;
@@ -190,6 +229,8 @@ function register(registry) {
         command: { type: 'string', description: '要执行的命令行' },
         timeoutSeconds: { type: 'integer', description: '超时秒数，默认 30；长任务请按预估耗时调大（如 300/600）' },
         async: { type: 'boolean', description: 'true = 后台执行立即返回 jobId（用于长任务），用 poll_job 轮询；默认 false 前台等待' },
+        outputOffset: { type: 'integer', description: '同步命令输出起始游标，默认 0' },
+        maxOutputChars: { type: 'integer', description: '单次返回的最大输出字符数，默认 12000；超出时返回 jobId 并用 poll_job 分页' },
       },
       required: ['command'],
     },
@@ -258,7 +299,22 @@ function register(registry) {
         child.on('close', (exitCode) => {
           clearTimeout(timer);
           context.audit('execute_shell ' + command + ' exit=' + exitCode);
-          resolve(AgentToolResult.ok('退出码 ' + exitCode + '\n' + output.trim(), { exitCode, command, output: output.slice(0, 4000) }));
+          const page = outputPage(output, args.outputOffset, args.maxOutputChars, false);
+          const paged = page.hasMore;
+          const jobId = paged ? storeCompletedOutput(root, command, output, exitCode) : null;
+          const suffix = paged
+            ? '\n输出过长，已返回第 ' + page.offset + '-' + page.nextOffset + '/' + page.totalChars + ' 字符；请使用 poll_job jobId="' + jobId + '" offset=' + page.nextOffset + ' 继续读取。'
+            : '';
+          resolve(AgentToolResult.ok('退出码 ' + exitCode + '\n' + page.output.trim() + suffix, {
+            exitCode,
+            command,
+            output: page.output,
+            outputOffset: page.offset,
+            nextOffset: page.nextOffset,
+            totalOutputChars: page.totalChars,
+            hasMore: page.hasMore,
+            jobId,
+          }));
         });
       });
     }
@@ -273,6 +329,9 @@ function register(registry) {
       properties: {
         jobId: { type: 'string', description: 'execute_shell async=true 返回的 jobId' },
         waitSeconds: { type: 'integer', description: '可选：先阻塞等待 N 秒再返回（0~60），避免频繁空轮询' },
+        offset: { type: 'integer', description: '输出起始游标，默认 0；使用上次结果的 nextOffset 继续读取' },
+        maxChars: { type: 'integer', description: '本次最多返回多少字符，默认 12000，最大 100000' },
+        tail: { type: 'boolean', description: '是否只返回当前输出末尾；默认 false，分页读取请保持 false' },
       },
       required: ['jobId'],
     },
@@ -291,20 +350,23 @@ function register(registry) {
       }
       context.audit('poll_job jobId=' + jobId + ' status=' + job.status + ' elapsedMs=' + (Date.now() - job.startedAt));
       if (job.status === 'running') {
+        const page = outputPage(job.output, args.offset, args.maxChars, args.tail === true);
         return AgentToolResult.ok(
           '后台任务仍在运行（elapsed=' + Math.round((Date.now() - job.startedAt) / 1000) + 's，已输出 ' + job.output.length + ' 字符）。可继续 poll_job 或带 waitSeconds 等待。\n' + job.output.slice(-1500),
-          { jobId, status: 'running', startedAt: job.startedAt, elapsedMs: Date.now() - job.startedAt, output: job.output.slice(-4000) }
+          { jobId, status: 'running', startedAt: job.startedAt, elapsedMs: Date.now() - job.startedAt, ...page }
         );
       }
-      BACKGROUND_JOBS.delete(jobId);
       if (job.status === 'error') {
+        BACKGROUND_JOBS.delete(jobId);
         return AgentToolResult.error('后台任务执行失败：' + (job.error || '') + '\n' + job.output.trim());
       }
       const done = job.status === 'done';
       const statusText = done ? '退出码 ' + job.exitCode : '超时强制终止';
+      const page = outputPage(job.output, args.offset, args.maxChars, args.tail === true);
+      if (!page.hasMore) BACKGROUND_JOBS.delete(jobId);
       return AgentToolResult.ok(
-        '后台任务完成：' + statusText + '\n' + job.output.trim(),
-        { jobId, status: job.status, exitCode: job.exitCode, output: job.output.slice(0, 4000) }
+        '后台任务完成：' + statusText + '\n' + page.output.trim() + (page.hasMore ? '\n输出未读完，请使用 offset=' + page.nextOffset + ' 继续读取。' : ''),
+        { jobId, status: job.status, exitCode: job.exitCode, ...page }
       );
     }
   );

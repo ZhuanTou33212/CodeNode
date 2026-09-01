@@ -26,6 +26,7 @@ export type ScopeData = BaseData & {
   opacity: number;
   /** 兼容旧画布：members 与 childIds 等价，加载时会归一化到 childIds */
   members?: string[];
+  shrink?: boolean;
 };
 
 export type FileData = BaseData & {

@@ -58,6 +58,7 @@ export const NODE_TEMPLATES: Record<string, NodeTemplate> = {
       height: 220,
       fill: '#3b2f6b',
       opacity: 0.16,
+      shrink: false,
     } as ScopeData,
   },
   file: {

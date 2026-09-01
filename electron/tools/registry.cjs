@@ -7,8 +7,9 @@
 const { AgentToolResult } = require('./result.cjs');
 
 class AgentToolRegistry {
-  constructor() {
+  constructor(options) {
     this.tools = new Map(); // name -> { spec, executor }
+    this.allowedTools = options && options.allowedTools ? new Set(options.allowedTools) : null;
   }
 
   register(name, description, inputSchema, executor) {
@@ -29,6 +30,9 @@ class AgentToolRegistry {
   }
 
   async execute(name, arguments_, context) {
+    if (this.allowedTools && !this.allowedTools.has(name)) {
+      return AgentToolResult.error('当前子代理角色无权使用工具：' + name);
+    }
     const tool = this.tools.get(name);
     if (!tool) return AgentToolResult.error('未知工具：' + name);
     try {

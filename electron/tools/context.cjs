@@ -36,6 +36,10 @@ class AgentToolContext {
     this.scalarStoreValue = o.scalarStore || null;
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
+    this.runIdValue = o.runId || '';
+    this.taskIdValue = o.taskId || '';
+    this.roleValue = o.role || 'supervisor';
+    this.readOnlyValue = o.readOnly === true;
   }
 
   projectRoot() {
@@ -45,6 +49,11 @@ class AgentToolContext {
   model() {
     return this.modelValue;
   }
+
+  runId() { return this.runIdValue; }
+  taskId() { return this.taskIdValue; }
+  role() { return this.roleValue; }
+  readOnly() { return this.readOnlyValue; }
 
   async confirm(level, what, detail) {
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
@@ -66,6 +75,7 @@ class AgentToolContext {
   }
 
   async mutateWorkbench(fn) {
+    if (this.readOnlyValue) return false;
     if (!this.workbenchMutator || !fn) return false;
     try {
       return await this.workbenchMutator(fn);
@@ -75,6 +85,7 @@ class AgentToolContext {
   }
 
   async saveProject() {
+    if (this.readOnlyValue) return null;
     if (this.saveAction) {
       try {
         return await this.saveAction();
@@ -171,6 +182,30 @@ class AgentToolContext {
       }
     }
     return false;
+  }
+
+  fork(overrides) {
+    const o = overrides || {};
+    return new AgentToolContext({
+      projectRoot: o.projectRoot || this.projectRootValue,
+      model: o.model || this.modelValue,
+      confirm: this.confirmHandler,
+      audit: this.auditLogger,
+      mutateWorkbench: this.workbenchMutator,
+      saveProject: this.saveAction,
+      askUser: this.questionHandler,
+      ui: this.uiAction,
+      conversationHistory: this.conversationSupplier,
+      notifyFileChange: this.fileChangeNotifier,
+      ragConfig: this.ragConfigValue,
+      scalarStore: this.scalarStoreValue,
+      undo: this.undoAction,
+      redo: this.redoAction,
+      runId: o.runId || this.runIdValue,
+      taskId: o.taskId || this.taskIdValue,
+      role: o.role || this.roleValue,
+      readOnly: o.readOnly === true,
+    });
   }
 }
 

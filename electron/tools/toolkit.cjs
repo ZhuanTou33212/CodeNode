@@ -11,6 +11,28 @@
 const { AgentToolRegistry } = require('./registry.cjs');
 const { registerProjectExtensions } = require('./extensions.cjs');
 
+const ROLE_TOOLS = Object.freeze({
+  explorer: [
+    'get_workbench_model', 'project_info', 'scan_project', 'read_file',
+    'find_files', 'search_files', 'list_directory', 'retrieve_context', 'query_scalars',
+  ],
+  builder: [
+    'get_workbench_model', 'project_info', 'read_file', 'find_files', 'search_files',
+    'list_directory', 'retrieve_context', 'query_scalars', 'write_file', 'edit_file', 'workbench_edit',
+  ],
+  verifier: [
+    'project_info', 'read_file', 'find_files', 'search_files', 'list_directory',
+    'retrieve_context', 'query_scalars', 'execute_shell', 'poll_job', 'code_review',
+  ],
+  reviewer: [
+    'get_workbench_model', 'project_info', 'read_file', 'find_files', 'search_files',
+    'retrieve_context', 'query_scalars', 'code_review',
+  ],
+  canvas: [
+    'get_workbench_model', 'workbench_edit', 'write_analysis_md', 'save_project', 'ui_control',
+  ],
+});
+
 const BUILTINS = [
   require('./impl/getWorkbenchModelTool.cjs'),
   require('./impl/workbenchEditTool.cjs'),
@@ -73,7 +95,24 @@ function buildDefaultRegistryWithConfig(config) {
   const cfg = config || {};
   const registry = buildDefaultRegistry();
   if (cfg.projectRoot) registerProjectExtensions(registry, cfg.projectRoot);
+  if (cfg.role) filterByRole(registry, cfg.role);
   return filterByConfig(registry, cfg);
 }
 
-module.exports = { buildDefaultRegistry, filterByConfig, buildDefaultRegistryWithConfig, BUILTINS };
+function filterByRole(registry, role) {
+  if (!role || role === 'supervisor') return registry;
+  const allowed = ROLE_TOOLS[role];
+  if (!allowed) {
+    for (const spec of registry.listTools()) registry.unregister(spec.name);
+    registry.allowedTools = new Set();
+    return registry;
+  }
+  const allowedSet = new Set(allowed);
+  for (const spec of registry.listTools()) {
+    if (!allowedSet.has(spec.name)) registry.unregister(spec.name);
+  }
+  registry.allowedTools = allowedSet;
+  return registry;
+}
+
+module.exports = { buildDefaultRegistry, filterByConfig, filterByRole, buildDefaultRegistryWithConfig, BUILTINS, ROLE_TOOLS };

@@ -392,8 +392,6 @@ const SCALAR_BACKED_TOOLS = new Set([
   'workbench_edit',
   'bulk_edit',
   'write_analysis_md',
-  'create_nodes',
-  'workbench_connect',
   'query_scalars',
 ]);
 
@@ -483,8 +481,6 @@ const CACHEABLE_TOOLS = new Set([
 /** 会改变画布模型 / 文件 / 工程状态的工具：执行后清空只读结果缓存，保证后续读取为最新（修复读写不同步） */
 const MUTATION_TOOLS = new Set([
   'workbench_edit',
-  'create_nodes',
-  'workbench_connect',
   'bulk_edit',
   'write_file',
   'edit_file',

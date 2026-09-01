@@ -38,13 +38,17 @@ function ScopeNode({ id, data, selected }: NodeProps) {
         minHeight={120}
         color={accent}
         keepAspectRatio={false}
-        onResizeStart={() => useGraphStore.getState().setResizing([id])}
+        onResizeStart={() => {
+          const st = useGraphStore.getState();
+          st.commit();
+          st.setResizing([id]);
+        }}
         onResize={(_, params) => {
           const st = useGraphStore.getState();
           const node = st.nodes.find((n) => n.id === id);
           if (!node) return;
           if (Math.abs(params.x - node.position.x) > 0.5 || Math.abs(params.y - node.position.y) > 0.5) {
-            st.moveNode(id, { x: params.x, y: params.y });
+            st.moveNode(id, { x: params.x, y: params.y }, { moveChildren: false });
           }
           st.updateNodeData(id, { width: Math.round(params.width), height: Math.round(params.height) });
         }}

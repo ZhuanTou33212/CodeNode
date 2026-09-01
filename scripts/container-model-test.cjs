@@ -62,7 +62,7 @@ function main() {
   useGraphStore.getState().addToScope('t1', 'scope2');
   g = useGraphStore.getState();
   scope = g.nodes.find((n) => n.id === 'scope1');
-  const scope2 = g.nodes.find((n) => n.id === 'scope2');
+  let scope2 = g.nodes.find((n) => n.id === 'scope2');
   task = g.nodes.find((n) => n.id === 't1');
   assert.deepStrictEqual(scope.data.childIds, [], '旧父应移除成员');
   assert.deepStrictEqual(scope2.data.childIds, ['t1'], '新父应添加成员');

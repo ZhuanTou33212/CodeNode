@@ -163,6 +163,17 @@ export default function Inspector() {
             />
           </div>
           <div className="inspector-field">
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(d.shrink)}
+                onFocus={beginEdit}
+                onChange={(e) => updateNodeData(node.id, { shrink: e.target.checked })}
+              />{' '}
+              Shrink / 自动收缩
+            </label>
+          </div>
+          <div className="inspector-field">
             <label>说明</label>
             <textarea value={String(d.goal || '')} rows={3} onFocus={beginEdit} onChange={(e) => updateNodeData(node.id, { goal: e.target.value })} />
           </div>

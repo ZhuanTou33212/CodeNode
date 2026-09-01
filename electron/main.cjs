@@ -60,6 +60,7 @@ const { makeBridge } = require('./tools/bridge.cjs');
 const { getScalarStore } = require('./scalars/index.cjs');
 const memoryStore = require('./memory.cjs');
 const extensionStore = require('./tools/extensions.cjs');
+const { SubagentManager } = require('./subagents.cjs');
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -894,6 +895,9 @@ ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
 ipcMain.handle('agent:tools', async (_event, projectRoot) => {
   const cfg = agent.loadConfig(projectRoot);
   const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
+  const subagentManager = new SubagentManager({ agent, toolkit, cfg, registry });
+  subagentManager.register(registry);
+  toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
   return {
     enabled: cfg.tools.toolsEnabled,
     tools: registry.listTools().map((spec) => ({
@@ -933,6 +937,19 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (cfg.tools.toolsEnabled) {
       registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
     }
+    let subagentManager = null;
+    if (registry) {
+      subagentManager = new SubagentManager({
+        agent,
+        toolkit,
+        cfg,
+        registry,
+        runId: requestId || undefined,
+        onDelta: sendDelta,
+      });
+      subagentManager.register(registry);
+      toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
+    }
     const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
     const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
     const memoryText = memory.entries.slice(-30).map((entry) => `- ${entry.key ? '[' + entry.key + '] ' : ''}${entry.content}`).join('\n');
@@ -964,6 +981,8 @@ ipcMain.handle('agent:chat', async (event, payload) => {
         const context = new AgentToolContext({
           projectRoot,
           model,
+          runId: requestId || '',
+          role: 'supervisor',
           scalarStore,
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),

@@ -669,6 +669,8 @@ button:disabled {
   font-size: 13px;
   color: var(--text);
   text-align: center;
+  cursor: move;
+  user-select: none;
 }
 
 .wf-scope-toggle {

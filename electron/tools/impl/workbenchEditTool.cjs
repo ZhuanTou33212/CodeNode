@@ -79,7 +79,10 @@ function opCreate(model, args, ctx, errors, created) {
     if (type === 'scope') {
       data.width = 320; data.height = 200; data.fill = '#3b2f6b';
       data.opacity = 0.16; data.accent = '#8b5cf6';
-      if (initialMembers.length) data.childIds = initialMembers.slice();
+      if (initialMembers.length) {
+        data.members = initialMembers.slice();
+        data.childIds = initialMembers.slice();
+      }
     }
     // 自定义 id：允许同一批次内用该 id 连线/把节点放进范围节点
     const node = model.addNode(type, data, baseX, baseY + i * 110, n === 1 ? customId : '');
@@ -152,6 +155,9 @@ function opDelete(model, args, errors, affected) {
         if (Array.isArray(other.data.childIds)) {
           other.data.childIds = other.data.childIds.filter((m) => !idSet.has(m));
         }
+        if (Array.isArray(other.data.members)) {
+          other.data.members = other.data.members.filter((m) => !idSet.has(m));
+        }
         if (other.data.parentId && idSet.has(other.data.parentId)) {
           other.data.parentId = null;
           other.data.memberBadge = null;
@@ -198,6 +204,7 @@ function opMembers(model, args, errors, affected, mode) {
   else if (mode === 'add') next = [...new Set([...current, ...ids])];
   else next = current.filter((m) => !ids.includes(m));
   node.data.childIds = next;
+  node.data.members = next.slice();
   // set 模式下，被移除的旧成员要清空父关系
   if (mode === 'set') {
     for (const oldId of current) {
@@ -297,6 +304,9 @@ function applyAction(model, args, errors, affected, created) {
     case 'set_goal':
     case 'add_goal':
       opSet(model, args, errors, affected, 'goal', null);
+      break;
+    case 'set_result_summary':
+      opSet(model, args, errors, affected, 'result_summary', null);
       break;
     case 'set_status':
       opSet(model, args, errors, affected, 'status', (v) => STATUS_ALLOWED.includes(v.toLowerCase()));

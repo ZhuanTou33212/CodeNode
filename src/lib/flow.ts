@@ -28,6 +28,25 @@ export function parentIdOf(node: Node): string | null {
   return d?.parentId ?? null;
 }
 
+export function isDescendantOf(candidateId: string, ancestorId: string, nodes: Node[]): boolean {
+  if (candidateId === ancestorId) return false;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const visited = new Set<string>();
+  const stack = [ancestorId];
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const node = byId.get(id);
+    if (!node) continue;
+    for (const childId of childIdsOf(node)) {
+      if (childId === candidateId) return true;
+      stack.push(childId);
+    }
+  }
+  return false;
+}
+
 /** 成员制：容器的子节点 = 显式登记的成员（childIds / 兼容 members） */
 export function computeChildren(container: Node, nodes: Node[]): Node[] {
   const ids = new Set(childIdsOf(container));
