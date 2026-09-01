@@ -28,6 +28,8 @@ jobs:
       - run: npm run test:scalar
       - name: Electron smoke test (Linux)
         if: runner.os == 'Linux'
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
         run: xvfb-run -a npm run test:smoke
 
   package:
