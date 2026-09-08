@@ -4,6 +4,21 @@ const path = require('path');
 const fs = require('fs');
 const fsp = require('fs').promises;
 
+const APP_ICON = path.join(__dirname, '..', 'build', 'icon.ico');
+const APP_ICON_SOURCE = path.join(__dirname, '..', 'codenode-icon.png');
+
+function resolveAppIcon() {
+  if (fs.existsSync(APP_ICON)) return APP_ICON;
+  if (fs.existsSync(APP_ICON_SOURCE)) return APP_ICON_SOURCE;
+  return undefined;
+}
+
+if (process.platform === 'win32') {
+  try {
+    app.setAppUserModelId('com.codenode.desktop');
+  } catch {}
+}
+
 // Windows 控制台切换为 UTF-8，避免终端面板打印中文乱码
 if (process.platform === 'win32') {
   try {
@@ -231,6 +246,7 @@ function createWindow() {
     minHeight: 620,
     title: 'CodeNode Next',
     backgroundColor: '#14161a',
+    icon: resolveAppIcon(),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

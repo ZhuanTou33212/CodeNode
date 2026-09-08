@@ -95,11 +95,16 @@ export default function Canvas() {
   const setAltDrag = useGraphStore((s) => s.setAltDrag);
   const setDragging = useGraphStore((s) => s.setDragging);
   const closeAddMenu = useUiStore((s) => s.closeAddMenu);
+  const leftOpen = useUiStore((s) => s.leftOpen);
+  const leftWidth = useUiStore((s) => s.leftWidth);
+  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const dockOpen = useUiStore((s) => s.dockOpen);
   const setViewport = useUiStore((s) => s.setViewport);
   const pendingViewport = useUiStore((s) => s.pendingViewport);
   const applyPendingViewport = useUiStore((s) => s.applyPendingViewport);
   const progress = useSessionStore((s) => s.progress);
-  const { getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
+  const { fitView, getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
+  const canvasRef = useRef<HTMLDivElement | null>(null);
 
   const dragState = useRef<{
     id: string;
@@ -118,6 +123,28 @@ export default function Canvas() {
     if (v) rfSetViewport(v, { duration: 300 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingViewport]);
+
+  // 面板开合或窗口尺寸变化后，让 React Flow 重新计算可视区域。
+  // 这里做轻微防抖，避免拖动左侧分隔条时不断跳动视口。
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let timer: number | null = null;
+    const refit = () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        if (useGraphStore.getState().nodes.length > 0) {
+          fitView({ padding: 0.2, duration: 220 });
+        }
+      }, 180);
+    };
+    const observer = new ResizeObserver(refit);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [fitView, leftOpen, leftWidth, inspectorOpen, dockOpen]);
 
   // Agent 进度扫描：沿画布连线逐条推进高亮（多段线连接动画）
   useEffect(() => {
@@ -169,6 +196,7 @@ export default function Canvas() {
 
   return (
     <div
+      ref={canvasRef}
       className="canvas-wrap"
       onMouseDown={(e) => {
         if (e.button === 2 && e.ctrlKey) {

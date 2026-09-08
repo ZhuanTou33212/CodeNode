@@ -24,13 +24,16 @@
     "test:rag-ui": "node scripts/run-electron.cjs scripts/rag-ui-test.cjs",
     "test:shell-output": "node scripts/shell-output-test.cjs",
     "test:subagent": "node scripts/subagent-test.cjs",
+    "test:vector": "node scripts/vector-ui-test.cjs",
     "start": "node scripts/run-electron.cjs .",
     "start:prod": "npm run build && node scripts/run-electron.cjs .",
     "launcher": "node scripts/make-launcher.cjs",
     "dist:win": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs",
     "dist:mac": "node scripts/build-release.cjs mac",
     "dist:linux": "node scripts/build-release.cjs linux",
-    "dist": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs"
+    "dist": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs",
+    "icons:build": "electron scripts/build-icon-v3.cjs",
+    "postbuild": "npm run icons:build"
   },
   "build": {
     "appId": "com.codenode.desktop",
@@ -46,6 +49,7 @@
       "dist/**/*",
       "electron/**/*",
       "config/**/*",
+      "build/icon.ico",
       "package.json"
     ],
     "win": {
@@ -57,7 +61,8 @@
           ]
         }
       ],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true,
+      "icon": "build/icon.ico"
     },
     "mac": {
       "target": [

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">CodeNode icon</title>
+  <desc id="desc">A minimal graphite C-shaped loop with a teal connected node.</desc>
+
+  <rect width="1024" height="1024" rx="210" fill="#17233B"/>
+
+  <path
+    d="M 748 286
+       C 676 224 582 190 480 190
+       C 264 190 90 364 90 580
+       C 90 796 264 970 480 970
+       C 582 970 676 936 748 874"
+    fill="none"
+    stroke="#F4F1E8"
+    stroke-width="126"
+    stroke-linecap="round"
+    stroke-linejoin="round"/>
+
+  <circle cx="762" cy="828" r="72" fill="#16C8C1"/>
+</svg>

@@ -14,6 +14,7 @@ import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
 import ModelManager from './components/ModelManager';
 import WorkbenchDock from './components/WorkbenchDock';
+import VectorStudio from './vector/VectorStudio';
 
 function isTypingTarget(): boolean {
   const el = document.activeElement as HTMLElement | null;
@@ -32,6 +33,8 @@ export default function App() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const dockOpen = useUiStore((s) => s.dockOpen);
+  const workspace = useUiStore((s) => s.workspace);
   const { fitView } = useReactFlow();
 
   useEffect(() => {
@@ -46,8 +49,25 @@ export default function App() {
     return uninstall;
   }, []);
 
+  // 窄窗口优先保留画布与 Prompt，项目树可通过左上角按钮随时展开。
+  useEffect(() => {
+    let wasNarrow = window.innerWidth <= 780;
+    if (wasNarrow && useUiStore.getState().leftOpen) useUiStore.getState().toggleLeft();
+    const onResize = () => {
+      const isNarrow = window.innerWidth <= 780;
+      if (isNarrow && !wasNarrow && useUiStore.getState().leftOpen) {
+        useUiStore.getState().toggleLeft();
+      }
+      wasNarrow = isNarrow;
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // 矢量设计工作室激活时，工作台不再处理任何快捷键
+      if (useUiStore.getState().workspace !== 'agent') return;
       const mod = e.ctrlKey || e.metaKey;
 
       // 全局保存/打开/新建：即使在输入框中也生效
@@ -115,18 +135,21 @@ export default function App() {
   }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, layoutNodes, arrangeNodes, createScopeFromSelection]);
 
   return (
-    <div className="app">
-      <Toolbar />
-      <div className="app-body">
-        <ProjectManager />
-        <Canvas />
-        {inspectorOpen ? <Inspector /> : <InspectorBadge />}
-        <AddMenu />
-        <WorkbenchDock />
+    <>
+      <div className="app" style={workspace === 'vector' ? { display: 'none' } : undefined}>
+        <Toolbar />
+        <div className={`app-body${dockOpen ? ' has-dock' : ''}`}>
+          <ProjectManager />
+          <Canvas />
+          {inspectorOpen ? <Inspector /> : <InspectorBadge />}
+          <AddMenu />
+          <WorkbenchDock />
+        </div>
+        <StatusBar />
+        <ToolDialog />
+        <ModelManager />
       </div>
-      <StatusBar />
-      <ToolDialog />
-      <ModelManager />
-    </div>
+      {workspace === 'vector' ? <VectorStudio /> : null}
+    </>
   );
 }
