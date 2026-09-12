@@ -6,6 +6,20 @@ const { spawn } = require('child_process');
 const { AgentToolResult } = require('./result.cjs');
 const { ConfirmationLevel } = require('./context.cjs');
 
+const SAFE_ENV_KEYS = new Set(['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'ComSpec', 'COMSPEC', 'LANG', 'LC_ALL', 'NODE_PATH']);
+
+function extensionEnv(extraEnv, allowlist) {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (SAFE_ENV_KEYS.has(key) || key.startsWith('CODENODE_')) env[key] = value;
+  }
+  for (const key of Array.isArray(allowlist) ? allowlist : []) {
+    const name = String(key || '').trim();
+    if (name && process.env[name] != null && !/(key|token|secret|password|credential|private)/i.test(name)) env[name] = process.env[name];
+  }
+  return { ...env, ...(extraEnv || {}) };
+}
+
 function splitCommand(command) {
   const tokens = [];
   let current = '';
@@ -36,7 +50,7 @@ function readManifest(projectRoot) {
   return [];
 }
 
-function runExternal(root, command, args, extraEnv) {
+function runExternal(root, command, args, extraEnv, signal, allowlist) {
   const tokens = splitCommand(command);
   if (!tokens.length) return Promise.resolve({ ok: false, error: '扩展命令为空' });
   return new Promise((resolve) => {
@@ -49,7 +63,7 @@ function runExternal(root, command, args, extraEnv) {
         cwd: root,
         shell: false,
         windowsHide: true,
-        env: { ...process.env, CODENODE_TOOL_ARGS: JSON.stringify(args || {}), ...(extraEnv || {}) },
+        env: extensionEnv({ CODENODE_TOOL_ARGS: JSON.stringify(args || {}), ...(extraEnv || {}) }, allowlist),
       });
     } catch (e) {
       finish({ ok: false, error: String((e && e.message) || e) });
@@ -58,13 +72,17 @@ function runExternal(root, command, args, extraEnv) {
     const append = (data) => { output += String(data); if (output.length > 20000) output = output.slice(-20000); };
     child.stdout?.on('data', append);
     child.stderr?.on('data', append);
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish({ ok: false, output, error: '扩展执行超时' }); }, 120000);
-    child.on('error', (e) => { clearTimeout(timer); finish({ ok: false, output, error: String((e && e.message) || e) }); });
-    child.on('close', (code) => { clearTimeout(timer); finish({ ok: code === 0, output, exitCode: code }); });
+    const onAbort = () => { try { child.kill('SIGTERM'); } catch {} finish({ ok: false, output, error: '扩展执行已取消', cancelled: true }); };
+    signal && signal.addEventListener('abort', onAbort, { once: true });
+    if (signal && signal.aborted) onAbort();
+    const cleanup = () => signal && signal.removeEventListener('abort', onAbort);
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} cleanup(); finish({ ok: false, output, error: '扩展执行超时' }); }, 120000);
+    child.on('error', (e) => { clearTimeout(timer); cleanup(); finish({ ok: false, output, error: String((e && e.message) || e) }); });
+    child.on('close', (code) => { clearTimeout(timer); cleanup(); finish({ ok: code === 0, output, exitCode: code }); });
   });
 }
 
-function runMcpTool(root, extension, tool, args) {
+function runMcpTool(root, extension, tool, args, signal) {
   const tokens = splitCommand(extension.command);
   if (!tokens.length) return Promise.resolve({ ok: false, error: 'MCP command 为空' });
   return new Promise((resolve) => {
@@ -72,9 +90,17 @@ function runMcpTool(root, extension, tool, args) {
     let buffer = '';
     let finished = false;
     let timer;
-    const finish = (result) => { if (!finished) { finished = true; if (timer) clearTimeout(timer); try { child?.kill('SIGTERM'); } catch {} resolve(result); } };
+    let onAbort = null;
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      if (timer) clearTimeout(timer);
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+      try { child?.kill('SIGTERM'); } catch {}
+      resolve(result);
+    };
     try {
-      child = spawn(tokens[0], [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])], { cwd: root, shell: false, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
+      child = spawn(tokens[0], [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])], { cwd: root, shell: false, windowsHide: true, env: extensionEnv({ PYTHONUTF8: '1' }, extension.envAllowlist) });
     } catch (e) { finish({ ok: false, error: String((e && e.message) || e) }); return; }
     const send = (message) => { try { child.stdin.write(JSON.stringify(message) + '\n'); } catch {} };
     const parse = (data) => {
@@ -96,6 +122,8 @@ function runMcpTool(root, extension, tool, args) {
     child.stderr?.on('data', () => {});
     child.on('error', (e) => finish({ ok: false, error: String((e && e.message) || e) }));
     child.on('close', (code) => { if (!finished) finish({ ok: false, error: `MCP 进程提前退出（${code}）` }); });
+    onAbort = () => finish({ ok: false, error: 'MCP 扩展执行已取消', cancelled: true });
+    signal && signal.addEventListener('abort', onAbort, { once: true });
     send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: extension.protocolVersion || '2024-11-05', capabilities: {}, clientInfo: { name: 'CodeNode', version: '0.12.0' } } });
     send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
     send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: args || {} } });
@@ -103,11 +131,11 @@ function runMcpTool(root, extension, tool, args) {
   });
 }
 
-async function runHook(root, hook, args) {
+async function runHook(root, hook, args, signal, allowlist) {
   if (!hook) return { ok: true };
   const command = typeof hook === 'string' ? hook : hook.command;
   if (!command) return { ok: true };
-  return runExternal(root, command, args || {}, { CODENODE_HOOK: '1' });
+  return runExternal(root, command, args || {}, { CODENODE_HOOK: '1' }, signal, allowlist);
 }
 
 function registerProjectExtensions(registry, projectRoot) {
@@ -120,11 +148,11 @@ function registerProjectExtensions(registry, projectRoot) {
         registry.register(String(tool.name), String(tool.description || `${name} MCP 工具`), tool.parameters || { type: 'object', properties: {} }, async (context, args) => {
           const ok = await context.confirm(ConfirmationLevel.WRITE, `运行扩展 ${name}.${tool.name}`, `来源：${extension.source}`);
           if (!ok) return AgentToolResult.error('已取消扩展执行');
-          await runHook(context.projectRoot(), extension.hooks?.before, args);
+          await runHook(context.projectRoot(), extension.hooks?.before, args, context.signal && context.signal(), extension.envAllowlist);
           const result = String(extension.kind || '').toLowerCase() === 'mcp'
-            ? await runMcpTool(context.projectRoot(), extension, { ...tool, name: String(tool.name) }, args || {})
-            : await runExternal(context.projectRoot(), String(extension.command || ''), args || {}, { CODENODE_EXTENSION_TOOL: String(tool.name) });
-          await runHook(context.projectRoot(), extension.hooks?.after, { args, result });
+            ? await runMcpTool(context.projectRoot(), extension, { ...tool, name: String(tool.name) }, args || {}, context.signal && context.signal())
+            : await runExternal(context.projectRoot(), String(extension.command || ''), args || {}, { CODENODE_EXTENSION_TOOL: String(tool.name) }, context.signal && context.signal(), extension.envAllowlist);
+          await runHook(context.projectRoot(), extension.hooks?.after, { args, result }, context.signal && context.signal(), extension.envAllowlist);
           if (!result.ok) return AgentToolResult.error(`扩展 ${name}.${tool.name} 执行失败：${result.error || ''}`);
           context.audit(`extension ${name}.${tool.name} ok`);
           return AgentToolResult.ok(result.output || `扩展 ${name}.${tool.name} 已完成`, { extension: name, tool: tool.name, output: result.output || '' });
@@ -140,9 +168,9 @@ function registerProjectExtensions(registry, projectRoot) {
       async (context, args) => {
         const ok = await context.confirm(ConfirmationLevel.WRITE, `运行项目扩展 ${name}`, `来源：${extension.source}\n命令：${extension.command}`);
         if (!ok) return AgentToolResult.error('已取消扩展执行');
-        await runHook(context.projectRoot(), extension.hooks?.before, args);
-        const result = await runExternal(context.projectRoot(), String(extension.command), args || {}, { CODENODE_EXTENSION: name });
-        await runHook(context.projectRoot(), extension.hooks?.after, { args, result });
+        await runHook(context.projectRoot(), extension.hooks?.before, args, context.signal && context.signal(), extension.envAllowlist);
+        const result = await runExternal(context.projectRoot(), String(extension.command), args || {}, { CODENODE_EXTENSION: name }, context.signal && context.signal(), extension.envAllowlist);
+        await runHook(context.projectRoot(), extension.hooks?.after, { args, result }, context.signal && context.signal(), extension.envAllowlist);
         context.audit(`extension ${name} exit=${result.exitCode ?? 'error'}`);
         if (!result.ok) return AgentToolResult.error(`扩展 ${name} 执行失败：${result.error || ''}\n${result.output || ''}`);
         return AgentToolResult.ok(`扩展 ${name} 已完成（退出码 ${result.exitCode}）\n${result.output || ''}`, { extension: name, exitCode: result.exitCode, output: result.output || '' });
@@ -152,4 +180,4 @@ function registerProjectExtensions(registry, projectRoot) {
   return registry;
 }
 
-module.exports = { registerProjectExtensions, readManifest };
+module.exports = { registerProjectExtensions, readManifest, extensionEnv };

@@ -6,6 +6,8 @@ const os = require('os');
 const path = require('path');
 const { chatCompletion, chatCompletionStream } = require('../electron/agent.cjs');
 const modelStore = require('../electron/modelStore.cjs');
+const runStore = require('../electron/runStore.cjs');
+const { extensionEnv } = require('../electron/tools/extensions.cjs');
 const { AgentToolRegistry } = require('../electron/tools/registry.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
@@ -82,6 +84,31 @@ async function main() {
     fs.rmSync(modelRoot, { recursive: true, force: true });
   }
 
+  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-run-store-'));
+  try {
+    runStore.startRun(runRoot, 'run-complete', { model: 'test' });
+    runStore.appendEvent(runRoot, 'run-complete', 'tool_result', { name: 'read_file', ok: true });
+    runStore.finishRun(runRoot, 'run-complete', 'completed', { toolCount: 1 });
+    assert.strictEqual(runStore.summarizeRun(runStore.readRun(runRoot, 'run-complete')).status, 'completed');
+    runStore.startRun(runRoot, 'run-interrupted', { model: 'test' });
+    assert.strictEqual(runStore.listRuns(runRoot).some((item) => item.runId === 'run-interrupted' && item.status === 'interrupted'), true);
+    runStore.recoverInterrupted(runRoot);
+    assert.ok(runStore.readRun(runRoot, 'run-interrupted').some((item) => item.type === 'run_recovered'));
+  } finally {
+    fs.rmSync(runRoot, { recursive: true, force: true });
+  }
+
+  const oldSecret = process.env.CODE_NODE_SECRET_TEST;
+  process.env.CODE_NODE_SECRET_TEST = 'should-not-pass';
+  try {
+    const env = extensionEnv({ CODENODE_TEST: '1' }, []);
+    assert.strictEqual(env.CODENODE_TEST, '1');
+    assert.strictEqual(env.CODE_NODE_SECRET_TEST, undefined, '扩展环境不得继承未知密钥变量');
+  } finally {
+    if (oldSecret == null) delete process.env.CODE_NODE_SECRET_TEST;
+    else process.env.CODE_NODE_SECRET_TEST = oldSecret;
+  }
+
   const registry = new AgentToolRegistry();
   let executed = false;
   registry.register('required_tool', 'test', {
@@ -104,6 +131,10 @@ async function main() {
     const search = await tools.execute('search_files', { pattern: 'PRIVATE_TOKEN' }, context);
     assert.strictEqual(search.ok, true);
     assert.strictEqual(search.data.count, 0, 'search_files 不得返回敏感文件内容');
+    const privateUrl = await tools.execute('fetch_url', { url: 'http://127.0.0.1:9/' }, context);
+    assert.strictEqual(privateUrl.ok, false, 'fetch_url 不得访问回环地址');
+    const localhostUrl = await tools.execute('fetch_url', { url: 'http://localhost:9/' }, context);
+    assert.strictEqual(localhostUrl.ok, false, 'fetch_url 不得访问 localhost');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     global.fetch = originalFetch;

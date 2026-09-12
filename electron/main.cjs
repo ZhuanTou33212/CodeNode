@@ -74,6 +74,7 @@ const { AgentToolContext } = require('./tools/context.cjs');
 const { makeBridge } = require('./tools/bridge.cjs');
 const { getScalarStore } = require('./scalars/index.cjs');
 const memoryStore = require('./memory.cjs');
+const runStore = require('./runStore.cjs');
 const extensionStore = require('./tools/extensions.cjs');
 const { SubagentManager } = require('./subagents.cjs');
 
@@ -823,11 +824,7 @@ function auditLog(projectRoot, entry) {
     if (!projectRoot) return;
     const dir = path.join(projectRoot, '.codenode');
     require('fs').mkdirSync(dir, { recursive: true });
-    require('fs').appendFileSync(
-      path.join(dir, 'audit.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), entry }) + '\n',
-      'utf-8'
-    );
+    runStore.appendJsonl(path.join(dir, 'audit.jsonl'), { ts: new Date().toISOString(), entry: agent.redactSecrets(String(entry || '')) });
   } catch {}
 }
 
@@ -932,11 +929,15 @@ ipcMain.handle('agent:tools', async (_event, projectRoot) => {
 ipcMain.handle('agent:chat', async (event, payload) => {
   const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
   const sender = event.sender;
+  let runId = null;
   const sendDelta = (d) => {
     if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
   };
   try {
     const cfg = agent.loadConfig(projectRoot);
+    const maxConcurrentRuns = Number(cfg.limits && cfg.limits.maxConcurrentRuns) || 2;
+    if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
+    if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
     // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
     const baseCfg = agent.loadConfig(null);
     const sel = modelId ? modelStore.findModel(app.getPath('userData'), baseCfg, modelId) : null;
@@ -951,6 +952,20 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (!cfg.apiKey) {
       return { ok: false, error: '未配置 API Key（模型管理中填写或 config/agent.properties）' };
     }
+    runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
+    runStore.recoverInterrupted(projectRoot);
+    runStore.startRun(projectRoot, runId, { prompt: String(prompt || '').slice(0, 4000), model: cfg.model, nodeId: nodeId || null });
+    const onAgentDelta = (delta) => {
+      sendDelta(delta);
+      if (!delta || !delta.kind) return;
+      if (delta.kind === 'tool_result' && Array.isArray(delta.toolCalls)) {
+        runStore.appendEvent(projectRoot, runId, 'tool_result', {
+          tools: delta.toolCalls.map((item) => ({ name: item && item.name, ok: item && item.ok, elapsedMs: item && item.elapsedMs })),
+        });
+      } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
+        runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null });
+      }
+    };
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
 
     // 先装配工具注册表：用于系统提示中的工具引导，也用于工具循环
@@ -965,8 +980,8 @@ ipcMain.handle('agent:chat', async (event, payload) => {
         toolkit,
         cfg,
         registry,
-        runId: requestId || undefined,
-        onDelta: sendDelta,
+        runId,
+        onDelta: onAgentDelta,
       });
       subagentManager.register(registry);
       toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
@@ -1010,7 +1025,10 @@ ipcMain.handle('agent:chat', async (event, payload) => {
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),
-          audit: (entry) => auditLog(projectRoot, entry),
+          audit: (entry) => {
+            auditLog(projectRoot, entry);
+            runStore.appendEvent(projectRoot, runId, 'audit', { entry: String(entry || '').slice(0, 2000) });
+          },
           mutateWorkbench: async (fn) => {
             undoStack.push(JSON.parse(JSON.stringify(model.doc)));
             if (redoStack.length) redoStack.length = 0;
@@ -1049,18 +1067,18 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     }
 
     sendDelta({ kind: 'start' });
-    if (requestId) activeRequests.set(requestId, controller);
+    activeRequests.set(runId, controller);
     let result;
     try {
       result = await agent.runAgentChat({
         cfg,
         messages,
-        onDelta: sendDelta,
+        onDelta: onAgentDelta,
         tools,
         signal: controller.signal,
       });
     } finally {
-      if (requestId) activeRequests.delete(requestId);
+      activeRequests.delete(runId);
     }
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),
@@ -1070,6 +1088,12 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       toolCalls: result.toolCalls || null,
       usage: result.usage || null,
       grounding: result.grounding || null,
+    });
+    runStore.finishRun(projectRoot, runId, result.error ? 'error' : result.aborted ? 'cancelled' : 'completed', {
+      toolCount: Array.isArray(result.toolCalls) ? result.toolCalls.length : 0,
+      usage: result.usage || null,
+      grounding: result.grounding || null,
+      error: result.error || null,
     });
     sendDelta({ kind: 'done' });
     const out = {
@@ -1086,13 +1110,14 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (bridge) bridge.cleanup();
     return out;
   } catch (e) {
+    if (runId) runStore.finishRun(projectRoot, runId, 'error', { error: String((e && e.message) || e) });
     sendDelta({ kind: 'error', error: String((e && e.message) || e) });
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
 
 ipcMain.handle('agent:stop', (_event, requestId) => {
-  const controller = requestId ? activeRequests.get(requestId) : null;
+  const controller = requestId ? (activeRequests.get(requestId) || activeRequests.get(runStore.normalizeRunId(requestId))) : null;
   if (controller) controller.abort();
   return { ok: true };
 });

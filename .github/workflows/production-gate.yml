@@ -1,0 +1,48 @@
+name: production-gate
+
+on:
+  push:
+    branches: [n0_12]
+  pull_request:
+    branches: [n0_12]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:production-gate
+      - run: npm run test:agent-reliability
+      - run: npm run test:rag
+      - run: npm run test:scalar
+      - run: npm run test:model
+      - run: npm run test:cache
+      - run: npm run test:bg
+      - run: npm run test:subagent
+
+  provider-smoke:
+    if: ${{ vars.PROVIDER_E2E_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run test:provider-smoke
+        env:
+          CODENODE_E2E_API_KEY: ${{ secrets.CODENODE_E2E_API_KEY }}
+          CODENODE_E2E_API_BASE: ${{ vars.CODENODE_E2E_API_BASE }}
+          CODENODE_E2E_MODEL: ${{ vars.CODENODE_E2E_MODEL }}

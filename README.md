@@ -199,7 +199,19 @@ node scripts/arrange-test.cjs
 node scripts/background-job-test.cjs
 # 构建后验证来源校验徽标渲染
 npm run test:rag-ui
+# Agent 可靠性、安全边界、密钥存储、SSRF 与运行持久化回归
+npm run test:agent-reliability
+# 生产门禁（安全配置、运行持久化、角色隔离和核心结构检查）
+npm run test:production-gate
 ```
+
+### 生产运行边界
+
+- Agent Run 会把生命周期、工具结果摘要、审计事件和结束状态追加写入 `.codenode/runs/<runId>.jsonl`；应用重启后未结束的 Run 会标记为 `interrupted`，不会伪装成已完成。
+- 单进程默认最多并发 2 个 Agent Run，单轮默认最多累计 250,000 tokens；可通过 `agent.max_concurrent_runs` 与 `agent.max_total_tokens` 调整。
+- `fetch_url` 会阻止 localhost、回环、私网、链路本地和解析到私网的域名，并限制手动重定向次数；项目扩展/MCP 子进程默认不继承密钥类环境变量。
+- GitHub Actions 的 `production-gate` 会执行生产构建、核心 Agent/RAG/子代理/后台任务回归和静态安全门禁。真实供应商端到端测试需要在受控环境注入凭据，不能用本地 mock 代替。
+- 真实供应商冒烟测试：设置 `CODENODE_E2E_API_KEY`（可选 `CODENODE_E2E_API_BASE`、`CODENODE_E2E_MODEL`）后运行 `npm run test:provider-smoke`；CI 通过 `PROVIDER_E2E_ENABLED=true` 才启用该 job。
 
 ## 路线图
 

@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const runStore = require('./runStore.cjs');
 
 function loadProperties(file) {
   const out = {};
@@ -41,6 +42,7 @@ function loadConfig(projectRoot) {
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
     reliability: parseReliabilityConfig(cfg),
+    limits: parseLimitsConfig(cfg),
   };
 }
 
@@ -129,6 +131,14 @@ function parseReliabilityConfig(cfg) {
     maxAttempts: configInteger(cfg, 'agent.request_max_attempts', 3, 1, 5),
     retryBaseMs: configInteger(cfg, 'agent.retry_base_ms', 400, 50, 5000),
     retryMaxMs: configInteger(cfg, 'agent.retry_max_ms', 5000, 250, 30000),
+  };
+}
+
+/** 单次运行与进程级资源上限，避免上下文/工具 fan-out 失控。 */
+function parseLimitsConfig(cfg) {
+  return {
+    maxConcurrentRuns: configInteger(cfg, 'agent.max_concurrent_runs', 2, 1, 8),
+    maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 250000, 10000, 2000000),
   };
 }
 
@@ -470,8 +480,21 @@ function logConversation(projectRoot, entry) {
   try {
     const dir = path.join(projectRoot, '.codenode');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'conversation.jsonl'), JSON.stringify(entry) + '\n', 'utf-8');
+    runStore.appendJsonl(path.join(dir, 'conversation.jsonl'), redactSecrets(entry));
   } catch {}
+}
+
+function redactSecrets(value) {
+  if (typeof value === 'string') {
+    return value
+      .replace(/(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+      .replace(/((?:api[_-]?key|token|password|secret|private[_-]?key)\s*[=:]\s*)[^\s,;"']+/gi, '$1[REDACTED]');
+  }
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /api.?key|token|password|secret|private.?key/i.test(key) ? '[REDACTED]' : redactSecrets(item)]));
+  }
+  return value;
 }
 
 const MAX_TOOL_ITERATIONS = 12;
@@ -669,7 +692,7 @@ function logToolTrace(projectRoot, entry) {
   try {
     const dir = path.join(projectRoot, '.codenode');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'tools_trace.jsonl'), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n', 'utf-8');
+    runStore.appendJsonl(path.join(dir, 'tools_trace.jsonl'), redactSecrets({ ts: new Date().toISOString(), ...entry }));
   } catch {}
 }
 
@@ -679,6 +702,16 @@ function safeLog(s) {
     const cp = c.codePointAt(0);
     return cp <= 0xffff ? '\\u' + cp.toString(16).padStart(4, '0') : '\\u{' + cp.toString(16) + '}';
   });
+}
+
+function mergeUsage(previous, next) {
+  if (!next || typeof next !== 'object') return previous || null;
+  const merged = { ...(previous || {}) };
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === 'number' && Number.isFinite(value)) merged[key] = (Number(merged[key]) || 0) + value;
+    else if (merged[key] == null) merged[key] = value;
+  }
+  return merged;
 }
 
 /**
@@ -697,6 +730,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let content = '';
   let reasoning = '';
   let usage = null;
+  let totalTokens = 0;
   const allToolCalls = [];
   const toolResultCache = new Map();
   let totalToolCalls = 0;
@@ -735,7 +769,16 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         timeoutMs,
         tools: payload.tools,
       });
-      if (res.usage) usage = res.usage;
+      if (res.usage) {
+        usage = mergeUsage(usage, res.usage);
+        totalTokens = Number(usage.total_tokens) || totalTokens;
+        const maxTotalTokens = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 250000;
+        if (totalTokens > maxTotalTokens) {
+          const error = '已达到本轮 Agent token 预算（' + maxTotalTokens + '），已停止继续调用模型。';
+          onDelta && onDelta({ kind: 'error', error });
+          return { content, reasoning, toolCalls: allToolCalls, usage, error };
+        }
+      }
 
       const toolCalls = res.toolCalls || [];
       if (tools && tools.registry && toolCalls.length) {
@@ -919,6 +962,9 @@ module.exports = {
   runAgentChat,
   logToolTrace,
   parseRagConfig,
+  parseLimitsConfig,
+  mergeUsage,
+  redactSecrets,
   parseReliabilityConfig,
   shouldCompress,
   buildToolContent,
