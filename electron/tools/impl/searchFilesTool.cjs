@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { shouldSkipDir, isBinaryFileName } = require('../toolFiles.cjs');
-const { globToRegExp } = require('./shared.cjs');
+const { globToRegExp, isSensitivePath } = require('./shared.cjs');
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -78,6 +78,7 @@ function register(registry) {
       const maxCollect = offset + max;
       walkFiles(start, start, fileRegex, (abs, relative) => {
         if (matches.length >= maxCollect) return;
+        if (isSensitivePath(relative)) return;
         if (isBinaryFileName(path.basename(abs))) return;
         let size;
         try {

@@ -118,6 +118,8 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 - `execute_shell` 支持 `async=true`：长任务后台执行，**立即返回 jobId**，不再前台硬等；`timeoutSeconds` 可按预估时长调大（默认 30）
 - 新增 `poll_job jobId=… waitSeconds=…`：轮询后台任务状态（running/done/error/timeout）、已输出内容与退出码，任务结束自动清理
 - 核心原则：**工具失败 ≠ 任务失败**。任何 error 先做三件事：①分析原因 ②修正参数或换工具 ③重试，直到成功或确实无路可走
+- 模型网络请求对连接失败、408/425/429/5xx 做有限次数指数退避重试；用户取消和请求超时不会被继续重试
+- 工具注册表在执行前统一校验 JSON Schema 参数；敏感凭据文件不会通过 `read_file` / `search_files` 送入模型
 - 失败分类：参数错→修正重调；文件/节点/路径不存在→先探查（`list_directory`/`find_files`/`get_workbench_model`/`query_scalars`）再重试；命令不在白名单→换等价命令；执行超时→调大 `timeoutSeconds` 或 `async=true`+`poll_job`
 
 ### 画布与会话解耦（独立工作系统）

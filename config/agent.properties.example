@@ -5,6 +5,10 @@ model=deepseek-v4-flash
 max_tokens=8192
 # 推理强度：low / medium / high
 # reasoning_effort=high
+# 瞬时网络错误重试（408/425/429/5xx 与连接失败），不会重试用户取消/超时
+# agent.request_max_attempts=3
+# agent.retry_base_ms=400
+# agent.retry_max_ms=5000
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md
 

@@ -9,6 +9,7 @@ function emptyModel(): ModelSpec {
     model: '',
     apiBase: 'https://api.deepseek.com',
     apiKey: '',
+    apiKeySet: false,
     contextWindow: 1_000_000,
     priceInput: 0.22,
     priceInputHit: 0.007,
@@ -186,7 +187,7 @@ export default function ModelManager() {
             </div>
             <div className="mm-field">
               <label>API Key</label>
-              {input('apiKey', 'sk-…', { pw: true })}
+                {input('apiKey', form.apiKeySet ? '已保存，留空保持不变' : 'sk-…', { pw: true })}
             </div>
 
             <div className="mm-grid">

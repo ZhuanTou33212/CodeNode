@@ -860,7 +860,7 @@ ipcMain.handle('agent:config', async (_event, projectRoot) => {
     soul,
     toolsEnabled: cfg.tools.toolsEnabled,
     ragEnabled: cfg.rag.enabled,
-    models: store.models,
+    models: modelStore.toPublicModels(store.models),
     activeModelId: store.activeId,
   };
 });
@@ -869,7 +869,7 @@ ipcMain.handle('agent:config', async (_event, projectRoot) => {
 ipcMain.handle('models:list', async (_event) => {
   const cfg = agent.loadConfig(null);
   const store = modelStore.getModels(app.getPath('userData'), cfg);
-  return { models: store.models, activeId: store.activeId };
+  return { models: modelStore.toPublicModels(store.models), activeId: store.activeId };
 });
 
 ipcMain.handle('models:save', async (_event, model) => {
@@ -877,10 +877,15 @@ ipcMain.handle('models:save', async (_event, model) => {
   const cfg = agent.loadConfig(null);
   const userDataDir = app.getPath('userData');
   const store = modelStore.getModels(userDataDir, cfg);
-  const models = store.models.filter((m) => m.id !== model.id);
-  models.push(model);
+  const existing = store.models.find((item) => item && item.id === model.id);
+  const incoming = { ...model };
+  // UI 不会回传已保存的密钥；空值表示保留主进程中的旧密钥。
+  if (!String(incoming.apiKey || '').trim() && existing && existing.apiKey) incoming.apiKey = existing.apiKey;
+  delete incoming.apiKeySet;
+  const models = store.models.filter((m) => m.id !== incoming.id);
+  models.push(incoming);
   modelStore.writeModels(userDataDir, models, store.activeId || model.id);
-  return { ok: true, models, activeId: store.activeId || model.id };
+  return { ok: true, models: modelStore.toPublicModels(models), activeId: store.activeId || model.id };
 });
 
 ipcMain.handle('models:delete', async (_event, id) => {
@@ -890,7 +895,7 @@ ipcMain.handle('models:delete', async (_event, id) => {
   const models = store.models.filter((m) => m.id !== id);
   const activeId = store.activeId === id ? (models[0] ? models[0].id : null) : store.activeId;
   modelStore.writeModels(userDataDir, models, activeId);
-  return { ok: true, models, activeId };
+  return { ok: true, models: modelStore.toPublicModels(models), activeId };
 });
 
 ipcMain.handle('models:active', async (_event, id) => {
@@ -988,6 +993,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     let model = null;
     let bridge = null;
     let dirty = false;
+    const controller = new AbortController();
     if (registry && registry.listTools().length > 0) {
         bridge = makeBridge(sender);
         model = new GraphModel(document || undefined);
@@ -999,6 +1005,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
           model,
           runId: requestId || '',
           role: 'supervisor',
+          signal: controller.signal,
           scalarStore,
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),
@@ -1042,16 +1049,19 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     }
 
     sendDelta({ kind: 'start' });
-    const controller = new AbortController();
     if (requestId) activeRequests.set(requestId, controller);
-    const result = await agent.runAgentChat({
-      cfg,
-      messages,
-      onDelta: sendDelta,
-      tools,
-      signal: controller.signal,
-    });
-    if (requestId) activeRequests.delete(requestId);
+    let result;
+    try {
+      result = await agent.runAgentChat({
+        cfg,
+        messages,
+        onDelta: sendDelta,
+        tools,
+        signal: controller.signal,
+      });
+    } finally {
+      if (requestId) activeRequests.delete(requestId);
+    }
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),
       role: 'assistant',

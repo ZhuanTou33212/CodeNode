@@ -4,6 +4,8 @@ const { AgentToolResult } = require('./tools/result.cjs');
 const { ROLE_TOOLS } = require('./tools/toolkit.cjs');
 
 const READ_ONLY_ROLES = new Set(['explorer', 'verifier', 'reviewer']);
+const MAX_TASKS_PER_RUN = 12;
+const MAX_BATCH_TASKS = 8;
 const ROLE_PROMPTS = {
   explorer: '你负责项目探查和证据收集，只读分析，不修改文件或画布。',
   builder: '你负责按任务目标实施最小必要修改，只修改任务范围内的文件或画布。',
@@ -115,6 +117,7 @@ class SubagentManager {
       async (context, args) => {
         const tasks = Array.isArray(args.tasks) ? args.tasks : [];
         if (!tasks.length) return AgentToolResult.error('缺少 tasks');
+        if (tasks.length > MAX_BATCH_TASKS) return AgentToolResult.error('单次最多委派 ' + MAX_BATCH_TASKS + ' 个子代理任务');
         if (tasks.some((item) => !item || !ROLE_TOOLS[item.role] || !String(item.objective || '').trim())) {
           return AgentToolResult.error('tasks 中存在无效的 role 或 objective');
         }
@@ -128,6 +131,8 @@ class SubagentManager {
   }
 
   async delegate(context, args) {
+    if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
+    if (this.tasks.size >= MAX_TASKS_PER_RUN) return AgentToolResult.error('本轮最多执行 ' + MAX_TASKS_PER_RUN + ' 个子代理任务');
     const role = String(args.role || '').trim();
     const objective = String(args.objective || '').trim();
     if (!ROLE_TOOLS[role]) return AgentToolResult.error('不支持的子代理角色：' + role);
@@ -168,7 +173,7 @@ class SubagentManager {
           { role: 'user', content: objective },
         ],
         tools: { registry: childRegistry, context: childContext },
-        signal: null,
+        signal: typeof context.signal === 'function' ? context.signal() : null,
         timeoutMs: clampTimeout(args.timeoutSeconds),
         onDelta: (event) => this.onDelta && this.onDelta({ kind: 'subagent_delta', taskId: task.taskId, role, event }),
       });

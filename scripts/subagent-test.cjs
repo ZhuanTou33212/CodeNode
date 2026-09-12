@@ -14,17 +14,20 @@ const { SubagentManager } = require('../electron/subagents.cjs');
   assert.strictEqual(readOnly.contains('write_file'), false);
 
   const model = new GraphModel({ root: { nodes: [{ id: 'stage-1', type: 'stage', position: { x: 0, y: 0 }, data: { label: '探查', status: 'pending' } }], edges: [] } });
+  const controller = new AbortController();
   const context = new AgentToolContext({
     projectRoot: process.cwd(),
     model,
     confirm: async () => true,
     mutateWorkbench: async (fn) => { fn(model); return true; },
     audit: () => {},
+    signal: controller.signal,
   });
   const supervisor = toolkit.buildDefaultRegistry();
   const manager = new SubagentManager({
     agent: { runAgentChat: async ({ tools }) => {
       assert.strictEqual(tools.context.role(), 'explorer');
+      assert.strictEqual(tools.context.signal(), controller.signal);
       assert.strictEqual(tools.registry.contains('write_file'), false);
       return { content: '探查完成', toolCalls: [], usage: null };
     } },

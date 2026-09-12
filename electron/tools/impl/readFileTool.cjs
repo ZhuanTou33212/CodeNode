@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
-const { resolveInRoot, resolveFileFuzzy, detectLanguage, readTextFile } = require('./shared.cjs');
+const { resolveInRoot, resolveFileFuzzy, detectLanguage, readTextFile, isSensitivePath } = require('./shared.cjs');
 const { extractPdfText } = require('./pdfText.cjs');
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
@@ -88,6 +88,7 @@ function register(registry) {
     async (context, args) => {
       const relative = String(args.path || '').trim();
       if (!relative) return AgentToolResult.error('缺少 path');
+      if (isSensitivePath(relative)) return AgentToolResult.error('出于凭据保护，Agent 不能读取敏感文件：' + relative);
       const root = path.resolve(context.projectRoot());
       const exact = resolveInRoot(root, relative);
       if (!exact) return AgentToolResult.error('路径越过项目边界');
