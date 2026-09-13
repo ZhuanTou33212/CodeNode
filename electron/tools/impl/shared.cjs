@@ -31,6 +31,20 @@ function resolveInRoot(root, relative) {
   const resolvedRoot = path.resolve(root);
   const full = path.resolve(resolvedRoot, relative);
   if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
+  try {
+    const realRoot = fs.realpathSync(resolvedRoot);
+    let existing = full;
+    while (!fs.existsSync(existing)) {
+      // Dangling links must not be treated as ordinary missing paths.
+      try { if (fs.lstatSync(existing).isSymbolicLink()) return null; } catch {}
+      const parent = path.dirname(existing);
+      if (parent === existing) return null;
+      existing = parent;
+    }
+    const real = fs.realpathSync(existing);
+    const inside = path.relative(realRoot, real);
+    if (inside === '..' || inside.startsWith('..' + path.sep) || path.isAbsolute(inside)) return null;
+  } catch { return null; }
   return full;
 }
 
@@ -47,7 +61,7 @@ function resolveFileFuzzy(root, relative) {
   const resolvedRoot = path.resolve(root);
   const full = resolveInRoot(root, relative);
   if (full && fs.existsSync(full) && fs.statSync(full).isFile()) return full;
-  if (!relative) return null;
+  if (!relative || !full) return null;
 
   const baseName = path.basename(String(relative).replace(/[\\/]+/g, '/'));
   const dirName = path.dirname(String(relative).replace(/[\\/]+/g, '/'));

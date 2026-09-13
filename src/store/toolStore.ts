@@ -30,6 +30,7 @@ interface ToolState {
   push: (req: ToolRequest) => void;
   respond: (id: string, result: unknown) => void;
   clearCurrent: () => void;
+  cancel: (id: string) => void;
 }
 
 export const useToolStore = create<ToolState>((set, get) => ({
@@ -57,4 +58,10 @@ export const useToolStore = create<ToolState>((set, get) => ({
   },
 
   clearCurrent: () => set({ current: null, queue: [] }),
+  cancel: (id) => set((s) => {
+    const queue = s.queue.filter((item) => item.id !== id);
+    return s.current?.id === id
+      ? { current: queue[0] || null, queue: queue.slice(1) }
+      : { queue };
+  }),
 }));

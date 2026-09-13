@@ -14,7 +14,8 @@ function modelsFile(userDataDir) {
 function safeStorage() {
   try {
     const { safeStorage: storage } = require('electron');
-    if (storage && typeof storage.isEncryptionAvailable === 'function' && storage.isEncryptionAvailable()) return storage;
+    if (storage && typeof storage.isEncryptionAvailable === 'function' && storage.isEncryptionAvailable()
+      && !(typeof storage.getSelectedStorageBackend === 'function' && storage.getSelectedStorageBackend() === 'basic_text')) return storage;
   } catch {}
   return null;
 }
@@ -26,8 +27,7 @@ function encryptSecret(value) {
   if (storage) {
     try { return 'safe:v1:' + storage.encryptString(secret).toString('base64'); } catch {}
   }
-  // 仅用于 Electron safeStorage 不可用的开发/迁移环境；正常桌面运行会使用系统密钥环/DPAPI。
-  return 'plain:v1:' + Buffer.from(secret, 'utf8').toString('base64');
+  throw new Error('安全密钥存储不可用，拒绝保存 API Key；原配置未修改');
 }
 
 function decryptSecret(value) {
@@ -35,8 +35,9 @@ function decryptSecret(value) {
   if (!raw) return '';
   if (raw.startsWith('safe:v1:')) {
     const storage = safeStorage();
-    if (!storage) return '';
-    try { return storage.decryptString(Buffer.from(raw.slice(8), 'base64')); } catch { return ''; }
+    if (!storage) throw new Error('安全密钥存储不可用，无法解密；原配置已保留');
+    try { return storage.decryptString(Buffer.from(raw.slice(8), 'base64')); }
+    catch { throw new Error('密钥解密失败；原配置已保留，请恢复系统密钥环'); }
   }
   if (raw.startsWith('plain:v1:')) {
     try { return Buffer.from(raw.slice(9), 'base64').toString('utf8'); } catch { return ''; }
@@ -93,13 +94,14 @@ function readModels(userDataDir) {
   try {
     const raw = fs.readFileSync(modelsFile(userDataDir), 'utf-8');
     const data = JSON.parse(raw);
-    if (!data || !Array.isArray(data.models)) return null;
+    if (!data || !Array.isArray(data.models)) throw new Error('模型配置格式错误，拒绝覆盖原文件');
     return {
       models: data.models.map((model) => ({ ...model, apiKey: decryptSecret(model && model.apiKey) })),
       activeId: data.activeId || null,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
   }
 }
 
@@ -109,7 +111,14 @@ function writeModels(userDataDir, models, activeId) {
     ...model,
     apiKey: encryptSecret(model && model.apiKey),
   }));
-  fs.writeFileSync(modelsFile(userDataDir), JSON.stringify({ models: persisted, activeId }, null, 2), 'utf-8');
+  const file = modelsFile(userDataDir);
+  const temporary = file + '.' + require('crypto').randomUUID() + '.tmp';
+  try {
+    fs.writeFileSync(temporary, JSON.stringify({ models: persisted, activeId }, null, 2), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
 }
 
 /**
@@ -118,7 +127,7 @@ function writeModels(userDataDir, models, activeId) {
  */
 function getModels(userDataDir, cfg) {
   const existing = readModels(userDataDir);
-  if (existing && existing.models.length > 0) {
+  if (existing) {
     return existing;
   }
   const models = seedModels(cfg || {});

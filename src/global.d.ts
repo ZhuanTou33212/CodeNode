@@ -72,7 +72,7 @@ interface ToolRecordDto {
 
 interface ToolRequestDto {
   id: string;
-  type: 'confirm' | 'ask' | 'ui';
+  type: 'confirm' | 'ask' | 'ui' | 'cancel';
   level?: string;
   what?: string;
   detail?: string;

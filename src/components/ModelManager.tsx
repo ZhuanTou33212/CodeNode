@@ -29,6 +29,7 @@ export default function ModelManager() {
   const [form, setForm] = useState<ModelSpec>(emptyModel());
   const [isNew, setIsNew] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
     const api = window.codenode;
@@ -48,7 +49,9 @@ export default function ModelManager() {
         setForm(emptyModel());
         setIsNew(true);
       }
-    } catch {}
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '无法读取模型配置');
+    }
   }, [selectedId]);
 
   useEffect(() => {
@@ -68,6 +71,7 @@ export default function ModelManager() {
   const save = async () => {
     if (!form.label.trim() || !form.model.trim()) return;
     setBusy(true);
+    setError('');
     const api = window.codenode;
     try {
       const payload: ModelSpec = {
@@ -83,11 +87,14 @@ export default function ModelManager() {
         priceOutput: Number(form.priceOutput) || 0,
       };
       const res = api && api.modelsSave ? await api.modelsSave(payload) : null;
+      if (!res?.ok) throw new Error(res?.error || '保存失败');
       if (res && res.ok) {
         await refresh();
         await loadModels();
         if (res.activeId) setActiveId(res.activeId);
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '保存失败');
     } finally {
       setBusy(false);
     }
@@ -99,11 +106,14 @@ export default function ModelManager() {
     const api = window.codenode;
     try {
       const res = api && api.modelsDelete ? await api.modelsDelete(selectedId) : null;
+      if (!res?.ok) throw new Error(res?.error || '删除失败');
       if (res && res.ok) {
         await refresh();
         await loadModels();
         if (res.activeId) setActiveId(res.activeId);
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '删除失败');
     } finally {
       setBusy(false);
     }
@@ -112,8 +122,13 @@ export default function ModelManager() {
   const setActive = async () => {
     if (!selectedId) return;
     const api = window.codenode;
-    const res = api && api.modelsActive ? await api.modelsActive(selectedId) : null;
-    if (res && res.ok) setActiveId(selectedId);
+    try {
+      const res = api && api.modelsActive ? await api.modelsActive(selectedId) : null;
+      if (!res?.ok) throw new Error('无法切换模型');
+      setActiveId(selectedId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '无法切换模型');
+    }
   };
 
   const addNew = () => {
@@ -145,6 +160,7 @@ export default function ModelManager() {
           </button>
         </div>
 
+        {error && <div role="alert" className="mm-error">{error}</div>}
         <div className="mm-body">
           <div className="mm-side">
             <div className="mm-side-list">

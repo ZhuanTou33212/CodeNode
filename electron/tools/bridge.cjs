@@ -15,8 +15,20 @@ const REQUEST_TIMEOUT_MS = 180000;
 
 let seq = 0;
 
-function makeBridge(sender) {
+function makeBridge(sender, signal) {
   const pending = new Map(); // id -> { resolve, senderId, timer }
+  let closed = false;
+  function cleanup() {
+    closed = true;
+    ipcMain.removeListener('tools:response', onResponse);
+    signal?.removeEventListener('abort', cleanup);
+    for (const [id, entry] of pending) {
+      clearTimeout(entry.timer);
+      try { sender.send('tools:request', { id, type: 'cancel' }); } catch {}
+      entry.resolve(null);
+    }
+    pending.clear();
+  }
 
   const onResponse = (_event, msg) => {
     if (!msg || msg.id == null) return;
@@ -28,12 +40,14 @@ function makeBridge(sender) {
     p.resolve(msg.result);
   };
   ipcMain.on('tools:response', onResponse);
+  signal?.addEventListener('abort', cleanup, { once: true });
+  if (signal?.aborted) cleanup();
 
   function request(type, payload) {
     const id = 'tool-' + Date.now().toString(36) + '-' + (++seq);
     return new Promise((resolve) => {
       const senderId = sender && !sender.isDestroyed() ? sender.id : null;
-      if (senderId == null) {
+      if (closed || senderId == null) {
         resolve(null);
         return;
       }
@@ -73,7 +87,7 @@ function makeBridge(sender) {
     return !!(r && r.applied);
   }
 
-  return { confirm, askUser, ui, request, cleanup: () => ipcMain.removeListener('tools:response', onResponse) };
+  return { confirm, askUser, ui, request, cleanup };
 }
 
 module.exports = { makeBridge };

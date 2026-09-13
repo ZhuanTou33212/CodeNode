@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
+const { redact } = require('./redaction.cjs');
 
 const MAX_RUN_EVENTS = 4000;
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
@@ -20,19 +22,41 @@ function runFile(projectRoot, runId) {
 }
 
 function appendJsonl(file, record, maxBytes = MAX_LOG_BYTES) {
+  let temporary;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (fs.existsSync(file) && fs.statSync(file).size > maxBytes) {
-      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).slice(-MAX_RUN_EVENTS + 1);
-      const compact = file + '.compact';
-      fs.writeFileSync(compact, lines.join('\n') + (lines.length ? '\n' : ''), 'utf8');
-      fs.rmSync(file, { force: true });
-      fs.renameSync(compact, file);
+    const line = JSON.stringify(redact(record)) + '\n';
+    if (Buffer.byteLength(line) > maxBytes) throw new Error('Log event exceeds byte budget');
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (Buffer.byteLength(existing) + Buffer.byteLength(line) > maxBytes || (existing && !existing.endsWith('\n'))) {
+      const valid = existing.split(/\r?\n/).filter(text => {
+        try { JSON.parse(text); return !!text; } catch { return false; }
+      });
+      const start = valid.find(text => JSON.parse(text).type === 'run_start');
+      const kept = [];
+      let bytes = Buffer.byteLength(line);
+      if (start && bytes + Buffer.byteLength(start + '\n') <= maxBytes) bytes += Buffer.byteLength(start + '\n');
+      else if (start) throw new Error('Log budget cannot preserve run header');
+      for (let i = valid.length - 1; i >= 0 && kept.length < MAX_RUN_EVENTS - 2; i--) {
+        if (valid[i] === start) continue;
+        const size = Buffer.byteLength(valid[i] + '\n');
+        if (bytes + size > maxBytes) break;
+        kept.unshift(valid[i]);
+        bytes += size;
+      }
+      if (start) kept.unshift(start);
+      temporary = file + '.' + randomUUID() + '.tmp';
+      fs.writeFileSync(temporary, kept.map(text => text + '\n').join('') + line, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporary, file);
+    } else {
+      fs.appendFileSync(file, line, { encoding: 'utf8', mode: 0o600 });
     }
-    fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8');
     return true;
-  } catch {
+  } catch (error) {
+    console.error('[log-write-failed]', error.code || 'LOG_WRITE_FAILED');
     return false;
+  } finally {
+    if (temporary && fs.existsSync(temporary)) fs.unlinkSync(temporary);
   }
 }
 
@@ -62,7 +86,9 @@ function finishRun(projectRoot, runId, status, data) {
 function readRun(projectRoot, runId) {
   try {
     const lines = fs.readFileSync(runFile(projectRoot, runId), 'utf8').split(/\r?\n/).filter(Boolean);
-    return lines.slice(-MAX_RUN_EVENTS).map((line) => JSON.parse(line));
+    return lines.flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
   } catch {
     return [];
   }
@@ -94,9 +120,10 @@ function listRuns(projectRoot, limit = 30) {
   }
 }
 
-function recoverInterrupted(projectRoot) {
+function recoverInterrupted(projectRoot, activeIds = new Set()) {
   const recovered = [];
   for (const run of listRuns(projectRoot, 200)) {
+    if (activeIds.has(run.runId)) continue;
     const events = readRun(projectRoot, run.runId);
     if (run.status === 'interrupted' && !events.some((event) => event.type === 'run_recovered')) {
       appendEvent(projectRoot, run.runId, 'run_recovered', { previousStatus: 'running', status: 'interrupted' });

@@ -73,13 +73,15 @@ async function main() {
 
   const modelRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-model-store-'));
   try {
-    modelStore.writeModels(modelRoot, [{ id: 'test', apiKey: 'super-secret', label: 'Test' }], 'test');
+    assert.throws(() => modelStore.writeModels(modelRoot, [{ id: 'test', apiKey: 'super-secret', label: 'Test' }], 'test'), /拒绝保存/);
+    assert.strictEqual(fs.existsSync(path.join(modelRoot, 'models.json')), false);
+    modelStore.writeModels(modelRoot, [{ id: 'test', apiKey: '', label: 'Test' }], 'test');
     const persisted = fs.readFileSync(path.join(modelRoot, 'models.json'), 'utf8');
     assert.ok(!persisted.includes('super-secret'), '模型配置文件不得保存明文 API Key');
     const internal = modelStore.readModels(modelRoot);
-    assert.strictEqual(internal.models[0].apiKey, 'super-secret');
+    assert.strictEqual(internal.models[0].apiKey, '');
     assert.strictEqual(modelStore.toPublicModel(internal.models[0]).apiKey, '');
-    assert.strictEqual(modelStore.toPublicModel(internal.models[0]).apiKeySet, true);
+    assert.strictEqual(modelStore.toPublicModel(internal.models[0]).apiKeySet, false);
   } finally {
     fs.rmSync(modelRoot, { recursive: true, force: true });
   }
