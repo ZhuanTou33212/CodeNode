@@ -7,7 +7,7 @@ const path = require('path');
 const { chatCompletion, chatCompletionStream } = require('../electron/agent.cjs');
 const modelStore = require('../electron/modelStore.cjs');
 const runStore = require('../electron/runStore.cjs');
-const { extensionEnv } = require('../electron/tools/extensions.cjs');
+const { safeEnvironment } = require('../electron/envPolicy.cjs');
 const { AgentToolRegistry } = require('../electron/tools/registry.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
@@ -103,7 +103,7 @@ async function main() {
   const oldSecret = process.env.CODE_NODE_SECRET_TEST;
   process.env.CODE_NODE_SECRET_TEST = 'should-not-pass';
   try {
-    const env = extensionEnv({ CODENODE_TEST: '1' }, []);
+    const env = safeEnvironment({ CODENODE_TEST: '1' }, []);
     assert.strictEqual(env.CODENODE_TEST, '1');
     assert.strictEqual(env.CODE_NODE_SECRET_TEST, undefined, '扩展环境不得继承未知密钥变量');
   } finally {

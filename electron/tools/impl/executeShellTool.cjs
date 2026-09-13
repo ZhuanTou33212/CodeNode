@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { killProcessTree } = require('../../processTree.cjs');
+const { safeEnvironment } = require('../../envPolicy.cjs');
 
 const ALLOWED = new Set([
   'mvn', 'mvnw', 'mvnw.cmd', 'git', 'java', 'javac', 'gradle', 'gradlew', 'gradlew.bat',
@@ -42,7 +43,7 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
   sweepJobs();
   if (signal && signal.aborted) return { jobId: null, error: '已取消执行' };
   const jobId = 'job-' + Date.now().toString(36) + '-' + (++jobSeq).toString(36);
-  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  const env = safeEnvironment({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
   let child;
   try {
     const spec = spawnSpec(normalized, tokens);
@@ -284,7 +285,7 @@ function register(registry) {
         let child;
         let cancelled = false;
         try {
-          const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+          const env = safeEnvironment({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
           const spec = spawnSpec(normalized, tokens);
           child = spawn(spec.file, spec.args, { cwd: root, shell: false, windowsHide: true, env });
         } catch (e) {

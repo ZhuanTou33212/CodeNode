@@ -6,21 +6,7 @@ const { spawn } = require('child_process');
 const { AgentToolResult } = require('./result.cjs');
 const { ConfirmationLevel } = require('./context.cjs');
 const { killProcessTree } = require('../processTree.cjs');
-
-const SAFE_ENV_KEYS = new Set(['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'ComSpec', 'COMSPEC', 'LANG', 'LC_ALL']);
-
-function extensionEnv(extraEnv, allowlist) {
-  const env = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (SAFE_ENV_KEYS.has(key)) env[key] = value;
-  }
-  for (const key of Array.isArray(allowlist) ? allowlist : []) {
-    const name = String(key || '').trim();
-    if (name && process.env[name] != null && !/(key|token|secret|password|credential|private)/i.test(name)
-      && !/^(NODE_|LD_|DYLD_|PYTHONPATH|PYTHONHOME|ELECTRON_|CODENODE_)/i.test(name)) env[name] = process.env[name];
-  }
-  return { ...env, ...(extraEnv || {}) };
-}
+const { safeEnvironment } = require('../envPolicy.cjs');
 
 function splitCommand(command) {
   const tokens = [];
@@ -66,7 +52,7 @@ function runExternal(root, command, args, extraEnv, signal, allowlist) {
         cwd: root,
         shell: false,
         windowsHide: true,
-        env: extensionEnv({ CODENODE_TOOL_ARGS: JSON.stringify(args || {}), ...(extraEnv || {}) }, allowlist),
+        env: safeEnvironment({ CODENODE_TOOL_ARGS: JSON.stringify(args || {}), ...(extraEnv || {}) }, allowlist),
       });
     } catch (e) {
       finish({ ok: false, error: String((e && e.message) || e) });
@@ -104,7 +90,7 @@ function runMcpTool(root, extension, tool, args, signal) {
       resolve(result);
     };
     try {
-      child = spawn(tokens[0], [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])], { cwd: root, shell: false, windowsHide: true, env: extensionEnv({ PYTHONUTF8: '1' }, extension.envAllowlist) });
+      child = spawn(tokens[0], [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])], { cwd: root, shell: false, windowsHide: true, env: safeEnvironment({ PYTHONUTF8: '1' }, extension.envAllowlist) });
     } catch (e) { finish({ ok: false, error: String((e && e.message) || e) }); return; }
     const send = (message) => { try { child.stdin.write(JSON.stringify(message) + '\n'); } catch {} };
     const parse = (data) => {
@@ -192,4 +178,4 @@ function registerProjectExtensions(registry, projectRoot) {
   return registry;
 }
 
-module.exports = { registerProjectExtensions, readManifest, extensionEnv };
+module.exports = { registerProjectExtensions, readManifest, safeEnvironment };
