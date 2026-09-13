@@ -33,6 +33,7 @@ jobs:
       - run: npm run test:bridge
       - run: npm run test:agent-boundary
       - run: npm run test:request-budget
+      - run: npm run test:atomic-file
       - run: npm run test:production-gate
       - run: npm run test:agent-reliability
       - run: npm run test:rag

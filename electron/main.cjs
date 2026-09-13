@@ -75,6 +75,7 @@ const { makeBridge } = require('./tools/bridge.cjs');
 const { getScalarStore } = require('./scalars/index.cjs');
 const memoryStore = require('./memory.cjs');
 const runStore = require('./runStore.cjs');
+const { atomicWriteFile } = require('./atomicFile.cjs');
 const extensionStore = require('./tools/extensions.cjs');
 const { SubagentManager } = require('./subagents.cjs');
 
@@ -836,14 +837,7 @@ function saveDoc(projectRoot, projectFile, model) {
     ? path.resolve(projectFile)
     : path.join(path.resolve(projectRoot || '.'), 'workflow.cnode');
   require('fs').mkdirSync(path.dirname(filePath), { recursive: true });
-  require('fs').writeFileSync(
-    filePath,
-    cnode.encodeCnode({
-      graph,
-      workspace: {},
-      manifest: {},
-    })
-  );
+  atomicWriteFile(filePath, cnode.encodeCnode({ graph, workspace: {}, manifest: {} }));
   return filePath;
 }
 

@@ -30,6 +30,7 @@
     "test:bridge": "node scripts/bridge-cancellation-test.cjs",
     "test:agent-boundary": "node scripts/agent-boundary-test.cjs",
     "test:request-budget": "node scripts/request-budget-test.cjs",
+    "test:atomic-file": "node scripts/atomic-file-test.cjs",
     "test:production-gate": "node scripts/production-gate.cjs",
     "test:provider-smoke": "node scripts/provider-smoke.cjs",
     "test:vector": "node scripts/vector-ui-test.cjs",
