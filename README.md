@@ -227,6 +227,21 @@ npm run test:production-gate
 - GitHub Actions 的 `production-gate` 会执行生产构建、核心 Agent/RAG/子代理/后台任务回归和静态安全门禁。真实供应商端到端测试需要在受控环境注入凭据，不能用本地 mock 代替。
 - 真实供应商冒烟测试：设置 `CODENODE_E2E_API_KEY`（可选 `CODENODE_E2E_API_BASE`、`CODENODE_E2E_MODEL`）后运行 `npm run test:provider-smoke`；CI 通过 `PROVIDER_E2E_ENABLED=true` 才启用该 job。
 
+### Windows 打包（`npm run dist:win`）
+
+- 流程：`tsc --noEmit && vite build` → `postbuild` 生成 `build/icon.ico` → `electron-builder --win portable`，产物为 `release\CodeNode-<version>.exe`，随后 `make-launcher.cjs` 生成 `release\CodeNode 控制台.cmd`（可跟随应用日志的启动器）。
+- `build.win.signAndEditExecutable: true` 会让 electron-builder 调用 rcedit 写入图标/版本信息，而 app-builder 需要 `winCodeSign-2.6.0`（内含 `rcedit-x64.exe`）。它的 7z 里有 2 个 macOS 符号链接（`darwin/10.12/lib/libcrypto.dylib`、`libssl.dylib`），**在没有「创建符号链接」权限的 Windows 上 7za 解压会返回 exit 2，导致打包中断**。
+- 规避：先把该产物缓存到 app-builder 约定的路径即可（之后打包会直接命中缓存、不再下载）。失败时缓存里会留下 `winCodeSign-2.6.0.7z`，用它解压一次即可：
+
+```powershell
+$cache = "$PWD\.cache\electron-builder"
+$7z = "node_modules\7zip-bin\win\x64\7za.exe"
+$arc = Get-ChildItem "$cache\winCodeSign\*.7z" | Select-Object -First 1
+& $7z x $arc.FullName "-o$cache\winCodeSign\winCodeSign-2.6.0" '-xr!darwin' -y
+```
+
+- 桌面快捷方式不随打包自动更新：若安装了 `release\CodeNode-<version>.exe` 的快捷方式，升级版本号后需要把 `.lnk` 的目标指向新 exe（同一目录下的 `CodeNode 控制台.cmd` 会自动匹配第一个 `CodeNode-*.exe`，因此建议旧版本 exe 移出 `release\`）。
+
 ## 路线图
 
 - [x] 基础画布 + 基础 UI + `.cnode` 专属格式
