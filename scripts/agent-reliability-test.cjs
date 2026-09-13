@@ -128,6 +128,13 @@ async function main() {
     fs.writeFileSync(path.join(root, '.env'), 'PRIVATE_TOKEN=must-not-leak\n', 'utf8');
     const context = new AgentToolContext({ projectRoot: root });
     const tools = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true });
+    let confirmed = false;
+    const guarded = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true });
+    const guardedResult = await guarded.execute('execute_shell', { command: 'powershell -Command Write-Output safe' }, new AgentToolContext({
+      projectRoot: root, confirm: async () => { confirmed = true; return false; },
+    }));
+    assert.strictEqual(guardedResult.ok, false);
+    assert.strictEqual(confirmed, true, 'interpreter command must require high confirmation');
     const read = await tools.execute('read_file', { path: '.env' }, context);
     assert.strictEqual(read.ok, false, 'read_file 不得读取 .env');
     const search = await tools.execute('search_files', { pattern: 'PRIVATE_TOKEN' }, context);

@@ -168,12 +168,15 @@ function splitCommand(command) {
 
 function isSensitiveCommand(tokens) {
   const flags = tokens.map((t) => t.toLowerCase());
+  const base = flags[0] || '';
+  if (['powershell', 'pwsh', 'cmd', 'node', 'python', 'python3', 'py', 'npm', 'npx', 'java', 'javac', 'mvn', 'mvnw', 'go'].includes(base)) {
+    return true;
+  }
   for (const f of flags) {
     if (['rm', 'del', 'rmdir', 'rd', 'clean', 'distclean', 'reset', 'hard', 'push', 'publish', '-f', '--force', '--hard'].includes(f)) {
       return true;
     }
   }
-  const base = flags[0] || '';
   if (base === 'powershell' || base === 'pwsh' || base === 'cmd') {
     const script = tokens.slice(1).join(' ');
     if (/\b(remove-item|set-content|add-content|move-item|copy-item|clear-content|format-volume|stop-process|invoke-expression|start-process)\b/i.test(script)) return true;
