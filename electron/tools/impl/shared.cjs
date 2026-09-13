@@ -7,6 +7,25 @@ const path = require('path');
 const fs = require('fs');
 const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
 
+const SENSITIVE_FILE_NAMES = new Set([
+  '.env', '.npmrc', '.pypirc', '.netrc', 'agent.properties',
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+]);
+const SENSITIVE_FILE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.der']);
+
+/** 防止 read_file/search_files 把凭据原文发送给模型；RAG 索引也使用同等规则。 */
+function isSensitivePath(relative) {
+  const normalized = String(relative || '').replace(/\\/g, '/').toLowerCase();
+  const name = path.posix.basename(normalized);
+  const ext = path.posix.extname(name);
+  return (
+    SENSITIVE_FILE_NAMES.has(name) ||
+    name.startsWith('.env.') ||
+    SENSITIVE_FILE_EXTENSIONS.has(ext) ||
+    /(^|[._-])(credentials?|secrets?|private[-_]?key)([._-]|$)/i.test(name)
+  );
+}
+
 /** 解析项目内相对路径；越界返回 null。 */
 function resolveInRoot(root, relative) {
   const resolvedRoot = path.resolve(root);
@@ -185,6 +204,7 @@ module.exports = {
   detectLanguage,
   readTextFile,
   globToRegExp,
+  isSensitivePath,
   NODE_TYPE_ACCENT,
   accentForType,
 };

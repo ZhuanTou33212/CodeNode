@@ -46,6 +46,15 @@ async function main() {
   const p3 = await reg.execute('poll_job', { jobId }, ctx);
   assert.strictEqual(p3.ok, false, '任务结束后应被清理');
 
+  const cancelController = new AbortController();
+  const cancelCtx = new AgentToolContext({ projectRoot: root, confirm: async () => true, signal: cancelController.signal });
+  const cancelStart = await reg.execute('execute_shell', { command: 'powershell Start-Sleep -Seconds 20', async: true }, cancelCtx);
+  assert.strictEqual(cancelStart.ok, true, cancelStart.text);
+  cancelController.abort();
+  const cancelled = await reg.execute('poll_job', { jobId: cancelStart.data.jobId }, cancelCtx);
+  assert.strictEqual(cancelled.ok, false, '取消后台任务应返回失败结果');
+  assert.strictEqual(cancelled.data.status, 'cancelled');
+
   // 缺失 jobId
   const bad = await reg.execute('poll_job', { jobId: 'nope' }, ctx);
   assert.strictEqual(bad.ok, false, '不存在 jobId 应报错');

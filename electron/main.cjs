@@ -4,6 +4,21 @@ const path = require('path');
 const fs = require('fs');
 const fsp = require('fs').promises;
 
+const APP_ICON = path.join(__dirname, '..', 'build', 'icon.ico');
+const APP_ICON_SOURCE = path.join(__dirname, '..', 'codenode-icon.png');
+
+function resolveAppIcon() {
+  if (fs.existsSync(APP_ICON)) return APP_ICON;
+  if (fs.existsSync(APP_ICON_SOURCE)) return APP_ICON_SOURCE;
+  return undefined;
+}
+
+if (process.platform === 'win32') {
+  try {
+    app.setAppUserModelId('com.codenode.desktop');
+  } catch {}
+}
+
 // Windows 控制台切换为 UTF-8，避免终端面板打印中文乱码
 if (process.platform === 'win32') {
   try {
@@ -59,6 +74,7 @@ const { AgentToolContext } = require('./tools/context.cjs');
 const { makeBridge } = require('./tools/bridge.cjs');
 const { getScalarStore } = require('./scalars/index.cjs');
 const memoryStore = require('./memory.cjs');
+const runStore = require('./runStore.cjs');
 const extensionStore = require('./tools/extensions.cjs');
 const { SubagentManager } = require('./subagents.cjs');
 
@@ -231,6 +247,7 @@ function createWindow() {
     minHeight: 620,
     title: 'CodeNode Next',
     backgroundColor: '#14161a',
+    icon: resolveAppIcon(),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -807,11 +824,7 @@ function auditLog(projectRoot, entry) {
     if (!projectRoot) return;
     const dir = path.join(projectRoot, '.codenode');
     require('fs').mkdirSync(dir, { recursive: true });
-    require('fs').appendFileSync(
-      path.join(dir, 'audit.jsonl'),
-      JSON.stringify({ ts: new Date().toISOString(), entry }) + '\n',
-      'utf-8'
-    );
+    runStore.appendJsonl(path.join(dir, 'audit.jsonl'), { ts: new Date().toISOString(), entry: agent.redactSecrets(String(entry || '')) });
   } catch {}
 }
 
@@ -844,7 +857,7 @@ ipcMain.handle('agent:config', async (_event, projectRoot) => {
     soul,
     toolsEnabled: cfg.tools.toolsEnabled,
     ragEnabled: cfg.rag.enabled,
-    models: store.models,
+    models: modelStore.toPublicModels(store.models),
     activeModelId: store.activeId,
   };
 });
@@ -853,7 +866,7 @@ ipcMain.handle('agent:config', async (_event, projectRoot) => {
 ipcMain.handle('models:list', async (_event) => {
   const cfg = agent.loadConfig(null);
   const store = modelStore.getModels(app.getPath('userData'), cfg);
-  return { models: store.models, activeId: store.activeId };
+  return { models: modelStore.toPublicModels(store.models), activeId: store.activeId };
 });
 
 ipcMain.handle('models:save', async (_event, model) => {
@@ -861,10 +874,15 @@ ipcMain.handle('models:save', async (_event, model) => {
   const cfg = agent.loadConfig(null);
   const userDataDir = app.getPath('userData');
   const store = modelStore.getModels(userDataDir, cfg);
-  const models = store.models.filter((m) => m.id !== model.id);
-  models.push(model);
+  const existing = store.models.find((item) => item && item.id === model.id);
+  const incoming = { ...model };
+  // UI 不会回传已保存的密钥；空值表示保留主进程中的旧密钥。
+  if (!String(incoming.apiKey || '').trim() && existing && existing.apiKey) incoming.apiKey = existing.apiKey;
+  delete incoming.apiKeySet;
+  const models = store.models.filter((m) => m.id !== incoming.id);
+  models.push(incoming);
   modelStore.writeModels(userDataDir, models, store.activeId || model.id);
-  return { ok: true, models, activeId: store.activeId || model.id };
+  return { ok: true, models: modelStore.toPublicModels(models), activeId: store.activeId || model.id };
 });
 
 ipcMain.handle('models:delete', async (_event, id) => {
@@ -874,7 +892,7 @@ ipcMain.handle('models:delete', async (_event, id) => {
   const models = store.models.filter((m) => m.id !== id);
   const activeId = store.activeId === id ? (models[0] ? models[0].id : null) : store.activeId;
   modelStore.writeModels(userDataDir, models, activeId);
-  return { ok: true, models, activeId };
+  return { ok: true, models: modelStore.toPublicModels(models), activeId };
 });
 
 ipcMain.handle('models:active', async (_event, id) => {
@@ -911,11 +929,15 @@ ipcMain.handle('agent:tools', async (_event, projectRoot) => {
 ipcMain.handle('agent:chat', async (event, payload) => {
   const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
   const sender = event.sender;
+  let runId = null;
   const sendDelta = (d) => {
     if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
   };
   try {
     const cfg = agent.loadConfig(projectRoot);
+    const maxConcurrentRuns = Number(cfg.limits && cfg.limits.maxConcurrentRuns) || 2;
+    if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
+    if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
     // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
     const baseCfg = agent.loadConfig(null);
     const sel = modelId ? modelStore.findModel(app.getPath('userData'), baseCfg, modelId) : null;
@@ -930,6 +952,20 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (!cfg.apiKey) {
       return { ok: false, error: '未配置 API Key（模型管理中填写或 config/agent.properties）' };
     }
+    runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
+    runStore.recoverInterrupted(projectRoot);
+    runStore.startRun(projectRoot, runId, { prompt: String(prompt || '').slice(0, 4000), model: cfg.model, nodeId: nodeId || null });
+    const onAgentDelta = (delta) => {
+      sendDelta(delta);
+      if (!delta || !delta.kind) return;
+      if (delta.kind === 'tool_result' && Array.isArray(delta.toolCalls)) {
+        runStore.appendEvent(projectRoot, runId, 'tool_result', {
+          tools: delta.toolCalls.map((item) => ({ name: item && item.name, ok: item && item.ok, elapsedMs: item && item.elapsedMs })),
+        });
+      } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
+        runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null });
+      }
+    };
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
 
     // 先装配工具注册表：用于系统提示中的工具引导，也用于工具循环
@@ -944,8 +980,8 @@ ipcMain.handle('agent:chat', async (event, payload) => {
         toolkit,
         cfg,
         registry,
-        runId: requestId || undefined,
-        onDelta: sendDelta,
+        runId,
+        onDelta: onAgentDelta,
       });
       subagentManager.register(registry);
       toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
@@ -972,6 +1008,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     let model = null;
     let bridge = null;
     let dirty = false;
+    const controller = new AbortController();
     if (registry && registry.listTools().length > 0) {
         bridge = makeBridge(sender);
         model = new GraphModel(document || undefined);
@@ -983,11 +1020,15 @@ ipcMain.handle('agent:chat', async (event, payload) => {
           model,
           runId: requestId || '',
           role: 'supervisor',
+          signal: controller.signal,
           scalarStore,
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),
-          audit: (entry) => auditLog(projectRoot, entry),
+          audit: (entry) => {
+            auditLog(projectRoot, entry);
+            runStore.appendEvent(projectRoot, runId, 'audit', { entry: String(entry || '').slice(0, 2000) });
+          },
           mutateWorkbench: async (fn) => {
             undoStack.push(JSON.parse(JSON.stringify(model.doc)));
             if (redoStack.length) redoStack.length = 0;
@@ -1026,16 +1067,19 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     }
 
     sendDelta({ kind: 'start' });
-    const controller = new AbortController();
-    if (requestId) activeRequests.set(requestId, controller);
-    const result = await agent.runAgentChat({
-      cfg,
-      messages,
-      onDelta: sendDelta,
-      tools,
-      signal: controller.signal,
-    });
-    if (requestId) activeRequests.delete(requestId);
+    activeRequests.set(runId, controller);
+    let result;
+    try {
+      result = await agent.runAgentChat({
+        cfg,
+        messages,
+        onDelta: onAgentDelta,
+        tools,
+        signal: controller.signal,
+      });
+    } finally {
+      activeRequests.delete(runId);
+    }
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),
       role: 'assistant',
@@ -1044,6 +1088,12 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       toolCalls: result.toolCalls || null,
       usage: result.usage || null,
       grounding: result.grounding || null,
+    });
+    runStore.finishRun(projectRoot, runId, result.error ? 'error' : result.aborted ? 'cancelled' : 'completed', {
+      toolCount: Array.isArray(result.toolCalls) ? result.toolCalls.length : 0,
+      usage: result.usage || null,
+      grounding: result.grounding || null,
+      error: result.error || null,
     });
     sendDelta({ kind: 'done' });
     const out = {
@@ -1060,13 +1110,14 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (bridge) bridge.cleanup();
     return out;
   } catch (e) {
+    if (runId) runStore.finishRun(projectRoot, runId, 'error', { error: String((e && e.message) || e) });
     sendDelta({ kind: 'error', error: String((e && e.message) || e) });
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
 
 ipcMain.handle('agent:stop', (_event, requestId) => {
-  const controller = requestId ? activeRequests.get(requestId) : null;
+  const controller = requestId ? (activeRequests.get(requestId) || activeRequests.get(runStore.normalizeRunId(requestId))) : null;
   if (controller) controller.abort();
   return { ok: true };
 });

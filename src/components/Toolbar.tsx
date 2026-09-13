@@ -118,6 +118,19 @@ export default function Toolbar() {
           聚焦
         </button>
       </div>
+
+      <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
+        <button
+          className="toolbar-vector"
+          title="打开矢量设计工作室：贝塞尔图形编辑 + 集合逻辑分析"
+          onClick={() => {
+            useUiStore.getState().setWorkspace('vector');
+            setToast('已进入矢量设计工作室');
+          }}
+        >
+          ✦ 矢量设计
+        </button>
+      </div>
     </header>
   );
 }

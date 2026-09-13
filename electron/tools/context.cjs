@@ -40,6 +40,7 @@ class AgentToolContext {
     this.taskIdValue = o.taskId || '';
     this.roleValue = o.role || 'supervisor';
     this.readOnlyValue = o.readOnly === true;
+    this.signalValue = o.signal || null;
   }
 
   projectRoot() {
@@ -54,6 +55,8 @@ class AgentToolContext {
   taskId() { return this.taskIdValue; }
   role() { return this.roleValue; }
   readOnly() { return this.readOnlyValue; }
+  signal() { return this.signalValue; }
+  cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
 
   async confirm(level, what, detail) {
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
@@ -205,6 +208,7 @@ class AgentToolContext {
       taskId: o.taskId || this.taskIdValue,
       role: o.role || this.roleValue,
       readOnly: o.readOnly === true,
+      signal: o.signal || this.signalValue,
     });
   }
 }

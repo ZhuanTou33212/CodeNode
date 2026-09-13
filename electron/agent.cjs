@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const runStore = require('./runStore.cjs');
 
 function loadProperties(file) {
   const out = {};
@@ -40,6 +41,8 @@ function loadConfig(projectRoot) {
     rag: parseRagConfig(cfg),
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
+    reliability: parseReliabilityConfig(cfg),
+    limits: parseLimitsConfig(cfg),
   };
 }
 
@@ -119,6 +122,23 @@ function parseCompressionConfig(cfg) {
     maxCalls: configInteger(cfg, 'agent.compression.max_calls', 8, 0, 50),
     maxInputChars: configInteger(cfg, 'agent.compression.max_input_chars', 300000, 2000, 1000000),
     exclude: defaults.concat(exclude.filter((item) => !defaults.includes(item))),
+  };
+}
+
+/** 瞬时模型错误重试配置：只重试网络错误与明确的 408/429/5xx。 */
+function parseReliabilityConfig(cfg) {
+  return {
+    maxAttempts: configInteger(cfg, 'agent.request_max_attempts', 3, 1, 5),
+    retryBaseMs: configInteger(cfg, 'agent.retry_base_ms', 400, 50, 5000),
+    retryMaxMs: configInteger(cfg, 'agent.retry_max_ms', 5000, 250, 30000),
+  };
+}
+
+/** 单次运行与进程级资源上限，避免上下文/工具 fan-out 失控。 */
+function parseLimitsConfig(cfg) {
+  return {
+    maxConcurrentRuns: configInteger(cfg, 'agent.max_concurrent_runs', 2, 1, 8),
+    maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 250000, 10000, 2000000),
   };
 }
 
@@ -241,31 +261,97 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
   return lines.join('\n\n');
 }
 
+function isRetryableStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isAbortError(error) {
+  return !!error && (error.name === 'AbortError' || /aborted|abort/i.test(String(error.message || error)));
+}
+
+function retryDelay(cfg, attempt, retryAfter) {
+  const reliability = (cfg && cfg.reliability) || {};
+  const base = Number(reliability.retryBaseMs) || 400;
+  const max = Number(reliability.retryMaxMs) || 5000;
+  const serverDelay = Number(retryAfter);
+  if (Number.isFinite(serverDelay) && serverDelay >= 0) return Math.min(max, Math.max(0, serverDelay * 1000));
+  const exponential = Math.min(max, base * (2 ** Math.max(0, attempt - 1)));
+  const jitter = Math.floor(exponential * (0.8 + Math.random() * 0.4));
+  return Math.min(max, jitter);
+}
+
+function waitForRetry(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(Object.assign(new Error('请求已取消'), { name: 'AbortError' }));
+      return;
+    }
+    let timer;
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal && signal.removeEventListener('abort', onAbort);
+      reject(Object.assign(new Error('请求已取消'), { name: 'AbortError' }));
+    };
+    timer = setTimeout(() => {
+      signal && signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal && signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function maxAttemptsFor(cfg) {
+  const attempts = cfg && cfg.reliability && cfg.reliability.maxAttempts;
+  return Math.max(1, Math.min(5, Number(attempts) || 3));
+}
+
 async function chatCompletion(cfg, messages, { signal, timeoutMs = 120000 } = {}) {
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   const onAbort = () => controller.abort();
   signal && signal.addEventListener('abort', onAbort);
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify(chatBody(cfg, messages, { stream: false })),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+    const attempts = maxAttemptsFor(cfg);
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+          body: JSON.stringify(chatBody(cfg, messages, { stream: false })),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          const message = `HTTP ${res.status}: ${text.slice(0, 300)}`;
+          if (isRetryableStatus(res.status) && attempt < attempts && !timedOut && !(signal && signal.aborted)) {
+            await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), signal);
+            continue;
+          }
+          const error = new Error(message);
+          error.retryable = false;
+          throw error;
+        }
+        const data = await res.json();
+        const msg = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message : null;
+        return {
+          content: (msg && msg.content) || '',
+          reasoning: (msg && msg.reasoning_content) || '',
+          toolCalls: (msg && msg.tool_calls) || null,
+          usage: data.usage || null,
+        };
+      } catch (error) {
+        lastError = error;
+        if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
+        await waitForRetry(retryDelay(cfg, attempt), signal);
+      }
     }
-    const data = await res.json();
-    const msg = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message : null;
-    return {
-      content: (msg && msg.content) || '',
-      reasoning: (msg && msg.reasoning_content) || '',
-      toolCalls: (msg && msg.tool_calls) || null,
-      usage: data.usage || null,
-    };
+    throw lastError || new Error('模型请求失败');
   } finally {
     clearTimeout(timer);
     signal && signal.removeEventListener('abort', onAbort);
@@ -299,22 +385,41 @@ function chatBody(cfg, messages, { stream, tools } = {}) {
 async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools } = {}) {
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   const onAbort = () => controller.abort();
   signal && signal.addEventListener('abort', onAbort);
   let usage = null;
   try {
     const body = chatBody(cfg, messages, { stream: true, tools });
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+    const attempts = maxAttemptsFor(cfg);
+    let res = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (res.ok) break;
+        const text = await res.text().catch(() => '');
+        if (isRetryableStatus(res.status) && attempt < attempts && !timedOut && !(signal && signal.aborted)) {
+          await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), signal);
+          continue;
+        }
+        const error = new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+        error.retryable = false;
+        throw error;
+      } catch (error) {
+        if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
+        await waitForRetry(retryDelay(cfg, attempt), signal);
+      }
     }
+    if (!res || !res.body) throw new Error('模型响应没有可读取的流');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
@@ -389,8 +494,21 @@ function logConversation(projectRoot, entry) {
   try {
     const dir = path.join(projectRoot, '.codenode');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'conversation.jsonl'), JSON.stringify(entry) + '\n', 'utf-8');
+    runStore.appendJsonl(path.join(dir, 'conversation.jsonl'), redactSecrets(entry));
   } catch {}
+}
+
+function redactSecrets(value) {
+  if (typeof value === 'string') {
+    return value
+      .replace(/(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+      .replace(/((?:api[_-]?key|token|password|secret|private[_-]?key)\s*[=:]\s*)[^\s,;"']+/gi, '$1[REDACTED]');
+  }
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /api.?key|token|password|secret|private.?key/i.test(key) ? '[REDACTED]' : redactSecrets(item)]));
+  }
+  return value;
 }
 
 const MAX_TOOL_ITERATIONS = 12;
@@ -588,7 +706,7 @@ function logToolTrace(projectRoot, entry) {
   try {
     const dir = path.join(projectRoot, '.codenode');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'tools_trace.jsonl'), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n', 'utf-8');
+    runStore.appendJsonl(path.join(dir, 'tools_trace.jsonl'), redactSecrets({ ts: new Date().toISOString(), ...entry }));
   } catch {}
 }
 
@@ -598,6 +716,16 @@ function safeLog(s) {
     const cp = c.codePointAt(0);
     return cp <= 0xffff ? '\\u' + cp.toString(16).padStart(4, '0') : '\\u{' + cp.toString(16) + '}';
   });
+}
+
+function mergeUsage(previous, next) {
+  if (!next || typeof next !== 'object') return previous || null;
+  const merged = { ...(previous || {}) };
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === 'number' && Number.isFinite(value)) merged[key] = (Number(merged[key]) || 0) + value;
+    else if (merged[key] == null) merged[key] = value;
+  }
+  return merged;
 }
 
 /**
@@ -616,6 +744,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let content = '';
   let reasoning = '';
   let usage = null;
+  let totalTokens = 0;
   const allToolCalls = [];
   const toolResultCache = new Map();
   let totalToolCalls = 0;
@@ -654,7 +783,16 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         timeoutMs,
         tools: payload.tools,
       });
-      if (res.usage) usage = res.usage;
+      if (res.usage) {
+        usage = mergeUsage(usage, res.usage);
+        totalTokens = Number(usage.total_tokens) || totalTokens;
+        const maxTotalTokens = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 250000;
+        if (totalTokens > maxTotalTokens) {
+          const error = '已达到本轮 Agent token 预算（' + maxTotalTokens + '），已停止继续调用模型。';
+          onDelta && onDelta({ kind: 'error', error });
+          return { content, reasoning, toolCalls: allToolCalls, usage, error };
+        }
+      }
 
       const toolCalls = res.toolCalls || [];
       if (tools && tools.registry && toolCalls.length) {
@@ -671,6 +809,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         let capped = false;
         let failedAny = false;
         for (const tc of toolCalls) {
+          if (signal && signal.aborted) {
+            onDelta && onDelta({ kind: 'stopped' });
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
+          }
           if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
             capped = true;
             break;
@@ -696,6 +838,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             }
           } else {
             result = await tools.registry.execute(tc.name, args, tools.context);
+          }
+          if (signal && signal.aborted) {
+            onDelta && onDelta({ kind: 'stopped' });
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
           }
           // 变更类工具执行后，清空只读结果缓存（get_workbench_model/read_file/scan_project 等），
           // 保证随后读取的一定是最新的画布模型/文件状态，避免“写入成功但读到旧数据/0 节点”
@@ -830,6 +976,10 @@ module.exports = {
   runAgentChat,
   logToolTrace,
   parseRagConfig,
+  parseLimitsConfig,
+  mergeUsage,
+  redactSecrets,
+  parseReliabilityConfig,
   shouldCompress,
   buildToolContent,
   compressorSystemPrompt,

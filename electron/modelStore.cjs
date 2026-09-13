@@ -11,6 +11,49 @@ function modelsFile(userDataDir) {
   return path.join(userDataDir, 'models.json');
 }
 
+function safeStorage() {
+  try {
+    const { safeStorage: storage } = require('electron');
+    if (storage && typeof storage.isEncryptionAvailable === 'function' && storage.isEncryptionAvailable()) return storage;
+  } catch {}
+  return null;
+}
+
+function encryptSecret(value) {
+  const secret = String(value || '');
+  if (!secret) return '';
+  const storage = safeStorage();
+  if (storage) {
+    try { return 'safe:v1:' + storage.encryptString(secret).toString('base64'); } catch {}
+  }
+  // 仅用于 Electron safeStorage 不可用的开发/迁移环境；正常桌面运行会使用系统密钥环/DPAPI。
+  return 'plain:v1:' + Buffer.from(secret, 'utf8').toString('base64');
+}
+
+function decryptSecret(value) {
+  const raw = String(value || '');
+  if (!raw) return '';
+  if (raw.startsWith('safe:v1:')) {
+    const storage = safeStorage();
+    if (!storage) return '';
+    try { return storage.decryptString(Buffer.from(raw.slice(8), 'base64')); } catch { return ''; }
+  }
+  if (raw.startsWith('plain:v1:')) {
+    try { return Buffer.from(raw.slice(9), 'base64').toString('utf8'); } catch { return ''; }
+  }
+  // 兼容旧版本明文 models.json；下次保存时会迁移为加密格式。
+  return raw;
+}
+
+function toPublicModel(model) {
+  const { apiKey, ...rest } = model || {};
+  return { ...rest, apiKey: '', apiKeySet: !!apiKey };
+}
+
+function toPublicModels(models) {
+  return (Array.isArray(models) ? models : []).map(toPublicModel);
+}
+
 /** 从 agent.properties 配置生成默认模型列表（保留用户已有的 apiBase/apiKey） */
 function seedModels(cfg) {
   const apiBase = cfg.apiBase || 'https://api.deepseek.com';
@@ -51,7 +94,10 @@ function readModels(userDataDir) {
     const raw = fs.readFileSync(modelsFile(userDataDir), 'utf-8');
     const data = JSON.parse(raw);
     if (!data || !Array.isArray(data.models)) return null;
-    return { models: data.models, activeId: data.activeId || null };
+    return {
+      models: data.models.map((model) => ({ ...model, apiKey: decryptSecret(model && model.apiKey) })),
+      activeId: data.activeId || null,
+    };
   } catch {
     return null;
   }
@@ -59,7 +105,11 @@ function readModels(userDataDir) {
 
 function writeModels(userDataDir, models, activeId) {
   fs.mkdirSync(userDataDir, { recursive: true });
-  fs.writeFileSync(modelsFile(userDataDir), JSON.stringify({ models, activeId }, null, 2), 'utf-8');
+  const persisted = (Array.isArray(models) ? models : []).map((model) => ({
+    ...model,
+    apiKey: encryptSecret(model && model.apiKey),
+  }));
+  fs.writeFileSync(modelsFile(userDataDir), JSON.stringify({ models: persisted, activeId }, null, 2), 'utf-8');
 }
 
 /**
@@ -83,4 +133,4 @@ function findModel(userDataDir, cfg, id) {
   return store.models.find((m) => m && m.id === id) || null;
 }
 
-module.exports = { getModels, findModel, readModels, writeModels, seedModels };
+module.exports = { getModels, findModel, readModels, writeModels, seedModels, toPublicModel, toPublicModels, encryptSecret, decryptSecret };

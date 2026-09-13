@@ -9,6 +9,7 @@ export interface ModelSpec {
   model: string;
   apiBase?: string;
   apiKey?: string;
+  apiKeySet?: boolean;
   contextWindow: number;
   priceInput: number;
   priceInputHit: number;

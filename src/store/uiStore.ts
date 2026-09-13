@@ -13,6 +13,8 @@ interface UiState {
   hoverScopeId: string | null;
   dockOpen: boolean;
   dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
+  /** 工作区：agent = Agent 工作台；vector = 矢量设计工作室（全屏模式） */
+  workspace: 'agent' | 'vector';
 
   toggleLeft: () => void;
   setHoverScopeId: (id: string | null) => void;
@@ -31,6 +33,7 @@ interface UiState {
   openDock: (tab?: UiState['dockTab']) => void;
   closeDock: () => void;
   setDockTab: (tab: UiState['dockTab']) => void;
+  setWorkspace: (w: 'agent' | 'vector') => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -48,6 +51,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   hoverScopeId: null,
   dockOpen: false,
   dockTab: 'editor',
+  workspace: 'agent',
 
   toggleLeft: () => set((s) => ({ leftOpen: !s.leftOpen })),
   setHoverScopeId: (id) => set({ hoverScopeId: id }),
@@ -74,4 +78,5 @@ export const useUiStore = create<UiState>((set, get) => ({
   openDock: (tab) => set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
   closeDock: () => set({ dockOpen: false }),
   setDockTab: (tab) => set({ dockOpen: true, dockTab: tab }),
+  setWorkspace: (w) => set({ workspace: w }),
 }));

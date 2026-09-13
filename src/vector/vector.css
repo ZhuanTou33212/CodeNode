@@ -1,0 +1,3341 @@
+/* ============================================================
+   矢量设计工作室（Vector Studio）样式 · v2
+   设计语言：Linear（near-black 分层 · 半透明白细边框 ·
+   蓝紫 accent #7170ff · 8px 网格 · 银灰文字阶梯）
+   独立作用域 vs-*，与 Agent 工作台样式互不干扰
+   ============================================================ */
+
+/* ---------- Token（暗色） ---------- */
+.vs {
+  /* 表面亮度阶梯：画布最深 → 面板 → 悬浮行 → 弹层 */
+  --vbg: #0f1011;          /* 面板/底（Linear Panel Dark） */
+  --vbg-deep: #0a0b0c;     /* 画布底（最暗，Linear Marketing Black） */
+  --vpanel: #101112;       /* 常规面板 */
+  --vpanel2: #15171a;      /* 行/卡表面（白光 3-5%） */
+  --vpanel3: #1d1f23;      /* hover / 弹层（白光 8%） */
+  --vpanel4: #26282d;      /* 更浅表面：输入、滚动条 */
+  --vborder: rgba(255, 255, 255, 0.08);   /* 结构分隔 */
+  --vborder2: rgba(255, 255, 255, 0.14);  /* 强调分隔/悬浮描边 */
+  --vline: rgba(255, 255, 255, 0.055);    /* 极细线 */
+  --vtext: #f2f4f6;        /* 主文字（非纯白，防眩光） */
+  --vtext2: #aeb6c0;       /* 次文字 银灰 */
+  --vtext3: #6f7680;       /* 弱文字 */
+  --vtext4: #4c5158;       /* 最弱（禁用/水印） */
+  --vacc: #7170ff;         /* Linear 品牌紫 */
+  --vacc-soft: rgba(113, 112, 255, 0.14);
+  --vacc2: #8f8cf8;        /* 次级紫（锚点/控制柄/组名） */
+  --vok: #30c98a;
+  --vwarn: #ffc857;
+  --vbad: #ff6b7a;
+  --vcanvas: #0a0b0c;
+  --vpaper: #1a1c20;       /* 画纸表面（比面板亮一档） */
+  --vpaper-edge: rgba(255, 255, 255, 0.1);
+  --vpaper-tint: rgba(113, 112, 255, 0.05);
+  --vsel: #7170ff;
+  --vsel-soft: rgba(113, 112, 255, 0.2);
+  --vshadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 28px rgba(0, 0, 0, 0.45);
+  --vshadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --vguide: rgba(255, 107, 161, 0.8);
+  --venn1: #7cb7ff;
+  --venn2: #54d6ac;
+  --venn3: #d08bf5;
+  --venn4: #ffb36b;
+  --venn5: #ff8f8f;
+  --vdot-rect: #5b8def;
+  --vdot-round: #e8799f;
+  --vdot-ellipse: #3ec4cf;
+  --vdot-bezier: #9a8cff;
+  --vdot-arrow: #f0a35c;
+  --vdot-text: #8a93a5;
+  --vfont: 'Inter', 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --vfont-mono: 'JetBrains Mono', Consolas, ui-monospace, monospace;
+  color-scheme: dark;
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--vfont);
+  font-size: 13px;
+  background: var(--vbg);
+  color: var(--vtext);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Token（亮色） ---------- */
+.vs-light {
+  --vbg: #f5f6f7;          /* 面板底 */
+  --vbg-deep: #e9ebee;     /* 画布底（比面板深一点点，仍浅） */
+  --vpanel: #ffffff;
+  --vpanel2: #f3f4f6;
+  --vpanel3: #e9ebef;
+  --vpanel4: #dde0e5;
+  --vborder: rgba(15, 20, 30, 0.1);
+  --vborder2: rgba(15, 20, 30, 0.2);
+  --vline: rgba(15, 20, 30, 0.06);
+  --vtext: #16181d;
+  --vtext2: #4f5661;
+  --vtext3: #8a92a0;
+  --vtext4: #b3bac4;
+  --vacc: #5b5bd6;
+  --vacc-soft: rgba(91, 91, 214, 0.12);
+  --vacc2: #6d5ae0;
+  --vok: #12a96d;
+  --vwarn: #c98600;
+  --vbad: #e5484d;
+  --vcanvas: #e9ebee;
+  --vpaper: #ffffff;
+  --vpaper-edge: rgba(15, 20, 30, 0.16);
+  --vpaper-tint: rgba(91, 91, 214, 0.045);
+  --vsel: #5b5bd6;
+  --vsel-soft: rgba(91, 91, 214, 0.16);
+  --vshadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 10px 30px rgba(15, 23, 42, 0.12);
+  --vshadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --vguide: rgba(225, 29, 108, 0.7);
+  --venn1: #3b82f6;
+  --venn2: #10b981;
+  --venn3: #a855f7;
+  --venn4: #f59e0b;
+  --venn5: #ef4444;
+  --vdot-rect: #3b82f6;
+  --vdot-round: #ec4899;
+  --vdot-ellipse: #06b6d4;
+  --vdot-bezier: #8b5cf6;
+  --vdot-arrow: #f59e0b;
+  --vdot-text: #64748b;
+  color-scheme: light;
+}
+
+.vs * {
+  box-sizing: border-box;
+}
+
+.vs input,
+.vs textarea,
+.vs select {
+  user-select: text;
+}
+
+.vs button {
+  font-family: inherit;
+}
+
+.vs-loading {
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--vtext2);
+}
+
+/* ---------------- 顶栏 ---------------- */
+
+.vs-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 10px;
+  background: var(--vpanel);
+  border-bottom: 1px solid var(--vborder);
+  flex: none;
+}
+
+.vs-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+  border-right: 1px solid var(--vline);
+  min-width: 0;
+}
+
+.vs-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #7170ff, #4b8bff);
+  color: #fff;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  box-shadow: 0 0 0 1px rgba(113, 112, 255, 0.35), 0 2px 10px rgba(96, 104, 255, 0.35);
+  flex: none;
+}
+
+.vs-brand-text {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.vs-brand-text b {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+}
+
+.vs-brand-text small {
+  font-size: 9px;
+  color: var(--vtext3);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.vs-btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--vtext2);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.vs-btn-back:hover {
+  color: var(--vtext);
+  background: var(--vpanel3);
+}
+
+.vs-mode-switch {
+  display: flex;
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  flex: none;
+}
+
+.vs-mode-switch button {
+  border: none;
+  background: transparent;
+  color: var(--vtext2);
+  padding: 4px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.14s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.vs-mode-switch button:hover {
+  color: var(--vtext);
+}
+
+.vs-mode-switch button.active {
+  background: var(--vacc);
+  color: #fff;
+  font-weight: 500;
+  box-shadow: 0 1px 8px rgba(113, 112, 255, 0.4);
+}
+
+.vs-mode-switch button:last-child.active {
+  background: linear-gradient(135deg, #7170ff, #a06bf2);
+  box-shadow: 0 1px 8px rgba(143, 111, 255, 0.45);
+}
+
+.vs-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.vs-icon-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--vtext2);
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.1s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+}
+
+.vs-icon-btn:hover:not(:disabled) {
+  background: var(--vpanel3);
+  color: var(--vtext);
+}
+
+.vs-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.vs-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--vline);
+  margin: 0 6px;
+  display: inline-block;
+  flex: none;
+}
+
+.vs-zoom-label {
+  min-width: 38px;
+  text-align: center;
+  color: var(--vtext2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--vfont-mono);
+}
+
+/* ---------------- 主体三栏 ---------------- */
+
+.vs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* --- 左栏 --- */
+
+.vs-left {
+  width: 172px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--vbg);
+  border-right: 1px solid var(--vborder);
+  overflow: hidden;
+}
+
+/* 工具轨：单列行式图标按钮（Figma/Linear 风格） */
+.vs-toolrail {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 8px 8px 6px;
+}
+
+.vs-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--vtext2);
+  padding: 6px 2px 5px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.1s;
+  min-height: 46px;
+}
+
+.vs-tool:hover {
+  background: var(--vpanel2);
+  color: var(--vtext);
+}
+
+.vs-tool.active {
+  background: var(--vacc-soft);
+  border-color: rgba(113, 112, 255, 0.4);
+  color: var(--vacc);
+}
+
+.vs-tool-glyph {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.vs-tool small {
+  font-size: 9.5px;
+  color: inherit;
+  opacity: 0.85;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.vs-tool-soft.active {
+  background: var(--vpanel3);
+  color: var(--vtext);
+  border-color: var(--vborder2);
+}
+
+.vs-rail-spacer {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--vline);
+  margin: 3px 0;
+}
+
+/* 组件库（精简为两列小卡） */
+.vs-library {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vs-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.vs-panel-head b {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--vtext3);
+}
+
+.vs-panel-head i {
+  font-style: normal;
+  font-size: 9px;
+  color: var(--vtext4);
+  margin-left: auto;
+}
+
+.vs-eyebrow {
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  color: var(--vacc);
+  font-weight: 600;
+}
+
+.vs-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.vs-asset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 6px;
+  padding: 8px 2px 6px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.vs-asset:hover {
+  border-color: rgba(113, 112, 255, 0.5);
+  background: var(--vpanel3);
+}
+
+.vs-asset small {
+  font-size: 9.5px;
+  color: var(--vtext2);
+  white-space: nowrap;
+}
+
+.vs-asset-glyph {
+  font-size: 14px;
+  width: 26px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--vtext);
+}
+
+.vs-asset-rectangle .vs-asset-glyph,
+.asset-rectangle {
+  color: var(--vdot-rect);
+}
+
+.vs-asset-rounded .vs-asset-glyph,
+.asset-rounded {
+  color: var(--vdot-round);
+}
+
+.vs-asset-ellipse .vs-asset-glyph,
+.asset-ellipse {
+  color: var(--vdot-ellipse);
+}
+
+.vs-asset-bezier .vs-asset-glyph,
+.asset-bezier {
+  color: var(--vdot-bezier);
+}
+
+.vs-asset-arrow .vs-asset-glyph,
+.asset-arrow {
+  color: var(--vdot-arrow);
+}
+
+.vs-lib-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.vs-lib-actions .vs-btn {
+  flex: 1;
+  font-size: 11px;
+  padding: 5px 4px;
+}
+
+/* --- 通用按钮/控件（Linear：透明系按钮） --- */
+
+.vs-btn {
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  color: var(--vtext);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.1s;
+  white-space: nowrap;
+}
+
+.vs-btn:hover:not(:disabled) {
+  border-color: var(--vborder2);
+  background: var(--vpanel3);
+}
+
+.vs-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.vs-btn-danger {
+  color: var(--vbad);
+}
+
+.vs-btn-danger:hover:not(:disabled) {
+  border-color: rgba(255, 107, 122, 0.5);
+  background: rgba(255, 107, 122, 0.1);
+}
+
+.vs-mini-btn {
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  color: var(--vtext2);
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.1s;
+  white-space: nowrap;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.vs-mini-btn:hover:not(:disabled) {
+  color: var(--vtext);
+  border-color: var(--vborder2);
+}
+
+.vs-mini-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.vs-mini-btn.on {
+  background: var(--vacc);
+  border-color: var(--vacc);
+  color: #fff;
+  font-weight: 500;
+}
+
+.vs-input {
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  color: var(--vtext);
+  border-radius: 5px;
+  padding: 4px 7px;
+  font-size: 12px;
+  min-width: 0;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  height: 26px;
+}
+
+.vs-input:focus {
+  border-color: var(--vacc);
+  box-shadow: 0 0 0 2px rgba(113, 112, 255, 0.2);
+}
+
+.vs-input-textarea {
+  resize: vertical;
+  min-height: 44px;
+  line-height: 1.5;
+  height: auto;
+}
+
+.vs-input::placeholder {
+  color: var(--vtext4);
+}
+
+/* --- 中部画布区 --- */
+
+.vs-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--vbg-deep);
+}
+
+.vs-stagebar {
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--vbg);
+  border-bottom: 1px solid var(--vline);
+  font-size: 11.5px;
+}
+
+.vs-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vtext3);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.vs-crumbs b {
+  color: var(--vtext);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.vs-mode-badge {
+  font-style: normal;
+  font-size: 10px;
+  background: var(--vacc-soft);
+  color: var(--vacc);
+  padding: 1px 8px;
+  border-radius: 20px;
+  font-weight: 500;
+  flex: none;
+}
+
+.vs-logic .vs-mode-badge {
+  background: rgba(160, 107, 242, 0.15);
+  color: #b39af5;
+}
+
+.vs-hint {
+  color: var(--vtext3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.vs-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--vbg-deep);
+}
+
+.vs-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.vs-cursor-cross {
+  cursor: crosshair;
+}
+
+.vs-cursor-pen {
+  cursor: crosshair;
+}
+
+.vs-cursor-grab {
+  cursor: grab;
+}
+
+.vs-cursor-grab:active {
+  cursor: grabbing;
+}
+
+/* 标尺 */
+.vs-ruler {
+  position: absolute;
+  background: var(--vbg);
+  z-index: 5;
+  overflow: hidden;
+}
+
+.vs-ruler-top {
+  top: 0;
+  left: 0;
+  height: 16px;
+  width: 100%;
+  border-bottom: 1px solid var(--vline);
+  cursor: default;
+}
+
+.vs-ruler-left {
+  top: 0;
+  left: 0;
+  width: 16px;
+  height: 100%;
+  border-right: 1px solid var(--vline);
+  cursor: default;
+}
+
+.vs-ruler-corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  background: var(--vbg);
+  z-index: 6;
+  border-right: 1px solid var(--vline);
+  border-bottom: 1px solid var(--vline);
+}
+
+.vs-tick {
+  position: absolute;
+  top: 0;
+  height: 5px;
+  width: 1px;
+  background: var(--vtext4);
+}
+
+.vs-tick.rot {
+  left: 0;
+  top: auto;
+  width: 5px;
+  height: 1px;
+}
+
+.vs-tick i {
+  position: absolute;
+  font-style: normal;
+  font-size: 8px;
+  color: var(--vtext4);
+  top: 6px;
+  left: 3px;
+  white-space: nowrap;
+  font-family: var(--vfont-mono);
+}
+
+.vs-tick.rot i {
+  top: 3px;
+  left: 6px;
+  writing-mode: vertical-rl;
+}
+
+.vs-tick.major {
+  height: 8px;
+  background: var(--vtext3);
+}
+
+.vs-tick.rot.major {
+  width: 8px;
+  height: 1px;
+}
+
+.vs-ruler-cursor {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--vacc);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.vs-ruler-cursor:not(:has(+ .vs-tick)) {
+  background: transparent;
+}
+
+/* 世界层 */
+.vs-world {
+  color: rgba(148, 163, 184, 0.4);
+}
+
+/* 画纸：暗色下比画布底亮一档，带投影与细描边 */
+.vs-paper {
+  fill: var(--vpaper);
+  stroke: var(--vpaper-edge);
+  stroke-width: 1;
+}
+
+.vs-grid-layer {
+  color: var(--vtext4);
+}
+
+.vs-logic-paper {
+  fill: var(--vpaper-tint);
+  pointer-events: none;
+}
+
+.vs-logic-highlight {
+  opacity: 0.9;
+  mix-blend-mode: screen;
+}
+
+.vs-light .vs-logic-highlight {
+  mix-blend-mode: multiply;
+}
+
+.vs-guide {
+  stroke: var(--vguide);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: ew-resize;
+}
+
+.vs-guide[class~='vs-guide']:nth-child(2n) {
+  cursor: ns-resize;
+}
+
+.vs-guide-ghost {
+  stroke: var(--vguide);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 图形 */
+.vs-obj {
+  cursor: move;
+}
+
+.vs-obj-locked {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.vs-text-label {
+  dominant-baseline: text-before-edge;
+}
+
+.vs-obj .vs-shape {
+  pointer-events: visiblePainted;
+}
+
+/* 就地编辑 */
+.vs-foreign-edit {
+  overflow: visible;
+}
+
+.vs-edit-wrap {
+  width: 100%;
+  height: 100%;
+}
+
+.vs-edit-input,
+.vs-edit-textarea {
+  background: transparent;
+  border: 1px dashed var(--vacc);
+  outline: none;
+  resize: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  width: 100%;
+  height: 100%;
+  min-height: 24px;
+  overflow: hidden;
+  caret-color: var(--vacc);
+}
+
+.vs-edit-textarea {
+  overflow-y: auto;
+}
+
+/* 选中 Chrome（Linear 紫） */
+.vs-select-box {
+  fill: none;
+  stroke: var(--vsel);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.vs-select-box-locked {
+  fill: none;
+  stroke: var(--vtext3);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-handle-box {
+  fill: var(--vpanel2);
+  stroke: var(--vsel);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  cursor: crosshair;
+}
+
+.vs-rotate-arm {
+  stroke: var(--vsel);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-rotate-dot {
+  fill: var(--vpanel2);
+  stroke: var(--vsel);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+
+.vs-handle-line {
+  stroke: var(--vacc2);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-handle-puck {
+  fill: var(--vpanel2);
+  stroke: var(--vacc2);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  cursor: crosshair;
+}
+
+.vs-handle-puck-g {
+  cursor: crosshair;
+}
+
+.vs-anchor {
+  fill: var(--vpanel2);
+  stroke: var(--vacc2);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+
+.vs-anchor.smooth {
+  fill: var(--vpanel2);
+}
+
+.vs-anchor.corner {
+  fill: var(--vpanel4);
+}
+
+.vs-anchor.active {
+  stroke: var(--vwarn);
+  stroke-width: 2.2;
+}
+
+.vs-multi-count {
+  fill: var(--vacc);
+  pointer-events: none;
+}
+
+.vs-multi-count-text {
+  fill: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  pointer-events: none;
+  font-family: var(--vfont-mono);
+}
+
+/* 框选 / 预览 / 辅助 */
+.vs-marquee {
+  fill: var(--vsel-soft);
+  stroke: var(--vsel);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-create-preview {
+  fill: var(--vacc-soft);
+  stroke: var(--vacc);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* 钢笔草稿 */
+.vs-pen-draft line,
+.vs-pen-rubber {
+  stroke: var(--vok);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-pen-rubber {
+  stroke-dasharray: 5 4;
+  opacity: 0.85;
+}
+
+.vs-pen-dot {
+  fill: var(--vok);
+  stroke: var(--vbg-deep);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.vs-pen-first {
+  fill: var(--vpanel2);
+  stroke: var(--vok);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.vs-pen-close {
+  fill: none;
+  stroke: var(--vok);
+  stroke-width: 1.6;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-pen-handle-line {
+  stroke: var(--vacc2);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vs-pen-handle-dot {
+  fill: var(--vpanel2);
+  stroke: var(--vacc2);
+  stroke-width: 1.2;
+  pointer-events: none;
+}
+
+/* 逻辑模式画布角标（Linear 芯片样式） */
+.vs-logic-legend {
+  position: absolute;
+  left: 22px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(22, 24, 28, 0.92);
+  border: 1px solid var(--vborder);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--vtext2);
+  box-shadow: var(--vshadow-sm);
+  backdrop-filter: blur(8px);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.vs-light .vs-logic-legend {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.vs-logic-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: #ffd34d;
+  display: inline-block;
+  box-shadow: 0 0 8px rgba(255, 211, 77, 0.45);
+}
+
+.vs-logic-legend b {
+  color: var(--vwarn);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--vfont-mono);
+}
+
+/* --- 右栏 --- */
+
+.vs-right {
+  width: 280px;
+  flex: none;
+  border-left: 1px solid var(--vborder);
+  background: var(--vbg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.vs-right-tabs {
+  display: flex;
+  gap: 1px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--vborder);
+  flex: none;
+  height: 36px;
+  align-items: stretch;
+}
+
+.vs-right-tabs button {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--vtext2);
+  padding: 0 11px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.1s;
+  position: relative;
+  margin-bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.vs-right-tabs button:hover {
+  color: var(--vtext);
+}
+
+.vs-right-tabs button.active {
+  color: var(--vtext);
+  font-weight: 500;
+  border-bottom-color: var(--vacc);
+}
+
+/* --- 属性面板 --- */
+
+.vs-props {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vs-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vs-inspector-head b {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vs-inspector-head i {
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--vtext3);
+  margin-left: auto;
+  flex: none;
+}
+
+.vs-type-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: #fff;
+  background: var(--vacc);
+  flex: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.vs-dot-bezier {
+  background: var(--vdot-bezier);
+}
+
+.vs-dot-rectangle {
+  background: var(--vdot-rect);
+}
+
+.vs-dot-rounded {
+  background: var(--vdot-round);
+}
+
+.vs-dot-ellipse {
+  background: var(--vdot-ellipse);
+}
+
+.vs-dot-arrow {
+  background: var(--vdot-arrow);
+}
+
+.vs-dot-text {
+  background: var(--vdot-text);
+}
+
+.vs-lock-chip {
+  font-style: normal;
+  font-size: 9.5px;
+  background: var(--vpanel3);
+  color: var(--vtext2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.vs-section {
+  border-top: 1px solid var(--vline);
+  padding-top: 10px;
+}
+
+.vs-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--vtext3);
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.vs-section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--vline);
+}
+
+.vs-section-chip {
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--vacc);
+  background: var(--vacc-soft);
+  padding: 1px 7px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+
+.vs-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.vs-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  align-items: end;
+}
+
+.vs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.vs-field-wide {
+  grid-column: 1 / -1;
+}
+
+.vs-field-label {
+  font-size: 10px;
+  color: var(--vtext3);
+}
+
+.vs-num-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vs-num-wrap small {
+  font-size: 9.5px;
+  color: var(--vtext4);
+  flex: none;
+}
+
+.vs-input-num {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.vs-color-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.vs-color-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--vborder);
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.vs-color-swatch input {
+  position: absolute;
+  inset: -6px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.vs-input-hex {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-family: var(--vfont-mono);
+  text-transform: uppercase;
+}
+
+.vs-slider-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vs-range {
+  flex: 1;
+  accent-color: var(--vacc);
+  height: 14px;
+}
+
+.vs-range-val {
+  font-size: 10.5px;
+  color: var(--vtext2);
+  min-width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--vfont-mono);
+}
+
+.vs-check-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--vtext2);
+  cursor: pointer;
+  height: 24px;
+}
+
+.vs-check-row input {
+  accent-color: var(--vacc);
+  margin: 0;
+}
+
+.vs-rotate-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.vs-mini-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: end;
+}
+
+.vs-align-row {
+  align-items: end;
+}
+
+.vs-align-btns {
+  display: flex;
+  gap: 3px;
+}
+
+.vs-align-btns .vs-mini-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 2px;
+}
+
+.vs-path-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 7px;
+  padding: 7px 9px;
+}
+
+.vs-path-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: rgba(154, 140, 255, 0.14);
+  color: #b5a8ff;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  flex: none;
+}
+
+.vs-path-state > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.vs-path-state b {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.vs-path-state small {
+  font-size: 10px;
+  color: var(--vtext3);
+}
+
+.vs-path-hint {
+  font-size: 10.5px;
+  color: var(--vtext3);
+  line-height: 1.5;
+}
+
+.vs-path-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.vs-path-actions .vs-btn {
+  font-size: 11px;
+  padding: 4px 2px;
+}
+
+.vs-layer-btns {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.vs-layer-btns .vs-btn {
+  font-size: 11px;
+  padding: 4px 2px;
+}
+
+.vs-props-footer {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.vs-actions-row {
+  padding-top: 4px;
+}
+
+/* --- 图层面板 --- */
+
+.vs-layers {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.vs-layers-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--vline);
+  font-size: 12px;
+  flex: none;
+  min-height: 34px;
+}
+
+.vs-layers-toolbar span {
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--vtext2);
+}
+
+.vs-layers-toolbar span i {
+  font-style: normal;
+  color: var(--vtext4);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.vs-layers-toolbar > div {
+  display: flex;
+  gap: 3px;
+}
+
+.vs-layer-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 3px 0;
+}
+
+.vs-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 0 8px;
+  height: 28px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 0.07s;
+  font-size: 12px;
+}
+
+.vs-layer-row:hover {
+  background: var(--vpanel2);
+}
+
+.vs-layer-row.selected {
+  background: var(--vacc-soft);
+  border-left-color: var(--vacc);
+}
+
+.vs-layer-row.dragging {
+  opacity: 0.4;
+}
+
+.vs-layer-row.drop-target {
+  box-shadow: inset 0 2px 0 0 var(--vacc);
+}
+
+.vs-layer-caret {
+  background: none;
+  border: none;
+  color: var(--vtext3);
+  font-size: 9px;
+  width: 14px;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  height: 20px;
+  line-height: 20px;
+  border-radius: 3px;
+}
+
+.vs-layer-caret:hover {
+  color: var(--vtext);
+  background: var(--vpanel3);
+}
+
+.vs-layer-caret-none {
+  display: inline-block;
+}
+
+.vs-layer-eye {
+  background: none;
+  border: none;
+  color: var(--vtext4);
+  font-size: 11.5px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  border-radius: 3px;
+  display: inline-grid;
+  place-items: center;
+  line-height: 1;
+}
+
+.vs-layer-eye:hover {
+  color: var(--vtext);
+  background: var(--vpanel3);
+}
+
+.vs-layer-thumb {
+  width: 16px;
+  text-align: center;
+  color: var(--vtext2);
+  font-size: 12px;
+  flex: none;
+}
+
+.vs-layer-thumb.is-group {
+  color: var(--vacc2);
+}
+
+.vs-layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--vtext2);
+}
+
+.vs-layer-row:hover .vs-layer-name,
+.vs-layer-row.selected .vs-layer-name {
+  color: var(--vtext);
+}
+
+.vs-layer-name b {
+  font-weight: 600;
+  color: var(--vacc2);
+}
+
+.vs-layer-rename {
+  flex: 1;
+  min-width: 0;
+  background: var(--vpanel2);
+  border: 1px solid var(--vacc);
+  color: var(--vtext);
+  border-radius: 4px;
+  font-size: 11.5px;
+  padding: 1px 5px;
+  outline: none;
+  height: 20px;
+}
+
+.vs-layer-lock {
+  background: none;
+  border: none;
+  color: var(--vtext4);
+  font-size: 10px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  border-radius: 3px;
+}
+
+.vs-layer-lock:hover {
+  color: var(--vtext);
+  background: var(--vpanel3);
+}
+
+.vs-layers-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-top: 1px solid var(--vline);
+  font-size: 10.5px;
+  color: var(--vtext3);
+  flex: none;
+}
+
+.vs-layers-footer > div {
+  display: flex;
+  gap: 3px;
+}
+
+.vs-footer-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vok);
+  margin-right: 4px;
+  box-shadow: 0 0 6px rgba(48, 201, 138, 0.6);
+}
+
+.vs-layers-hint {
+  padding: 0 10px 8px;
+  font-size: 9.5px;
+  color: var(--vtext4);
+  flex: none;
+}
+
+.vs-layers-empty {
+  padding: 30px 14px;
+  text-align: center;
+  color: var(--vtext3);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* --- 逻辑面板 --- */
+
+.vs-logic {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vs-logic-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vs-logic-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.vs-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--vok);
+  background: rgba(48, 201, 138, 0.12);
+  padding: 2px 8px;
+  border-radius: 20px;
+  flex: none;
+}
+
+.vs-live-badge i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--vok);
+  animation: vs-pulse 1.4s infinite;
+}
+
+@keyframes vs-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.vs-logic-intro {
+  font-size: 11px;
+  color: var(--vtext3);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.vs-logic-section {
+  border-top: 1px solid var(--vline);
+  padding-top: 9px;
+}
+
+.vs-logic-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--vtext3);
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+}
+
+.vs-logic-section-title i {
+  font-style: normal;
+  font-size: 9.5px;
+  color: var(--vtext4);
+  margin-left: auto;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 400;
+}
+
+.vs-set-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vs-set-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  color: var(--vtext2);
+  transition: all 0.1s;
+  height: 32px;
+  font-size: 12px;
+}
+
+.vs-set-row:hover {
+  border-color: var(--vborder);
+}
+
+.vs-set-row.on {
+  color: var(--vtext);
+  border-color: rgba(113, 112, 255, 0.45);
+  background: var(--vacc-soft);
+}
+
+.vs-set-check {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--vborder2);
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  color: #fff;
+  flex: none;
+}
+
+.vs-set-check.checked {
+  background: var(--vacc);
+  border-color: var(--vacc);
+}
+
+.vs-set-order {
+  font-size: 9px;
+  font-weight: 600;
+  color: #fff;
+  border-radius: 3px;
+  padding: 0 4px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  font-family: var(--vfont-mono);
+  flex: none;
+}
+
+.vs-set-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.vs-set-type {
+  color: var(--vtext4);
+  font-size: 11px;
+}
+
+.vs-logic-note {
+  font-size: 11px;
+  color: var(--vtext4);
+  line-height: 1.6;
+}
+
+.vs-op-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+.vs-op {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 6px;
+  padding: 5px 2px;
+  cursor: pointer;
+  transition: all 0.1s;
+  color: var(--vtext2);
+  min-height: 44px;
+}
+
+.vs-op b {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  font-family: var(--vfont-mono);
+}
+
+.vs-op small {
+  font-size: 9px;
+  opacity: 0.85;
+}
+
+.vs-op:hover {
+  border-color: var(--vborder2);
+  color: var(--vtext);
+}
+
+.vs-op.active {
+  background: linear-gradient(135deg, #7170ff, #8f6bf2);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(113, 112, 255, 0.4);
+}
+
+.vs-op-desc {
+  font-size: 10.5px;
+  color: var(--vtext3);
+  margin-top: 5px;
+  line-height: 1.5;
+}
+
+.vs-expr-card {
+  background: linear-gradient(135deg, rgba(113, 112, 255, 0.09), rgba(160, 107, 242, 0.07));
+  border: 1px solid rgba(113, 112, 255, 0.3);
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+
+.vs-expr-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--vtext3);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.vs-expr-label i {
+  font-style: normal;
+  font-size: 9px;
+  color: var(--vok);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.vs-expr-value {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin: 5px 0 7px;
+  letter-spacing: 0.2px;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.vs-expr-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(113, 112, 255, 0.18);
+  padding-top: 6px;
+}
+
+.vs-expr-result.muted {
+  opacity: 0.55;
+}
+
+.vs-result-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: #ffd34d;
+  flex: none;
+  box-shadow: 0 0 8px rgba(255, 211, 77, 0.5);
+}
+
+.vs-expr-result > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.vs-expr-result small {
+  font-size: 9.5px;
+  color: var(--vtext3);
+}
+
+.vs-expr-result b {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--vfont-mono);
+}
+
+.vs-region-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vs-region-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  background: var(--vpanel2);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  height: 26px;
+}
+
+.vs-region-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vs-region-area {
+  font-variant-numeric: tabular-nums;
+  color: var(--vtext2);
+  font-family: var(--vfont-mono);
+  font-size: 10px;
+}
+
+.vs-region-pct {
+  color: var(--vacc);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+  font-size: 10px;
+}
+
+.vs-relation-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 2px;
+  font-size: 11px;
+  min-height: 24px;
+}
+
+.vs-rel-name {
+  color: var(--vtext2);
+  font-size: 11px;
+}
+
+.vs-rel-chip {
+  font-size: 10px;
+  border-radius: 20px;
+  padding: 1px 9px;
+  border: 1px solid;
+  font-weight: 500;
+}
+
+.vs-rel-分离 {
+  color: var(--vtext3);
+  border-color: var(--vline);
+  background: var(--vpanel2);
+}
+
+.vs-rel-相交 {
+  color: var(--vwarn);
+  border-color: rgba(255, 200, 87, 0.4);
+  background: rgba(255, 200, 87, 0.08);
+}
+
+.vs-rel-包含 {
+  color: var(--vok);
+  border-color: rgba(48, 201, 138, 0.4);
+  background: rgba(48, 201, 138, 0.08);
+}
+
+.vs-rel-被包含 {
+  color: var(--vacc);
+  border-color: rgba(113, 112, 255, 0.4);
+  background: rgba(113, 112, 255, 0.1);
+}
+
+.vs-venn-sec {
+  display: flex;
+  flex-direction: column;
+}
+
+.vs-venn {
+  width: 100%;
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 7px;
+}
+
+.vs-venn-letter {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--vtext);
+  pointer-events: none;
+  font-family: var(--vfont-mono);
+}
+
+.vs-venn-op {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--vtext2);
+  pointer-events: none;
+  font-family: var(--vfont-mono);
+}
+
+.vs-venn-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--vtext3);
+}
+
+.vs-venn-legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 3px;
+}
+
+.vs-venn-empty {
+  font-size: 11px;
+  color: var(--vtext3);
+  text-align: center;
+  padding: 22px 0;
+  border: 1px dashed var(--vline);
+  border-radius: 7px;
+}
+
+.vs-logic-foot {
+  display: flex;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--vtext3);
+  line-height: 1.5;
+  background: var(--vpanel2);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
+.vs-logic-foot span {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--vacc-soft);
+  color: var(--vacc);
+  display: grid;
+  place-items: center;
+  font-size: 8.5px;
+  font-weight: 600;
+  flex: none;
+  margin-top: 1px;
+  font-family: var(--vfont-mono);
+}
+
+/* --- 空状态 / 提示 --- */
+
+.vs-empty-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 20px;
+  color: var(--vtext2);
+}
+
+.vs-empty-icon {
+  font-size: 24px;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.vs-empty-panel b {
+  font-size: 13px;
+  color: var(--vtext);
+  font-weight: 500;
+}
+
+.vs-empty-panel span {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--vtext3);
+}
+
+.vs-shortcut-tip {
+  margin-top: 14px;
+  font-size: 10px;
+  color: var(--vtext4);
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.vs-shortcut-tip kbd {
+  background: var(--vpanel2);
+  border: 1px solid var(--vline);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-family: var(--vfont-mono);
+  color: var(--vtext2);
+}
+
+.vs-multi-badge {
+  font-size: 9.5px;
+  background: var(--vacc-soft);
+  color: var(--vacc);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-weight: 500;
+}
+
+/* --- 状态栏 --- */
+
+.vs-status {
+  height: 24px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  background: var(--vbg);
+  border-top: 1px solid var(--vborder);
+  font-size: 10.5px;
+  color: var(--vtext3);
+}
+
+.vs-status-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 10.5px;
+}
+
+.vs-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vok);
+  flex: none;
+  box-shadow: 0 0 6px rgba(48, 201, 138, 0.6);
+}
+
+.vs-status-coords {
+  color: var(--vtext4);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--vfont-mono);
+  font-size: 10px;
+}
+
+.vs-status-mid {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--vtext3);
+}
+
+.vs-status-mid b {
+  color: var(--vtext);
+  font-weight: 500;
+}
+
+.vs-status-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  color: var(--vtext4);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--vfont-mono);
+  font-size: 10px;
+}
+
+.vs-status-right .on {
+  color: var(--vacc);
+}
+
+.vs-status-right .off {
+  color: var(--vtext4);
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.vs-status-result {
+  color: var(--vwarn);
+  font-weight: 500;
+}
+
+.vs-live-dot {
+  color: var(--vok);
+  font-size: 10px;
+  animation: vs-pulse 1.6s infinite;
+}
+
+/* --- Toast --- */
+
+.vs-toast {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--vpanel3);
+  color: var(--vtext);
+  border: 1px solid var(--vborder);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  box-shadow: var(--vshadow);
+  z-index: 300;
+  animation: vs-toast-in 0.18s ease-out;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+
+@keyframes vs-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* --- 滚动条（细） --- */
+
+.vs ::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.vs ::-webkit-scrollbar-thumb {
+  background: var(--vpanel4);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.vs ::-webkit-scrollbar-thumb:hover {
+  background: var(--vborder2);
+  background-clip: content-box;
+}
+
+.vs ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --- 窄窗口自适应 --- */
+
+@media (max-width: 1180px) {
+  .vs-left {
+    width: 158px;
+  }
+
+  .vs-hint {
+    display: none;
+  }
+}
+
+@media (max-width: 1000px) {
+  .vs-left {
+    width: 52px;
+  }
+
+  .vs-library,
+  .vs-tool small {
+    display: none;
+  }
+
+  .vs-toolrail {
+    grid-template-columns: 1fr;
+  }
+
+  .vs-brand-text small {
+    display: none;
+  }
+}
+
+/* ========================================================================
+   Vector Workbench refresh
+   Canvas-first layout inspired by the supplied reference: generous chrome,
+   clear hierarchy, soft glass surfaces, and responsive panel choreography.
+   ======================================================================== */
+.vs {
+  --vbg: #0c0e12;
+  --vbg-deep: #080a0d;
+  --vpanel: #101318;
+  --vpanel2: #151a22;
+  --vpanel3: #1d2430;
+  --vpanel4: #293240;
+  --vborder: rgba(185, 201, 225, 0.14);
+  --vborder2: rgba(185, 201, 225, 0.26);
+  --vline: rgba(185, 201, 225, 0.09);
+  --vtext: #eef3fa;
+  --vtext2: #a7b3c2;
+  --vtext3: #728095;
+  --vtext4: #4f5b6a;
+  --vacc: #7c74ff;
+  --vacc-soft: rgba(124, 116, 255, 0.15);
+  --vacc2: #a397ff;
+  --vok: #35ce91;
+  --vwarn: #ffd05e;
+  --vbad: #ff7186;
+  --vcanvas: #080a0d;
+  --vpaper: #1b1f2a;
+  --vpaper-edge: rgba(195, 207, 237, 0.18);
+  --vpaper-tint: rgba(124, 116, 255, 0.075);
+  --vsel: #8b80ff;
+  --vsel-soft: rgba(124, 116, 255, 0.19);
+  --vshadow: 0 2px 4px rgba(0, 0, 0, 0.36), 0 18px 46px rgba(0, 0, 0, 0.34);
+  --vshadow-sm: 0 5px 16px rgba(0, 0, 0, 0.25);
+  --vguide: rgba(255, 85, 164, 0.86);
+  --vfont: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --vfont-mono: "JetBrains Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+  font-family: var(--vfont);
+  background:
+    radial-gradient(circle at 54% -30%, rgba(86, 65, 180, 0.16), transparent 38%),
+    var(--vbg);
+}
+
+.vs-light {
+  --vbg: #f5f6f8;
+  --vbg-deep: #e8ebf0;
+  --vpanel: #ffffff;
+  --vpanel2: #f1f3f7;
+  --vpanel3: #e7eaf0;
+  --vpanel4: #d6dbe4;
+  --vborder: rgba(24, 31, 45, 0.13);
+  --vborder2: rgba(24, 31, 45, 0.24);
+  --vline: rgba(24, 31, 45, 0.09);
+  --vtext: #141821;
+  --vtext2: #4d5664;
+  --vtext3: #7f8998;
+  --vtext4: #aab2bf;
+  --vacc: #655de0;
+  --vacc-soft: rgba(101, 93, 224, 0.13);
+  --vacc2: #665ad5;
+  --vok: #0fa971;
+  --vwarn: #b77700;
+  --vbad: #d83f56;
+  --vcanvas: #e7eaf0;
+  --vpaper: #ffffff;
+  --vpaper-edge: rgba(24, 31, 45, 0.17);
+  --vpaper-tint: rgba(101, 93, 224, 0.07);
+  --vsel: #655de0;
+  --vsel-soft: rgba(101, 93, 224, 0.15);
+}
+
+.vs-topbar {
+  height: 76px;
+  gap: 16px;
+  padding: 0 32px;
+  background: linear-gradient(180deg, rgba(17, 20, 27, 0.98), rgba(13, 16, 21, 0.96));
+  border-bottom: 1px solid rgba(185, 201, 225, 0.15);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(18px) saturate(135%);
+  overflow: hidden;
+}
+
+.vs-light .vs-topbar {
+  background: rgba(255, 255, 255, 0.93);
+}
+
+.vs-brand {
+  gap: 12px;
+  padding-right: 18px;
+  border-right-color: var(--vline);
+}
+
+.vs-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 16px;
+  box-shadow: 0 0 0 1px rgba(124, 116, 255, 0.46), 0 6px 18px rgba(91, 86, 255, 0.34);
+}
+
+.vs-brand-text {
+  gap: 8px;
+}
+
+.vs-brand-text b {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+
+.vs-brand-text small {
+  color: #7688a1;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+}
+
+.vs-btn-back {
+  min-height: 34px;
+  margin-left: 8px;
+  padding: 6px 12px;
+  border-color: transparent;
+  border-radius: 9px;
+  color: #c1cad8;
+  font-size: 14px;
+}
+
+.vs-btn-back:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.vs-mode-switch {
+  gap: 4px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(185, 201, 225, 0.14);
+  border-radius: 12px;
+}
+
+.vs-mode-switch button {
+  min-height: 38px;
+  padding: 7px 18px;
+  border-radius: 9px;
+  font-size: 14px;
+}
+
+.vs-mode-switch button.active {
+  background: linear-gradient(135deg, #6d63ee, #9b65ef);
+  box-shadow: 0 5px 18px rgba(124, 116, 255, 0.3);
+}
+
+.vs-top-actions {
+  gap: 3px;
+}
+
+.vs-icon-btn {
+  min-height: 34px;
+  height: 34px;
+  padding: 6px 10px;
+  color: #a6b2c2;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.vs-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--vtext);
+}
+
+.vs-zoom-label {
+  min-width: 44px;
+  color: #d1d9e6;
+  font-size: 12px;
+}
+
+.vs-body {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(250px, 276px) minmax(0, 1fr) minmax(360px, 430px);
+}
+
+.vs-left,
+.vs-right {
+  width: auto;
+  min-width: 0;
+  background: linear-gradient(180deg, rgba(17, 20, 27, 0.98), rgba(12, 15, 20, 0.98));
+}
+
+.vs-left {
+  border-right-color: rgba(185, 201, 225, 0.14);
+  box-shadow: 8px 0 26px rgba(0, 0, 0, 0.13);
+}
+
+.vs-right {
+  border-left-color: rgba(185, 201, 225, 0.14);
+  box-shadow: -8px 0 26px rgba(0, 0, 0, 0.13);
+}
+
+.vs-light .vs-left,
+.vs-light .vs-right {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.vs-toolrail {
+  gap: 9px 8px;
+  padding: 28px 32px 18px;
+}
+
+.vs-tool {
+  min-height: 68px;
+  gap: 7px;
+  padding: 9px 3px 8px;
+  border-radius: 10px;
+  color: #a7b2c2;
+}
+
+.vs-tool:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.vs-tool.active {
+  color: #a79eff;
+  background: rgba(124, 116, 255, 0.16);
+  border-color: rgba(139, 128, 255, 0.58);
+  box-shadow: inset 0 0 20px rgba(124, 116, 255, 0.08);
+}
+
+.vs-tool-glyph {
+  font-size: 21px;
+}
+
+.vs-tool small {
+  font-size: 11px;
+}
+
+.vs-rail-spacer {
+  margin: 4px 0;
+  background: rgba(185, 201, 225, 0.13);
+}
+
+.vs-library {
+  gap: 14px;
+  padding: 18px 32px 24px;
+  border-top: 1px solid rgba(185, 201, 225, 0.1);
+}
+
+.vs-panel-head {
+  gap: 9px;
+  padding: 0 2px;
+}
+
+.vs-panel-head b {
+  color: #cbd4e0;
+  font-size: 12px;
+  letter-spacing: 1.4px;
+}
+
+.vs-panel-head i {
+  color: #657489;
+  font-size: 10px;
+}
+
+.vs-eyebrow {
+  color: #8074ff;
+  font-size: 10px;
+}
+
+.vs-asset-grid {
+  gap: 8px;
+}
+
+.vs-asset {
+  min-height: 74px;
+  gap: 8px;
+  padding: 10px 4px 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(185, 201, 225, 0.13);
+  border-radius: 10px;
+}
+
+.vs-asset:hover {
+  background: rgba(124, 116, 255, 0.11);
+  border-color: rgba(139, 128, 255, 0.55);
+}
+
+.vs-asset-glyph {
+  width: 32px;
+  height: 26px;
+  font-size: 18px;
+}
+
+.vs-asset small {
+  color: #aab7c8;
+  font-size: 11px;
+}
+
+.vs-lib-actions {
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.vs-lib-actions .vs-btn {
+  min-height: 36px;
+  font-size: 12px;
+}
+
+.vs-btn,
+.vs-mini-btn,
+.vs-input {
+  border-color: rgba(185, 201, 225, 0.16);
+  border-radius: 8px;
+}
+
+.vs-btn {
+  min-height: 32px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.vs-mini-btn {
+  min-height: 28px;
+  height: 28px;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.vs-input {
+  height: 32px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.vs-stage {
+  min-width: 0;
+  background:
+    radial-gradient(circle at 55% 34%, rgba(80, 66, 152, 0.12), transparent 46%),
+    var(--vbg-deep);
+}
+
+.vs-stagebar {
+  height: 62px;
+  gap: 16px;
+  padding: 0 22px;
+  background: rgba(12, 15, 20, 0.84);
+  border-bottom-color: rgba(185, 201, 225, 0.1);
+}
+
+.vs-crumbs {
+  gap: 8px;
+  font-size: 14px;
+}
+
+.vs-crumbs b {
+  color: #f1f4fa;
+  font-size: 15px;
+}
+
+.vs-mode-badge {
+  padding: 4px 10px;
+  color: #ad9fff;
+  background: rgba(124, 116, 255, 0.14);
+  border: 1px solid rgba(124, 116, 255, 0.18);
+  font-size: 11px;
+}
+
+.vs-hint {
+  color: #75869a;
+  font-size: 12px;
+}
+
+.vs-canvas {
+  min-width: 0;
+  container-type: size;
+  container-name: vector-canvas;
+  background:
+    radial-gradient(circle at 56% 43%, rgba(54, 46, 111, 0.14), transparent 44%),
+    linear-gradient(135deg, #080a0d, #0d1016);
+}
+
+.vs-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(rgba(169, 185, 211, 0.28) 0.7px, transparent 0.7px);
+  background-size: 24px 24px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.42), transparent 80%);
+}
+
+.vs-ruler {
+  background: rgba(11, 14, 19, 0.9);
+  backdrop-filter: blur(8px);
+}
+
+.vs-ruler-top {
+  height: 28px;
+  border-bottom-color: rgba(185, 201, 225, 0.12);
+}
+
+.vs-ruler-left {
+  width: 26px;
+  border-right-color: rgba(185, 201, 225, 0.12);
+}
+
+.vs-ruler-corner {
+  width: 26px;
+  height: 28px;
+  background: #0d1117;
+  border-right-color: rgba(185, 201, 225, 0.12);
+  border-bottom-color: rgba(185, 201, 225, 0.12);
+}
+
+.vs-tick i {
+  color: #627186;
+  font-size: 9px;
+}
+
+.vs-paper {
+  fill: #1a1d28;
+  stroke: rgba(182, 193, 225, 0.18);
+  filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.28));
+}
+
+.vs-light .vs-paper {
+  fill: #ffffff;
+}
+
+.vs-logic-paper {
+  fill: rgba(124, 116, 255, 0.07);
+}
+
+.vs-logic-legend {
+  left: 20px;
+  bottom: 18px;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  background: rgba(19, 23, 33, 0.84);
+  border: 1px solid rgba(185, 201, 225, 0.17);
+  border-radius: 10px;
+  box-shadow: var(--vshadow-sm);
+  backdrop-filter: blur(14px);
+}
+
+.vs-logic-legend b {
+  color: #ffd05e;
+}
+
+.vs-right-tabs {
+  height: 54px;
+  gap: 8px;
+  padding: 0 22px;
+  border-bottom-color: rgba(185, 201, 225, 0.12);
+}
+
+.vs-right-tabs button {
+  min-height: 54px;
+  padding: 0 6px;
+  font-size: 13px;
+}
+
+.vs-right-tabs button.active {
+  color: #a89fff;
+  border-bottom-color: #8378ff;
+}
+
+.vs-props {
+  gap: 18px;
+  padding: 22px 22px 34px;
+}
+
+.vs-inspector-head {
+  gap: 10px;
+}
+
+.vs-inspector-head b {
+  font-size: 16px;
+}
+
+.vs-inspector-head i {
+  font-size: 11px;
+}
+
+.vs-type-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.vs-section {
+  padding-top: 14px;
+  border-top-color: rgba(185, 201, 225, 0.1);
+}
+
+.vs-section-title,
+.vs-logic-section-title {
+  gap: 10px;
+  margin-bottom: 10px;
+  color: #75859a;
+  font-size: 11px;
+  letter-spacing: 1.1px;
+}
+
+.vs-section-body {
+  gap: 9px;
+}
+
+.vs-path-state,
+.vs-expr-card,
+.vs-logic-foot {
+  border-radius: 10px;
+}
+
+.vs-path-state {
+  padding: 10px 11px;
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(185, 201, 225, 0.13);
+}
+
+.vs-logic {
+  gap: 20px;
+  padding: 24px 22px 34px;
+}
+
+.vs-logic-head h3 {
+  font-size: 17px;
+}
+
+.vs-logic-intro {
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.vs-live-badge {
+  min-height: 26px;
+  padding: 4px 10px;
+  border: 1px solid rgba(53, 206, 145, 0.18);
+}
+
+.vs-set-list {
+  gap: 7px;
+}
+
+.vs-set-row {
+  min-height: 48px;
+  height: auto;
+  padding: 9px 12px;
+  border-color: rgba(185, 201, 225, 0.13);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 14px;
+}
+
+.vs-set-row.on {
+  color: #f1f3ff;
+  background: rgba(124, 116, 255, 0.16);
+  border-color: rgba(139, 128, 255, 0.68);
+  box-shadow: inset 0 0 22px rgba(124, 116, 255, 0.08);
+}
+
+.vs-set-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+}
+
+.vs-op-grid {
+  gap: 7px;
+}
+
+.vs-op {
+  min-height: 66px;
+  padding: 8px 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(185, 201, 225, 0.12);
+}
+
+.vs-op b {
+  font-size: 18px;
+}
+
+.vs-op small {
+  font-size: 10px;
+}
+
+.vs-op.active {
+  background: linear-gradient(145deg, #7368f4, #9f6af0);
+  box-shadow: 0 8px 20px rgba(124, 116, 255, 0.28);
+}
+
+.vs-expr-card {
+  padding: 13px 14px;
+  background: linear-gradient(145deg, rgba(124, 116, 255, 0.13), rgba(160, 107, 242, 0.08));
+  border-color: rgba(124, 116, 255, 0.36);
+}
+
+.vs-expr-value {
+  font-size: 16px;
+}
+
+.vs-status {
+  min-height: 48px;
+  height: auto;
+  gap: 18px;
+  padding: 0 32px;
+  background: rgba(13, 16, 21, 0.98);
+  border-top-color: rgba(185, 201, 225, 0.14);
+  color: #8190a3;
+}
+
+.vs-status-left {
+  min-width: 220px;
+  font-size: 12px;
+}
+
+.vs-status-mid {
+  font-size: 12px;
+}
+
+.vs-status-right {
+  gap: 13px;
+  color: #65758a;
+  font-size: 11px;
+}
+
+.vs-toast {
+  top: 88px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(29, 36, 48, 0.94);
+  border-color: rgba(185, 201, 225, 0.2);
+  box-shadow: var(--vshadow);
+  backdrop-filter: blur(16px);
+}
+
+/* Desktop shrink: preserve the three-column hierarchy while giving the canvas the remainder. */
+@media (max-width: 1500px) {
+  .vs-topbar {
+    height: 64px;
+    padding-inline: 20px;
+    gap: 10px;
+  }
+
+  .vs-brand {
+    gap: 9px;
+    padding-right: 10px;
+  }
+
+  .vs-logo {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+
+  .vs-brand-text b {
+    font-size: 14px;
+  }
+
+  .vs-brand-text small {
+    font-size: 9px;
+  }
+
+  .vs-btn-back {
+    min-height: 30px;
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+
+  .vs-mode-switch button {
+    min-height: 32px;
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+
+  .vs-icon-btn {
+    min-height: 30px;
+    height: 30px;
+    padding-inline: 7px;
+    font-size: 12px;
+  }
+
+  .vs-body {
+    grid-template-columns: minmax(210px, 230px) minmax(0, 1fr) minmax(320px, 360px);
+  }
+
+  .vs-toolrail {
+    padding-inline: 22px;
+  }
+
+  .vs-library {
+    padding-inline: 22px;
+  }
+
+  .vs-stagebar {
+    height: 50px;
+    padding-inline: 16px;
+  }
+
+  .vs-ruler-top {
+    height: 24px;
+  }
+
+  .vs-ruler-left,
+  .vs-ruler-corner {
+    width: 22px;
+  }
+
+  .vs-ruler-corner {
+    height: 24px;
+  }
+
+  .vs-logic,
+  .vs-props {
+    padding-inline: 18px;
+  }
+
+  .vs-status {
+    padding-inline: 20px;
+  }
+}
+
+/* Tablet: convert the asset library to a compact tool rail. */
+@media (max-width: 1120px) {
+  .vs-body {
+    grid-template-columns: 58px minmax(0, 1fr) minmax(300px, 320px);
+  }
+
+  .vs-library {
+    display: none;
+  }
+
+  .vs-toolrail {
+    grid-template-columns: 1fr;
+    gap: 5px;
+    padding: 14px 8px;
+  }
+
+  .vs-tool {
+    min-height: 48px;
+  }
+
+  .vs-tool-glyph {
+    font-size: 18px;
+  }
+
+  .vs-tool small,
+  .vs-brand-text small {
+    display: none;
+  }
+
+  .vs-stagebar {
+    height: 42px;
+  }
+
+  .vs-hint {
+    display: none;
+  }
+
+  .vs-status-mid {
+    display: none;
+  }
+}
+
+/* Narrow window: right inspector becomes a bottom sheet, canvas keeps full width. */
+@media (max-width: 760px) {
+  .vs-topbar {
+    padding-inline: 10px;
+    gap: 6px;
+  }
+
+  .vs-brand {
+    padding-right: 5px;
+  }
+
+  .vs-btn-back {
+    margin-left: 0;
+    padding-inline: 6px;
+  }
+
+  .vs-mode-switch button {
+    padding-inline: 9px;
+  }
+
+  .vs-top-actions {
+    max-width: 46vw;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .vs-top-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .vs-body {
+    grid-template-columns: 54px minmax(0, 1fr);
+  }
+
+  .vs-right {
+    position: absolute;
+    z-index: 40;
+    right: 10px;
+    bottom: 10px;
+    width: min(350px, calc(100% - 74px));
+    height: min(52%, 420px);
+    border: 1px solid rgba(185, 201, 225, 0.22);
+    border-radius: 14px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(18px) saturate(135%);
+  }
+
+  .vs-stagebar {
+    padding-inline: 12px;
+  }
+
+  .vs-crumbs {
+    font-size: 12px;
+  }
+
+  .vs-crumbs b {
+    font-size: 13px;
+  }
+
+  .vs-status {
+    min-height: 42px;
+    padding-inline: 12px;
+  }
+
+  .vs-status-left {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .vs-status-right {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 560px) {
+  .vs-topbar {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    align-content: center;
+    padding-block: 8px;
+  }
+
+  .vs-top-actions {
+    order: 3;
+    flex: 1 0 100%;
+    max-width: none;
+    justify-content: flex-end;
+  }
+
+  .vs-mode-switch button {
+    min-height: 30px;
+    padding-block: 5px;
+    font-size: 11px;
+  }
+
+  .vs-stagebar {
+    height: 38px;
+  }
+
+  .vs-mode-badge {
+    display: none;
+  }
+
+  .vs-right {
+    left: 64px;
+    right: 8px;
+    width: auto;
+    height: min(58%, 360px);
+  }
+
+  .vs-status-left {
+    font-size: 10px;
+  }
+
+  .vs-status-coords,
+  .vs-status-right span:nth-child(n + 4) {
+    display: none;
+  }
+}
+
+@container vector-canvas (max-width: 520px) {
+  .vs-hint {
+    display: none;
+  }
+
+  .vs-logic-legend {
+    left: 10px;
+    bottom: 10px;
+    max-width: calc(100% - 20px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vs *,
+  .vs *::before,
+  .vs *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .vs-topbar,
+  .vs-left,
+  .vs-right,
+  .vs-logic-legend,
+  .vs-toast {
+    background: var(--vpanel);
+    backdrop-filter: none;
+  }
+}
+/* The workbench is the viewport surface; do not inherit the legacy inset frame. */
+.vs {
+  padding: 0;
+}
+@media (max-width: 760px) {
+  .vs-topbar {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    align-content: center;
+    padding-block: 8px;
+  }
+
+  .vs-top-actions {
+    order: 3;
+    flex: 1 0 100%;
+    max-width: none;
+    justify-content: flex-end;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .vs-top-actions::-webkit-scrollbar {
+    display: none;
+  }
+}

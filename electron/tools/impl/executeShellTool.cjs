@@ -37,8 +37,9 @@ function sweepJobs() {
 }
 
 /** 后台启动一个白名单命令，立即返回 jobId。 */
-function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds) {
+function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, signal) {
   sweepJobs();
+  if (signal && signal.aborted) return { jobId: null, error: '已取消执行' };
   const jobId = 'job-' + Date.now().toString(36) + '-' + (++jobSeq).toString(36);
   const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
   let child;
@@ -50,20 +51,30 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds) {
   }
   const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', exitCode: null, error: null, child };
   BACKGROUND_JOBS.set(jobId, job);
+  const onAbort = () => {
+    if (job.status !== 'running') return;
+    job.status = 'cancelled';
+    job.output += '\n…（任务已取消）';
+    try { child.kill('SIGTERM'); } catch {}
+  };
+  signal && signal.addEventListener('abort', onAbort, { once: true });
   child.stdout.on('data', (d) => { job.output += decodeOutput(d); });
   child.stderr.on('data', (d) => { job.output += decodeOutput(d); });
   const timer = setTimeout(() => {
+    if (job.status !== 'running') return;
     try { child.kill('SIGKILL'); } catch {}
     job.status = 'timeout';
     job.output += '\n…（后台任务超时，已强制终止）';
   }, timeoutSeconds * 1000);
   child.on('error', (e) => {
     clearTimeout(timer);
+    signal && signal.removeEventListener('abort', onAbort);
     job.status = 'error';
     job.error = String((e && e.message) || e);
   });
   child.on('close', (exitCode) => {
     clearTimeout(timer);
+    signal && signal.removeEventListener('abort', onAbort);
     if (job.status === 'running') job.status = 'done';
     job.exitCode = exitCode;
   });
@@ -258,7 +269,7 @@ function register(registry) {
       // 后台执行：长任务立即返回 jobId，用 poll_job 轮询
       if (args.async === true) {
         const bgTimeout = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? Math.max(10, Math.floor(args.timeoutSeconds)) : 1800;
-        const started = startBackgroundJob(root, tokens, normalized, command, bgTimeout);
+        const started = startBackgroundJob(root, tokens, normalized, command, bgTimeout, context.signal && context.signal());
         if (!started.jobId) return AgentToolResult.error('后台启动失败：' + (started.error || ''));
         context.audit('execute_shell async=true jobId=' + started.jobId + ' command=' + command + ' timeout=' + bgTimeout);
         return AgentToolResult.ok(
@@ -270,6 +281,7 @@ function register(registry) {
       return new Promise((resolve) => {
         let output = '';
         let child;
+        let cancelled = false;
         try {
           const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
           const spec = spawnSpec(normalized, tokens);
@@ -284,20 +296,36 @@ function register(registry) {
         child.stderr.on('data', (d) => {
           output += decodeOutput(d);
         });
+        const onAbort = () => {
+          cancelled = true;
+          try { child.kill('SIGTERM'); } catch {}
+        };
+        const signal = context.signal && context.signal();
+        signal && signal.addEventListener('abort', onAbort, { once: true });
+        if (signal && signal.aborted) onAbort();
+        const cleanup = () => signal && signal.removeEventListener('abort', onAbort);
         const timer = setTimeout(() => {
           try {
             child.kill('SIGKILL');
           } catch {}
+          cleanup();
           output += '\n…（执行超时，已强制终止）';
           context.audit('execute_shell ' + command + ' exit=TIMEOUT');
           resolve(AgentToolResult.ok('退出码 -1（超时强杀）\n' + output.trim(), { exitCode: -1, command, timedOut: true, output: output.slice(0, 4000) }));
         }, timeoutSeconds * 1000);
         child.on('error', (e) => {
           clearTimeout(timer);
+          cleanup();
           resolve(AgentToolResult.error('执行失败：' + ((e && e.message) || e)));
         });
         child.on('close', (exitCode) => {
           clearTimeout(timer);
+          cleanup();
+          if (cancelled) {
+            context.audit('execute_shell ' + command + ' exit=CANCELLED');
+            resolve(AgentToolResult.error('执行已取消', { exitCode: -1, command, cancelled: true, output: output.slice(0, 4000) }));
+            return;
+          }
           context.audit('execute_shell ' + command + ' exit=' + exitCode);
           const page = outputPage(output, args.outputOffset, args.maxOutputChars, false);
           const paged = page.hasMore;
@@ -343,7 +371,21 @@ function register(registry) {
       if (!job) return AgentToolResult.error('后台任务不存在或已清理：' + jobId);
       const wait = typeof args.waitSeconds === 'number' && Number.isFinite(args.waitSeconds) ? Math.max(0, Math.min(60, Math.floor(args.waitSeconds))) : 0;
       if (wait > 0 && job.status === 'running') {
-        await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+        await new Promise((resolve) => {
+          const signal = context.signal && context.signal();
+          let timer;
+          const finish = () => {
+            clearTimeout(timer);
+            signal && signal.removeEventListener('abort', onAbort);
+            resolve();
+          };
+          const onAbort = () => {
+            finish();
+          };
+          timer = setTimeout(finish, wait * 1000);
+          signal && signal.addEventListener('abort', onAbort, { once: true });
+        });
+        if (context.signal && context.signal() && context.signal().aborted) return AgentToolResult.error('轮询已取消', { jobId, status: 'cancelled' });
         sweepJobs();
         job = BACKGROUND_JOBS.get(jobId);
         if (!job) return AgentToolResult.error('后台任务已结束并被清理：' + jobId);
@@ -359,6 +401,10 @@ function register(registry) {
       if (job.status === 'error') {
         BACKGROUND_JOBS.delete(jobId);
         return AgentToolResult.error('后台任务执行失败：' + (job.error || '') + '\n' + job.output.trim());
+      }
+      if (job.status === 'cancelled') {
+        BACKGROUND_JOBS.delete(jobId);
+        return AgentToolResult.error('后台任务已取消：' + jobId, { jobId, status: 'cancelled', exitCode: job.exitCode, output: job.output });
       }
       const done = job.status === 'done';
       const statusText = done ? '退出码 ' + job.exitCode : '超时强制终止';

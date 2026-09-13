@@ -3,6 +3,7 @@ dist/
 logs/
 .cache/
 release/
+.hermes/
 *.log
 .DS_Store
 Thumbs.db
