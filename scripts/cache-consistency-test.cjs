@@ -33,9 +33,16 @@ const server = http.createServer((req, res) => {
       res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_2', type: 'function', function: { name: 'workbench_edit', arguments: '{"operations":[{"action":"create","name":"new_task","type":"task","prompt":"write api"}]}' } }] } }] }));
     } else if (requestCount === 3) {
       res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_3', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] } }] }));
+    } else if (requestCount === 5) {
+      // 回归场景：服务端关闭流时没有附带最后一个换行符。
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_5', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] } }] })}`);
     } else {
-      res.write(sse({ choices: [{ delta: { content: '完成' } }] }));
-      res.write(DONE);
+      if (requestCount === 6) {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '尾帧无换行' } }] })}`);
+      } else {
+        res.write(sse({ choices: [{ delta: { content: '完成' } }] }));
+        res.write(DONE);
+      }
     }
     res.end();
   });
@@ -64,8 +71,6 @@ async function main() {
 
   const result = await runAgentChat({ cfg, messages, tools: { registry, context }, signal: null, timeoutMs: 20000 });
 
-  server.close();
-
   assert.strictEqual(result.error, undefined, '不应出错：' + result.error);
   assert.ok(readCalls >= 2, 'get_workbench_model 应被真实执行 ≥2 次（变更后必须重新读画布，不能命中旧缓存）');
 
@@ -74,6 +79,19 @@ async function main() {
   const lastRead = toolResults[toolResults.length - 1];
   assert.ok(lastRead && lastRead.content.includes('工作台共 1 个节点'), '变更后再次读取应返回 1 个节点，实际：' + (lastRead && lastRead.content));
   assert.ok(lastRead.content.includes('new_task'), '读取结果应包含刚创建的节点名');
+
+  const noNewlineResult = await runAgentChat({
+    cfg,
+    messages: [{ role: 'system', content: 'test' }],
+    tools: { registry, context },
+    signal: null,
+    timeoutMs: 20000,
+  });
+  assert.strictEqual(noNewlineResult.error, undefined, '最后分片无换行不应导致错误');
+  assert.ok(readCalls >= 3, '最后分片的 tool call 不应被忽略');
+  assert.ok(noNewlineResult.content.includes('尾帧无换行'), '最后分片无换行的文本应被保留');
+
+  server.close();
 
   console.log('CACHE CONSISTENCY TEST: PASS  readCalls=' + readCalls);
 }

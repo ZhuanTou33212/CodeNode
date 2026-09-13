@@ -402,7 +402,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       return orphaned ? { edges } : { edges, ...withHistory(s) };
     }),
 
-  onConnect: (conn) => set((s) => ({ edges: addEdge({ ...conn, animated: true }, s.edges), ...withHistory(s) })),
+  onConnect: (conn) => set((s) => ({ edges: addEdge({ ...conn, type: 'waypoint', animated: false }, s.edges), ...withHistory(s) })),
 
   addNode: (node) =>
     set((s) => ({

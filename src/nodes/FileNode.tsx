@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, type CSSProperties } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { FileData } from '../types';
 
@@ -6,9 +6,10 @@ function FileNode({ data, selected }: NodeProps) {
   const d = data as unknown as FileData;
   const status = d.status || 'pending';
   const name = d.filePath ? d.filePath.split('/').pop() : d.label;
+  const accent = d.accent || '#f97316';
 
   return (
-    <div className={`wf-node wf-file ${selected ? 'is-selected' : ''}`} style={{ borderColor: d.accent || '#f97316' }}>
+    <div className={`wf-node wf-file wf-node-file ${selected ? 'is-selected' : ''}`} style={{ borderColor: `${accent}b8`, '--wf-accent': accent } as CSSProperties}>
       <Handle type="target" position={Position.Left} className="wf-handle" />
       <div className="wf-node-title">
         <span className="wf-file-icon">F</span>

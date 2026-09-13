@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, type CSSProperties } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import type { WorkflowNodeData } from '../types';
@@ -64,9 +64,10 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
   const isStart = nodeType === 'start';
   const isEnd = nodeType === 'end';
   const isObject = nodeType === 'object';
+  const nodeStyle = { borderColor: `${accent}b8`, '--wf-accent': accent } as CSSProperties;
 
   return (
-    <div className={`wf-node ${selected ? 'is-selected' : ''} ${isObject ? 'wf-object-node' : ''}`} style={{ borderColor: accent }}>
+    <div className={`wf-node wf-node-${nodeType || 'default'} ${selected ? 'is-selected' : ''} ${isObject ? 'wf-object-node' : ''}`} style={nodeStyle}>
       {!isStart && <Handle type="target" position={Position.Left} className="wf-handle" />}
       <div className="wf-node-title">
         <span className="wf-status-dot" style={{ background: STATUS_COLOR[status] }} title={status} />

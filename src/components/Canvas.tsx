@@ -10,14 +10,13 @@ import {
   type Connection,
   type Node,
   type Edge,
-  MarkerType,
 } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { useSessionStore } from '../store/sessionStore';
 import { nodeTypes } from '../nodes';
 import { edgeTypes } from '../edges';
-import { childIdsOf, parentIdOf, isDescendantOf } from '../lib/flow';
+import { childIdsOf, computeChildren, parentIdOf, isDescendantOf } from '../lib/flow';
 import ChatSidebar from './ChatSidebar';
 import PromptBar from './PromptBar';
 
@@ -39,6 +38,7 @@ function collectHiddenIds(nodes: Node[]): Set<string> {
 }
 
 type Pt = { x: number; y: number };
+type BoundaryDirection = 'in' | 'out';
 
 function segIntersect(a: Pt, b: Pt, c: Pt, d: Pt): Pt | null {
   const rX = b.x - a.x;
@@ -53,9 +53,52 @@ function segIntersect(a: Pt, b: Pt, c: Pt, d: Pt): Pt | null {
   return { x: a.x + t * rX, y: a.y + t * rY };
 }
 
-function edgePoints(edge: Edge, byId: Map<string, Node>): Pt[] {
-  const s = byId.get(edge.source);
-  const t = byId.get(edge.target);
+function scopeBoundaryId(
+  nodeId: string,
+  direction: BoundaryDirection,
+  byId: Map<string, Node>,
+  edges: Edge[],
+  visited = new Set<string>(),
+): string {
+  const node = byId.get(nodeId);
+  if (!node || node.type !== 'scope' || visited.has(nodeId)) return nodeId;
+  if ((node.data as { collapsed?: boolean } | undefined)?.collapsed) return nodeId;
+
+  const members = computeChildren(node, [...byId.values()]);
+  if (!members.length) return nodeId;
+  const memberIds = new Set(members.map((member) => member.id));
+  const boundary = members.filter((member) => {
+    const connectedInside = edges.some((edge) =>
+      direction === 'in'
+        ? edge.target === member.id && memberIds.has(edge.source)
+        : edge.source === member.id && memberIds.has(edge.target)
+    );
+    return !connectedInside;
+  });
+  const candidates = boundary.length ? boundary : members;
+  candidates.sort((a, b) => {
+    const xDelta = a.position.x - b.position.x;
+    if (xDelta !== 0) return direction === 'in' ? xDelta : -xDelta;
+    const yDelta = a.position.y - b.position.y;
+    return direction === 'in' ? yDelta : -yDelta;
+  });
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(nodeId);
+  return scopeBoundaryId(candidates[0].id, direction, byId, edges, nextVisited);
+}
+
+function visualEdgeNodeIds(edge: Edge, byId: Map<string, Node>, edges: Edge[]) {
+  return {
+    source: scopeBoundaryId(edge.source, 'out', byId, edges),
+    target: scopeBoundaryId(edge.target, 'in', byId, edges),
+  };
+}
+
+function edgePoints(edge: Edge, byId: Map<string, Node>, edges: Edge[]): Pt[] {
+  const ids = visualEdgeNodeIds(edge, byId, edges);
+  const s = byId.get(ids.source);
+  const t = byId.get(ids.target);
   if (!s || !t) return [];
   const sw = (s.measured?.width as number) || 88;
   const sh = (s.measured?.height as number) || 64;
@@ -119,7 +162,7 @@ export default function Canvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingViewport]);
 
-  // Agent 进度扫描：沿画布连线逐条推进高亮（多段线连接动画）
+  // Agent 进度扫描：沿画布连线逐条推进高亮
   useEffect(() => {
     const p = useSessionStore.getState().progress;
     if (!p || !p.running) return;
@@ -130,16 +173,35 @@ export default function Canvas() {
   const hiddenIds = collectHiddenIds(nodes);
   const visibleNodes = nodes.filter((n) => !hiddenIds.has(n.id));
   const visibleEdges = edges.filter((e) => !hiddenIds.has(e.source) && !hiddenIds.has(e.target));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const visibleNodeIds = new Set(visibleNodes.map((n) => n.id));
+  const renderableEdges = visibleEdges.filter((edge) => {
+    const endpointIds = visualEdgeNodeIds(edge, byId, visibleEdges);
+    const source = byId.get(endpointIds.source);
+    const target = byId.get(endpointIds.target);
+    // scope 是纯 Frame，没有 socket；只有成功映射到可见成员节点的边才绘制。
+    return (
+      visibleNodeIds.has(endpointIds.source) &&
+      visibleNodeIds.has(endpointIds.target) &&
+      source?.type !== 'scope' &&
+      target?.type !== 'scope'
+    );
+  });
 
-  const displayEdges = visibleEdges.map((e) => {
-    const wp = (e.data as { waypoints?: unknown[] } | undefined)?.waypoints;
-    const base = wp && wp.length ? { ...e, type: 'waypoint' } : e;
+  const displayEdges = renderableEdges.map((e) => {
+    const base = {
+      ...e,
+      ...visualEdgeNodeIds(e, byId, visibleEdges),
+      type: 'waypoint',
+      animated: false,
+      markerEnd: undefined,
+    };
     if (!progress || !progress.edgeIds.length) return base;
     const idx = progress.edgeIds.indexOf(e.id);
     if (idx < 0) return base;
-    if (idx === progress.index) return { ...base, animated: true, style: { strokeWidth: 4, stroke: '#38bdf8' } };
-    if (idx < progress.index) return { ...base, animated: true };
-    return { ...base, animated: false, style: { strokeOpacity: 0.22 } };
+    if (idx === progress.index) return { ...base, animated: true, style: { ...e.style, strokeWidth: 3.2, stroke: '#66d9ff' } };
+    if (idx < progress.index) return { ...base, style: { ...e.style, stroke: '#69a7c4', strokeOpacity: 0.78 } };
+    return { ...base, style: { ...e.style, strokeOpacity: 0.2 } };
   });
 
   const findHoverScope = (node: Node): string | null => {
@@ -195,9 +257,9 @@ export default function Canvas() {
         setCutLine([...le.screenPts]);
         const st = useGraphStore.getState();
         const byId = new Map(st.nodes.map((n) => [n.id, n]));
-        for (const edge of visibleEdges) {
+          for (const edge of renderableEdges) {
           if (le.hits.has(edge.id)) continue;
-          const hit = lineHitsEdge(le.points, edgePoints(edge, byId));
+          const hit = lineHitsEdge(le.points, edgePoints(edge, byId, visibleEdges));
           if (hit) le.hits.set(edge.id, hit);
         }
       }}
@@ -327,9 +389,8 @@ export default function Canvas() {
         fitView
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
-          type: 'smoothstep',
-          animated: true,
-          markerEnd: { type: MarkerType.ArrowClosed },
+          type: 'waypoint',
+          animated: false,
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#2a2f3a" />

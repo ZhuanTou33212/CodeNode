@@ -5,8 +5,8 @@ import App from './App';
 import { useGraphStore } from './store/graphStore';
 import { useSessionStore } from './store/sessionStore';
 import { useChatStore } from './store/chatStore';
-import './styles.css';
 import '@xyflow/react/dist/style.css';
+import './styles.css';
 
 const w = window as unknown as {
   __codenodeStore?: typeof useGraphStore;

@@ -1,5 +1,5 @@
-import { memo } from 'react';
-import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
+import { memo, type CSSProperties } from 'react';
+import { NodeResizer, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { computeChildren } from '../lib/flow';
@@ -19,18 +19,20 @@ function ScopeNode({ id, data, selected }: NodeProps) {
   const accent = d.accent || '#8b5cf6';
   const fill = d.fill || '#3b2f6b';
   const collapsed = !!d.collapsed;
+  const scopeStyle = {
+    width: d.width || 320,
+    height: d.height || 220,
+    borderColor: `${accent}b8`,
+    '--wf-accent': accent,
+    background: `${fill}${Math.round((d.opacity ?? 0.16) * 255)
+      .toString(16)
+      .padStart(2, '0')}`,
+  } as CSSProperties;
 
   return (
     <div
       className={`wf-scope ${selected ? 'is-selected' : ''} ${hoverScopeId === id ? 'is-hover-target' : ''}`}
-      style={{
-        width: d.width || 320,
-        height: d.height || 220,
-        borderColor: accent,
-        background: `${fill}${Math.round((d.opacity ?? 0.16) * 255)
-          .toString(16)
-          .padStart(2, '0')}`,
-      }}
+      style={scopeStyle}
     >
       <NodeResizer
         isVisible={true}
@@ -54,12 +56,6 @@ function ScopeNode({ id, data, selected }: NodeProps) {
         }}
         onResizeEnd={() => useGraphStore.getState().setResizing([])}
       />
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="wf-handle"
-        style={{ background: accent, borderColor: '#14161a' }}
-      />
       <div className="wf-scope-title">
         <button
           className="wf-scope-toggle nodrag"
@@ -71,12 +67,6 @@ function ScopeNode({ id, data, selected }: NodeProps) {
         <span>{d.label}</span>
       </div>
       <div className="wf-scope-sub">范围 · 成员 {children.length}{collapsed ? ' · 已折叠' : ''}</div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="wf-handle"
-        style={{ background: accent, borderColor: '#14161a' }}
-      />
     </div>
   );
 }
