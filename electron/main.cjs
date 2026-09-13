@@ -920,6 +920,17 @@ ipcMain.handle('agent:tools', async (_event, projectRoot) => {
   };
 });
 
+ipcMain.handle('agent:runs', async (_event, projectRoot) => {
+  if (!projectRoot) return [];
+  runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
+  return runStore.listRuns(projectRoot, 50);
+});
+
+ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {
+  if (!projectRoot) return { ok: false, error: '未选择项目' };
+  return runStore.resumePlan(projectRoot, runId);
+});
+
 ipcMain.handle('agent:chat', async (event, payload) => {
   const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
   const sender = event.sender;

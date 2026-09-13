@@ -156,6 +156,23 @@ interface CodenodeApi {
   agentTools: (
     root: string | null
   ) => Promise<{ enabled: boolean; tools: AgentToolSpecDto[] }>;
+  agentRuns: (root: string | null) => Promise<Array<{
+    runId: string | null;
+    status: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+    eventCount: number;
+  }>>;
+  agentResumePlan: (root: string | null, runId: string) => Promise<{
+    ok: boolean;
+    requiresReview?: boolean;
+    runId?: string;
+    prompt?: string;
+    model?: string | null;
+    nodeId?: string | null;
+    warning?: string;
+    error?: string;
+  }>;
   agentChat: (payload: {
     projectRoot: string | null;
     prompt: string;

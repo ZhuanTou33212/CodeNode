@@ -133,4 +133,26 @@ function recoverInterrupted(projectRoot, activeIds = new Set()) {
   return recovered;
 }
 
-module.exports = { normalizeRunId, appendJsonl, appendEvent, startRun, finishRun, readRun, summarizeRun, listRuns, recoverInterrupted };
+function resumePlan(projectRoot, runId) {
+  const events = readRun(projectRoot, runId);
+  const summary = summarizeRun(events);
+  if (!summary.runId) return { ok: false, error: 'Run 不存在' };
+  if (summary.status !== 'interrupted') return { ok: false, error: 'Run 当前不可恢复：' + summary.status };
+  const start = events.find((event) => event.type === 'run_start') || {};
+  const tools = events.filter((event) => event.type === 'tool_result')
+    .flatMap((event) => Array.isArray(event.tools) ? event.tools : []);
+  return {
+    ok: true,
+    requiresReview: true,
+    runId: summary.runId,
+    prompt: String(start.prompt || ''),
+    model: start.model || null,
+    nodeId: start.nodeId || null,
+    startedAt: summary.startedAt,
+    lastEvent: summary.lastEvent,
+    completedToolNames: tools.map((tool) => tool.name).filter(Boolean),
+    warning: '这是全新重试计划，不会自动重放未知副作用；执行前请重新确认当前项目状态。',
+  };
+}
+
+module.exports = { normalizeRunId, appendJsonl, appendEvent, startRun, finishRun, readRun, summarizeRun, listRuns, recoverInterrupted, resumePlan };

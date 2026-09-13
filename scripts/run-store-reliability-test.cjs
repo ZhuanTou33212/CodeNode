@@ -27,6 +27,10 @@ try {
   assert.strictEqual(store.recoverInterrupted(root, new Set(['running'])).length, 0);
   assert.strictEqual(store.recoverInterrupted(root).length, 1);
   assert.strictEqual(store.recoverInterrupted(root).length, 0);
+  const plan = store.resumePlan(root, 'running');
+  assert.strictEqual(plan.ok, true);
+  assert.strictEqual(plan.requiresReview, true);
+  assert.match(plan.warning, /不会自动重放/);
   assert.ok(!fs.readFileSync(runFile, 'utf8').includes('synthetic-private'));
   const clean = redact({ total_tokens: 42, prompt_tokens: 20, apiKey: 'synthetic',
     args: '{"password":"synthetic-password"}' });

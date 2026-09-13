@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('codenode', {
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
+  agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),
+  agentResumePlan: (root, runId) => ipcRenderer.invoke('agent:resume-plan', root, runId),
   modelsList: () => ipcRenderer.invoke('models:list'),
   modelsSave: (model) => ipcRenderer.invoke('models:save', model),
   modelsDelete: (id) => ipcRenderer.invoke('models:delete', id),
