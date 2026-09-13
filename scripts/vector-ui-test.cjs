@@ -433,7 +433,59 @@ async function main() {
     const firstAfter = await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(firstId)}).getState().objects.length`);
     ok('在第二个节点绘制不影响第一个节点', firstAfter === firstCount, `${firstCount} → ${firstAfter}`);
 
-    /* ========== 14. 画布节点 × 工作台互不干扰 ========== */
+    /* ========== 14. 样式归属：节点与连线用本地 Blender 那套，不被覆盖 ========== */
+    // 背景：n0_12 的「session surface」主题在后面又写了一遍 .wf-node/.wf-scope/.react-flow__edge-path
+    // 等选择器，同优先级下后写的会赢。这里锁死「节点样式 + 连线样式」必须来自本地那套。
+    await cdp.eval(`(() => {
+      const st = window.__codenodeStore.getState();
+      st.addNode({ id: 'style-task', type: 'task', position: { x: 80, y: 80 }, data: { label: '样式任务', status: 'running', prompt: 'p', subtitle: 'Task', accent: '#3b82f6' } });
+      st.addNode({ id: 'style-task2', type: 'task', position: { x: 420, y: 80 }, data: { label: '样式任务2', status: 'pending', prompt: 'p', subtitle: 'Task', accent: '#3b82f6' } });
+      st.addNode({ id: 'style-scope', type: 'scope', position: { x: 80, y: 320 }, data: { label: '样式范围', status: 'pending', accent: '#8b5cf6', width: 320, height: 200, fill: '#3b2f6b', opacity: 0.16, shrink: false } });
+      // 连线两端都必须是普通节点（scope 是纯 Frame，没有 socket，按设计不画边）
+      st.onConnect({ source: 'style-task', target: 'style-task2' });
+      return 'ok';
+    })()`);
+    await sleep(600);
+    const style = await cdp.eval(`(() => {
+      const q = (s) => document.querySelector(s);
+      const cs = (el) => (el ? getComputedStyle(el) : null);
+      const node = q('.react-flow__node-task .wf-node');
+      const title = q('.react-flow__node-task .wf-node-title');
+      const handle = q('.react-flow__node-task .wf-handle');
+      const edge = q('.react-flow__edge-path');
+      const scope = q('.react-flow__node-scope .wf-scope');
+      const nr = node && node.getBoundingClientRect();
+      const tr = title && title.getBoundingClientRect();
+      const n = cs(node); const t = cs(title); const h = cs(handle); const e = cs(edge); const sc = cs(scope);
+      return {
+        nodeRadius: n && n.borderTopLeftRadius,
+        nodeBgImage: n && n.backgroundImage,
+        nodePaddingTop: n && n.paddingTop,
+        nodePaddingX: n && n.paddingLeft + '/' + n.paddingRight,
+        nodeMinWidth: n && n.minWidth,
+        titleInsetL: nr && tr ? +(tr.left - nr.left).toFixed(2) : null,
+        titleInsetR: nr && tr ? +(nr.right - tr.right).toFixed(2) : null,
+        titleFontSize: t && t.fontSize,
+        handleW: h && h.width,
+        edgeStroke: e && e.stroke,
+        edgeStrokeWidth: e && e.strokeWidth,
+        edgeLinecap: e && e.strokeLinecap,
+        scopeRadius: sc && sc.borderTopLeftRadius,
+      };
+    })()`);
+    ok(`节点圆角用本地 7px（实际 ${style.nodeRadius}）`, style.nodeRadius === '7px');
+    ok('节点背景没有被覆盖成渐变', style.nodeBgImage === 'none');
+    ok(`节点内边距用本地 0/10px（实际 ${style.nodePaddingTop} ${style.nodePaddingX}）`, style.nodePaddingTop === '0px' && style.nodePaddingX === '10px/10px');
+    ok(`节点 min-width 用本地 160px（实际 ${style.nodeMinWidth}）`, style.nodeMinWidth === '160px');
+    // 标题栏应落在节点内（左右对称、不为负即未凸出）；数值随画布缩放变化，故只校验对称与不凸出
+    ok(`标题栏不凸出节点（左右 inset ${style.titleInsetL}/${style.titleInsetR}）`, style.titleInsetL > 0.3 && style.titleInsetR > 0.3 && Math.abs(style.titleInsetL - style.titleInsetR) < 0.3);
+    ok(`标题字号用本地 12px（实际 ${style.titleFontSize}）`, style.titleFontSize === '12px');
+    ok(`端口用本地 11px（实际 ${style.handleW}）`, style.handleW === '11px');
+    ok(`连线描边用本地 #778292（实际 ${style.edgeStroke}）`, style.edgeStroke === 'rgb(119, 130, 146)');
+    ok(`连线用本地 2.2px / round（实际 ${style.edgeStrokeWidth} ${style.edgeLinecap}）`, style.edgeStrokeWidth === '2.2px' && style.edgeLinecap === 'round');
+    ok(`范围节点圆角用本地 8px（实际 ${style.scopeRadius}）`, style.scopeRadius === '8px');
+
+    /* ========== 15. 画布节点 × 工作台互不干扰 ========== */
     ok('工作台工具栏仍然完整', await cdp.eval(`document.querySelectorAll('.toolbar-group button').length > 5`));
     ok('画布节点带标题栏（Blender 风格）', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .wf-vector-title .wf-node-label')`));
     ok('矢量文档 store 与节点一一对应', await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(nodeId)}) !== window.__codenodeVector`));
