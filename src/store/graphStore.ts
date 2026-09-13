@@ -30,6 +30,8 @@ function stripLegacyTypes(nodes: Node[], edges: Edge[]): Graph {
 
 function withZIndex(n: Node): Node {
   if (n.type === 'scope') return { ...n, zIndex: 0, dragHandle: n.dragHandle || '.wf-scope-title' };
+  // 画布节点内部有大量指针交互，只允许从标题栏拖拽整体
+  if (n.type === 'vector') return { ...n, zIndex: 1, dragHandle: n.dragHandle || '.wf-vector-title' };
   return { ...n, zIndex: 1 };
 }
 
@@ -113,7 +115,15 @@ function normalizeParentChild(nodes: Node[]): Node[] {
       const explicitChildren = [...parentByChild.entries()].filter(([, parent]) => parent === n.id).map(([id]) => id);
       setScopeChildren(d, [...listed, ...explicitChildren]);
     }
-    return { ...n, data: d, ...(n.type === 'scope' ? { dragHandle: n.dragHandle || '.wf-scope-title' } : {}) };
+    return {
+      ...n,
+      data: d,
+      ...(n.type === 'scope'
+        ? { dragHandle: n.dragHandle || '.wf-scope-title' }
+        : n.type === 'vector'
+          ? { dragHandle: n.dragHandle || '.wf-vector-title' }
+          : {}),
+    };
   });
 }
 

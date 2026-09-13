@@ -1,0 +1,340 @@
+/* ============================================================
+   画布节点（Canvas Node）—— 嵌在 Agent 画布上的矢量画布
+   继承 .wf-node 的 Blender 风格外观，但改为可缩放的容器布局：
+   标题栏（左上角模式切换） + 工具/配件栏 + 绘制表面 + 右栏 + 底栏
+   ============================================================ */
+
+/* 说明：这里统一用 `.wf-node.wf-vector` 双类名，保证优先级高于 styles.css 里的
+   .wf-node 基础样式（node.css 在打包顺序上可能早于 styles.css）。 */
+
+.wf-node.wf-vector {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: var(--vpanel, #101112);
+}
+
+.wf-node.wf-vector::before {
+  display: none;
+}
+
+.wf-node.wf-vector.is-selected {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--wf-accent, #22d3ee) 70%, #ffffff),
+    0 0 0 3px color-mix(in srgb, var(--wf-accent, #22d3ee) 30%, transparent),
+    0 8px 26px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- 标题栏 ---------- */
+
+.wf-vector-title {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--wf-accent, #22d3ee) 16%, #23262c);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  cursor: grab;
+  user-select: none;
+}
+
+.wf-vector-title:active {
+  cursor: grabbing;
+}
+
+/* 左上角模式切换 */
+.wf-vector-modes {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.36);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wf-vector-mode {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #8b93a0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.wf-vector-mode:hover {
+  color: #e8edf4;
+}
+
+.wf-vector-mode.on {
+  background: color-mix(in srgb, var(--wf-accent, #22d3ee) 34%, transparent);
+  color: #f2fbff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wf-accent, #22d3ee) 58%, transparent);
+}
+
+.wf-vector-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-vector-badge {
+  flex: none;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  color: #cbb8ff;
+  background: rgba(160, 107, 242, 0.18);
+}
+
+.wf-vector-actions {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.wf-vector-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.3);
+  color: #aeb6c0;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.wf-vector-icon:hover:not(:disabled) {
+  color: #f2f4f6;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.wf-vector-icon:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.wf-vector-icon.on {
+  color: #eaf9ff;
+  background: color-mix(in srgb, var(--wf-accent, #22d3ee) 22%, rgba(0, 0, 0, 0.3));
+}
+
+/* ---------- 主体：工具/配件 | 绘制表面 | 右栏 ---------- */
+
+.wf-vector-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  background: var(--vbg-deep, #0a0b0c);
+}
+
+.wf-vector-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+
+.wf-vector-stage > .vs-stage {
+  flex: 1 1 auto;
+}
+
+/* ---------- 工具 / 预设配件栏 ---------- */
+
+.wf-vector-rail {
+  flex: none;
+  width: 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 7px;
+  overflow-y: auto;
+  border-right: 1px solid var(--vborder, rgba(255, 255, 255, 0.08));
+  background: var(--vpanel, #101112);
+}
+
+.wf-vector-sec-label {
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  color: var(--vtext4, #4c5158);
+  text-transform: uppercase;
+  padding-left: 2px;
+}
+
+.wf-vector-tools {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.wf-vector-tool {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--vpanel2, #15171a);
+  color: var(--vtext2, #aeb6c0);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wf-vector-tool:hover {
+  background: var(--vpanel3, #1d1f23);
+  color: var(--vtext, #f2f4f6);
+}
+
+.wf-vector-tool.on {
+  background: var(--vacc-soft, rgba(113, 112, 255, 0.14));
+  color: #d8d5ff;
+  border-color: color-mix(in srgb, var(--vacc, #7170ff) 55%, transparent);
+}
+
+.wf-vector-assets {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.wf-vector-asset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 2px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--vpanel2, #15171a);
+  color: var(--vtext2, #aeb6c0);
+  font-size: 13px;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.wf-vector-asset small {
+  font-size: 9.5px;
+  color: var(--vtext3, #6f7680);
+}
+
+.wf-vector-asset:hover {
+  background: var(--vpanel3, #1d1f23);
+  color: var(--vtext, #f2f4f6);
+  border-color: color-mix(in srgb, var(--vacc, #7170ff) 45%, transparent);
+}
+
+.wf-vector-rail-foot {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--vline, rgba(255, 255, 255, 0.055));
+}
+
+.wf-vector-mini {
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--vpanel2, #15171a);
+  color: var(--vtext2, #aeb6c0);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wf-vector-mini:hover {
+  background: var(--vpanel3, #1d1f23);
+  color: var(--vtext, #f2f4f6);
+}
+
+.wf-vector-mini.on {
+  color: #d8d5ff;
+  border-color: color-mix(in srgb, var(--vacc, #7170ff) 55%, transparent);
+  background: var(--vacc-soft, rgba(113, 112, 255, 0.14));
+}
+
+/* ---------- 右栏（属性 / 图层 / 逻辑分析） ---------- */
+
+.vs-node-dock {
+  flex: none;
+  width: 268px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--vborder, rgba(255, 255, 255, 0.08));
+  background: var(--vpanel, #101112);
+}
+
+.vs-node-dock-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.vs-node-dock .vs-logic {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------- 底栏 ---------- */
+
+.wf-vector-foot {
+  flex: none;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-top: 1px solid var(--vborder, rgba(255, 255, 255, 0.08));
+  background: var(--vbg, #0f1011);
+  color: var(--vtext3, #6f7680);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.wf-vector-foot-status {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.wf-vector-foot-spacer {
+  flex: 1 1 auto;
+}
+
+.wf-vector-foot-tag {
+  flex: none;
+  white-space: nowrap;
+  color: var(--vtext3, #6f7680);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wf-vector {
+    transition: box-shadow 120ms ease;
+  }
+}

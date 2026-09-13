@@ -114,6 +114,7 @@ class GraphModel {
       files: count('file'),
       objects: count('object'),
       scopes: count('scope'),
+      canvases: count('vector'),
     };
   }
 }

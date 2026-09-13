@@ -190,6 +190,7 @@ const NODE_TYPE_ACCENT = {
   file: '#f97316',
   scope: '#8b5cf6',
   object: '#06b6d4',
+  vector: '#22d3ee',
 };
 
 /** 按类型取节点主色，未知类型回退默认蓝。 */

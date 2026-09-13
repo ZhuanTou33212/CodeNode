@@ -1,5 +1,11 @@
-/** 矢量设计工作室 —— 全局状态（zustand），与 Agent 工作台 store 完全隔离 */
-import { create } from 'zustand';
+/**
+ * 矢量画布 —— 文档状态（zustand），与 Agent 工作台 store 完全隔离。
+ *
+ * 每个「画布节点」都持有自己独立的 store 实例（见 getVectorStore），
+ * 通过 VectorStoreContext 注入；默认实例 useVectorStore 供单机调试与旧调用方使用。
+ */
+import { create, type StoreApi, type UseBoundStore } from 'zustand';
+import { createContext, useContext } from 'react';
 import type {
   Anchor,
   DraftPoint,
@@ -21,7 +27,7 @@ import {
   validateProject,
 } from './model';
 
-const STORAGE_KEY = 'codenode.vector.project.v2';
+const DEFAULT_STORAGE_KEY = 'codenode.vector.project.v2';
 const HISTORY_LIMIT = 60;
 
 type Point = { x: number; y: number };
@@ -156,7 +162,24 @@ function primaryId(state: Pick<VectorState, 'selectedIds'>): string | null {
   return state.selectedIds.length ? state.selectedIds[state.selectedIds.length - 1] : null;
 }
 
-export const useVectorStore = create<VectorState>((set, get) => {
+export type VectorStore = UseBoundStore<StoreApi<VectorState>>;
+
+/** 创建画布文档的选项 */
+export type VectorStoreOptions = {
+  /** localStorage 持久化键；不同画布节点使用不同键，互不覆盖 */
+  storageKey?: string;
+  /** 首次打开时的初始内容：'demo' 载入示例工程，'empty' 空白纸张（画布节点用） */
+  seed?: 'demo' | 'empty';
+};
+
+/**
+ * 创建一个独立的矢量画布状态实例。
+ * 画布节点为每个节点创建一个实例，因此多个画布节点可以各自持有互不干扰的文档。
+ */
+export function createVectorStore(options: VectorStoreOptions = {}): VectorStore {
+  const storageKey = options.storageKey || DEFAULT_STORAGE_KEY;
+  const seed = options.seed || 'demo';
+  return create<VectorState>((set, get) => {
   const pushHistory = () => {
     const s = get();
     const snap = snapshotOf(s);
@@ -181,7 +204,7 @@ export const useVectorStore = create<VectorState>((set, get) => {
       savedAt: Date.now(),
     };
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(file));
+      localStorage.setItem(storageKey, JSON.stringify(file));
     } catch {
       /* 存储不可用时静默 */
     }
@@ -194,7 +217,7 @@ export const useVectorStore = create<VectorState>((set, get) => {
 
   const loadFromStorage = (): ProjectFile | null => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(storageKey);
       if (!raw) return null;
       return validateProject(JSON.parse(raw));
     } catch {
@@ -263,6 +286,11 @@ export const useVectorStore = create<VectorState>((set, get) => {
       if (file) {
         applyProject(file, set);
         set({ status: `已恢复上次项目（${new Date(file.savedAt || Date.now()).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}）` });
+        return;
+      }
+      if (seed === 'empty') {
+        // 画布节点：默认是一张空白纸，由用户用预设配件自由绘制
+        set({ objects: [], groups: [], logicIds: [], ready: true, status: '就绪 · 空白画布' });
         return;
       }
       const demo = buildDemoProject();
@@ -868,4 +896,59 @@ export const useVectorStore = create<VectorState>((set, get) => {
     setTab: (t) => set({ tab: t }),
     setPointer: (p) => set({ pointer: p }),
   };
-});
+  });
+}
+
+/** 默认实例：单机调试 / 兼容旧调用方（window.__codenodeVector 指向它）。 */
+export const useVectorStore = createVectorStore();
+
+const nodeStores = new Map<string, VectorStore>();
+
+/**
+ * 取得某个画布节点的文档 store（按节点 id 复用）。
+ * 每个节点一份独立文档 + 独立 localStorage 键，互不干扰。
+ */
+export function getVectorStore(nodeId: string): VectorStore {
+  let store = nodeStores.get(nodeId);
+  if (!store) {
+    store = createVectorStore({ storageKey: `codenode.vector.node.${nodeId}`, seed: 'empty' });
+    nodeStores.set(nodeId, store);
+  }
+  return store;
+}
+
+/** 释放节点 store（节点被删除时调用，清掉内存实例；localStorage 保留以便撤销恢复）。 */
+export function releaseVectorStore(nodeId: string): void {
+  nodeStores.delete(nodeId);
+}
+
+/**
+ * 当前「活跃」画布节点：被选中的那个。
+ * 工作台快捷键与画布节点快捷键据此互斥，避免 Delete/Ctrl+Z 同时作用在两处。
+ */
+let activeNodeId: string | null = null;
+
+export function setActiveVectorNode(id: string | null): void {
+  activeNodeId = id;
+}
+
+/** 只在当前活跃节点是自己时清除，避免多节点互相清空。 */
+export function clearActiveVectorNode(id: string): void {
+  if (activeNodeId === id) activeNodeId = null;
+}
+
+export function getActiveVectorNode(): string | null {
+  return activeNodeId;
+}
+
+/** 画布节点通过 Provider 注入自己的 store；未注入时回退到默认实例。 */
+export const VectorStoreContext = createContext<VectorStore | null>(null);
+
+/** 取当前矢量画布 store：优先上下文（画布节点），否则默认实例。 */
+export function useVector(): VectorStore;
+/** 取当前 store 的某个切片（等价于 store(selector)）。 */
+export function useVector<T>(selector: (s: VectorState) => T): T;
+export function useVector<T>(selector?: (s: VectorState) => T): VectorStore | T {
+  const store = useContext(VectorStoreContext) || useVectorStore;
+  return selector ? store(selector) : store;
+}

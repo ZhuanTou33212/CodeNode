@@ -66,6 +66,17 @@ async function main() {
   await exec({ action: 'delete', nodeId: 't1' });
   assert.deepStrictEqual(model.byId('cond2').data.members, ['t2'], '删除节点后应清理 scope members');
 
+  // 6. 画布节点（canvas/vector）：内嵌矢量画布，需带尺寸/模式，且计入统计
+  const cv = await exec({ action: 'create', id: 'cv1', name: '画布', type: 'canvas' });
+  assert.strictEqual(cv.ok, true, cv.text);
+  const cvNode = model.byId('cv1');
+  assert.strictEqual(cvNode.type, 'vector', 'canvas 应映射为 vector 节点类型');
+  assert.strictEqual(cvNode.data.width, 1040, '画布节点应带默认宽度');
+  assert.strictEqual(cvNode.data.height, 640, '画布节点应带默认高度');
+  assert.strictEqual(cvNode.data.mode, 'design', '画布节点默认设计模式');
+  assert.strictEqual(cvNode.data.accent, '#22d3ee', '画布节点应使用专属主色');
+  assert.strictEqual(model.stats().canvases, 1, '画布节点应计入 canvases 统计');
+
   console.log('WORKBENCH MODEL TEST: PASS');
 }
 

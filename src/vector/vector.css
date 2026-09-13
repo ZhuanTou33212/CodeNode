@@ -1,12 +1,21 @@
 /* ============================================================
-   矢量设计工作室（Vector Studio）样式 · v2
+   矢量画布（Vector Canvas）样式 · v2
    设计语言：Linear（near-black 分层 · 半透明白细边框 ·
    蓝紫 accent #7170ff · 8px 网格 · 银灰文字阶梯）
    独立作用域 vs-*，与 Agent 工作台样式互不干扰
+
+   作用域：
+   - .vs-scope  画布节点内嵌作用域（当前主用法，见 node.css / VectorNode.tsx）
+   - .vs        独立全屏工作区（旧矢量工作室外壳；UI 已改为画布节点，
+                这里保留 .vs-app/.vs-topbar/.vs-left/.vs-status 等外壳样式，
+                便于独立调试或后续回退，实际渲染路径不再使用）
    ============================================================ */
 
-/* ---------- Token（暗色） ---------- */
-.vs {
+/* ---------- Token（暗色） ----------
+   .vs       = 独立全屏工作区（保留给单机调试）
+   .vs-scope = 画布节点内的嵌入作用域：共享同一套 token，但不做全屏定位 */
+.vs,
+.vs-scope {
   /* 表面亮度阶梯：画布最深 → 面板 → 悬浮行 → 弹层 */
   --vbg: #0f1011;          /* 面板/底（Linear Panel Dark） */
   --vbg-deep: #0a0b0c;     /* 画布底（最暗，Linear Marketing Black） */
@@ -50,18 +59,21 @@
   --vfont: 'Inter', 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
   --vfont-mono: 'JetBrains Mono', Consolas, ui-monospace, monospace;
   color-scheme: dark;
+  font-family: var(--vfont);
+  font-size: 13px;
+  color: var(--vtext);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.vs {
   position: fixed;
   inset: 0;
   z-index: 200;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: var(--vfont);
-  font-size: 13px;
   background: var(--vbg);
-  color: var(--vtext);
-  user-select: none;
-  -webkit-font-smoothing: antialiased;
 }
 
 /* ---------- Token（亮色） ---------- */
@@ -108,13 +120,14 @@
   color-scheme: light;
 }
 
-.vs * {
+.vs *,
+.vs-scope * {
   box-sizing: border-box;
 }
 
-.vs input,
-.vs textarea,
-.vs select {
+.vs input, .vs-scope input,
+.vs textarea, .vs-scope textarea,
+.vs select, .vs-scope select {
   user-select: text;
 }
 
@@ -1056,6 +1069,8 @@
   position: absolute;
   left: 22px;
   bottom: 12px;
+  /* 纯信息浮层：不能吞掉画布上的指针事件（否则拖动经过它时会断触） */
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 7px;

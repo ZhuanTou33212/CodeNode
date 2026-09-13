@@ -27,7 +27,7 @@ const KIND_TO_TYPE = {
   regular: 'task', calculation: 'task', condition: 'task', capture: 'task',
   asset: 'file', file: 'file', task: 'task',
   stage: 'stage', tool: 'tool', start: 'start', end: 'end', scope: 'scope',
-  object: 'object',
+  object: 'object', canvas: 'vector', vector: 'vector',
 };
 
 const STATUS_ALLOWED = ['pending', 'running', 'done', 'failed', 'blocked'];
@@ -76,6 +76,12 @@ function opCreate(model, args, ctx, errors, created) {
     const data = { label: nodeName, status: 'pending', prompt, accent: accentForType(type) };
     if (type === 'file') data.filePath = relativePath || nodeName;
     if (type === 'object') data.objectName = stringArg(args, 'objectName', '') || nodeName;
+    if (type === 'vector') {
+      // 画布节点：内嵌矢量画布，尺寸/模式与前端新节点保持一致
+      data.width = 1040; data.height = 640;
+      data.mode = 'design'; data.dockOpen = true;
+      data.accent = '#22d3ee';
+    }
     if (type === 'scope') {
       data.width = 320; data.height = 200; data.fill = '#3b2f6b';
       data.opacity = 0.16; data.accent = '#8b5cf6';
@@ -366,8 +372,8 @@ function register(registry) {
       'create 支持自定义 id（如 {action:"create",id:"start-1",name:"开始",type:"start"}），同批内即可用该 id 连线或放进 scope。' +
       '【节点建模规则】a) 一条完整链路必须有 start 与 end，且必须把 start 连线到链路的第一个执行节点、把最后一个执行节点连线到 end（start 只有输出端口，end 只有输入端口），使 start 真正作为入口、end 作为出口；' +
       'b) 条件判断/分支/重复循环用 scope（范围）节点包裹，且必须用 add_members/set_members 把子链路节点 id 放进 scope 的 members（否则节点不会显示在范围节点内）；c) 需要子代理负责部分工作（文件探查、项目审核、独立分析等）用 stage（阶段）节点；' +
-      'd) 需要使用某个对象（数据对象/配置对象/实体名）时用 object（对象）节点并把名称填到 objectName 字段。' +
-      'e) 节点类型按语义选择，禁止一律用 task：文件→file、工具→tool、子代理→stage、条件循环→scope、对象→object。' +
+      'd) 需要使用某个对象（数据对象/配置对象/实体名）时用 object（对象）节点并把名称填到 objectName 字段；需要一块可自由绘制/标注的矢量画布（架构草图、集合关系示意、流程草图等）用 canvas（画布）节点，它内嵌在 Agent 画布上，图形内容由用户在节点内用预设配件绘制并在节点左上角切换 设计/逻辑 模式。' +
+      'e) 节点类型按语义选择，禁止一律用 task：文件→file、工具→tool、子代理→stage、条件循环→scope、对象→object、矢量画布→canvas。' +
       'f) 画布为空（get_workbench_model 或当前画布节点清单为 0 个节点）时无需读取画布，直接按需求创建完整链路；画布已有节点时先 get_workbench_model 读取现状，复用已有节点 id，不重复创建；g) 需求拆分：对象→object、独立工作→stage、条件/循环→scope、具体步骤→task/tool，最后 start 开头、end 结尾连成完整链路。',
     {
       type: 'object',

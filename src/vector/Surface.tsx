@@ -1,13 +1,14 @@
 /**
- * 矢量设计工作室 —— 主组件
- * 布局：顶栏（模式/文件/视图） + 左（工具/组件库） + 中（画布） + 右（面板）+ 底（状态栏）
+ * 矢量画布引擎 —— 可嵌入的绘制表面（纸面 / 图形 / 选中框 / 手势）。
+ *
+ * 原本是「矢量设计工作室」的主组件；重构后不再单独占一栏，
+ * 而是由画布节点（VectorNode）嵌入到 Agent 画布上，每个节点一份独立文档 store。
  * 全部指针手势统一在 svg 的 pointer 事件中按命中目标分类分发。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useVectorStore } from './vectorStore';
-import { useUiStore } from '../store/uiStore';
+import { useVector, type VectorStore } from './vectorStore';
 import { computeLogicAnalysisForSets } from './region';
-import type { LogicAnalysis, VecObject, VecShapeKind, VecTool } from './types';
+import type { LogicAnalysis, VecObject, VecShapeKind } from './types';
 import { GRID_STEP, LOGIC_OP_META, PAPER_H, PAPER_ORIGIN, PAPER_W } from './types';
 import {
   bezierPathD,
@@ -15,16 +16,11 @@ import {
   hitTest,
   insertAnchorAt,
   localToWorld,
-  OP_SYMBOL,
   round1,
   setAnchorSmooth,
-  SHAPE_GLYPHS,
-  SHAPE_TITLES,
-  sortedObjects,
   worldBoundsOf,
   worldToLocal,
 } from './model';
-import { LayersPanel, LogicPanel, PropertiesPanel } from './Panels';
 import './vector.css';
 
 type Point = { x: number; y: number };
@@ -45,433 +41,6 @@ type Gesture =
 
 const MIN_SIZE = 24;
 
-/* ==================== 全局快捷键（矢量工作室激活期间挂载） ==================== */
-
-function useVectorHotkeys() {
-  const store = useVectorStore;
-  useEffect(() => {
-    const isTyping = () => {
-      const el = document.activeElement as HTMLElement | null;
-      if (!el) return false;
-      return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement | null)?.closest?.('.vs-foreign-edit')) return;
-      const s = store.getState();
-      const mod = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
-
-      if (mod && key === 'z') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (e.shiftKey) s.redo();
-        else s.undo();
-        return;
-      }
-      if (mod && key === 'y') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        s.redo();
-        return;
-      }
-      if (mod && key === 's') {
-        e.preventDefault();
-        s.saveProject();
-        return;
-      }
-      if (isTyping()) return;
-      if (mod && key === 'd') {
-        e.preventDefault();
-        s.duplicateSelected();
-        return;
-      }
-      if (mod && key === 'c') {
-        e.preventDefault();
-        s.copySelection(false);
-        return;
-      }
-      if (mod && key === 'x') {
-        e.preventDefault();
-        s.copySelection(true);
-        return;
-      }
-      if (mod && key === 'v') {
-        e.preventDefault();
-        s.pasteClipboard();
-        return;
-      }
-      if (mod && key === 'a') {
-        e.preventDefault();
-        s.selectAll();
-        return;
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        const act = s.activeAnchor;
-        if (act) {
-          const obj = s.objects.find((o) => o.id === act.id);
-          if (obj && obj.type === 'bezier' && obj.anchors && obj.anchors[act.index]) {
-            const anchors = [...obj.anchors];
-            anchors.splice(act.index, 1);
-            if (anchors.length < 3 && obj.closed) {
-              s.updateOne(obj.id, { anchors, closed: false }, undefined);
-            } else if (anchors.length >= 1) {
-              s.updateOne(obj.id, { anchors }, undefined);
-            }
-            s.setActiveAnchor(null);
-            return;
-          }
-        }
-        s.deleteSelected();
-        return;
-      }
-      if (e.key === 'Escape') {
-        if (s.penPts) s.penCancel();
-        else if (s.activeAnchor) s.setActiveAnchor(null);
-        else if (s.editingId) s.setEditing(null);
-        else s.clearSelection();
-        return;
-      }
-      if (e.key === 'Enter' && s.penPts) {
-        e.preventDefault();
-        s.penFinish(true);
-        return;
-      }
-      if (!mod && !e.altKey && !isTyping()) {
-        const map: [string, VecTool][] = [
-          ['v', 'select'],
-          ['p', 'pen'],
-          ['r', 'rectangle'],
-          ['u', 'rounded'],
-          ['e', 'ellipse'],
-          ['a', 'arrow'],
-          ['t', 'text'],
-          ['h', 'hand'],
-        ];
-        const hit = map.find(([k]) => k === key);
-        if (hit) {
-          e.preventDefault();
-          s.setTool(hit[1]);
-          return;
-        }
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && s.selectedIds.length) {
-          e.preventDefault();
-          const step = e.shiftKey ? 10 : 1;
-          const d: Record<string, [number, number]> = {
-            ArrowUp: [0, -step],
-            ArrowDown: [0, step],
-            ArrowLeft: [-step, 0],
-            ArrowRight: [step, 0],
-          };
-          const [dx, dy] = d[e.key];
-          s.nudgeSelection(dx, dy);
-        }
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [store]);
-}
-
-/* ==================== 主组件 ==================== */
-
-export default function VectorStudio() {
-  const ready = useVectorStore((s) => s.ready);
-  const dark = useVectorStore((s) => s.dark);
-  const mode = useVectorStore((s) => s.mode);
-  const zoom = useVectorStore((s) => s.zoom);
-  const objects = useVectorStore((s) => s.objects);
-  const selectedIds = useVectorStore((s) => s.selectedIds);
-  const logicIds = useVectorStore((s) => s.logicIds);
-  const logicOp = useVectorStore((s) => s.logicOp);
-  const canUndo = useVectorStore((s) => s.past.length > 0);
-  const canRedo = useVectorStore((s) => s.future.length > 0);
-  const store = useVectorStore;
-  const fitRef = useRef<() => void>(() => {});
-  const fileRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    store.getState().init();
-    return useUiStore.subscribe((state, prev) => {
-      if (state.workspace === 'vector' && prev.workspace !== 'vector') {
-        store.getState().init();
-      }
-    });
-  }, [store]);
-
-  useVectorHotkeys();
-
-  // 逻辑分析结果（画布高亮 + 右侧面板共用）
-  const analysis = useMemo<LogicAnalysis>(() => {
-    if (mode !== 'logic') return { ready: false, sets: [], relations: [], stats: [], resultUrl: null, resultArea: 0, expression: '—' };
-    return computeLogicAnalysisForSets(sortedObjects(objects, logicIds), logicOp);
-  }, [mode, objects, logicIds, logicOp]);
-
-  const exportJson = () => {
-    const text = store.getState().exportJson();
-    const blob = new Blob([text], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `vector-canvas-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    store.getState().notify('项目 JSON 已导出');
-  };
-
-  const importFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const ok = store.getState().importJson(String(reader.result || ''));
-      if (!ok) store.getState().notify('导入失败：文件格式不正确');
-    };
-    reader.readAsText(file);
-  };
-
-  if (!ready) return <div className="vs vs-loading">矢量设计工作室加载中…</div>;
-
-  const s = store.getState();
-  const primary = sortedObjects(objects, selectedIds).slice(-1)[0];
-
-  return (
-    <div className={`vs vs-app ${dark ? 'vs-dark' : 'vs-light'} vs-mode-${mode}`}>
-      <header className="vs-topbar">
-        <div className="vs-brand">
-          <span className="vs-logo">V</span>
-          <div className="vs-brand-text">
-            <b>矢量设计</b>
-            <small>VECTOR WORKBENCH</small>
-          </div>
-          <button className="vs-btn-back" title="保存并返回 Agent 工作台" onClick={() => {
-            store.getState().saveProject();
-            useUiStore.getState().setWorkspace('agent');
-          }}>
-            ← 工作台
-          </button>
-        </div>
-
-        <div className="vs-mode-switch" role="tablist" aria-label="模式切换">
-          <button role="tab" aria-selected={mode === 'design'} className={mode === 'design' ? 'active' : ''} onClick={() => store.getState().setMode('design')}>
-            ✦ 图像模式
-          </button>
-          <button role="tab" aria-selected={mode === 'logic'} className={mode === 'logic' ? 'active' : ''} onClick={() => store.getState().setMode('logic')}>
-            ◌ 逻辑分析
-          </button>
-        </div>
-
-        <div className="vs-top-actions">
-          <button className="vs-icon-btn" title="撤销 (Ctrl+Z)" disabled={!canUndo} onClick={() => store.getState().undo()}>↶</button>
-          <button className="vs-icon-btn" title="重做 (Ctrl+Shift+Z / Ctrl+Y)" disabled={!canRedo} onClick={() => store.getState().redo()}>↷</button>
-          <span className="vs-sep" />
-          <button className="vs-icon-btn" title="新建空白画布" onClick={() => store.getState().clearAll()}>＋ 新建</button>
-          <button className="vs-icon-btn" title="载入示例工程" onClick={() => store.getState().resetDemo()}>示例</button>
-          <button className="vs-icon-btn" title="保存项目 (Ctrl+S)" onClick={() => store.getState().saveProject()}>保存</button>
-          <button className="vs-icon-btn" title="导出项目 JSON" onClick={exportJson}>导出</button>
-          <button className="vs-icon-btn" title="导入项目 JSON" onClick={() => fileRef.current?.click()}>导入</button>
-          <span className="vs-sep" />
-          <button className="vs-icon-btn" title="缩小" onClick={() => store.getState().setViewport(clamp(zoom - 0.1, 0.2, 4), store.getState().pan)}>−</button>
-          <span className="vs-zoom-label">{Math.round(zoom * 100)}%</span>
-          <button className="vs-icon-btn" title="放大" onClick={() => store.getState().setViewport(clamp(zoom + 0.1, 0.2, 4), store.getState().pan)}>＋</button>
-          <button className="vs-icon-btn" title="适应画布" onClick={() => fitRef.current()}>⛶</button>
-          <span className="vs-sep" />
-          <button className="vs-icon-btn" title={dark ? '切换浅色主题' : '切换深色主题'} onClick={() => store.getState().setDark(!dark)}>
-            {dark ? '☀' : '☾'}
-          </button>
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/json,.json"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) importFile(f);
-            e.target.value = '';
-          }}
-        />
-      </header>
-
-      <div className="vs-body">
-        <LeftRail />
-        <CanvasStage analysis={analysis} registerFit={(fn) => { fitRef.current = fn; }} />
-        <RightDock analysis={analysis} />
-      </div>
-
-      <StatusBar analysis={analysis} primary={primary} />
-      <ToastHost />
-    </div>
-  );
-}
-
-function ToastHost() {
-  const toast = useVectorStore((s) => s.toast);
-  if (!toast) return null;
-  return <div className="vs-toast">{toast}</div>;
-}
-
-/* ==================== 左侧 ==================== */
-
-function LeftRail() {
-  const tool = useVectorStore((s) => s.tool);
-  const gridOn = useVectorStore((s) => s.gridOn);
-  const guidesOn = useVectorStore((s) => s.guidesOn);
-  const snapOn = useVectorStore((s) => s.snapOn);
-  const store = useVectorStore;
-  const s = store.getState();
-
-  const tools: { t: VecTool; g: string; label: string; k: string }[] = [
-    { t: 'select', g: '↖', label: '选择', k: 'V' },
-    { t: 'pen', g: '✒', label: '钢笔', k: 'P' },
-    { t: 'rectangle', g: '□', label: '矩形', k: 'R' },
-    { t: 'rounded', g: '▢', label: '圆角矩形', k: 'U' },
-    { t: 'ellipse', g: '◯', label: '椭圆', k: 'E' },
-    { t: 'arrow', g: '➔', label: '箭头', k: 'A' },
-    { t: 'text', g: 'T', label: '文本', k: 'T' },
-    { t: 'hand', g: '✋', label: '平移', k: 'H' },
-  ];
-
-  return (
-    <aside className="vs-left">
-      <div className="vs-toolrail">
-        {tools.map((t) => (
-          <button key={t.t} className={`vs-tool ${tool === t.t ? 'active' : ''}`} title={`${t.label} (${t.k})`} onClick={() => s.setTool(t.t)}>
-            <span className="vs-tool-glyph">{t.g}</span>
-            <small>{t.label}</small>
-          </button>
-        ))}
-        <div className="vs-rail-spacer" />
-        <button className={`vs-tool vs-tool-soft ${gridOn ? 'active' : ''}`} title="网格" onClick={() => s.toggleGrid()}>
-          <span className="vs-tool-glyph">⊞</span><small>网格</small>
-        </button>
-        <button className={`vs-tool vs-tool-soft ${guidesOn ? 'active' : ''}`} title="参考线（从标尺拖出；双击删除）" onClick={() => s.toggleGuides()}>
-          <span className="vs-tool-glyph">⌗</span><small>参考线</small>
-        </button>
-        <button className={`vs-tool vs-tool-soft ${snapOn ? 'active' : ''}`} title="吸附（拖动时按 Shift 临时关闭）" onClick={() => s.toggleSnap()}>
-          <span className="vs-tool-glyph">⌖</span><small>吸附</small>
-        </button>
-      </div>
-
-      <div className="vs-library">
-        <div className="vs-panel-head">
-          <span className="vs-eyebrow">ASSETS</span>
-          <b>组件库</b>
-          <i>点击加入画布中心</i>
-        </div>
-        <div className="vs-asset-grid">
-          {(['rectangle', 'rounded', 'ellipse', 'bezier', 'arrow', 'text'] as VecShapeKind[]).map((kind) => (
-            <button key={kind} className="vs-asset" title={`创建${SHAPE_TITLES[kind]}`} onClick={() => addToCenter(kind)}>
-              <span className={`vs-asset-glyph asset-${kind}`}>{SHAPE_GLYPHS[kind]}</span>
-              <small>{SHAPE_TITLES[kind]}</small>
-            </button>
-          ))}
-        </div>
-        <div className="vs-lib-actions">
-          <button className="vs-btn" onClick={() => store.getState().resetDemo()}>↺ 示例工程</button>
-          <button className="vs-btn" title="多选后点击可编组" onClick={() => store.getState().groupSelected()}>⇥ 编组</button>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function addToCenter(kind: VecShapeKind) {
-  const st = useVectorStore.getState();
-  const cx = PAPER_ORIGIN.x + PAPER_W / 2;
-  const cy = PAPER_ORIGIN.y + PAPER_H / 2;
-  st.addFromPreset(kind, { x: cx, y: cy });
-  st.setTool('select');
-}
-
-/* ==================== 右侧 ==================== */
-
-function RightDock(props: { analysis: LogicAnalysis }) {
-  const mode = useVectorStore((s) => s.mode);
-  const tab = useVectorStore((s) => s.tab);
-  const objects = useVectorStore((s) => s.objects);
-  const selectedIds = useVectorStore((s) => s.selectedIds);
-  const store = useVectorStore;
-  const s = store.getState();
-  if (mode === 'logic') {
-    return (
-      <aside className="vs-right">
-        <LogicPanel analysis={props.analysis} />
-      </aside>
-    );
-  }
-  const primary = sortedObjects(objects, selectedIds).slice(-1)[0];
-  return (
-    <aside className="vs-right">
-      <div className="vs-right-tabs">
-        <button className={tab === 'properties' ? 'active' : ''} onClick={() => s.setTab('properties')}>属性</button>
-        <button className={tab === 'layers' ? 'active' : ''} onClick={() => s.setTab('layers')}>图层 {objects.length}</button>
-      </div>
-      {tab === 'properties' ? <PropertiesPanel primary={primary} selectedIds={selectedIds} /> : <LayersPanel />}
-    </aside>
-  );
-}
-
-/* ==================== 状态栏 ==================== */
-
-function StatusBar(props: { analysis: LogicAnalysis; primary?: VecObject }) {
-  const status = useVectorStore((s) => s.status);
-  const zoom = useVectorStore((s) => s.zoom);
-  const pointer = useVectorStore((s) => s.pointer);
-  const gridOn = useVectorStore((s) => s.gridOn);
-  const guidesOn = useVectorStore((s) => s.guidesOn);
-  const snapOn = useVectorStore((s) => s.snapOn);
-  const mode = useVectorStore((s) => s.mode);
-  const selectedIds = useVectorStore((s) => s.selectedIds);
-  const objects = useVectorStore((s) => s.objects);
-  const logicIds = useVectorStore((s) => s.logicIds);
-  const { analysis, primary } = props;
-
-  return (
-    <footer className="vs-status">
-      <div className="vs-status-left">
-        <span className="vs-status-dot" />
-        {status}
-        <span className="vs-status-coords">
-          {pointer ? `X ${Math.round(pointer.x)}  Y ${Math.round(pointer.y)}` : ''}
-        </span>
-      </div>
-      <div className="vs-status-mid">
-        {selectedIds.length === 1 && primary ? (
-          <>
-            <b>{primary.name}</b>
-            <span className="vs-sep" />
-            {SHAPE_TITLES[primary.type]}
-            <span className="vs-sep" />
-            X {Math.round(primary.x)} · Y {Math.round(primary.y)} · {Math.round(primary.width)}×{Math.round(primary.height)} px
-            {primary.rotation ? <> · {round1(primary.rotation)}°</> : null}
-            {primary.locked ? <i className="vs-lock-chip">锁</i> : null}
-          </>
-        ) : selectedIds.length > 1 ? (
-          <>已选 {selectedIds.length} 个图形（拖动任意一个整体移动）</>
-        ) : (
-          '未选择对象'
-        )}
-      </div>
-      <div className="vs-status-right">
-        {mode === 'logic' ? (
-          analysis.ready ? (
-            <span className="vs-status-result" title="当前运算的结果区域面积">
-              {OP_SYMBOL[logicIds.length ? useVectorStore.getState().logicOp : 'union']} 结果 {analysis.resultArea.toLocaleString()} px²
-            </span>
-          ) : (
-            <span>选择集合开始分析</span>
-          )
-        ) : null}
-        {mode === 'logic' ? <span className="vs-live-dot">● 实时</span> : null}
-        <span>{Math.round(zoom * 100)}%</span>
-        <span className={gridOn ? 'on' : 'off'} title="网格">网格</span>
-        <span className={guidesOn ? 'on' : 'off'} title="参考线">参考线</span>
-        <span className={snapOn ? 'on' : 'off'} title="吸附">吸附</span>
-        <span>{objects.filter((o) => o.visible).length}/{objects.length} 可见</span>
-      </div>
-    </footer>
-  );
-}
-
 /* ==================== 主画布 ==================== */
 
 const EDGE_DELTAS: Record<string, Point> = {
@@ -485,7 +54,25 @@ const EDGE_DELTAS: Record<string, Point> = {
   w: { x: -1, y: 0 },
 };
 
-function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => void) => void }) {
+export type VectorSurfaceProps = {
+  analysis: LogicAnalysis;
+  registerFit?: (fn: () => void) => void;
+  /**
+   * 宿主视口缩放（React Flow 的 zoom）。
+   * 节点整体被 CSS transform 缩放时，屏幕像素与 SVG 本地像素不再 1:1，
+   * 所有「client 坐标 ↔ 世界坐标」的换算都要先除掉这个比例。
+   */
+  stageScale?: number;
+  /** 紧凑排版（节点内嵌时隐藏标尺外的大留白） */
+  compact?: boolean;
+};
+
+/**
+ * 可嵌入的矢量绘制表面：纸张 / 网格 / 参考线 / 图形 / 选中框 / 手势 / 逻辑高亮。
+ * 由画布节点（VectorNode）嵌到 Agent 画布上，不再单独占一个工作区。
+ */
+export function VectorSurface(props: VectorSurfaceProps) {
+  const stageScale = props.stageScale && props.stageScale > 0 ? props.stageScale : 1;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const gestureRef = useRef<Gesture>({ kind: 'none' });
@@ -498,20 +85,20 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
   const [penCursor, setPenCursor] = useState<Point | null>(null);
   const [guideGhost, setGuideGhost] = useState<{ axis: 'v' | 'h'; pos: number } | null>(null);
 
-  const store = useVectorStore;
-  const objects = useVectorStore((s) => s.objects);
-  const zoom = useVectorStore((s) => s.zoom);
-  const pan = useVectorStore((s) => s.pan);
-  const tool = useVectorStore((s) => s.tool);
-  const mode = useVectorStore((s) => s.mode);
-  const selectedIds = useVectorStore((s) => s.selectedIds);
-  const penPts = useVectorStore((s) => s.penPts);
-  const snapOn = useVectorStore((s) => s.snapOn);
-  const guidesOn = useVectorStore((s) => s.guidesOn);
-  const gridOn = useVectorStore((s) => s.gridOn);
-  const guides = useVectorStore((s) => s.guides);
-  const editingId = useVectorStore((s) => s.editingId);
-  const activeAnchor = useVectorStore((s) => s.activeAnchor);
+  const store = useVector();
+  const objects = useVector((s) => s.objects);
+  const zoom = useVector((s) => s.zoom);
+  const pan = useVector((s) => s.pan);
+  const tool = useVector((s) => s.tool);
+  const mode = useVector((s) => s.mode);
+  const selectedIds = useVector((s) => s.selectedIds);
+  const penPts = useVector((s) => s.penPts);
+  const snapOn = useVector((s) => s.snapOn);
+  const guidesOn = useVector((s) => s.guidesOn);
+  const gridOn = useVector((s) => s.gridOn);
+  const guides = useVector((s) => s.guides);
+  const editingId = useVector((s) => s.editingId);
+  const activeAnchor = useVector((s) => s.activeAnchor);
 
   /** 视口尺寸观测（画布自适应 + fit） */
   useEffect(() => {
@@ -519,11 +106,12 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
-      setBox({ w: r.width, h: r.height });
+      // getBoundingClientRect 返回的是屏幕（已被宿主缩放的）尺寸，换算回本地 px
+      setBox({ w: r.width / stageScale, h: r.height / stageScale });
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [stageScale]);
 
 
   /** client → 世界坐标（svg 无 viewBox，用户单位即 px） */
@@ -531,12 +119,14 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
     (cx: number, cy: number): Point => {
       const rect = svgRef.current?.getBoundingClientRect();
       if (!rect) return { x: 0, y: 0 };
+      const lx = (cx - rect.left) / stageScale;
+      const ly = (cy - rect.top) / stageScale;
       return {
-        x: (cx - rect.left - PAPER_ORIGIN.x - pan.x) / zoom,
-        y: (cy - rect.top - PAPER_ORIGIN.y - pan.y) / zoom,
+        x: (lx - PAPER_ORIGIN.x - pan.x) / zoom,
+        y: (ly - PAPER_ORIGIN.y - pan.y) / zoom,
       };
     },
-    [pan, zoom]
+    [pan, zoom, stageScale]
   );
 
   /** 适应画布 */
@@ -556,7 +146,7 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
     return () => window.clearTimeout(timer);
   }, [box.w, box.h, fitView]);
 
-  useEffect(() => props.registerFit(fitView), [fitView, props]);
+  useEffect(() => props.registerFit?.(fitView), [fitView, props]);
 
   /* —— 吸附：把 delta 修正到网格 / 参考线 —— */
   const snapDelta = useCallback(
@@ -577,13 +167,13 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
             out = c - (target + raw);
           }
         }
-        return bestD < 7 / zoom ? out : 0;
+        return bestD < 7 / (zoom * stageScale) ? out : 0;
       };
       const nx = best(delta.x, anchor.x, PAPER_W);
       const ny = best(delta.y, anchor.y, PAPER_H);
       return { x: delta.x + nx, y: delta.y + ny };
     },
-    [snapOn, zoom, store]
+    [snapOn, zoom, store, stageScale]
   );
 
   /* —— svg 事件入口 —— */
@@ -756,8 +346,8 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
       if (g.kind === 'none') return;
 
       if (g.kind === 'pan') {
-        const dx = e.clientX - g.last.x;
-        const dy = e.clientY - g.last.y;
+        const dx = (e.clientX - g.last.x) / stageScale;
+        const dy = (e.clientY - g.last.y) / stageScale;
         if (Math.hypot(dx, dy) > 1) g.moved = true;
         st.setViewport(st.zoom, { x: st.pan.x + dx, y: st.pan.y + dy });
         gestureRef.current = { kind: 'pan', last: { x: e.clientX, y: e.clientY }, moved: g.moved };
@@ -1032,13 +622,13 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
       const k = next / st.zoom;
       const ox = PAPER_ORIGIN.x + st.pan.x;
       const oy = PAPER_ORIGIN.y + st.pan.y;
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
+      const mx = (e.clientX - rect.left) / stageScale;
+      const my = (e.clientY - rect.top) / stageScale;
       st.setViewport(next, { x: (ox + (mx - ox) * k) - PAPER_ORIGIN.x, y: (oy + (my - oy) * k) - PAPER_ORIGIN.y });
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
-  }, [store]);
+  }, [store, stageScale]);
 
   // 空格平移
   useEffect(() => {
@@ -1076,18 +666,20 @@ function CanvasStage(props: { analysis: LogicAnalysis; registerFit: (fn: () => v
   const penCloseR = 12 / zoom;
 
   return (
-    <main className="vs-stage">
-      <div className="vs-stagebar">
-        <span className="vs-crumbs">
-          Project / <b>{mode === 'logic' ? '逻辑分析' : '图像设计'}</b>
-          <i className="vs-mode-badge">{mode === 'logic' ? '◌ 集合逻辑' : '✦ 图形编辑'}</i>
-        </span>
-        <span className="vs-hint">
-          {tool === 'pen'
-            ? '单击添加锚点 · 拖动末点拉出控制柄 · 单击首点或 Enter/双击 闭合 · 右键结束开放路径'
-            : '滚轮缩放（光标锚定）· 空格/中键拖动平移 · 双击图形直接编辑文字 · 从标尺拖出参考线'}
-        </span>
-      </div>
+    <main className={`vs-stage${props.compact ? ' vs-stage-compact' : ''}`}>
+      {props.compact ? null : (
+        <div className="vs-stagebar">
+          <span className="vs-crumbs">
+            Project / <b>{mode === 'logic' ? '逻辑分析' : '图像设计'}</b>
+            <i className="vs-mode-badge">{mode === 'logic' ? '◌ 集合逻辑' : '✦ 图形编辑'}</i>
+          </span>
+          <span className="vs-hint">
+            {tool === 'pen'
+              ? '单击添加锚点 · 拖动末点拉出控制柄 · 单击首点或 Enter/双击 闭合 · 右键结束开放路径'
+              : '滚轮缩放（光标锚定）· 空格/中键拖动平移 · 双击图形直接编辑文字 · 从标尺拖出参考线'}
+          </span>
+        </div>
+      )}
 
       <div className="vs-canvas" ref={wrapRef}>
         <div className="vs-ruler vs-ruler-top" onPointerDown={(e) => { if (guidesOn) gestureRef.current = { kind: 'guide', axis: 'v', from: toWorld(e.clientX, e.clientY).x }; }}>
@@ -1503,8 +1095,8 @@ export function scaleObjectAbout(o: VecObject, pivot: Point, sx: number, sy: num
 const LINE_TYPES = new Set(['bezier', 'arrow', 'text']);
 
 function ShapeLayer({ obj: o }: { obj: VecObject }) {
-  const selected = useVectorStore((s) => s.selectedIds.includes(o.id));
-  const editing = useVectorStore((s) => s.editingId === o.id);
+  const selected = useVector((s) => s.selectedIds.includes(o.id));
+  const editing = useVector((s) => s.editingId === o.id);
   if (!o.visible) return null;
 
   const fill = o.fill === 'none' ? 'transparent' : o.fill;
@@ -1646,7 +1238,7 @@ function TextLabel({ o }: { o: VecObject }) {
 
 /** 就地文字编辑（foreignObject 内嵌 HTML） */
 function InlineTextEditor({ o }: { o: VecObject }) {
-  const store = useVectorStore;
+  const store = useVector();
   const isText = o.type === 'text';
   const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
   const [value, setValue] = useState(String(o.text || ''));
@@ -1743,7 +1335,7 @@ function InlineTextEditor({ o }: { o: VecObject }) {
 
 function SingleChrome(props: { obj: VecObject; activeAnchor: { id: string; index: number } | null }) {
   const { obj: o, activeAnchor } = props;
-  const zoom = useVectorStore((s) => s.zoom);
+  const zoom = useVector((s) => s.zoom);
   const k = (v: number) => v / zoom;
   const h = k(7);
   const edges = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const;
@@ -1814,7 +1406,7 @@ function SingleChrome(props: { obj: VecObject; activeAnchor: { id: string; index
 }
 
 function MultiChrome(props: { box: { x0: number; y0: number; x1: number; y1: number } }) {
-  const zoom = useVectorStore((s) => s.zoom);
+  const zoom = useVector((s) => s.zoom);
   const { box } = props;
   const k = (v: number) => v / zoom;
   const h = k(7);
@@ -1832,7 +1424,7 @@ function MultiChrome(props: { box: { x0: number; y0: number; x1: number; y1: num
     sw: { x: box.x0, y: box.y1 },
     w: { x: box.x0, y: cy },
   };
-  const count = useVectorStore((s) => s.selectedIds.length);
+  const count = useVector((s) => s.selectedIds.length);
   return (
     <g className="vs-chrome vs-chrome-multi">
       <rect className="vs-select-box" x={box.x0 - h} y={box.y0 - h} width={w + h * 2} height={ht + h * 2} rx={k(2)} />
@@ -1862,9 +1454,9 @@ function MultiChrome(props: { box: { x0: number; y0: number; x1: number; y1: num
 /* ==================== 标尺 ==================== */
 
 function RulerTicks({ axis }: { axis: 'v' | 'h' }) {
-  const zoom = useVectorStore((s) => s.zoom);
-  const pan = useVectorStore((s) => s.pan);
-  const pointer = useVectorStore((s) => s.pointer);
+  const zoom = useVector((s) => s.zoom);
+  const pan = useVector((s) => s.pan);
+  const pointer = useVector((s) => s.pointer);
   const horizontal = axis === 'v';
   const o = horizontal ? PAPER_ORIGIN.x + pan.x : PAPER_ORIGIN.y + pan.y;
   const ticks: React.ReactNode[] = [];

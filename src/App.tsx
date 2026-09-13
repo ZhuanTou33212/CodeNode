@@ -14,13 +14,19 @@ import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
 import ModelManager from './components/ModelManager';
 import WorkbenchDock from './components/WorkbenchDock';
-import VectorStudio from './vector/VectorStudio';
+import { getActiveVectorNode } from './vector/vectorStore';
 
 function isTypingTarget(): boolean {
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
   const tag = el.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+}
+
+/** 焦点在画布节点（矢量画布）内部时，工作台快捷键让位给节点自身。 */
+function isVectorNodeFocus(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  return Boolean(el?.closest?.('.vs-scope'));
 }
 
 export default function App() {
@@ -34,7 +40,6 @@ export default function App() {
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const dockOpen = useUiStore((s) => s.dockOpen);
-  const workspace = useUiStore((s) => s.workspace);
   const { fitView } = useReactFlow();
 
   useEffect(() => {
@@ -66,8 +71,10 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // 矢量设计工作室激活时，工作台不再处理任何快捷键
-      if (useUiStore.getState().workspace !== 'agent') return;
+      // 选中的是画布节点 / 焦点在矢量画布内时，快捷键交给画布节点处理
+      const activeVector = getActiveVectorNode();
+      if (activeVector && activeVector === selectedId) return;
+      if (isVectorNodeFocus()) return;
       const mod = e.ctrlKey || e.metaKey;
 
       // 全局保存/打开/新建：即使在输入框中也生效
@@ -135,21 +142,18 @@ export default function App() {
   }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, layoutNodes, arrangeNodes, createScopeFromSelection]);
 
   return (
-    <>
-      <div className="app" style={workspace === 'vector' ? { display: 'none' } : undefined}>
-        <Toolbar />
-        <div className={`app-body${dockOpen ? ' has-dock' : ''}`}>
-          <ProjectManager />
-          <Canvas />
-          {inspectorOpen ? <Inspector /> : <InspectorBadge />}
-          <AddMenu />
-          <WorkbenchDock />
-        </div>
-        <StatusBar />
-        <ToolDialog />
-        <ModelManager />
+    <div className="app">
+      <Toolbar />
+      <div className={`app-body${dockOpen ? ' has-dock' : ''}`}>
+        <ProjectManager />
+        <Canvas />
+        {inspectorOpen ? <Inspector /> : <InspectorBadge />}
+        <AddMenu />
+        <WorkbenchDock />
       </div>
-      {workspace === 'vector' ? <VectorStudio /> : null}
-    </>
+      <StatusBar />
+      <ToolDialog />
+      <ModelManager />
+    </div>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * create_nodes：在工作台当前画布创建节点。count 默认 1（最多 50）；name 为名称（数量>1 自动编号）；
- * type 支持任务节点语义（task/stage/tool/start/end/file/scope），agent/user 已废弃（传入回退为 task）。
- * file 类型需 relativePath；connect=true 时按创建顺序串联成链。返回节点 id 列表。
+ * type 支持任务节点语义（task/stage/tool/start/end/file/scope/object/canvas），agent/user 已废弃（传入回退为 task）。
+ * file 类型需 relativePath；canvas（=vector）创建内嵌矢量画布的画布节点；connect=true 时按创建顺序串联成链。返回节点 id 列表。
  */
 'use strict';
 
@@ -24,6 +24,8 @@ const KIND_TO_TYPE = {
   end: 'end',
   scope: 'scope',
   object: 'object',
+  canvas: 'vector',
+  vector: 'vector',
 };
 
 function stringArg(args, key, fallback) {
@@ -37,14 +39,15 @@ function register(registry) {
   registry.register(
     'create_nodes',
     '在工作台当前画布创建节点。count 指定数量（默认1，最多50）；name 为名称（数量>1 时自动编号如 名1/名2）；' +
-      'type 支持 task/stage/tool/start/end/file/scope/object（start 只有输出端口、end 只有输入端口；object 需 objectName；已废弃的 agent/user 传入回退为 task）；file 类型需 relativePath；' +
+      'type 支持 task/stage/tool/start/end/file/scope/object/canvas（start 只有输出端口、end 只有输入端口；object 需 objectName；' +
+      'canvas（别名 vector）创建一个内嵌矢量画布的画布节点，可在节点里用预设配件自由绘制并切换 设计/逻辑 模式；已废弃的 agent/user 传入回退为 task）；file 类型需 relativePath；' +
       'prompt 为节点职责说明；connect=true 时按创建顺序串联成链。创建后返回节点 id 列表。',
     {
       type: 'object',
       properties: {
         count: { type: 'integer', description: '节点数量，默认 1，最多 50' },
         name: { type: 'string', description: '节点名称或前缀' },
-        type: { type: 'string', description: 'task/stage/tool/start/end/file/scope/object（agent/user 已废弃，传入回退为 task）' },
+        type: { type: 'string', description: 'task/stage/tool/start/end/file/scope/object/canvas（agent/user 已废弃，传入回退为 task）' },
         nodeKind: { type: 'string', description: '兼容旧版：regular/calculation/condition/capture/file/asset' },
         prompt: { type: 'string', description: '节点职责说明' },
         objectName: { type: 'string', description: 'object 类型节点的对象名称' },
@@ -84,6 +87,14 @@ function register(registry) {
             const data = { label: nodeName, status: 'pending', prompt, accent: accentForType(type) };
             if (type === 'file') data.filePath = relativePath || nodeName;
             if (type === 'object') data.objectName = objectName || nodeName;
+            if (type === 'vector') {
+              // 画布节点：内嵌矢量画布，尺寸/模式与前端新节点保持一致
+              data.width = 1040;
+              data.height = 640;
+              data.mode = 'design';
+              data.dockOpen = true;
+              data.accent = '#22d3ee';
+            }
             if (type === 'scope') {
               data.width = 320;
               data.height = 200;

@@ -247,8 +247,8 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
       '    a) 一条完整的节点链路必须有开始节点(start)和结束节点(end)，且必须真正连线成链：把 start 连线到链路的第一个执行节点，把最后一个执行节点连线到 end。start 是链路的入口（只有输出端口、没有输入端口），end 是链路的出口（只有输入端口、没有输出端口）；不允许 start/end 游离在链路之外。\n' +
       '    b) 需要条件判断、分支、重复循环等逻辑结构时，使用范围节点(scope)包裹相关子链路，并且必须把子链路节点 id 加入 scope 的 members（用 workbench_edit 的 add_members/set_members 操作，或 create scope 时传 members），否则节点不会显示在范围节点内。\n' +
       '    c) 需要子代理负责一部分工作（如文件探查、项目审核、独立分析、测试执行等）时，使用阶段节点(stage)表示该子代理任务。\n' +
-      '    d) 需要使用某个对象（数据对象/配置对象/实体名）时，使用对象节点(object)表示，并把对象名称填入 objectName 字段。\n' +
-      '    e) 节点类型必须从本地软件的节点类型中按语义选择，禁止一律建 task：start/task/stage/tool/end/file/scope/object 各司其职；工具/文件/对象/子代理/条件循环分别用 tool/file/object/stage/scope。每种节点类型有固定主色（start 绿、end 红、task 蓝、stage 紫、tool 橙、file 橙红、object 青、scope 紫），创建时自动按类型上色，无需手动指定颜色。\n' +
+      '    d) 需要使用某个对象（数据对象/配置对象/实体名）时，使用对象节点(object)表示，并把对象名称填入 objectName 字段；需要一块可自由绘制/标注的矢量画布（架构草图、集合关系示意、流程草图等）时，使用画布节点(canvas)，它内嵌在 Agent 画布上，用户可在节点内用预设配件自由绘制并切换 设计/逻辑 模式（图形内容由用户在节点内编辑，不要试图用 workbench_edit 写入图形）。\n' +
+      '    e) 节点类型必须从本地软件的节点类型中按语义选择，禁止一律建 task：start/task/stage/tool/end/file/scope/object/canvas 各司其职；工具/文件/对象/画布/子代理/条件循环分别用 tool/file/object/canvas/stage/scope。每种节点类型有固定主色（start 绿、end 红、task 蓝、stage 紫、tool 橙、file 橙红、object 青、scope 紫、canvas 蓝绿），创建时自动按类型上色，无需手动指定颜色。\n' +
       '    f) 若【当前画布节点清单】为空（[]），说明画布没有任何节点：不要调用 get_workbench_model，直接按用户需求创建一条完整链路；若画布已有节点，先用 get_workbench_model 读取现状，再引用/复用画布上已有的节点 id 与连线进行修改或补充，不要凭空重建、复制或把已有节点重复创建。\n' +
       '    g) 收到需求先做「需求拆分」：从需求中识别要制作/使用的对象（数据、配置、实体等）→ 各建一个 object 节点；识别需子代理独立完成的工作 → 建 stage 节点；识别条件判断/循环 → 用 scope 包裹并把节点加入 members；拆成具体可执行步骤 → 用 task/tool 节点；最后以 start 开头、end 结尾连线成一条完整链路。确保每个节点都落在「start→…→end」的完整路径上：不要留下没有任何入边/出边的悬空节点，对象/任务都要被连线接入链路（可用 workbench_edit 返回的【链路提示】检查并补全）。\n' +
       '    h) 所有画布操作（新建节点、连线、移动、删除、把节点放进范围节点、改名/设属性）都是你要执行的控制操作，统一通过 workbench_edit 完成；create 时可给节点指定自定义 id（如 id:"start-1"），以便同一批 operations 里用该 id 连线或放进 scope。\n' +

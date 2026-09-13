@@ -2,6 +2,7 @@ import { useReactFlow } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { newProject, openProject, openProjectFile, saveProject } from '../lib/projectActions';
+import { NODE_TEMPLATES } from '../nodes';
 
 export default function Toolbar() {
   const undo = useGraphStore((s) => s.undo);
@@ -17,7 +18,7 @@ export default function Toolbar() {
   const nodeCount = useGraphStore((s) => s.nodes.length);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
-  const { fitView } = useReactFlow();
+  const { fitView, screenToFlowPosition } = useReactFlow();
 
   return (
     <header className="toolbar">
@@ -122,13 +123,22 @@ export default function Toolbar() {
       <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
         <button
           className="toolbar-vector"
-          title="打开矢量设计工作室：贝塞尔图形编辑 + 集合逻辑分析"
+          title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"
           onClick={() => {
-            useUiStore.getState().setWorkspace('vector');
-            setToast('已进入矢量设计工作室');
+            const position = { x: window.innerWidth / 2 - 260, y: 140 };
+            const flowPos = screenToFlowPosition(position);
+            const { addNode } = useGraphStore.getState();
+            const template = NODE_TEMPLATES.vector;
+            addNode({
+              id: `vector-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
+              type: 'vector',
+              position: flowPos,
+              data: { ...template.data },
+            });
+            setToast('已添加画布节点');
           }}
         >
-          ✦ 矢量设计
+          ✦ 画布节点
         </button>
       </div>
     </header>

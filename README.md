@@ -19,12 +19,24 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 
 ### 画布（Blender 风格操作）
 - 鼠标中键 / 右键拖动画布，左键框选，滚轮缩放
-- `Shift+A` 光标处弹出节点菜单（入口 / 出口 / 任务 / 阶段 / 工具 / 范围 / 文件 / 对象）
-- 节点拖拽、端口连线（右侧拖出 → 左侧，箭头 + 动画）
+- `Shift+A` 光标处弹出节点菜单（入口 / 出口 / 任务 / 阶段 / 工具 / 范围 / 文件 / 对象 / 画布）
+- 节点拖拽、端口连线（右侧拖出 → 左侧，转弯处圆滑过渡的 waypoint 曲线）
 - **端口规则**：`start`（入口）只有输出端口、没有输入端口；`end`（出口）只有输入端口、没有输出端口
 - **对象节点**（`object`）：专门用于表示/存储对象名称（数据对象、配置对象、实体名），对象名称填在 `objectName` 字段
 - 快捷键：`Ctrl+Z/Y` 撤销重做、`Ctrl+D` 复制、`Del`/`X` 删除、`Home`/`Z` 聚焦全部、`Escape` 关闭菜单
 - 节点状态（待执行 / 执行中 / 已完成 / 失败 / 阻塞）实时着色
+
+### 画布节点（`vector` / canvas，矢量画布内嵌在画布上）
+
+矢量画布**不再单独占一个工作区**，而是作为一个节点直接放到 Agent 画布上：
+
+- 工具栏 `✦ 画布节点` 或在光标处 `Shift+A → 画布节点` 即可新增；节点可拖拽、可连线、可缩放（右下角把手）
+- **左上角切换模式**：`✦ 设计`（图形编辑） / `◌ 逻辑`（集合运算分析），切换会写回节点 data
+- **预设配件**：左侧「配件」区一键放置矩形 / 圆角矩形 / 椭圆 / 贝塞尔 / 箭头 / 文本，落在当前指针位置
+- **自由绘制**：左侧工具区选择选择 / 钢笔 / 矩形 / 圆角矩形 / 椭圆 / 箭头 / 文本 / 平移后在纸面上直接绘制；支持双击改文字、框选、多选、编组、显隐/锁定、图层重排
+- 右侧面板（可收起）：属性 / 图层；切到逻辑模式时显示集合运算、区域统计、两两关系与韦恩图预览，画布同步高亮结果区域
+- 文档隔离：每个画布节点持有独立文档 store，并各自持久化到 `localStorage['codenode.vector.node.<节点 id>']`，互不干扰
+- 快捷键只在选中的画布节点内生效（`V/P/R/U/E/A/T/H` 切工具、`Ctrl+Z/Y` 节点内撤销重做、`Del` 删除选中图形），不会误删工作台节点
 
 ### 工程文件（专属 `.cnode` 格式，参考原版 .cnode）
 - UTF-8 ZIP 容器，`mimetype` 首条目：`application/vnd.codenode.project+zip`
@@ -193,6 +205,8 @@ node scripts/cache-consistency-test.cjs
 node scripts/session-canvas-test.cjs
 # workbench_edit 建模能力（scope members / 自定义 id / start-end 连线）回归测试
 node scripts/workbench-model-test.cjs
+# 画布节点（矢量画布内嵌）端到端 UI 验收：先 `npx vite --port 5199` 起 dev server，再执行
+npm run test:vector
 # 自动整理（连通分量分块 / scope 包裹）回归测试
 node scripts/arrange-test.cjs
 # 长任务后台执行 + poll_job 轮询 回归测试

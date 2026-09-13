@@ -1,6 +1,6 @@
-/** 矢量设计工作室 —— 右栏面板：属性 / 图层 / 逻辑分析 */
+/** 画布节点 —— 右栏面板：属性 / 图层 / 逻辑分析 */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useVectorStore } from './vectorStore';
+import { useVector, type VectorStore } from './vectorStore';
 import type { LogicAnalysis, VecArrowStyle, VecGroup, VecHAlign, VecObject, VecStrokeStyle } from './types';
 import { LOGIC_OP_META, PAPER_H, PAPER_W } from './types';
 import {
@@ -137,8 +137,8 @@ function Section({ title, children, right }: { title: string; children: React.Re
 
 export function PropertiesPanel(props: { primary?: VecObject; selectedIds: string[] }) {
   const { primary: p, selectedIds } = props;
-  const store = useVectorStore;
-  const activeAnchor = useVectorStore((s) => s.activeAnchor);
+  const store = useVector();
+  const activeAnchor = useVector((s) => s.activeAnchor);
   const multi = selectedIds.length > 1;
   const single = selectedIds.length === 1 && Boolean(p);
 
@@ -429,10 +429,10 @@ export function PropertiesPanel(props: { primary?: VecObject; selectedIds: strin
 
       <Section title="层级">
         <div className="vs-layer-btns">
-          <button className="vs-btn" onClick={() => layerMove('top')}>置顶</button>
-          <button className="vs-btn" onClick={() => layerMove('up')}>上移一层</button>
-          <button className="vs-btn" onClick={() => layerMove('down')}>下移一层</button>
-          <button className="vs-btn" onClick={() => layerMove('bottom')}>置底</button>
+          <button className="vs-btn" onClick={() => layerMove(store, 'top')}>置顶</button>
+          <button className="vs-btn" onClick={() => layerMove(store, 'up')}>上移一层</button>
+          <button className="vs-btn" onClick={() => layerMove(store, 'down')}>下移一层</button>
+          <button className="vs-btn" onClick={() => layerMove(store, 'bottom')}>置底</button>
         </div>
       </Section>
 
@@ -483,10 +483,10 @@ function buildRows(objects: VecObject[], groups: VecGroup[]): LayerRowItem[] {
 }
 
 export function LayersPanel() {
-  const store = useVectorStore;
-  const objects = useVectorStore((s) => s.objects);
-  const groups = useVectorStore((s) => s.groups);
-  const selectedIds = useVectorStore((s) => s.selectedIds);
+  const store = useVector();
+  const objects = useVector((s) => s.objects);
+  const groups = useVector((s) => s.groups);
+  const selectedIds = useVector((s) => s.selectedIds);
   const [renaming, setRenaming] = useState<{ id: string; isGroup: boolean } | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const dragRef = useRef<{ key: string; allowed: Set<string> } | null>(null);
@@ -771,8 +771,8 @@ export function LayersPanel() {
           <i className="vs-footer-dot" /> {visibleCount} / {objects.length} 可见
         </span>
         <div>
-          <button className="vs-mini-btn" title="选中图层置底" onClick={() => layerMove('bottom')}>⇊</button>
-          <button className="vs-mini-btn" title="选中图层置顶" onClick={() => layerMove('top')}>⇈</button>
+          <button className="vs-mini-btn" title="选中图层置底" onClick={() => layerMove(store, 'bottom')}>⇊</button>
+          <button className="vs-mini-btn" title="选中图层置顶" onClick={() => layerMove(store, 'top')}>⇈</button>
         </div>
       </div>
       <div className="vs-layers-hint">按住图层行拖动可排序 · 双击名称重命名</div>
@@ -781,8 +781,8 @@ export function LayersPanel() {
 }
 
 /** 层级移动：支持多选块、组边界（组内移动 / 整组在根层移动） */
-function layerMove(dir: 'top' | 'bottom' | 'up' | 'down') {
-  const st = useVectorStore.getState();
+function layerMove(store: VectorStore, dir: 'top' | 'bottom' | 'up' | 'down') {
+  const st = store.getState();
   const all = st.objects;
   const sel = st.selectedIds.filter((id) => {
     const o = all.find((x) => x.id === id);
@@ -845,10 +845,10 @@ function layerMove(dir: 'top' | 'bottom' | 'up' | 'down') {
 /* ================= 逻辑分析面板 ================= */
 
 export function LogicPanel(props: { analysis: LogicAnalysis }) {
-  const store = useVectorStore;
-  const objects = useVectorStore((s) => s.objects);
-  const logicIds = useVectorStore((s) => s.logicIds);
-  const logicOp = useVectorStore((s) => s.logicOp);
+  const store = useVector();
+  const objects = useVector((s) => s.objects);
+  const logicIds = useVector((s) => s.logicIds);
+  const logicOp = useVector((s) => s.logicOp);
   const { analysis } = props;
 
   const candidates = useMemo(
@@ -993,6 +993,7 @@ export function LogicPanel(props: { analysis: LogicAnalysis }) {
 /** 韦恩图预览：用集合真实面积比绘制圆，重叠示意 */
 function VennPreview(props: { analysis: LogicAnalysis; names: Map<string, string> }) {
   const { analysis } = props;
+  const logicOp = useVector((s) => s.logicOp);
   const sets = analysis.sets;
   const W = 300;
   const H = 170;
@@ -1014,7 +1015,7 @@ function VennPreview(props: { analysis: LogicAnalysis; names: Map<string, string
     : sets.length === 2
       ? [{ x: W / 2 - 62, y: H / 2 + 8 }, { x: W / 2 + 62, y: H / 2 + 8 }]
       : [{ x: W / 2 - 64, y: H / 2 - 6 }, { x: W / 2 + 64, y: H / 2 - 6 }, { x: W / 2, y: H / 2 + 44 }];
-  const opLabel = LOGIC_OP_META.find((m) => m.op === useVectorStore.getState().logicOp);
+  const opLabel = LOGIC_OP_META.find((m) => m.op === logicOp);
   return (
     <section className="vs-logic-section vs-venn-sec">
       <div className="vs-logic-section-title"><span>韦恩图预览</span><i>{sets.length} 集</i></div>

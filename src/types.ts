@@ -40,7 +40,18 @@ export type ObjectData = BaseData & {
   objectName?: string;
 };
 
-export type WorkflowNodeData = BaseData | ScopeData | FileData | ObjectData;
+/**
+ * 画布节点：内嵌一块矢量画布（预设配件 + 自由绘制），
+ * 左上角可切换 设计 / 逻辑 模式。文档本体按节点 id 独立存放，不写进节点 data。
+ */
+export type VectorData = BaseData & {
+  width?: number;
+  height?: number;
+  mode?: 'design' | 'logic';
+  dockOpen?: boolean;
+};
+
+export type WorkflowNodeData = BaseData | ScopeData | FileData | ObjectData | VectorData;
 
 export type Graph = { nodes: Node[]; edges: Edge[] };
 
