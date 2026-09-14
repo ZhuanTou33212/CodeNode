@@ -147,9 +147,12 @@ function EditorPanel() {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
 
+  // 幂等追加：不能在依赖里再读 tabs，否则 StrictMode 双次执行 / 陈旧闭包会重复插入同一路径
   useEffect(() => {
-    if (selected?.relPath && !tabs.includes(selected.relPath)) setTabs((list) => [...list, selected.relPath]);
-  }, [selected?.relPath, tabs]);
+    if (selected?.relPath) {
+      setTabs((list) => (list.includes(selected.relPath) ? list : [...list, selected.relPath]));
+    }
+  }, [selected?.relPath]);
 
   const save = async () => {
     setSaving(true);
@@ -158,10 +161,17 @@ function EditorPanel() {
     if (ok) useUiStore.getState().setToast(`已保存 ${selected?.relPath || '文件'}`);
   };
 
+  // Hook 必须在任何条件 return 之前调用：此前 useMemo 被放在 `if (!selected) return`
+  // 之后，未选中文件时少调一个 Hook、选中后多调一个，React 会抛
+  // "Rendered more hooks than during the previous render." 并卸载整棵树 -> 界面全白。
+  const problems = useMemo(
+    () => (selected ? diagnoseCode(selected.relPath, draft) : []),
+    [selected, draft]
+  );
+
   if (!selected) return <div className="dock-empty">从左侧项目树点击文件，开始编辑。支持多文件标签、保存、撤销和 Diff 对比。</div>;
   const lines = draft.split(/\r?\n/).length;
   const language = selected.relPath.split('.').pop()?.toUpperCase() || 'TEXT';
-  const problems = useMemo(() => diagnoseCode(selected.relPath, draft), [selected.relPath, draft]);
   const completionItems = ['const', 'function', 'return', 'async', 'await', 'if', 'else', 'for', 'try', 'catch', 'console.log'];
   const closeTab = (path: string) => {
     const next = tabs.filter((item) => item !== path);
