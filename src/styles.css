@@ -3186,3 +3186,10 @@ textarea:focus-visible {
     top: 58px;
   }
 }
+
+/* 运行指标条（成本 / 隔离状态 / 最新告警）：与既有 dock 视觉一致的低亮度次要信息 */
+.dock-metrics{display:flex;flex-wrap:wrap;gap:10px;padding:6px 10px;border-top:1px solid rgba(255,255,255,.06);color:var(--text-dim,#8b8f98);font-size:11px}
+.dock-metrics span{white-space:nowrap}
+.dock-metrics-alert{color:#e0a45e}
+.dock-recovery-meta{color:var(--text-dim,#8b8f98);font-size:11px;margin-bottom:4px}
+.dock-recovery-meta strong{color:inherit}

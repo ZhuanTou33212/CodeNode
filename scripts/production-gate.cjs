@@ -37,6 +37,11 @@ function main() {
     fs.rmSync(temp, { recursive: true, force: true });
   }
   console.log('PRODUCTION GATE: PASS');
+  // 运行时门槛（隔离 / 续跑幂等 / 成本告警）：
+  // 这里不直接 return，交由 runtime-gate.cjs 独立进程执行，失败时同样非 0 退出。
+  const { spawnSync } = require('child_process');
+  const runtime = spawnSync(process.execPath, [path.join(__dirname, 'runtime-gate.cjs')], { stdio: 'inherit' });
+  if (runtime.status !== 0) throw new Error('runtime-gate 未通过（exit=' + runtime.status + '）');
 }
 
 try {

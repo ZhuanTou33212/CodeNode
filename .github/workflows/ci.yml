@@ -4,28 +4,53 @@ on:
   push:
     branches: ["n0_12"]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   verify:
     name: Verify (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:session
-      - run: npm run test:arrange
-      - run: npm run test:bg
-      - run: npm run test:rag
-      - run: npm run test:scalar
+      - name: 安装依赖（package-lock.json 可用，使用 npm ci）
+        run: npm ci
+      - name: 构建（Linux：xvfb 提供显示环境；图标脚本另有明确的无头安全分支）
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run build
+      - name: 构建（Windows / macOS）
+        if: runner.os != 'Linux'
+        run: npm run build
+      - name: 回归：画布 / 工作台模型 / 缓存 / 容器 / 范围 / 撤销 / 标量
+        run: npm run test:session && npm run test:arrange && npm run test:model && npm run test:cache && npm run test:container && npm run test:scope-frame && npm run test:undo && npm run test:scalar
+      - name: 回归：Agent 边界 / 可靠性 / 取消 / 预算 / Run 日志 / 原子写 / 子代理
+        run: npm run test:agent-reliability && npm run test:agent-boundary && npm run test:bridge && npm run test:request-budget && npm run test:run-store && npm run test:atomic-file && npm run test:subagent
+      - name: 回归：安全 / 检索 / shell 分页 / 后台任务
+        run: npm run test:security && npm run test:rag && npm run test:shell-output && npm run test:bg
+      - name: 门禁：production-gate + Agent 多步评测（离线确定性模式，无网络）
+        run: npm run test:production-gate && npm run test:eval
+      - name: 上传评测报告（JSON + Markdown，绑定 commit/模型/参数/数据集版本）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-report-${{ runner.os }}
+          path: docs/eval-reports/
+          if-no-files-found: warn
       - name: Electron smoke test (Linux)
         if: runner.os == 'Linux'
         env:
@@ -36,7 +61,9 @@ jobs:
     name: Package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: verify
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest

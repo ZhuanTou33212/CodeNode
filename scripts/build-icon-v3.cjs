@@ -41,8 +41,29 @@ function makeIco(images) {
   return Buffer.concat([header, directory, ...payloads]);
 }
 
+/**
+ * 无头安全分支：Linux 上没有 DISPLAY/WAYLAND_DISPLAY 时 Electron 无法创建窗口，
+ * 图标重建必然失败。此时显式跳过并说明原因（build/icon.ico 使用仓库已提交版本，打包不受影响），
+ * 避免 CI 里出现「Electron 崩溃式的假失败」。需要强制在无头环境重建时用：
+ *   xvfb-run -a npm run icons:build          （推荐，CI 里就是这样跑的）
+ *   CODENODE_ICON_REQUIRE_HEADLESS=1 npm run icons:build
+ */
+function headlessLinuxWithoutDisplay() {
+  if (process.platform !== 'linux') return false;
+  if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return false;
+  return process.env.CODENODE_ICON_REQUIRE_HEADLESS !== '1';
+}
+
 async function main() {
   if (!fs.existsSync(SOURCE)) throw new Error(`找不到图标源文件：${SOURCE}`);
+  if (headlessLinuxWithoutDisplay()) {
+    console.log(
+      '[icons] 跳过图标重建：当前是无显示环境的 Linux（DISPLAY/WAYLAND_DISPLAY 均未设置），' +
+        'Electron 无法创建渲染窗口。build/icon.ico 沿用仓库已提交版本；' +
+        '如需重建请用 xvfb-run -a npm run icons:build，或设置 CODENODE_ICON_REQUIRE_HEADLESS=1 强制尝试。'
+    );
+    return;
+  }
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   const htmlPath = path.join(OUTPUT_DIR, '.icon-render.html');
   const sourceUrl = pathToFileURL(SOURCE).href;

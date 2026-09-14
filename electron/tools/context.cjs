@@ -41,6 +41,12 @@ class AgentToolContext {
     this.roleValue = o.role || 'supervisor';
     this.readOnlyValue = o.readOnly === true;
     this.signalValue = o.signal || null;
+    // 执行隔离策略（sandbox.cjs 解析结果）；未注入时由 sandbox.cjs 的默认策略兜底
+    this.sandboxPolicyValue = o.sandbox || null;
+    // 副作用幂等守卫（sideEffects.cjs）；未注入时为无操作
+    this.sideEffectGuardValue = o.sideEffectGuard || null;
+    // 断点检查点写入器（runCheckpoint.cjs）；未注入时为无操作
+    this.checkpointSink = o.checkpoint || null;
   }
 
   projectRoot() {
@@ -138,6 +144,53 @@ class AgentToolContext {
     return this.ragConfigValue || {};
   }
 
+  /** 写入执行检查点（runCheckpoint.cjs）：'tool_intent' | 'tool_commit' | 'messages' */
+  checkpoint(type, payload) {
+    if (!this.checkpointSink) return null;
+    try {
+      return this.checkpointSink(type, payload);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 保存对话快照用于断点续跑（每轮工具循环结束时调用） */
+  checkpointMessages(messages, reason) {
+    return this.checkpoint('messages', { messages, reason: reason || 'round_end' });
+  }
+
+  /** 执行隔离策略（sandbox.cjs 解析结果）；工具启动子进程时应交给 sandbox.guardedSpawn。 */
+  sandbox() {
+    return this.sandboxPolicyValue || null;
+  }
+
+  /**
+   * 副作用幂等守卫：写操作执行前登记意图，执行后提交结果。
+   * 返回 { skip:true } 表示该副作用在中断前已经提交过（续跑时不得重复执行）。
+   */
+  async beginSideEffect(toolName, args) {
+    if (!this.sideEffectGuardValue || typeof this.sideEffectGuardValue.begin !== 'function') return { skip: false, token: null };
+    try {
+      return await this.sideEffectGuardValue.begin(toolName, args);
+    } catch {
+      return { skip: false, token: null };
+    }
+  }
+
+  async commitSideEffect(token, info) {
+    if (!token || !this.sideEffectGuardValue || typeof this.sideEffectGuardValue.commit !== 'function') return;
+    try {
+      await this.sideEffectGuardValue.commit(token, info);
+    } catch {}
+  }
+
+  async failSideEffect(token, error) {
+    if (!token || !this.sideEffectGuardValue || typeof this.sideEffectGuardValue.fail !== 'function') return;
+    try {
+      await this.sideEffectGuardValue.fail(token, error);
+    } catch {}
+  }
+
   /** 本地标量存储；未启用时返回 null。 */
   scalars() {
     return this.scalarStoreValue || null;
@@ -211,6 +264,9 @@ class AgentToolContext {
       role: o.role || this.roleValue,
       readOnly: o.readOnly === true,
       signal: o.signal || this.signalValue,
+      sandbox: this.sandboxPolicyValue,
+      sideEffectGuard: this.sideEffectGuardValue,
+      checkpoint: this.checkpointSink,
     });
   }
 }

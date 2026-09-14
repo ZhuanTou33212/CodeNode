@@ -7,3 +7,8 @@ release/
 *.log
 .DS_Store
 Thumbs.db
+
+# 生成物：Agent 评测报告（CI 以 artifact 上传）、发布自检的临时构建/备份、临时沙箱用例
+docs/eval-reports/
+.codenode-selftest/
+.codenode/tmp-sandbox/

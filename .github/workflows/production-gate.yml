@@ -5,28 +5,81 @@ on:
     branches: [n0_12]
   pull_request:
     branches: [n0_12]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'gate=离线门禁（默认）；release=发布模式（必须提供评测 Key 与签名凭据，缺失即失败）'
+        required: true
+        default: gate
+        type: choice
+        options:
+          - gate
+          - release
 
 permissions:
   contents: read
 
 jobs:
+  # fail-closed 前置校验：发布模式缺少必需凭据时直接失败，绝不以成功码跳过。
+  credentials:
+    name: 凭据前置校验（fail-closed）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+    steps:
+      - name: 解析本次运行模式
+        id: mode
+        env:
+          INPUT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'gate' }}
+        run: |
+          if [ "${INPUT_MODE}" = "release" ]; then
+            echo "mode=release" >> "$GITHUB_OUTPUT"
+            echo "本次运行：release（发布模式，凭据必须齐全）"
+          else
+            echo "mode=gate" >> "$GITHUB_OUTPUT"
+            echo "本次运行：gate（离线门禁模式，不要求发布凭据）"
+          fi
+      - name: 发布模式凭据检查（缺一即失败）
+        if: steps.mode.outputs.mode == 'release'
+        env:
+          CODENODE_EVAL_API_KEY: ${{ secrets.CODENODE_EVAL_API_KEY }}
+          CODENODE_E2E_API_KEY: ${{ secrets.CODENODE_E2E_API_KEY }}
+          CODENODE_WIN_CERT_PFX_BASE64: ${{ secrets.CODENODE_WIN_CERT_PFX_BASE64 }}
+          CODENODE_WIN_CERT_PASSWORD: ${{ secrets.CODENODE_WIN_CERT_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "${CODENODE_EVAL_API_KEY}" ] || missing="${missing} CODENODE_EVAL_API_KEY"
+          [ -n "${CODENODE_E2E_API_KEY}" ] || missing="${missing} CODENODE_E2E_API_KEY"
+          [ -n "${CODENODE_WIN_CERT_PFX_BASE64}" ] || missing="${missing} CODENODE_WIN_CERT_PFX_BASE64"
+          [ -n "${CODENODE_WIN_CERT_PASSWORD}" ] || missing="${missing} CODENODE_WIN_CERT_PASSWORD"
+          if [ -n "${missing}" ]; then
+            echo "::error::发布模式缺少必需凭据：${missing}（fail-closed：不允许无凭据静默通过）"
+            exit 1
+          fi
+          echo "发布凭据齐全：评测 Key 与 Windows 签名证书均已配置"
+
   gate:
+    name: Gate (${{ matrix.os }})
+    needs: credentials
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
-      - if: runner.os == 'Linux'
+      - name: 构建（Linux 用 xvfb；图标脚本在无显示环境会显式跳过并说明，不会假失败）
+        if: runner.os == 'Linux'
         run: xvfb-run -a npm run build
-      - if: runner.os != 'Linux'
+      - name: 构建（Windows / macOS）
+        if: runner.os != 'Linux'
         run: npm run build
       - run: npm run test:security
       - run: npm run test:run-store
@@ -42,8 +95,53 @@ jobs:
       - run: npm run test:cache
       - run: npm run test:bg
       - run: npm run test:subagent
+      - run: npm run test:session
+      - run: npm run test:arrange
+      - run: npm run test:container
+      - run: npm run test:scope-frame
+      - run: npm run test:undo
+      - run: npm run test:shell-output
+      - name: Agent 多步评测（三平台离线确定性模式）
+        run: npm run test:eval
+      - name: 上传评测报告（三平台各一份，含失败与跳过清单）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-report-${{ runner.os }}
+          path: docs/eval-reports/
+          if-no-files-found: warn
+
+  # 真实模型评测：只在发布模式下运行，且必须已通过凭据前置校验。
+  model-eval:
+    name: 真实模型评测（发布模式，fail-closed）
+    needs: credentials
+    if: needs.credentials.outputs.mode == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 真实模型多步评测（--require-model：无 Key 直接非 0 退出）
+        run: npm run test:eval:model
+        env:
+          CODENODE_EVAL_API_KEY: ${{ secrets.CODENODE_EVAL_API_KEY }}
+          CODENODE_EVAL_BASE_URL: ${{ vars.CODENODE_EVAL_BASE_URL }}
+          CODENODE_EVAL_MODEL: ${{ vars.CODENODE_EVAL_MODEL }}
+      - name: 上传真实模型评测报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-report-model
+          path: docs/eval-reports/
+          if-no-files-found: warn
 
   provider-smoke:
+    name: 供应商连通性 smoke（fail-closed）
+    needs: credentials
     if: ${{ vars.PROVIDER_E2E_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -51,7 +149,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run test:provider-smoke

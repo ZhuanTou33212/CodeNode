@@ -11,7 +11,26 @@ import type { Node } from '@xyflow/react';
 type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
 type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
 type AgentRun = { runId: string | null; status: string; startedAt: string | null; eventCount: number };
-type ResumePlan = { runId?: string; prompt?: string; warning?: string; error?: string; ok: boolean };
+type ResumePlan = {
+  runId?: string;
+  prompt?: string;
+  warning?: string;
+  error?: string;
+  ok: boolean;
+  mode?: 'complete' | 'auto' | 'review' | 'unknown';
+  reason?: string;
+  requiresReview?: boolean;
+  pendingSteps?: { tool: string; effect: string; idemKey: string | null }[];
+  completedSteps?: { tool: string; idemKey: string | null; at: string | null }[];
+  skippedByLedger?: { tool: string; idemKey: string | null; reason: string }[];
+  unknownEffects?: { tool: string; effect: string }[];
+};
+
+type MetricsView = {
+  run: CostCountersDto;
+  today: CostCountersDto;
+  queue?: { active: number; waiting: number; maxWaitMs: number } | null;
+};
 
 const TABS: { id: DockTab; label: string }[] = [
   { id: 'editor', label: '代码编辑器' },
@@ -256,6 +275,7 @@ function RunsPanel() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [resumePlan, setResumePlan] = useState<ResumePlan | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [metrics, setMetrics] = useState<{ cost?: MetricsView; sandbox?: { description: string; backend: string; degraded: string[] }; alerts?: AlertDto[] } | null>(null);
   const sendChat = useChatStore((s) => s.send);
 
   useEffect(() => {
@@ -272,11 +292,48 @@ function RunsPanel() {
     return () => { alive = false; };
   }, [root]);
 
+  useEffect(() => {
+    let alive = true;
+    if (!root || !window.codenode?.agentMetrics) return () => { alive = false; };
+    const load = () => {
+      void window.codenode
+        ?.agentMetrics(root)
+        .then((res) => {
+          if (!alive || !res?.ok) return;
+          setMetrics({ cost: res.cost, sandbox: res.sandbox, alerts: res.firedAlerts?.length ? res.firedAlerts : res.alertHistory?.slice(-3) });
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 20000);
+    const off = window.codenode.onAgentAlert?.((alert) => {
+      useUiStore.getState().setToast((alert.severity === 'critical' ? '【严重】' : '【告警】') + alert.message);
+    });
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      off?.();
+    };
+  }, [root]);
+
   const inspectResume = async (runId: string) => {
     if (!root || !window.codenode?.agentResumePlan) return;
     setRecoveryBusy(true);
     try { setResumePlan(await window.codenode.agentResumePlan(root, runId)); }
     finally { setRecoveryBusy(false); }
+  };
+
+  /** 自动断点续跑：走完整检查点/幂等账本链路（跳过已提交的写操作），不需要用户重述任务 */
+  const autoResume = async () => {
+    if (!resumePlan?.ok || !resumePlan.runId) return;
+    setRecoveryBusy(true);
+    try {
+      await sendChat('（自动断点续跑）' + (resumePlan.prompt || ''), { resumeRunId: resumePlan.runId });
+      setResumePlan(null);
+      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter((run) => run.status === 'interrupted'));
+    } finally {
+      setRecoveryBusy(false);
+    }
   };
 
   const retryResume = async () => {
@@ -368,9 +425,27 @@ function RunsPanel() {
           <button onClick={() => run.runId && void inspectResume(run.runId)} disabled={recoveryBusy}>查看恢复计划</button>
         </div>)}
         {resumePlan && <div className="dock-recovery-plan">
+          <div className="dock-recovery-meta">
+            恢复级别：<strong>{resumePlan.mode || 'unknown'}</strong>
+            {resumePlan.reason ? ' · ' + resumePlan.reason : ''}
+            {resumePlan.completedSteps?.length ? ' · 已完成 ' + resumePlan.completedSteps.length + ' 步' : ''}
+            {resumePlan.skippedByLedger?.length ? ' · 幂等跳过 ' + resumePlan.skippedByLedger.length + ' 步' : ''}
+          </div>
           <pre>{resumePlan.warning || resumePlan.error || '无恢复计划'}</pre>
-          {resumePlan.ok && <button className="dock-primary" onClick={() => void retryResume()} disabled={recoveryBusy}>按当前状态重试</button>}
+          {resumePlan.ok && resumePlan.mode === 'auto' && (
+            <button className="dock-primary" onClick={() => void autoResume()} disabled={recoveryBusy}>自动续跑（跳过已提交的写操作）</button>
+          )}
+          {resumePlan.ok && resumePlan.mode !== 'auto' && (
+            <button className="dock-primary" onClick={() => void retryResume()} disabled={recoveryBusy}>按当前状态重试（人工确认）</button>
+          )}
         </div>}
+      </div>}
+      {metrics && <div className="dock-metrics">
+        <span>本任务 token {metrics.cost?.run?.totalTokens ?? 0}</span>
+        <span>今日 token {metrics.cost?.today?.totalTokens ?? 0}</span>
+        <span>今日成本 {metrics.cost?.today?.costKnown === false ? '未知（未配置单价）' : '$' + (metrics.cost?.today?.costUsd ?? 0).toFixed(4)}</span>
+        <span>隔离 {metrics.sandbox?.backend || 'none'}{metrics.sandbox?.degraded?.length ? '（降级：' + metrics.sandbox.degraded.join('/') + '）' : ''}</span>
+        {metrics.alerts?.length ? <span className="dock-metrics-alert">{metrics.alerts[metrics.alerts.length - 1].message}</span> : null}
       </div>}
       <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span></div>{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
     </div>

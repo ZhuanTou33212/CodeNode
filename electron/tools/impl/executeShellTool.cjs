@@ -4,11 +4,10 @@
  */
 'use strict';
 
-const { spawn } = require('child_process');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
-const { killProcessTree } = require('../../processTree.cjs');
 const { safeEnvironment } = require('../../envPolicy.cjs');
+const sandbox = require('../../sandbox.cjs');
 
 const ALLOWED = new Set([
   'mvn', 'mvnw', 'mvnw.cmd', 'git', 'java', 'javac', 'gradle', 'gradlew', 'gradlew.bat',
@@ -24,11 +23,18 @@ let jobSeq = 0;
 const JOB_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_OUTPUT_CHARS = 12000;
 
+/** 隔离策略拒绝执行时的统一错误描述：fail-closed 的拒绝必须让人看得懂，不能被当成普通失败重试。 */
+function describeSpawnError(error) {
+  const message = String((error && error.message) || error);
+  if (error && error.code === 'SANDBOX_UNAVAILABLE') return '执行被隔离策略拒绝（fail-closed）：' + message;
+  return message;
+}
+
 function sweepJobs() {
   const now = Date.now();
   for (const [jobId, job] of BACKGROUND_JOBS) {
     if (job.status === 'running' && now - job.startedAt > JOB_TTL_MS) {
-      killProcessTree(job.child, true);
+      sandbox.killSandboxed(job.child, true);
       job.status = 'timeout';
       job.output += '\n…（后台任务超时，已强制终止）';
     }
@@ -39,7 +45,7 @@ function sweepJobs() {
 }
 
 /** 后台启动一个白名单命令，立即返回 jobId。 */
-function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, signal) {
+function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, signal, context) {
   sweepJobs();
   if (signal && signal.aborted) return { jobId: null, error: '已取消执行' };
   const jobId = 'job-' + Date.now().toString(36) + '-' + (++jobSeq).toString(36);
@@ -47,9 +53,17 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
   let child;
   try {
     const spec = spawnSpec(normalized, tokens);
-    child = spawn(spec.file, spec.args, { cwd: root, shell: false, windowsHide: true, env, detached: process.platform !== 'win32' });
+    // 经执行隔离层启动（Windows Job Object / Linux bwrap / macOS sandbox-exec）；
+    // 策略关闭或无后端时自动退回原生 spawn，并在审计中留痕。
+    child = sandbox.guardedSpawn(spec, {
+      cwd: root,
+      env,
+      detached: process.platform !== 'win32',
+      policy: sandbox.currentPolicy(context),
+      context,
+    });
   } catch (e) {
-    return { jobId: null, error: String((e && e.message) || e) };
+    return { jobId: null, error: describeSpawnError(e) };
   }
   const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', exitCode: null, error: null, child };
   BACKGROUND_JOBS.set(jobId, job);
@@ -57,14 +71,14 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
     if (job.status !== 'running') return;
     job.status = 'cancelled';
     job.output += '\n…（任务已取消）';
-    killProcessTree(child);
+    sandbox.killSandboxed(child);
   };
   signal && signal.addEventListener('abort', onAbort, { once: true });
   child.stdout.on('data', (d) => { job.output += decodeOutput(d); });
   child.stderr.on('data', (d) => { job.output += decodeOutput(d); });
   const timer = setTimeout(() => {
     if (job.status !== 'running') return;
-    killProcessTree(child, true);
+    sandbox.killSandboxed(child, true);
     job.status = 'timeout';
     job.output += '\n…（后台任务超时，已强制终止）';
   }, timeoutSeconds * 1000);
@@ -274,7 +288,7 @@ function register(registry) {
       // 后台执行：长任务立即返回 jobId，用 poll_job 轮询
       if (args.async === true) {
         const bgTimeout = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? Math.max(10, Math.floor(args.timeoutSeconds)) : 1800;
-        const started = startBackgroundJob(root, tokens, normalized, command, bgTimeout, context.signal && context.signal());
+        const started = startBackgroundJob(root, tokens, normalized, command, bgTimeout, context.signal && context.signal(), context);
         if (!started.jobId) return AgentToolResult.error('后台启动失败：' + (started.error || ''));
         context.audit('execute_shell async=true jobId=' + started.jobId + ' command=' + command + ' timeout=' + bgTimeout);
         return AgentToolResult.ok(
@@ -290,9 +304,14 @@ function register(registry) {
         try {
           const env = safeEnvironment({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
           const spec = spawnSpec(normalized, tokens);
-          child = spawn(spec.file, spec.args, { cwd: root, shell: false, windowsHide: true, env });
+          child = sandbox.guardedSpawn(spec, {
+            cwd: root,
+            env,
+            policy: sandbox.currentPolicy(context),
+            context,
+          });
         } catch (e) {
-          resolve(AgentToolResult.error('执行失败：' + ((e && e.message) || e)));
+          resolve(AgentToolResult.error('执行失败：' + describeSpawnError(e)));
           return;
         }
         child.stdout.on('data', (d) => {
@@ -303,7 +322,7 @@ function register(registry) {
         });
         const onAbort = () => {
           cancelled = true;
-          killProcessTree(child);
+          sandbox.killSandboxed(child);
         };
         const signal = context.signal && context.signal();
         signal && signal.addEventListener('abort', onAbort, { once: true });
@@ -311,7 +330,7 @@ function register(registry) {
         const cleanup = () => signal && signal.removeEventListener('abort', onAbort);
         const timer = setTimeout(() => {
           try {
-            killProcessTree(child, true);
+            sandbox.killSandboxed(child, true);
           } catch {}
           cleanup();
           output += '\n…（执行超时，已强制终止）';

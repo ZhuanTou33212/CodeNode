@@ -182,6 +182,17 @@ class SubagentManager {
       task.toolCalls = result.toolCalls || [];
       task.grounding = result.grounding || null;
       task.usage = result.usage || null;
+      // 成本账本：子代理的模型用量计入同一个任务账（跨子代理共享预算，不再各记各的）
+      try {
+        require('./agent.cjs').recordCost(this.cfg, {
+          kind: 'subagent',
+          model: this.cfg.model,
+          usage: result.usage,
+          runId: this.runId,
+          latencyMs: Date.now() - Date.parse(task.startedAt || Date.now()),
+          meta: { role, taskId: task.taskId },
+        });
+      } catch {}
       if (result.error) task.error = result.error;
     } catch (error) {
       task.status = 'failed';

@@ -19,6 +19,20 @@ if (process.platform === 'win32') {
   } catch {}
 }
 
+// ---- 最小可注入点：隔离 userData 目录（发布自检 / 升级回滚验证用） ----
+// 支持 --codenode-user-data-dir=<dir> 或 CODENODE_USER_DATA_DIR=<dir>；
+// 两者都没有时行为与改动前完全一致（继续使用默认 userData）。
+(function applyUserDataOverride() {
+  try {
+    const flag = process.argv.find((item) => String(item).startsWith('--codenode-user-data-dir='));
+    const target = flag ? String(flag).slice('--codenode-user-data-dir='.length) : process.env.CODENODE_USER_DATA_DIR;
+    if (!target) return;
+    const dir = path.resolve(target);
+    fs.mkdirSync(dir, { recursive: true });
+    app.setPath('userData', dir);
+  } catch { /* 覆盖失败时保持默认行为 */ }
+})();
+
 // Windows 控制台切换为 UTF-8，避免终端面板打印中文乱码
 if (process.platform === 'win32') {
   try {
@@ -78,6 +92,12 @@ const runStore = require('./runStore.cjs');
 const { atomicWriteFile } = require('./atomicFile.cjs');
 const extensionStore = require('./tools/extensions.cjs');
 const { SubagentManager } = require('./subagents.cjs');
+const sandbox = require('./sandbox.cjs');
+const { CostLedger } = require('./costLedger.cjs');
+const { AlertDispatcher } = require('./alerts.cjs');
+const { SideEffectLedger, createGuard } = require('./sideEffects.cjs');
+const runCheckpoint = require('./runCheckpoint.cjs');
+const { modelQueue } = require('./requestQueue.cjs');
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -198,17 +218,21 @@ function runProjectCommand(root, command, timeoutSeconds = 120) {
 
 function spawnProjectProcess(tokens, base, cwd) {
   const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  // 工作流/项目命令与 Agent 工具共用同一套执行隔离策略（同一把锁，不留后门）
+  const policy = sandbox.currentPolicy(null);
   if (process.platform === 'win32' || (base !== 'powershell' && base !== 'pwsh' && base !== 'cmd')) {
-    return spawn(tokens[0], tokens.slice(1), { cwd, shell: false, windowsHide: true, env });
+    // 需要交互式 stdin：Windows Job 代理会接管 stdin，故这里只在不干扰 stdio 的包装后端下隔离，
+    // 其余情况如实降级并写审计（见 sandbox.guardedInteractiveSpawn）
+    return sandbox.guardedInteractiveSpawn({ file: tokens[0], args: tokens.slice(1) }, { cwd, env, policy });
   }
   const raw = tokens.slice(1).join(' ');
-  if (base === 'cmd') return spawn('/bin/sh', ['-lc', raw], { cwd, shell: false, env });
+  if (base === 'cmd') return sandbox.guardedInteractiveSpawn({ file: '/bin/sh', args: ['-lc', raw] }, { cwd, env, policy });
   const sleep = raw.match(/Start-Sleep\s+(?:-Seconds\s+)?(\d+)/i);
   const output = raw.match(/Write-Output\s+(.+)$/i);
   const parts = [];
   if (sleep) parts.push('sleep ' + Math.min(3600, Number(sleep[1])));
   if (output) parts.push("printf '%s\\n' '" + output[1].trim().replace(/^['"]|['"]$/g, '').replace(/'/g, "'\\''") + "'");
-  return spawn('/bin/sh', ['-lc', parts.join('; ') || 'true'], { cwd, shell: false, env });
+  return sandbox.guardedInteractiveSpawn({ file: '/bin/sh', args: ['-lc', parts.join('; ') || 'true'] }, { cwd, env, policy });
 }
 
 function startProjectStream(event, root, command, timeoutSeconds = 180) {
@@ -928,7 +952,44 @@ ipcMain.handle('agent:runs', async (_event, projectRoot) => {
 
 ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {
   if (!projectRoot) return { ok: false, error: '未选择项目' };
-  return runStore.resumePlan(projectRoot, runId);
+  // 带幂等账本的续跑计划：能区分「已完成但没来得及提交」与「结果未知」，避免盲目重放副作用
+  const ledger = new SideEffectLedger({ projectRoot, scopeRunId: runId });
+  return runCheckpoint.planResume(projectRoot, runId, { activeIds: new Set(activeRequests.keys()), ledger });
+});
+
+/** 运行指标：成本账本 / 队列 / 告警 / 隔离状态 / 最近 Run（供 UI 与外部监控查询） */
+ipcMain.handle('agent:metrics', async (_event, projectRoot) => {
+  const cfg = agent.loadConfig(projectRoot);
+  const policy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: app.getPath('userData') });
+  const ledger = new CostLedger({ projectRoot, runId: 'metrics-view', prices: cfg.costPrices });
+  const dispatcher = new AlertDispatcher({
+    projectRoot,
+    thresholds: cfg.alertThresholds,
+    webhook: cfg.alertWebhook || null,
+  });
+  const snapshot = ledger.snapshot(modelQueue.stats());
+  const fired = await dispatcher.check({
+    ...snapshot,
+    degradedSandbox: policy.degraded.length > 0,
+    degradedReason: policy.degraded.join('/'),
+  }).catch(() => []);
+  return {
+    ok: true,
+    cost: snapshot,
+    firedAlerts: fired,
+    alertHistory: dispatcher.recent(20),
+    queue: modelQueue.stats(),
+    sandbox: {
+      backend: sandbox.capabilities().backend,
+      isolation: sandbox.capabilities().isolation,
+      detail: sandbox.capabilities().detail,
+      mode: policy.mode,
+      network: policy.network,
+      degraded: policy.degraded,
+      description: sandbox.describe(policy),
+    },
+    runs: projectRoot ? runStore.listRuns(projectRoot, 20) : [],
+  };
 });
 
 ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
@@ -937,7 +998,7 @@ ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacem
 });
 
 ipcMain.handle('agent:chat', async (event, payload) => {
-  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
+  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce } = payload || {};
   const sender = event.sender;
   let runId = null;
   const sendDelta = (d) => {
@@ -945,6 +1006,9 @@ ipcMain.handle('agent:chat', async (event, payload) => {
   };
   try {
     const cfg = agent.loadConfig(projectRoot);
+    // 执行隔离策略：工具子进程 / 扩展 / 项目命令统一生效（strict 模式下能力不足会拒绝执行）
+    const sandboxPolicy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: app.getPath('userData') });
+    sandbox.setDefaultPolicy(sandboxPolicy);
     const maxConcurrentRuns = Number(cfg.limits && cfg.limits.maxConcurrentRuns) || 2;
     cfg.requestBudget = new (require('./requestBudget.cjs').RequestBudget)(cfg.limits.maxTotalTokens);
     if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
@@ -965,7 +1029,53 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     }
     runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
     runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
-    runStore.startRun(projectRoot, runId, { prompt: String(prompt || '').slice(0, 4000), model: cfg.model, nodeId: nodeId || null });
+
+    // ---- 断点续跑：先判定可续跑级别（auto / review），review 需要用户显式复核 ----
+    let resumePlan = null;
+    let resumeScope = runId;
+    if (resumeRunId) {
+      const originalId = runStore.normalizeRunId(resumeRunId);
+      const originalLedger = new SideEffectLedger({ projectRoot, scopeRunId: originalId });
+      resumePlan = runCheckpoint.planResume(projectRoot, originalId, {
+        activeIds: new Set(activeRequests.keys()),
+        ledger: originalLedger,
+      });
+      if (!resumePlan.ok) return { ok: false, error: resumePlan.error || '无法生成续跑计划' };
+      if (resumePlan.mode === 'complete') return { ok: false, error: '该 Run 无需续跑：' + (resumePlan.reason || '') };
+      if (resumePlan.requiresReview && resumeForce !== true) {
+        return { ok: false, needsReview: true, plan: resumePlan };
+      }
+      // 幂等作用域沿用原 Run：这样中断前已提交的写操作在本次续跑里会被识别并跳过
+      resumeScope = originalId;
+    }
+
+    // ---- 成本账本 + 副作用幂等账本 + 检查点写入器 ----
+    const costLedger = new CostLedger({ projectRoot, runId, prices: cfg.costPrices });
+    cfg.costLedger = costLedger;
+    cfg.costRunId = runId;
+    const sideEffectLedger = new SideEffectLedger({ projectRoot, scopeRunId: resumeScope });
+    const sideEffectGuard = createGuard(sideEffectLedger);
+    const checkpointSink = (type, payload) => {
+      if (!projectRoot) return null;
+      if (type === 'messages') return runCheckpoint.saveMessages(projectRoot, runId, payload && payload.messages, { reason: payload && payload.reason });
+      if (type === 'tool_intent') return runCheckpoint.recordIntent(projectRoot, runId, payload || {});
+      if (type === 'tool_commit') return runCheckpoint.recordCommit(projectRoot, runId, payload || {});
+      return null;
+    };
+    const alertDispatcher = new AlertDispatcher({
+      projectRoot,
+      thresholds: cfg.alertThresholds,
+      webhook: cfg.alertWebhook || null,
+      onAlert: (alert) => sendDelta({ kind: 'alert', alert }),
+    });
+
+    runStore.startRun(projectRoot, runId, {
+      prompt: String((resumePlan && resumePlan.prompt) || prompt || '').slice(0, 4000),
+      model: cfg.model,
+      nodeId: nodeId || null,
+      resumedFrom: resumePlan ? resumePlan.runId : null,
+      sandbox: sandbox.describe(sandboxPolicy),
+    });
     const onAgentDelta = (delta) => {
       sendDelta(delta);
       if (!delta || !delta.kind) return;
@@ -1002,11 +1112,18 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     const memoryText = memory.entries.slice(-30).map((entry) => `- ${entry.key ? '[' + entry.key + '] ' : ''}${entry.content}`).join('\n');
     const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
     const skillsText = skills.map((item) => `- ${item.name}: ${item.instructions || item.description || '按项目扩展定义执行'}`).join('\n');
-    const messages = [{ role: 'system', content: agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText) }];
-    for (const m of history || []) {
-      if (m && m.role && m.content) messages.push({ role: m.role, content: m.content });
+    const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText);
+    const messages = resumePlan
+      ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })
+      : [{ role: 'system', content: systemContent }];
+    if (!resumePlan) {
+      for (const m of history || []) {
+        if (m && m.role && m.content) messages.push({ role: m.role, content: m.content });
+      }
+      messages.push({ role: 'user', content: prompt });
+    } else if (!messages.length) {
+      messages.push({ role: 'system', content: systemContent });
     }
-    messages.push({ role: 'user', content: prompt });
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),
       role: 'user',
@@ -1033,6 +1150,9 @@ ipcMain.handle('agent:chat', async (event, payload) => {
           role: 'supervisor',
           signal: controller.signal,
           scalarStore,
+          sandbox: () => sandboxPolicy,
+          sideEffectGuard,
+          checkpoint: checkpointSink,
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),
@@ -1107,6 +1227,18 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       grounding: result.grounding || null,
       error: result.error || null,
     });
+    // 续跑成功 → 原 Run 标记为已被取代，避免重复出现在「中断」列表里
+    if (resumePlan) {
+      try { runStore.markRetry(projectRoot, resumePlan.runId, runId); } catch {}
+    }
+    // 告警评估：成本 / 失败率 / 队列 / 隔离降级（失败不影响主流程）
+    try {
+      await alertDispatcher.check({
+        ...costLedger.snapshot(modelQueue.stats()),
+        degradedSandbox: sandboxPolicy.degraded.length > 0,
+        degradedReason: sandboxPolicy.degraded.join('/'),
+      });
+    } catch {}
     sendDelta({ kind: 'done' });
     const out = {
       ok: !result.error,
@@ -1116,6 +1248,10 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       usage: result.usage,
       grounding: result.grounding,
     };
+    out.cost = costLedger.summary(runId);
+    out.alerts = alertDispatcher.recent(5);
+    out.sandbox = { mode: sandboxPolicy.mode, backend: sandbox.capabilities().backend, degraded: sandboxPolicy.degraded };
+    if (resumePlan) out.resumedFrom = resumePlan.runId;
     if (result.aborted) out.aborted = true;
     if (result.error) out.error = result.error;
     if (dirty && model) out.document = model.doc;
@@ -1134,6 +1270,20 @@ ipcMain.handle('agent:stop', (_event, requestId) => {
   return { ok: true };
 });
 
+// ---- 发布自检入口（--codenode-selftest）：不创建窗口，输出 JSON 后立即退出 ----
+// 该分支同步执行、在所有既有逻辑之前完成，`app.exit()` 立即结束进程，
+// 因此不会触发下面的 app.whenReady() 窗口创建，对既有行为零改动。
+if (process.argv.includes('--codenode-selftest')) {
+  const selfTest = require('./selfTest.cjs');
+  let code = 1;
+  try {
+    const result = selfTest.runSelfTest({ userDataDir: app.getPath('userData'), argv: process.argv });
+    code = selfTest.emitResult(result, process.argv);
+  } catch (error) {
+    code = selfTest.emitResult({ ok: false, kind: 'codenode-selftest', error: String((error && error.stack) || error) }, process.argv);
+  }
+  app.exit(code);
+}
 app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => {

@@ -1,0 +1,106 @@
+/**
+ * scripted-model.cjs —— 离线确定性「脚本化模型」
+ *
+ * 用途：在无网络、无 API Key 的情况下驱动真实的 runAgentChat 工具循环
+ * （agent.cjs 通过全局 fetch 调用 OpenAI 兼容接口，这里替换 global.fetch 返回受控 SSE 流）。
+ *
+ * 脚本格式：数组，每一项是「一轮」模型输出：
+ *   { content?: '文本', toolCalls?: [{ name, args }] , usage?: {...} }
+ * 超出脚本长度后按循环策略重复（loopLast=true 时重复最后一项），用于制造「模型停不下来」的场景。
+ */
+'use strict';
+
+function sseChunk(payload) {
+  return 'data: ' + JSON.stringify(payload) + '\n\n';
+}
+
+function buildStream(turn) {
+  const chunks = [];
+  if (turn.reasoning) {
+    chunks.push(sseChunk({ choices: [{ index: 0, delta: { reasoning_content: turn.reasoning } }] }));
+  }
+  if (turn.content) {
+    chunks.push(sseChunk({ choices: [{ index: 0, delta: { content: turn.content } }] }));
+  }
+  if (Array.isArray(turn.toolCalls) && turn.toolCalls.length) {
+    turn.toolCalls.forEach((call, index) => {
+      chunks.push(
+        sseChunk({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index,
+                    id: call.id || 'call_' + index,
+                    type: 'function',
+                    function: { name: call.name, arguments: typeof call.args === 'string' ? call.args : JSON.stringify(call.args || {}) },
+                  },
+                ],
+              },
+            },
+          ],
+        })
+      );
+    });
+  }
+  chunks.push(sseChunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: turn.usage || { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 } }));
+  chunks.push('data: [DONE]\n\n');
+  return chunks.join('');
+}
+
+/**
+ * 安装脚本化模型。
+ * @returns {{ calls: number, seen: Array, restore: Function }}
+ */
+function installScriptedModel(script, options = {}) {
+  const originalFetch = global.fetch;
+  const state = { calls: 0, seen: [], script, loopLast: options.loopLast !== false };
+  global.fetch = async (url, init) => {
+    state.calls += 1;
+    let body = {};
+    try {
+      body = JSON.parse(String((init && init.body) || '{}'));
+    } catch {}
+    state.seen.push({ url: String(url), messages: body.messages || [] });
+    const index = state.calls - 1;
+    const turn = script[index] || (state.loopLast ? script[script.length - 1] : { content: '（脚本已用尽）' });
+    if (typeof options.onTurn === 'function') options.onTurn(turn, state.calls, body);
+    const stream = buildStream(turn || { content: '' });
+    const encoder = new TextEncoder();
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => stream,
+      json: async () => JSON.parse(stream),
+      body: {
+        getReader() {
+          let sent = false;
+          return {
+            read: async () => {
+              if (sent) return { done: true, value: undefined };
+              sent = true;
+              return { done: false, value: encoder.encode(stream) };
+            },
+          };
+        },
+      },
+    };
+  };
+  return {
+    get calls() {
+      return state.calls;
+    },
+    get seen() {
+      return state.seen;
+    },
+    state,
+    restore() {
+      global.fetch = originalFetch;
+    },
+  };
+}
+
+module.exports = { installScriptedModel, buildStream, sseChunk };

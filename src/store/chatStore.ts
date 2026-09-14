@@ -9,7 +9,10 @@ import type { ToolRecord } from '../types';
 interface ChatState {
   sending: boolean;
   requestId: string | null;
-  send: (prompt: string) => Promise<{ reply: string; reasoning: string; tools: ToolRecord[] }>;
+  send: (
+    prompt: string,
+    options?: { resumeRunId?: string; resumeForce?: boolean }
+  ) => Promise<{ reply: string; reasoning: string; tools: ToolRecord[] }>;
   stop: () => void;
 }
 
@@ -58,7 +61,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  send: async (prompt) => {
+  send: async (prompt, options) => {
     const empty = { reply: '', reasoning: '', tools: [] };
     const api = window.codenode;
     if (!api) {
@@ -101,7 +104,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         reasoningEffort: us.effort,
         document: { root: ctx },
         projectFile: useProjectStore.getState().projectFile || undefined,
+        // 断点续跑：带上原始 Run 与「是否已人工复核」；主进程按续跑计划决定走 auto 还是 review
+        resumeRunId: options?.resumeRunId,
+        resumeForce: options?.resumeForce === true ? true : undefined,
       });
+      // 需要人工复核的续跑：主进程拒绝自动执行，这里如实提示，不假装跑过
+      if (!res.ok && (res as { needsReview?: boolean }).needsReview) {
+        useUiStore.getState().setToast('该运行存在结果未知的副作用，需要人工复核后才能继续');
+        useSessionStore.getState().stopTurn();
+        return empty;
+      }
       const usage = normalizeUsage(res.usage);
       if (usage) useUsageStore.getState().recordUsage(usage);
 

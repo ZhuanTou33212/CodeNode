@@ -10,6 +10,8 @@
 const fs = require('fs');
 const path = require('path');
 const runStore = require('./runStore.cjs');
+const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
+const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
 function loadProperties(file) {
   const out = {};
@@ -43,6 +45,10 @@ function loadConfig(projectRoot) {
     compression: parseCompressionConfig(cfg),
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
+    sandbox: parseSandboxConfig(cfg),
+    costPrices: parseCostPrices(cfg),
+    alertThresholds: parseAlertThresholds(cfg),
+    alertWebhook: String(cfg['alerts.webhook'] || '').trim(),
   };
 }
 
@@ -132,6 +138,37 @@ function parseReliabilityConfig(cfg) {
     retryBaseMs: configInteger(cfg, 'agent.retry_base_ms', 400, 50, 5000),
     retryMaxMs: configInteger(cfg, 'agent.retry_max_ms', 5000, 250, 30000),
   };
+}
+
+/**
+ * 执行隔离策略（sandbox.*）：真正的能力探测与命令包装在 electron/sandbox.cjs。
+ * mode=off 关闭；best-effort 尽可能隔离、不可用时降级并留审计；strict 要求隔离，不满足则拒绝执行。
+ */
+function parseSandboxConfig(cfg) {
+  const requireFilesystem = /^(1|true|yes|on)$/i.test(String(cfg['sandbox.require_filesystem'] || ''));
+  return {
+    mode: String(cfg['sandbox.mode'] || 'best-effort').trim().toLowerCase(),
+    network: String(cfg['sandbox.network'] || 'inherit').trim().toLowerCase(),
+    requireFilesystem,
+    maxProcesses: configInteger(cfg, 'sandbox.max_processes', 0, 0, 4096),
+    maxMemoryMB: configInteger(cfg, 'sandbox.max_memory_mb', 0, 0, 1024 * 1024),
+    cpuSeconds: configInteger(cfg, 'sandbox.cpu_seconds', 0, 0, 86400),
+    allowWrite: configList(cfg, 'sandbox.allow_write'),
+  };
+}
+
+/**
+ * 统一成本记账：主模型 / 结果压缩 / 子代理 / 嵌入都写同一本账（electron/costLedger.cjs）。
+ * 账本由主进程注入（cfg.costLedger），未注入时为空操作 —— 不编造数据。
+ */
+function recordCost(cfg, entry) {
+  const ledger = cfg && cfg.costLedger;
+  if (!ledger || typeof ledger.record !== 'function') return null;
+  try {
+    return ledger.record(entry);
+  } catch {
+    return null;
+  }
 }
 
 /** 单次运行与进程级资源上限，避免上下文/工具 fan-out 失控。 */
@@ -568,7 +605,9 @@ async function compressToolContent(cfg, toolName, text, signal) {
     { role: 'user', content: '<tool_result name="' + toolName + '">\n' + clipped + '\n</tool_result>\n请压缩上述工具结果为关键信息摘要。' },
   ];
   try {
+    const startedAt = Date.now();
     const res = await chatCompletion({ ...cfg, maxTokens: Math.min(cfg.maxTokens || 8192, 4096) }, messages, { timeoutMs: 60000, signal });
+    recordCost(cfg, { kind: 'compression', model: cfg.model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName } });
     const out = String(res.content || '').trim();
     if (!out) return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
     return out;
@@ -772,6 +811,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       if (tools && tools.registry) {
         payload.tools = tools.registry.toOpenAiTools();
       }
+      const turnStartedAt = Date.now();
       const onEvent = (ev) => {
         if (ev.kind === 'reasoning') {
           reasoning += ev.text;
@@ -790,6 +830,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       });
       if (res.usage) {
         usage = mergeUsage(usage, res.usage);
+        recordCost(cfg, { kind: 'main', model: cfg.model, usage: res.usage, latencyMs: Date.now() - turnStartedAt, runId: cfg.costRunId });
         totalTokens = Number(usage.total_tokens) || totalTokens;
         const maxTotalTokens = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 250000;
         if (totalTokens > maxTotalTokens) {
@@ -826,12 +867,44 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const t0 = Date.now();
           const args = parseToolArgs(tc.args);
           const rawArgs = (tc.args || '').trim();
+          const callId = tc.id || 'call_' + iter + '_' + totalToolCalls;
+          // 副作用幂等 + 检查点：写操作先登记意图，中断后续跑时凭账本跳过已提交的写操作
+          let sideEffectToken = null;
+          let deduped = false;
+          if (tools.context && typeof tools.context.beginSideEffect === 'function') {
+            try {
+              const guard = await tools.context.beginSideEffect(tc.name, args);
+              if (guard && guard.skip) {
+                deduped = true;
+                sideEffectToken = null;
+                if (typeof tools.context.checkpoint === 'function') {
+                  tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey });
+                  tools.context.checkpoint('tool_commit', { callId, tool: tc.name, ok: true, idemKey: guard.idemKey, effect: guard.effect, resultDigest: 'skipped-by-ledger' });
+                }
+              } else if (guard) {
+                sideEffectToken = { ...guard, tool: tc.name, callId };
+                if (typeof tools.context.checkpoint === 'function') {
+                  tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: guard.argsDigest || require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey });
+                }
+              }
+            } catch {}
+          }
           // 检测参数 JSON 损坏：模型可能把引号转义错误，导致工具拿到空参而失败、反复重试
           const malformed = rawArgs !== '' && rawArgs !== '{}' && Object.keys(args).length === 0;
           let result;
           let repeated = false;
-          const cacheKey = CACHEABLE_TOOLS.has(tc.name) ? tc.name + '\u0000' + canonicalArgs(tc.args) : null;
-          if (cacheKey) {
+          if (deduped) {
+            // 幂等去重：该写操作在中断前已提交，直接复用结论，绝不重复产生副作用
+            result = require('./tools/result.cjs').AgentToolResult.ok(
+              '（幂等去重）该写操作在上一次中断前已成功提交，本次跳过执行。',
+              { skipped: true, dedupedBy: 'side-effect-ledger' }
+            );
+            repeated = true;
+          }
+          const cacheKey = !deduped && CACHEABLE_TOOLS.has(tc.name) ? tc.name + '\u0000' + canonicalArgs(tc.args) : null;
+          if (deduped) {
+            // 已在上方构造结果，跳过执行
+          } else if (cacheKey) {
             const cached = toolResultCache.get(cacheKey);
             if (cached) {
               result = cached.result;
@@ -851,6 +924,24 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           // 变更类工具执行后，清空只读结果缓存（get_workbench_model/read_file/scan_project 等），
           // 保证随后读取的一定是最新的画布模型/文件状态，避免“写入成功但读到旧数据/0 节点”
           if (MUTATION_TOOLS.has(tc.name)) toolResultCache.clear();
+          // 副作用结算：写操作提交/失败都落账本，中断后能判断哪些写已经发生
+          if (sideEffectToken && tools.context) {
+            try {
+              if (result.ok) await tools.context.commitSideEffect(sideEffectToken, { ok: true, result: result.text });
+              else await tools.context.failSideEffect(sideEffectToken, result.text);
+            } catch {}
+            if (typeof tools.context.checkpoint === 'function') {
+              tools.context.checkpoint('tool_commit', {
+                callId,
+                tool: tc.name,
+                ok: result.ok,
+                idemKey: sideEffectToken.idemKey,
+                effect: sideEffectToken.effect,
+                resultDigest: require('./sideEffects.cjs').digest(String(result.text || '').slice(0, 4000)),
+                elapsedMs: Date.now() - t0,
+              });
+            }
+          }
           const elapsed = Date.now() - t0;
           const record = {
             name: tc.name,
@@ -931,6 +1022,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           executed: totalToolCalls,
           capped,
         });
+        // 断点续跑：每轮结束保存对话快照，崩溃后能凭它重建上下文而不是重新问用户
+        if (tools.context && typeof tools.context.checkpointMessages === 'function') {
+          tools.context.checkpointMessages(messages, 'round_end');
+        }
         if (capped) {
           stopReason = 'tool_limit';
           break;
@@ -974,6 +1069,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
 
 module.exports = {
   loadConfig,
+  parseSandboxConfig,
+  recordCost,
+  parseCostPrices,
+  parseAlertThresholds,
   loadSoul,
   parseSoul,
   buildSystemPrompt,

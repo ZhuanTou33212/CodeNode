@@ -165,14 +165,43 @@ interface CodenodeApi {
   }>>;
   agentResumePlan: (root: string | null, runId: string) => Promise<{
     ok: boolean;
+    mode?: 'complete' | 'auto' | 'review' | 'unknown';
     requiresReview?: boolean;
     runId?: string;
     prompt?: string;
     model?: string | null;
     nodeId?: string | null;
+    reason?: string;
     warning?: string;
     error?: string;
+    pendingSteps?: { tool: string; effect: string; idemKey: string | null }[];
+    completedSteps?: { tool: string; idemKey: string | null; at: string | null }[];
+    skippedByLedger?: { tool: string; idemKey: string | null; reason: string }[];
+    unknownEffects?: { tool: string; effect: string }[];
   }>;
+  agentMetrics: (root: string | null) => Promise<{
+    ok: boolean;
+    cost?: {
+      run: CostCountersDto;
+      today: CostCountersDto;
+      kinds?: Record<string, CostCountersDto>;
+      queue?: { active: number; waiting: number; maxWaitMs: number } | null;
+    };
+    firedAlerts?: AlertDto[];
+    alertHistory?: AlertDto[];
+    queue?: { active: number; waiting: number; limit: number; maxWaitMs: number };
+    sandbox?: {
+      backend: string;
+      isolation: Record<string, boolean>;
+      detail: string;
+      mode: string;
+      network: string;
+      degraded: string[];
+      description: string;
+    };
+    runs?: unknown[];
+  }>;
+  onAgentAlert: (cb: (alert: AlertDto) => void) => () => void;
   agentResumeStart: (root: string | null, runId: string, replacementRunId: string) => Promise<{
     ok: boolean;
     error?: string;
@@ -180,6 +209,8 @@ interface CodenodeApi {
   }>;
   agentChat: (payload: {
     projectRoot: string | null;
+    resumeRunId?: string;
+    resumeForce?: boolean;
     prompt: string;
     history?: { role: string; content: string }[];
     canvasSummary?: string;
@@ -207,6 +238,10 @@ interface CodenodeApi {
     };
     error?: string;
     document?: { root?: unknown };
+    cost?: Record<string, unknown>;
+    alerts?: AlertDto[];
+    resumedFrom?: string;
+    needsReview?: boolean;
   }>;
   stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {
@@ -221,6 +256,28 @@ interface CodenodeApi {
   }) => void) => () => void;
   onToolRequest: (cb: (data: ToolRequestDto) => void) => () => void;
   respondToolRequest: (id: string, result: unknown) => void;
+}
+
+interface CostCountersDto {
+  requests: number;
+  errors: number;
+  retries: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  costKnown: boolean;
+  estimated: number;
+  latencyMs: number;
+}
+
+interface AlertDto {
+  ts?: string;
+  id: string;
+  severity: 'warn' | 'critical' | string;
+  message: string;
+  value?: number;
+  threshold?: number;
 }
 
 interface Window {

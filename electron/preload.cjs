@@ -27,6 +27,13 @@ contextBridge.exposeInMainWorld('codenode', {
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),
   agentResumePlan: (root, runId) => ipcRenderer.invoke('agent:resume-plan', root, runId),
   agentResumeStart: (root, runId, replacementRunId) => ipcRenderer.invoke('agent:resume-start', root, runId, replacementRunId),
+  // 运行指标 / 成本 / 告警 / 执行隔离状态
+  agentMetrics: (root) => ipcRenderer.invoke('agent:metrics', root),
+  onAgentAlert: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('agent:alert', listener);
+    return () => ipcRenderer.removeListener('agent:alert', listener);
+  },
   modelsList: () => ipcRenderer.invoke('models:list'),
   modelsSave: (model) => ipcRenderer.invoke('models:save', model),
   modelsDelete: (id) => ipcRenderer.invoke('models:delete', id),

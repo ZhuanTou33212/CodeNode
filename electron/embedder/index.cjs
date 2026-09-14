@@ -97,6 +97,24 @@ class Embedder {
     this.apiKey = String(o.embedKey || '').trim();
     const defaultBase = this.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1';
     this.base = String(o.embedBase || defaultBase).trim().replace(/\/+$/, '');
+    // 与主模型共享有界并发队列与请求预算（嵌入也是模型调用，不能绕开统一成本/并发控制）
+    this.queue = o.queue || null;
+    this.budget = o.budget || null;
+    this.onUsage = typeof o.onUsage === 'function' ? o.onUsage : null;
+    this.signal = o.signal || null;
+  }
+
+  /** 估算 token 数（保守：按字符数 / 3 向上取整），用于嵌入请求的预算预留与记账 */
+  estimateTokens(texts) {
+    const chars = (Array.isArray(texts) ? texts : [texts]).reduce((sum, text) => sum + String(text || '').length, 0);
+    return Math.max(1, Math.ceil(chars / 3));
+  }
+
+  _report(kind, model, usage, startedAt) {
+    if (!this.onUsage) return;
+    try {
+      this.onUsage({ kind: kind || 'embedding', model, usage: usage || null, latencyMs: Date.now() - startedAt, runId: this.runId || null });
+    } catch {}
   }
 
   isLocal() {
@@ -113,6 +131,20 @@ class Embedder {
 
   async embedOpenAi(texts) {
     if (!this.apiKey) throw new Error('openai 嵌入器缺少 rag.embed_key');
+    const startedAt = Date.now();
+    const release = this.queue ? await this.queue.acquire(this.signal) : null;
+    const settle = this.budget ? this.budget.reserve(this.estimateTokens(texts) + 256) : null;
+    try {
+      return await this.embedOpenAiInner(texts, startedAt, settle);
+    } catch (error) {
+      if (settle) settle(null);
+      throw error;
+    } finally {
+      if (release) release();
+    }
+  }
+
+  async embedOpenAiInner(texts, startedAt, settle) {
     const res = await fetch(this.base + '/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
@@ -123,6 +155,8 @@ class Embedder {
       throw new Error('openai 嵌入 HTTP ' + res.status + ': ' + text.slice(0, 200));
     }
     const data = await res.json();
+    if (settle) settle(data.usage || null);
+    this._report('embedding', this.model || 'text-embedding-3-small', data.usage || null, startedAt);
     return (data.data || [])
       .slice()
       .sort((a, b) => (a.index || 0) - (b.index || 0))
@@ -131,6 +165,11 @@ class Embedder {
 
   async embedOllama(texts) {
     const out = [];
+    const startedAt = Date.now();
+    const release = this.queue ? await this.queue.acquire(this.signal) : null;
+    const settle = this.budget ? this.budget.reserve(this.estimateTokens(texts) + 256) : null;
+    let reported = 0;
+    try {
     for (const text of texts) {
       const res = await fetch(this.base + '/api/embeddings', {
         method: 'POST',
@@ -143,6 +182,13 @@ class Embedder {
       }
       const data = await res.json();
       out.push(data.embedding || []);
+      reported += 1;
+    }
+    } finally {
+      // ollama 不返回 usage：按估算结算并标记保守值（不假装免费、也不编造精确值）
+      if (settle) settle({ total_tokens: this.estimateTokens(texts) });
+      this._report('embedding', this.model || 'nomic-embed-text', { total_tokens: this.estimateTokens(texts), estimated: true }, startedAt);
+      if (release) release();
     }
     return out;
   }
