@@ -31,6 +31,8 @@ try {
   assert.strictEqual(plan.ok, true);
   assert.strictEqual(plan.requiresReview, true);
   assert.match(plan.warning, /不会自动重放/);
+  assert.strictEqual(store.markRetry(root, 'running', 'replacement').ok, true);
+  assert.strictEqual(store.summarizeRun(store.readRun(root, 'running')).status, 'superseded');
   assert.ok(!fs.readFileSync(runFile, 'utf8').includes('synthetic-private'));
   const clean = redact({ total_tokens: 42, prompt_tokens: 20, apiKey: 'synthetic',
     args: '{"password":"synthetic-password"}' });

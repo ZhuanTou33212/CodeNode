@@ -931,6 +931,11 @@ ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {
   return runStore.resumePlan(projectRoot, runId);
 });
 
+ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
+  if (!projectRoot) return { ok: false, error: '未选择项目' };
+  return runStore.markRetry(projectRoot, runId, replacementRunId);
+});
+
 ipcMain.handle('agent:chat', async (event, payload) => {
   const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
   const sender = event.sender;

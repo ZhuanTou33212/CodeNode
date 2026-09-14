@@ -283,6 +283,11 @@ function RunsPanel() {
     if (!resumePlan?.ok || !resumePlan.prompt) return;
     setRecoveryBusy(true);
     try {
+      const replacementRunId = 'retry-' + Date.now().toString(36);
+      const marked = root && window.codenode?.agentResumeStart
+        ? await window.codenode.agentResumeStart(root, resumePlan.runId || '', replacementRunId)
+        : { ok: false, error: '恢复接口不可用' };
+      if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
       await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
       setResumePlan(null);
       if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter((run) => run.status === 'interrupted'));

@@ -98,14 +98,22 @@ function summarizeRun(events) {
   const list = Array.isArray(events) ? events : [];
   const start = list.find((event) => event.type === 'run_start');
   const finish = [...list].reverse().find((event) => event.type === 'run_finish');
+  const retry = [...list].reverse().find((event) => event.type === 'run_retry_started');
   return {
     runId: (finish || start || {}).runId || null,
-    status: finish ? finish.status : start ? 'interrupted' : 'unknown',
+    status: retry ? 'superseded' : finish ? finish.status : start ? 'interrupted' : 'unknown',
     startedAt: start ? start.ts : null,
     finishedAt: finish ? finish.ts : null,
     eventCount: list.length,
     lastEvent: list[list.length - 1] || null,
   };
+}
+
+function markRetry(projectRoot, runId, replacementRunId) {
+  const summary = summarizeRun(readRun(projectRoot, runId));
+  if (!summary.runId || summary.status !== 'interrupted') return { ok: false, error: 'Run 当前不可重试：' + (summary.status || 'unknown') };
+  appendEvent(projectRoot, runId, 'run_retry_started', { replacementRunId: normalizeRunId(replacementRunId) });
+  return { ok: true, runId: summary.runId, replacementRunId: normalizeRunId(replacementRunId) };
 }
 
 function listRuns(projectRoot, limit = 30) {
@@ -155,4 +163,4 @@ function resumePlan(projectRoot, runId) {
   };
 }
 
-module.exports = { normalizeRunId, appendJsonl, appendEvent, startRun, finishRun, readRun, summarizeRun, listRuns, recoverInterrupted, resumePlan };
+module.exports = { normalizeRunId, appendJsonl, appendEvent, startRun, finishRun, readRun, summarizeRun, listRuns, recoverInterrupted, resumePlan, markRetry };

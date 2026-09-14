@@ -173,6 +173,11 @@ interface CodenodeApi {
     warning?: string;
     error?: string;
   }>;
+  agentResumeStart: (root: string | null, runId: string, replacementRunId: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    replacementRunId?: string;
+  }>;
   agentChat: (payload: {
     projectRoot: string | null;
     prompt: string;
