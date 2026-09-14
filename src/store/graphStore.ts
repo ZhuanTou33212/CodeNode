@@ -254,9 +254,44 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   resizingIds: [],
   flow: {},
 
-  setSelectedId: (id) => set({ selectedId: id }),
+  /**
+   * 选中态的唯一事实源是 nodes 的 selected 标志（React Flow 是受控读取它的）。
+   *
+   * 只改 selectedId/selectedIds 而不同步 selected 标志时，React Flow 下一次同步
+   * 会用 onSelectionChange([]) 把选择清空 —— 表现为“选中一闪即逝、Delete 删不掉”。
+   * 同步标志时会触发 React Flow 的受控回调，那一路会再回写这里；
+   * 因此这里带相等性短路：没有实际变化就原样返回，绝不生成新的 state/nodes，
+   * 否则会形成 [] → [x] → [] 的往复更新环（React error #185，整个工作台崩掉）。
+   * 选择不进撤销历史（selection 不是图内容）。
+   */
+  setSelectedId: (id) =>
+    set((s) => {
+      const nextId = id || null;
+      const sameIds = nextId ? s.selectedIds.length === 1 && s.selectedIds[0] === nextId : s.selectedIds.length === 0;
+      const nodes = sameIds
+        ? s.nodes
+        : s.nodes.map((n) => {
+            const should = n.id === nextId;
+            return n.selected === should ? n : { ...n, selected: should };
+          });
+      if (sameIds && s.selectedId === nextId) return s;
+      return { selectedId: nextId, selectedIds: nextId ? [nextId] : [], nodes };
+    }),
 
-  setSelectedIds: (ids) => set({ selectedIds: ids, selectedId: ids.length === 1 ? ids[0] : null }),
+  setSelectedIds: (ids) =>
+    set((s) => {
+      const sameIds = ids.length === s.selectedIds.length && ids.every((id) => s.selectedIds.includes(id));
+      const idSet = new Set(ids);
+      const nodes = sameIds
+        ? s.nodes
+        : s.nodes.map((n) => {
+            const should = idSet.has(n.id);
+            return n.selected === should ? n : { ...n, selected: should };
+          });
+      const nextId = ids.length === 1 ? ids[0] : null;
+      if (sameIds && s.selectedId === nextId) return s;
+      return { selectedIds: ids, selectedId: nextId, nodes };
+    }),
 
   setAltDrag: (ids) => set({ altDragIds: ids }),
 

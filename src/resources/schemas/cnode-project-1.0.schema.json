@@ -42,7 +42,7 @@
             "required": ["id", "type", "position"],
             "properties": {
               "id": { "type": "string" },
-              "type": { "type": "string", "enum": ["start", "end", "task", "stage", "tool"] },
+              "type": { "type": "string", "enum": ["start", "end", "task", "stage", "tool", "scope", "file", "image", "object", "vector"] },
               "position": {
                 "type": "object",
                 "required": ["x", "y"],
@@ -54,7 +54,12 @@
                   "label": { "type": "string" },
                   "subtitle": { "type": "string" },
                   "goal": { "type": "string" },
-                  "status": { "type": "string", "enum": ["pending", "running", "done", "failed", "blocked"] }
+                  "status": { "type": "string", "enum": ["pending", "running", "done", "failed", "blocked"] },
+                  "imagePath": { "type": "string", "description": "图像节点：项目内相对路径" },
+                  "dataUrl": { "type": "string", "description": "图像节点：图片 data URL" },
+                  "note": { "type": "string", "description": "图像节点：说明" },
+                  "filePath": { "type": "string", "description": "文件节点：项目内相对路径" },
+                  "objectName": { "type": "string", "description": "对象节点：对象名" }
                 }
               },
               "selected": { "type": "boolean" },

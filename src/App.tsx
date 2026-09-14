@@ -1,10 +1,9 @@
 import { useEffect } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
-import ProjectManager from './components/ProjectManager';
 import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
-import Inspector from './components/Inspector';
+import SidePanel from './components/side/SidePanel';
 import InspectorBadge from './components/InspectorBadge';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
@@ -31,6 +30,26 @@ function isVectorNodeFocus(): boolean {
   return Boolean(el?.closest?.('.vs-scope'));
 }
 
+/** 是否正在进行真正的“文字编辑”，此时 Delete/Backspace 应留给控件。
+ *
+ *  只按“焦点是不是 input/textarea”判断会误伤：点选节点时焦点常常落在节点内的
+ *  非文本控件上（如画布节点的模式按钮 .wf-vector-mode、面板里的 range/checkbox），
+ *  用户并没有在编辑文字，Delete 应该删除节点而不是被吞掉。
+ *  因此这里做白名单：只认真正的文本录入控件（textarea / 文本类 input / contentEditable）。 */
+const TEXT_INPUT_TYPES = ['text', 'search', 'url', 'email', 'password', 'tel', 'number'];
+
+function isTextEditingNow(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'textarea') return true;
+  if (tag === 'input') {
+    const type = ((el as HTMLInputElement).type || 'text').toLowerCase();
+    return TEXT_INPUT_TYPES.includes(type);
+  }
+  return el.isContentEditable === true;
+}
+
 export default function App() {
   const undo = useGraphStore((s) => s.undo);
   const redo = useGraphStore((s) => s.redo);
@@ -40,7 +59,7 @@ export default function App() {
   const layoutNodes = useGraphStore((s) => s.layoutNodes);
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
-  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const sideOpen = useUiStore((s) => s.sideOpen);
   const dockOpen = useUiStore((s) => s.dockOpen);
   const booted = useUiStore((s) => s.booted);
   const projectRoot = useProjectStore((s) => s.root);
@@ -58,14 +77,14 @@ export default function App() {
     return uninstall;
   }, []);
 
-  // 窄窗口优先保留画布与 Prompt，项目树可通过左上角按钮随时展开。
+  // 窄窗口优先保留画布与 Prompt：侧栏改为浮层，过窄时默认收起。
   useEffect(() => {
-    let wasNarrow = window.innerWidth <= 780;
-    if (wasNarrow && useUiStore.getState().leftOpen) useUiStore.getState().toggleLeft();
+    let wasNarrow = window.innerWidth <= 860;
+    if (wasNarrow && useUiStore.getState().sideOpen) useUiStore.getState().setSideOpen(false);
     const onResize = () => {
-      const isNarrow = window.innerWidth <= 780;
-      if (isNarrow && !wasNarrow && useUiStore.getState().leftOpen) {
-        useUiStore.getState().toggleLeft();
+      const isNarrow = window.innerWidth <= 860;
+      if (isNarrow && !wasNarrow && useUiStore.getState().sideOpen) {
+        useUiStore.getState().setSideOpen(false);
       }
       wasNarrow = isNarrow;
     };
@@ -88,6 +107,22 @@ export default function App() {
           void openProject();
         }
         return;
+      }
+
+      // 删除选中节点：必须放在「矢量画布让位」之前。
+      // 「画布节点」(vector) 内部就是一个 .vs-scope 矢量画布，焦点常常落在它上面，
+      // 若沿用下面的让位规则，Delete 会被吞掉 —— 这正是「选中画布节点后删不掉」的原因。
+      // 只有焦点在真正的文字输入里（节点内编辑文字）时才让位，避免误删字符。
+      if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
+        if (!isTextEditingNow()) {
+          const st = useGraphStore.getState();
+          const ids = st.selectedIds.length ? st.selectedIds : st.selectedId ? [st.selectedId] : [];
+          if (ids.length) {
+            e.preventDefault();
+            deleteNodes(ids);
+            return;
+          }
+        }
       }
 
       // 选中的是画布节点 / 焦点在矢量画布内时，快捷键交给画布节点处理
@@ -114,6 +149,13 @@ export default function App() {
 
       if (isTypingTarget()) return;
 
+      // Ctrl+B：开合右侧侧栏（对齐 VS Code 的习惯）
+      if (mod && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        useUiStore.getState().toggleSide();
+        return;
+      }
+
       if (e.code === 'KeyA' && e.shiftKey && !mod) {
         e.preventDefault();
         const m = useUiStore.getState().lastMouse;
@@ -127,6 +169,7 @@ export default function App() {
         return;
       }
 
+      // 删除选中节点已在上方（矢量画布让位之前）统一处理
       if (e.key.toLowerCase() === 'x' && !mod) {
         e.preventDefault();
         if (selectedId) deleteNodes([selectedId]);
@@ -155,8 +198,11 @@ export default function App() {
         if (selectedId) duplicateNode(selectedId);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // 用捕获阶段监听：节点内部（如矢量画布面板的按钮 / 输入控件）会在冒泡阶段
+    // stopPropagation，一旦焦点落在这些元素上，冒泡阶段的工作台快捷键（含删除）
+    // 就会被吞掉 —— 表现就是「选中画布节点后 Delete 没反应」。
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, layoutNodes, arrangeNodes, createScopeFromSelection]);
 
   // 启动引导尚未结束：先显示占位，避免「门禁页 -> 工作台」之间闪一下
@@ -178,10 +224,9 @@ export default function App() {
   return (
     <div className="app">
       <Toolbar />
-      <div className={`app-body${dockOpen ? ' has-dock' : ''}`}>
-        <ProjectManager />
+      <div className={`app-body side-left${dockOpen ? ' has-dock' : ''}`}>
+        {sideOpen ? <SidePanel /> : <InspectorBadge />}
         <Canvas />
-        {inspectorOpen ? <Inspector /> : <InspectorBadge />}
         <AddMenu />
         <WorkbenchDock />
       </div>

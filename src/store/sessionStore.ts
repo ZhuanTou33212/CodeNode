@@ -38,7 +38,7 @@ interface SessionState {
   restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null) => void;
 
   getDocument: () => SessionDoc;
-  pushUser: (content: string) => void;
+  pushUser: (content: string, attachments?: SessionMsg['attachments']) => void;
   beginTurn: () => void;
   streamDelta: (d: {
     kind?: string;
@@ -233,8 +233,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }));
   },
 
-  pushUser: (content) => {
-    set((s) => ({ messages: [...s.messages, { role: 'user', content }] }));
+  pushUser: (content, attachments) => {
+    set((s) => ({
+      messages: [...s.messages, { role: 'user', content, ...(attachments && attachments.length ? { attachments } : {}) }],
+    }));
   },
 
   beginTurn: () => {

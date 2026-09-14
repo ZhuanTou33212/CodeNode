@@ -1,8 +1,9 @@
 import type { NodeTypes } from '@xyflow/react';
-import type { WorkflowNodeData, ScopeData, FileData, ObjectData, VectorData } from '../types';
+import type { WorkflowNodeData, ScopeData, FileData, ObjectData, VectorData, ImageData } from '../types';
 import WorkflowNode from './WorkflowNode';
 import ScopeNode from './ScopeNode';
 import FileNode from './FileNode';
+import ImageNode from './ImageNode';
 import VectorNode from '../vector/VectorNode';
 
 export const nodeTypes: NodeTypes = {
@@ -13,6 +14,7 @@ export const nodeTypes: NodeTypes = {
   end: WorkflowNode,
   scope: ScopeNode,
   file: FileNode,
+  image: ImageNode,
   object: WorkflowNode,
   vector: VectorNode,
 };
@@ -67,6 +69,17 @@ export const NODE_TEMPLATES: Record<string, NodeTemplate> = {
     label: '文件节点',
     subtitle: 'File',
     data: { label: '文件节点', status: 'pending', accent: '#f97316' } as FileData,
+  },
+  image: {
+    label: '图像节点',
+    subtitle: 'Image',
+    data: {
+      label: '图像节点',
+      status: 'pending',
+      accent: '#14b8a6',
+      width: 320,
+      height: 224,
+    } as ImageData,
   },
   object: {
     label: '对象节点',

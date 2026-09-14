@@ -68,9 +68,19 @@ const STATUS_COLOR: Record<string, string> = {
 
 /* ==================== 快捷键（仅活跃节点绑定，与工作台互斥） ==================== */
 
-function useNodeHotkeys(store: VectorStore, active: boolean) {
+function useNodeHotkeys(store: VectorStore, active: boolean, nodeId: string) {
   useEffect(() => {
     if (!active) return;
+    /** 该监听注册在 window 的 capture 阶段并会 stopImmediatePropagation。
+     *  只有当焦点确实在「本节点的画布内容区」(.vs-scope) 里时才处理按键；
+     *  否则必须放行 —— 否则选中画布节点后按 Delete 会被当成“删除矢量对象”吞掉，
+     *  工作台的 deleteNodes 永远拿不到这次按键（表现为节点删不掉）。 */
+    const ownsFocus = () => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el) return false;
+      const scope = document.querySelector(`[data-id="${nodeId}"] .vs-scope`);
+      return !!scope && scope.contains(el);
+    };
     const isTyping = () => {
       const el = document.activeElement as HTMLElement | null;
       if (!el) return false;
@@ -78,6 +88,8 @@ function useNodeHotkeys(store: VectorStore, active: boolean) {
     };
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement | null)?.closest?.('.vs-foreign-edit')) return;
+      // 焦点不在本节点内：不处理也不拦截，交给工作台快捷键
+      if (!ownsFocus()) return;
       const s = store.getState();
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
@@ -182,7 +194,7 @@ function useNodeHotkeys(store: VectorStore, active: boolean) {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [store, active]);
+  }, [store, active, nodeId]);
 }
 
 /* ==================== 节点 ==================== */
@@ -205,7 +217,7 @@ function VectorNode({ id, data, selected }: NodeProps) {
   }, [selected, id]);
 
   // 仅当选中的画布节点激活快捷键，避免与工作台全局快捷键互相抢键
-  useNodeHotkeys(store, !!selected);
+  useNodeHotkeys(store, !!selected, id);
 
   const accent = d.accent || ACCENT;
   const style = {

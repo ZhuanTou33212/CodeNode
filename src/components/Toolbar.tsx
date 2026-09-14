@@ -3,6 +3,7 @@ import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { newProject, openProject, openProjectFile, saveProject } from '../lib/projectActions';
 import { NODE_TEMPLATES } from '../nodes';
+import type { VectorData } from '../types';
 
 export default function Toolbar() {
   const undo = useGraphStore((s) => s.undo);
@@ -16,9 +17,11 @@ export default function Toolbar() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
+  const sideOpen = useUiStore((s) => s.sideOpen);
+  const toggleSide = useUiStore((s) => s.toggleSide);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
-  const { fitView, screenToFlowPosition } = useReactFlow();
+  const { fitView, getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
 
   return (
     <header className="toolbar">
@@ -51,6 +54,17 @@ export default function Toolbar() {
       </div>
 
       <div className="toolbar-group">
+        <button
+          className={`toolbar-side ${sideOpen ? 'is-on' : ''}`}
+          title="显示 / 隐藏右侧侧栏：节点属性 · 项目文件 · 文件预览 (Ctrl+B)"
+          aria-pressed={sideOpen}
+          onClick={toggleSide}
+        >
+          ◧ 侧栏
+        </button>
+      </div>
+
+      <div className="toolbar-group toolbar-ops">
         <button title="打开代码编辑器" onClick={() => openDock('editor')}>
           编辑
         </button>
@@ -125,17 +139,39 @@ export default function Toolbar() {
           className="toolbar-vector"
           title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"
           onClick={() => {
-            const position = { x: window.innerWidth / 2 - 260, y: 140 };
-            const flowPos = screenToFlowPosition(position);
-            const { addNode } = useGraphStore.getState();
             const template = NODE_TEMPLATES.vector;
-            addNode({
-              id: `vector-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
+            const vd = template.data as VectorData;
+            const w = vd.width ?? 1040;
+            const h = vd.height ?? 640;
+            const id = `vector-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
+
+            // 视口中心（flow 坐标）放节点，尺寸按当前 zoom 折算，
+            // 使节点完整落在可视区内 —— 不依赖 fitView 的时序。
+            const host = document.querySelector('.canvas-wrap');
+            const rect = host
+              ? host.getBoundingClientRect()
+              : ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight } as DOMRect);
+            const center = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+            const vp = getViewport();
+            const zoom = vp.zoom > 0 ? vp.zoom : 1;
+            const flowW = w / zoom;
+            const flowH = h / zoom;
+
+            useGraphStore.getState().addNode({
+              id,
               type: 'vector',
-              position: flowPos,
+              position: { x: Math.round(center.x - flowW / 2), y: Math.round(center.y - flowH / 2) },
               data: { ...template.data },
             });
+            useGraphStore.getState().setSelectedIds([id]);
             setToast('已添加画布节点');
+            // 节点尺寸大（1040×640）且当前 zoom 可能偏大，收一档保证整块可见
+            const targetZoom = Math.min(zoom, 0.55);
+            const focus = () => {
+              const c = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+              rfSetViewport({ x: rect.width / 2 - c.x * targetZoom, y: rect.height / 2 - c.y * targetZoom, zoom: targetZoom }, { duration: 240 });
+            };
+            window.setTimeout(focus, 90);
           }}
         >
           ✦ 画布节点

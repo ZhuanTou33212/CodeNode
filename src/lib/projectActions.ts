@@ -3,6 +3,7 @@ import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { useSessionStore } from '../store/sessionStore';
 import { useCheckpointStore, type Checkpoint } from '../store/checkpointStore';
+import { readRecentProjects, rememberRecentProject } from './recentProjects';
 import type { Graph, SessionCanvas, SessionDoc, SessionMsg } from '../types';
 
 const LAST_ROOT_KEY = 'codenode.lastProjectRoot';
@@ -152,6 +153,7 @@ export async function newProject(): Promise<void> {
   const root = res.root || dirOf(res.filePath);
   localStorage.setItem(LAST_ROOT_KEY, root);
   localStorage.setItem(LAST_FILE_KEY, res.filePath);
+  rememberRecentProject({ root, file: res.filePath });
   await useProjectStore.getState().loadRoot(root);
   useCheckpointStore.getState().setProjectRoot(root, []);
   useProjectStore.getState().setProjectFile(res.filePath);
@@ -172,11 +174,13 @@ export async function openProject(): Promise<void> {
   if (!res.ok || !res.root) return;
   localStorage.setItem(LAST_ROOT_KEY, res.root);
   localStorage.removeItem(LAST_FILE_KEY);
+  rememberRecentProject({ root: res.root });
   await useProjectStore.getState().loadRoot(res.root);
   useCheckpointStore.getState().setProjectRoot(res.root);
   const lr = await api.loadProject(res.root);
   if (lr.ok && lr.data && lr.filePath) {
     localStorage.setItem(LAST_FILE_KEY, lr.filePath);
+    rememberRecentProject({ root: res.root, file: lr.filePath });
     useProjectStore.getState().setProjectFile(lr.filePath);
     applyLoaded(res.root, lr.data);
     const warn = lr.data.warnings?.length ? '（' + lr.data.warnings.join('；') + '）' : '';
@@ -204,6 +208,7 @@ export async function openProjectFile(): Promise<void> {
   const root = dirOf(res.filePath);
   localStorage.setItem(LAST_ROOT_KEY, root);
   localStorage.setItem(LAST_FILE_KEY, res.filePath);
+  rememberRecentProject({ root, file: res.filePath });
   await useProjectStore.getState().loadRoot(root);
   useCheckpointStore.getState().setProjectRoot(root);
   useProjectStore.getState().setProjectFile(res.filePath);
@@ -241,6 +246,7 @@ export async function saveProject(): Promise<void> {
       useProjectStore.getState().setProjectFile(res.filePath);
       localStorage.setItem(LAST_FILE_KEY, res.filePath);
       localStorage.setItem(LAST_ROOT_KEY, dirOf(res.filePath));
+      rememberRecentProject({ root: dirOf(res.filePath), file: res.filePath });
       useUiStore.getState().setToast('已保存：' + res.filePath);
     } else {
       useUiStore.getState().setToast('保存失败：' + (res.error || '未知错误'));
@@ -268,43 +274,69 @@ export async function saveProject(): Promise<void> {
 
 /**
  * 启动时恢复上次打开的工程。
- * 变成 async 并由 App 以 void 调用：结束时置 booted，让启动页/门禁页知道"引导已完成"。
- * 若上次的工程目录已不可用（被删、无权限），清空 root 退回门禁页，避免进到坏掉的工作台。
+ *
+ * 需求变更：不再自动进入最近打开的工程，而是停在门禁页，
+ * 由用户在「最近打开」列表里自己选择（见 ProjectGate）。
+ * 这里只负责结束启动引导（置 booted），让门禁页接管。
  */
 export async function restoreLastProject(): Promise<void> {
   try {
     if (!window.codenode) return;
-    const lastFile = localStorage.getItem(LAST_FILE_KEY);
-    const lastRoot = localStorage.getItem(LAST_ROOT_KEY);
-    const target = lastFile || lastRoot;
-    if (!target) return;
-    const api = window.codenode;
-    const root = lastFile ? dirOf(lastFile) : lastRoot;
-    await useProjectStore.getState().loadRoot(root || '');
-
-    const st = useProjectStore.getState();
-    if (!st.root) return;
-    if (st.error) {
-      // 目录读不到：清掉 root 让门禁页接管，并把原因显示出来
-      useProjectStore.setState({
-        root: null,
-        projectFile: null,
-        tree: [],
-        error: '上次打开的工程已不可用：' + st.error,
-      });
-      localStorage.removeItem(LAST_ROOT_KEY);
-      localStorage.removeItem(LAST_FILE_KEY);
-      return;
-    }
-
-    const lr = await api.loadProject(target);
-    if (lr.ok && lr.data && lr.filePath) {
-      useProjectStore.getState().setProjectFile(lr.filePath);
-      applyLoaded(root || '', lr.data);
-    }
+    // 兼容旧版本：把单条"上次打开"迁移进最近列表（只做迁移，不自动打开）
+    readRecentProjects();
   } catch (e) {
-    console.error('[CodeNode] 恢复上次工程失败:', e);
+    console.error('[CodeNode] 读取最近工程失败:', e);
   } finally {
     useUiStore.getState().setBooted(true);
   }
+}
+
+/**
+ * 打开一条「最近打开」记录：优先加载 .cnode 文件，只有目录时按目录打开。
+ */
+export async function openRecentProject(entry: { root: string; file?: string; name?: string }): Promise<void> {
+  const api = window.codenode;
+  if (!api) {
+    useUiStore.getState().setToast('需要 Electron 环境');
+    return;
+  }
+  const target = entry.file || entry.root;
+  if (!target) return;
+
+  const root = entry.file ? dirOf(entry.file) : entry.root;
+  await useProjectStore.getState().loadRoot(root);
+  const st = useProjectStore.getState();
+  if (!st.root) {
+    useUiStore.getState().setToast('打开失败：' + (st.error || '目录不可用'));
+    return;
+  }
+
+  if (entry.file) {
+    const lr = await api.loadProject(entry.file);
+    if (lr.ok && lr.data) {
+      useProjectStore.getState().setProjectFile(lr.filePath || entry.file);
+      useCheckpointStore.getState().setProjectRoot(root);
+      applyLoaded(root, lr.data);
+      rememberRecentProject({ root, file: lr.filePath || entry.file });
+      useUiStore.getState().setToast('已打开最近工程：' + nameOf(lr.filePath || entry.file));
+      return;
+    }
+    useUiStore.getState().setToast('该工程文件已不可用，已按目录打开：' + (lr.error || ''));
+  }
+
+  const lr2 = await api.loadProject(root);
+  if (lr2.ok && lr2.data && lr2.filePath) {
+    useProjectStore.getState().setProjectFile(lr2.filePath);
+    useCheckpointStore.getState().setProjectRoot(root);
+    applyLoaded(root, lr2.data);
+    rememberRecentProject({ root, file: lr2.filePath });
+    useUiStore.getState().setToast('已打开最近工程：' + nameOf(lr2.filePath));
+    return;
+  }
+  useGraphStore.getState().clear();
+  const { raw, greeting } = await fetchSoul(root);
+  useSessionStore.getState().initProject(greeting || raw, raw);
+  useCheckpointStore.getState().setProjectRoot(root, []);
+  rememberRecentProject({ root });
+  useUiStore.getState().setToast('已打开最近工程目录（无 .cnode 工程文件）：' + root);
 }

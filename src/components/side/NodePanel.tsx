@@ -1,32 +1,16 @@
-import { useGraphStore } from '../store/graphStore';
-import { useProjectStore } from '../store/projectStore';
-import { useUiStore } from '../store/uiStore';
-import { flattenFilePaths } from '../lib/flow';
-import type { FileData, ScopeData } from '../types';
+import { useGraphStore } from '../../store/graphStore';
+import { useProjectStore } from '../../store/projectStore';
+import { useUiStore } from '../../store/uiStore';
+import type { FileData, ImageData, ScopeData } from '../../types';
+import { flattenFilePaths } from '../../lib/flow';
+import FlowList from './FlowList';
 
-function FlowList({ title, items }: { title: string; items: { kind: string; label: string }[] }) {
-  if (!items.length) return null;
-  return (
-    <div className="inspector-field">
-      <label>{title}（{items.length} 项）</label>
-      <ul className="flow-list">
-        {items.map((it, i) => (
-          <li key={i}>
-            <span className="flow-kind">{it.kind}</span>
-            <span className="flow-label">{it.label}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-export default function Inspector() {
+/** 标签页 1：选中节点的属性检查器（原独立「检查器」浮层的全部内容） */
+export default function NodePanel({ onOpenFile }: { onOpenFile: (relPath: string) => void }) {
   const node = useGraphStore((s) => s.nodes.find((n) => n.id === s.selectedId));
   const flow = useGraphStore((s) => (s.selectedId ? s.flow[s.selectedId] : undefined));
   const updateNodeData = useGraphStore((s) => s.updateNodeData);
   const runFlow = useGraphStore((s) => s.runFlow);
-  const toggleInspector = useUiStore((s) => s.toggleInspector);
   const setToast = useUiStore((s) => s.setToast);
   const projectRoot = useProjectStore((s) => s.root);
   const tree = useProjectStore((s) => s.tree);
@@ -34,27 +18,21 @@ export default function Inspector() {
   // 进入编辑前记录一次快照，使“编辑节点”成为一次可撤销的节点操作
   const beginEdit = () => useGraphStore.getState().commit();
 
-  const header = (
-    <div className="inspector-header">
-      <span className="panel-title">检查器</span>
-      <button className="icon-btn" title="收起检查器" onClick={toggleInspector}>
-        »
-      </button>
-    </div>
-  );
-
   if (!node) {
     return (
-      <aside className="inspector">
-        {header}
-        <div className="inspector-empty">未选中节点</div>
-      </aside>
+      <div className="sp-pane">
+        <div className="inspector-empty">
+          未选中节点
+          <div className="sp-empty-hint">在画布上点选一个节点，这里会显示它的可编辑属性。</div>
+        </div>
+      </div>
     );
   }
 
-  const d = node.data as Record<string, unknown> & FileData & ScopeData;
+  const d = node.data as Record<string, unknown> & FileData & ScopeData & ImageData;
   const status = String(d.status || 'pending');
   const isFile = node.type === 'file';
+  const isImage = node.type === 'image';
   const isScope = node.type === 'scope';
 
   const handleReadFile = async () => {
@@ -74,17 +52,33 @@ export default function Inspector() {
     }
   };
 
+  const handleReadImage = async () => {
+    const root = projectRoot;
+    if (!root || !d.imagePath) {
+      setToast('请先选择项目与图片路径');
+      return;
+    }
+    if (!window.codenode) return;
+    const res = await window.codenode.readProjectFile(root, d.imagePath, { binary: true });
+    if (res.ok && res.dataUrl) {
+      updateNodeData(node.id, { dataUrl: res.dataUrl });
+      setToast(`已读取图片 ${d.imagePath}（${Math.round((res.bytes || 0) / 1024)}KB）`);
+    } else {
+      setToast('读取图片失败：' + (res.error || ''));
+    }
+  };
+
   return (
-    <aside className="inspector">
-      {header}
-      <div className="inspector-field">
-        <label>ID</label>
-        <input value={node.id} readOnly />
+    <div className="sp-pane">
+      <div className="sp-kv">
+        <span>ID</span>
+        <code title={node.id}>{node.id}</code>
       </div>
-      <div className="inspector-field">
-        <label>类型</label>
-        <input value={String(node.type)} readOnly />
+      <div className="sp-kv">
+        <span>类型</span>
+        <code>{String(node.type)}</code>
       </div>
+
       <div className="inspector-field">
         <label>名称</label>
         <input value={String(d.label || '')} onFocus={beginEdit} onChange={(e) => updateNodeData(node.id, { label: e.target.value })} />
@@ -180,6 +174,84 @@ export default function Inspector() {
         </>
       )}
 
+      {isImage && (
+        <>
+          <div className="inspector-field">
+            <label>项目内图片路径（相对路径）</label>
+            <input
+              value={String(d.imagePath || '')}
+              placeholder="例如 assets/logo.png"
+              onFocus={beginEdit}
+              onChange={(e) => updateNodeData(node.id, { imagePath: e.target.value, dataUrl: undefined })}
+            />
+          </div>
+          {tree.length > 0 && (
+            <div className="inspector-field">
+              <label>从项目选择图片</label>
+              <select
+                value={String(d.imagePath || '')}
+                onFocus={beginEdit}
+                onChange={(e) => updateNodeData(node.id, { imagePath: e.target.value, dataUrl: undefined })}
+              >
+                <option value="">— 选择 —</option>
+                {flattenFilePaths(tree)
+                  .filter((p) => /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(p))
+                  .map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+          <div className="inspector-field">
+            <button className="inspector-btn" onClick={() => void handleReadImage()}>
+              读取图片
+            </button>
+          </div>
+          <div className="inspector-field">
+            <label>宽 / 高（px）</label>
+            <div className="inspector-row">
+              <input
+                type="number"
+                min={120}
+                value={d.width || 320}
+                onFocus={beginEdit}
+                onChange={(e) => updateNodeData(node.id, { width: Number(e.target.value) })}
+              />
+              <input
+                type="number"
+                min={100}
+                value={d.height || 224}
+                onFocus={beginEdit}
+                onChange={(e) => updateNodeData(node.id, { height: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+          <div className="inspector-field">
+            <label>说明</label>
+            <textarea
+              rows={2}
+              value={String(d.note || '')}
+              placeholder="这张图的用途 / 给 Agent 的提示…"
+              onFocus={beginEdit}
+              onChange={(e) => updateNodeData(node.id, { note: e.target.value })}
+            />
+          </div>
+          {d.dataUrl ? (
+            <div className="inspector-field">
+              <label>当前图片（{Math.round(String(d.dataUrl).length / 1024)}KB base64）</label>
+              <img className="inspector-image" src={String(d.dataUrl)} alt="节点图片" />
+              <button className="inspector-btn" onClick={() => updateNodeData(node.id, { dataUrl: undefined })}>
+                清除图片数据
+              </button>
+            </div>
+          ) : (
+            <div className="inspector-hint">还没有图片数据：可在画布上直接把图拖进节点，或按 Ctrl+V 粘贴，或填上面的路径后点「读取图片」。</div>
+          )}
+        </>
+      )}
+
       {isFile && (
         <>
           <div className="inspector-field">
@@ -194,7 +266,14 @@ export default function Inspector() {
           {tree.length > 0 && (
             <div className="inspector-field">
               <label>从项目选择文件</label>
-              <select value={String(d.filePath || '')} onFocus={beginEdit} onChange={(e) => updateNodeData(node.id, { filePath: e.target.value })}>
+              <select
+                value={String(d.filePath || '')}
+                onFocus={beginEdit}
+                onChange={(e) => {
+                  updateNodeData(node.id, { filePath: e.target.value });
+                  if (e.target.value) onOpenFile(e.target.value);
+                }}
+              >
                 <option value="">— 选择 —</option>
                 {flattenFilePaths(tree).map((p) => (
                   <option key={p} value={p}>
@@ -212,7 +291,10 @@ export default function Inspector() {
           {d.content && (
             <div className="inspector-field">
               <label>内容预览（{d.content.length} 字符）</label>
-              <pre className="inspector-pre">{d.content.slice(0, 600)}{d.content.length > 600 ? '…' : ''}</pre>
+              <pre className="inspector-pre">
+                {d.content.slice(0, 600)}
+                {d.content.length > 600 ? '…' : ''}
+              </pre>
             </div>
           )}
         </>
@@ -220,6 +302,6 @@ export default function Inspector() {
 
       <FlowList title="数据流 · 输入" items={flow?.input || []} />
       <FlowList title="数据流 · 输出" items={flow?.output || []} />
-    </aside>
+    </div>
   );
 }

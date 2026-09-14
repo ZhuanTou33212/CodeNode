@@ -15,6 +15,8 @@ export interface ModelSpec {
   priceInputHit: number;
   priceOutput: number;
   supportsEffort: boolean;
+  /** 是否支持图片输入（多模态）。只有为 true 时才允许给该模型附加图片 */
+  vision?: boolean;
   enabled?: boolean;
 }
 

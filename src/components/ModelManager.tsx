@@ -15,6 +15,7 @@ function emptyModel(): ModelSpec {
     priceInputHit: 0.007,
     priceOutput: 0.66,
     supportsEffort: true,
+    vision: false,
     enabled: true,
   };
 }
@@ -229,6 +230,10 @@ export default function ModelManager() {
               <label className="mm-check">
                 <input type="checkbox" checked={!!form.supportsEffort} onChange={(e) => set('supportsEffort', e.target.checked)} />
                 支持推理强度
+              </label>
+              <label className="mm-check" title="开启后可在对话里粘贴 / 拖入 / 选择图片，模型会收到多模态内容">
+                <input type="checkbox" checked={!!form.vision} onChange={(e) => set('vision', e.target.checked)} />
+                视觉（图片输入）
               </label>
               <label className="mm-check">
                 <input type="checkbox" checked={form.enabled !== false} onChange={(e) => set('enabled', e.target.checked)} />

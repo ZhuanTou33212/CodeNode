@@ -268,8 +268,10 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
-    minWidth: 960,
-    minHeight: 620,
+    // 侧栏改成可收起的 tab 面板后，窄窗口不再需要 960 硬下限：
+    // 允许窗口缩到 720，交给渲染进程的响应式规则（<=860 侧栏转浮层）处理。
+    minWidth: 720,
+    minHeight: 560,
     title: 'CodeNode Next',
     backgroundColor: '#14161a',
     icon: resolveAppIcon(),
@@ -691,12 +693,29 @@ ipcMain.handle('project:list', async (_event, root) => {
   }
 });
 
-ipcMain.handle('project:read', async (_event, root, relPath) => {
+ipcMain.handle('project:read', async (_event, root, relPath, options) => {
   try {
     const resolvedRoot = path.resolve(root);
     const full = path.resolve(root, relPath);
     if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) {
       return { ok: false, error: '路径越界' };
+    }
+    // 二进制读取（图像节点用）：只接受图片扩展名，转成 data URL 给渲染进程显示
+    if (options && options.binary) {
+      const ext = path.extname(full).toLowerCase();
+      const mimeByExt = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+      };
+      const mime = mimeByExt[ext];
+      if (!mime) return { ok: false, error: '不是支持的图片格式：' + (ext || '未知') };
+      const MAX_IMG = 8 * 1024 * 1024;
+      const stat = await fsp.stat(full);
+      if (stat.size > MAX_IMG) {
+        return { ok: false, error: `图片过大（${(stat.size / 1048576).toFixed(1)}MB，上限 8MB）` };
+      }
+      const buf = await fsp.readFile(full);
+      return { ok: true, dataUrl: `data:${mime};base64,${buf.toString('base64')}`, bytes: buf.length, mtimeMs: stat.mtimeMs };
     }
     const MAX = 1024 * 1024;
     const buf = await fsp.readFile(full, 'utf-8');
@@ -998,7 +1017,7 @@ ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacem
 });
 
 ipcMain.handle('agent:chat', async (event, payload) => {
-  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce } = payload || {};
+  const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments } = payload || {};
   const sender = event.sender;
   let runId = null;
   const sendDelta = (d) => {
@@ -1026,6 +1045,19 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     if (reqEffort) cfg.reasoningEffort = reqEffort;
     if (!cfg.apiKey) {
       return { ok: false, error: '未配置 API Key（模型管理中填写或 config/agent.properties）' };
+    }
+    // 图片附件需要模型具备视觉能力：不支持的模型直接给出明确提示，
+    // 而不是把图发过去让模型自己说「无法识别图片」。
+    const attachmentSpec = require('./attachments.cjs');
+    const normalizedAttachments = attachmentSpec.normalizeAttachments(attachments);
+    if (!normalizedAttachments.ok) {
+      return { ok: false, error: normalizedAttachments.error };
+    }
+    if (normalizedAttachments.attachments.length > 0 && sel && sel.vision !== true) {
+      return {
+        ok: false,
+        error: `当前模型「${sel.label || sel.model}」未开启视觉能力，无法接收图片；请在模型管理中开启「视觉（图片输入）」或切换到支持视觉的模型`,
+      };
     }
     runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
     runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
@@ -1120,7 +1152,8 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       for (const m of history || []) {
         if (m && m.role && m.content) messages.push({ role: m.role, content: m.content });
       }
-      messages.push({ role: 'user', content: prompt });
+      // 图片附件 → OpenAI 兼容的多模态 user 消息（无图时保持纯文本，行为不变）
+      messages.push(attachmentSpec.buildUserMessage(prompt, normalizedAttachments.attachments));
     } else if (!messages.length) {
       messages.push({ role: 'system', content: systemContent });
     }

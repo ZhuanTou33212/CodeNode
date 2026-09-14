@@ -35,6 +35,20 @@ export type FileData = BaseData & {
   content?: string;
 };
 
+/** 图像节点：展示一张图（项目内图片路径 或 直接粘贴的图片数据） */
+export type ImageData = BaseData & {
+  /** 项目内相对路径（优先） */
+  imagePath?: string;
+  /** 已解析出的图片 data URL（粘贴/拖入或读取项目文件后写入） */
+  dataUrl?: string;
+  /** 说明/来源备注 */
+  note?: string;
+  /** 预览宽度（px） */
+  width?: number;
+  /** 预览高度（px） */
+  height?: number;
+};
+
 /** 对象节点：专门用于表示/存储对象名称（数据对象、配置对象、实体名等） */
 export type ObjectData = BaseData & {
   objectName?: string;
@@ -92,6 +106,18 @@ export type RagGrounding = {
 };
 
 
+/** 随消息发送的图片附件（多模态输入）。dataUrl 是已在渲染端压缩过的 data: URL */
+export type AgentAttachment = {
+  /** 仅接受 image/png | image/jpeg | image/webp | image/gif */
+  mime: string;
+  /** data:image/...;base64,... （可直接作为 img.src） */
+  dataUrl: string;
+  /** 原始文件名，仅用于界面展示 */
+  name?: string;
+  /** 压缩后的字节数 */
+  bytes?: number;
+};
+
 /** 会话中的一条消息 */
 export type SessionMsg = {
   role: 'user' | 'assistant' | 'system';
@@ -100,6 +126,8 @@ export type SessionMsg = {
   tools?: ToolRecord[];
   status?: string;
   grounding?: RagGrounding;
+  /** 用户消息携带的图片（仅用户消息会有） */
+  attachments?: AgentAttachment[];
 };
 
 /** 单个画布的文档快照（仅根图，无组嵌套） */

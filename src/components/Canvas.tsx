@@ -17,8 +17,6 @@ import { useSessionStore } from '../store/sessionStore';
 import { nodeTypes } from '../nodes';
 import { edgeTypes } from '../edges';
 import { childIdsOf, computeChildren, parentIdOf, isDescendantOf } from '../lib/flow';
-import ChatSidebar from './ChatSidebar';
-import PromptBar from './PromptBar';
 
 function collectHiddenIds(nodes: Node[]): Set<string> {
   const hidden = new Set<string>();
@@ -138,9 +136,8 @@ export default function Canvas() {
   const setAltDrag = useGraphStore((s) => s.setAltDrag);
   const setDragging = useGraphStore((s) => s.setDragging);
   const closeAddMenu = useUiStore((s) => s.closeAddMenu);
-  const leftOpen = useUiStore((s) => s.leftOpen);
-  const leftWidth = useUiStore((s) => s.leftWidth);
-  const inspectorOpen = useUiStore((s) => s.inspectorOpen);
+  const sideOpen = useUiStore((s) => s.sideOpen);
+  const sideWidth = useUiStore((s) => s.sideWidth);
   const dockOpen = useUiStore((s) => s.dockOpen);
   const setViewport = useUiStore((s) => s.setViewport);
   const pendingViewport = useUiStore((s) => s.pendingViewport);
@@ -167,8 +164,8 @@ export default function Canvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingViewport]);
 
-  // 面板开合或窗口尺寸变化后，让 React Flow 重新计算可视区域。
-  // 这里做轻微防抖，避免拖动左侧分隔条时不断跳动视口。
+  // 面板开合、侧栏宽度或底部 dock 变化后，让 React Flow 重新计算可视区域。
+  // 这里做轻微防抖，避免拖动侧栏分隔条时不断跳动视口。
   useEffect(() => {
     const el = canvasRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -187,7 +184,7 @@ export default function Canvas() {
       observer.disconnect();
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [fitView, leftOpen, leftWidth, inspectorOpen, dockOpen]);
+  }, [fitView, sideOpen, sideWidth, dockOpen]);
 
   // Agent 进度扫描：沿画布连线逐条推进高亮
   useEffect(() => {
@@ -327,15 +324,6 @@ export default function Canvas() {
         multiSelectionKeyCode="Control"
         selectionKeyCode="Shift"
         deleteKeyCode={['Delete', 'Backspace']}
-        onPaneClick={closeAddMenu}
-        onNodeClick={(_e, node: Node) => {
-          if (_e.altKey) {
-            // Alt+左键仅取消选中，不再用于移出范围
-            useGraphStore
-              .getState()
-              .onNodesChange([{ id: node.id, type: 'select', selected: false }]);
-          }
-        }}
         onMoveEnd={() => setViewport(getViewport())}
         onNodeDragStart={(e, node) => {
           commit();
@@ -413,7 +401,29 @@ export default function Canvas() {
           }
         }}
         onNodesDelete={(deleted) => deleteNodes(deleted.map((n) => n.id))}
-        onSelectionChange={({ nodes: sel }) => setSelectedIds(sel.map((n) => n.id))}
+        // 选择态由 store 驱动 nodes 的 selected 标志（受控）。
+        // 这里不再回写 store：React Flow 会在自己的渲染过程中回调本函数，
+        // 在其中 setState 会触发 React error #185（整个工作台被打崩），
+        // 而且它会与「写回 selected 标志」形成 [] → [x] → [] 的往复更新环。
+        // 选中改由 onNodeClick / onPaneClick（事件期，非渲染期）同步。
+        onNodeClick={(e, node: Node) => {
+          if (e.altKey) {
+            // Alt+左键：取消该节点选中
+            const st = useGraphStore.getState();
+            st.setSelectedIds(st.selectedIds.filter((id) => id !== node.id));
+          } else if (e.shiftKey || e.ctrlKey || e.metaKey) {
+            // 加选 / 减选
+            const st = useGraphStore.getState();
+            const cur = st.selectedIds;
+            st.setSelectedIds(cur.includes(node.id) ? cur.filter((id) => id !== node.id) : [...cur, node.id]);
+          } else {
+            useGraphStore.getState().setSelectedIds([node.id]);
+          }
+        }}
+        onPaneClick={() => {
+          closeAddMenu();
+          useGraphStore.getState().setSelectedIds([]);
+        }}
         fitView
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
@@ -445,8 +455,6 @@ export default function Canvas() {
           />
         </svg>
       ) : null}
-      <ChatSidebar />
-      <PromptBar />
     </div>
   );
 }

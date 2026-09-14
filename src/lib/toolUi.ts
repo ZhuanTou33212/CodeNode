@@ -53,7 +53,7 @@ export function performUiAction(action: string, args: Record<string, unknown>): 
     case 'toggle_panel': {
       const panel = String(args.panel || 'inspector');
       if (panel === 'inspector') {
-        u.toggleInspector();
+        u.toggleSide();
         return true;
       }
       return false;

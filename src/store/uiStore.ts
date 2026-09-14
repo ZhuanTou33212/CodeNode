@@ -1,9 +1,18 @@
 import { create } from 'zustand';
 
+/** 左侧侧栏的标签页：Agent 对话 / 节点属性 / 项目树 / 文件预览 */
+export type SideTab = 'agent' | 'node' | 'project' | 'preview';
+
+/** 侧栏宽度边界：下限保证输入控件可用，上限避免把画布挤没 */
+export const SIDE_WIDTH_MIN = 260;
+export const SIDE_WIDTH_MAX = 520;
+export const SIDE_WIDTH_DEFAULT = 300;
+
 interface UiState {
-  leftOpen: boolean;
-  leftWidth: number;
-  inspectorOpen: boolean;
+  /** 右侧侧栏（原「检查器」+ 原左侧「项目管理」合并后的唯一面板） */
+  sideOpen: boolean;
+  sideTab: SideTab;
+  sideWidth: number;
   addMenu: { x: number; y: number } | null;
   lastMouse: { x: number; y: number };
   toast: string | null;
@@ -16,11 +25,11 @@ interface UiState {
   /** 启动引导是否完成（恢复上次工程结束）。false 时先显示启动占位，避免门禁页闪现 */
   booted: boolean;
 
-  toggleLeft: () => void;
+  toggleSide: () => void;
+  setSideOpen: (v: boolean) => void;
+  setSideTab: (tab: SideTab) => void;
+  setSideWidth: (w: number) => void;
   setHoverScopeId: (id: string | null) => void;
-  setLeftWidth: (w: number) => void;
-  toggleInspector: () => void;
-  setInspectorOpen: (v: boolean) => void;
   openAddMenu: (x: number, y: number) => void;
   closeAddMenu: () => void;
   setLastMouse: (x: number, y: number) => void;
@@ -39,9 +48,9 @@ interface UiState {
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useUiStore = create<UiState>((set, get) => ({
-  leftOpen: true,
-  leftWidth: 268,
-  inspectorOpen: false,
+  sideOpen: false,
+  sideTab: 'agent',
+  sideWidth: SIDE_WIDTH_DEFAULT,
   addMenu: null,
   lastMouse: { x: 0, y: 0 },
   toast: null,
@@ -53,11 +62,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   dockTab: 'editor',
   booted: false,
 
-  toggleLeft: () => set((s) => ({ leftOpen: !s.leftOpen })),
-  setHoverScopeId: (id) => set({ hoverScopeId: id }),
-  setLeftWidth: (w) => set({ leftWidth: Math.min(540, Math.max(180, w)) }),
-  toggleInspector: () => set((s) => ({ inspectorOpen: !s.inspectorOpen })),
-  setInspectorOpen: (v) => set({ inspectorOpen: v }),
+  toggleSide: () => set((s) => ({ sideOpen: !s.sideOpen })),
+  setSideOpen: (v) => set({ sideOpen: v }),
+  setSideTab: (tab) => set({ sideOpen: true, sideTab: tab }),
+  setSideWidth: (w) => set({ sideWidth: Math.min(SIDE_WIDTH_MAX, Math.max(SIDE_WIDTH_MIN, Math.round(w))) }),  setHoverScopeId: (id) => set({ hoverScopeId: id }),
   openAddMenu: (x, y) => set({ addMenu: { x, y } }),
   closeAddMenu: () => set({ addMenu: null }),
   setLastMouse: (x, y) => set({ lastMouse: { x, y } }),

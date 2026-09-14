@@ -4,14 +4,14 @@ import { useGraphStore } from './graphStore';
 import { useUiStore } from './uiStore';
 import { useSessionStore } from './sessionStore';
 import { useUsageStore, type UsageSnapshot } from './usageStore';
-import type { ToolRecord } from '../types';
+import type { AgentAttachment, ToolRecord } from '../types';
 
 interface ChatState {
   sending: boolean;
   requestId: string | null;
   send: (
     prompt: string,
-    options?: { resumeRunId?: string; resumeForce?: boolean }
+    options?: { resumeRunId?: string; resumeForce?: boolean; attachments?: AgentAttachment[] }
   ) => Promise<{ reply: string; reasoning: string; tools: ToolRecord[] }>;
   stop: () => void;
 }
@@ -69,7 +69,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return empty;
     }
     const text = prompt.trim();
-    if (!text) return empty;
+    const attachments = options?.attachments ?? [];
+    // 允许「只有图片、没有文字」的消息
+    if (!text && !attachments.length) return empty;
 
     const ss = useSessionStore.getState();
     // 指令前已有的对话（作为历史传给 Agent）
@@ -80,7 +82,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!ss.current()) {
       ss.startOnCurrent(text);
     }
-    ss.pushUser(text);
+    ss.pushUser(text, attachments);
     ss.beginTurn();
 
     const requestId = 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -96,6 +98,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const res = await api.agentChat({
         projectRoot: useProjectStore.getState().root,
         prompt: text,
+        attachments: attachments.length ? attachments : undefined,
         history: prior,
         canvasSummary: summarizeDoc(ctx),
         nodeId: null,

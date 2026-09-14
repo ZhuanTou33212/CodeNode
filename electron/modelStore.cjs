@@ -61,9 +61,10 @@ function seedModels(cfg) {
   const apiKey = cfg.apiKey || '';
   return [
     {
+      // DeepSeek V4.1 Flash：多模态（看图）+ thinking，1M 上下文
       id: 'deepseek-v4-flash',
-      label: 'DeepSeek V4 Flash',
-      model: 'deepseek-v4-flash',
+      label: 'DeepSeek V4.1 Flash',
+      model: 'deepseek-flash',
       apiBase,
       apiKey,
       contextWindow: 1_000_000,
@@ -71,11 +72,12 @@ function seedModels(cfg) {
       priceInputHit: 0.007,
       priceOutput: 0.66,
       supportsEffort: true,
+      vision: true,
       enabled: true,
     },
     {
       id: 'deepseek-v4-pro',
-      label: 'DeepSeek V4 Pro',
+      label: 'DeepSeek V4.1 Pro',
       model: 'deepseek-v4-pro',
       apiBase,
       apiKey,
@@ -84,6 +86,8 @@ function seedModels(cfg) {
       priceInputHit: 0.022,
       priceOutput: 1.98,
       supportsEffort: true,
+      // 实测 deepseek-v4-pro 不接受图片（会回「无法识别图片内容」），故不开视觉
+      vision: false,
       enabled: true,
     },
   ];

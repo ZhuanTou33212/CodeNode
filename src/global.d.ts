@@ -94,6 +94,8 @@ interface ModelSpecDto {
   priceInputHit: number;
   priceOutput: number;
   supportsEffort: boolean;
+  /** 是否支持图片输入（多模态） */
+  vision?: boolean;
   enabled?: boolean;
 }
 
@@ -105,8 +107,9 @@ interface CodenodeApi {
   listProject: (root: string) => Promise<{ ok: boolean; files?: ProjectFileDto[]; error?: string }>;
   readProjectFile: (
     root: string,
-    relPath: string
-  ) => Promise<{ ok: boolean; content?: string; truncated?: boolean; mtimeMs?: number; error?: string }>;
+    relPath: string,
+    options?: { binary?: boolean }
+  ) => Promise<{ ok: boolean; content?: string; dataUrl?: string; bytes?: number; truncated?: boolean; mtimeMs?: number; error?: string }>;
   writeProjectFile: (
     root: string,
     relPath: string,
@@ -213,6 +216,8 @@ interface CodenodeApi {
     resumeForce?: boolean;
     prompt: string;
     history?: { role: string; content: string }[];
+    /** 图片附件（多模态）：仅当所选模型 vision=true 时允许 */
+    attachments?: { mime: string; dataUrl: string; name?: string; bytes?: number }[];
     canvasSummary?: string;
     nodeId?: string | null;
     requestId?: string;

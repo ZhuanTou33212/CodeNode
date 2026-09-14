@@ -175,7 +175,9 @@ function recordCost(cfg, entry) {
 function parseLimitsConfig(cfg) {
   return {
     maxConcurrentRuns: configInteger(cfg, 'agent.max_concurrent_runs', 2, 1, 8),
-    maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 250000, 10000, 2000000),
+    // 单次运行的累计 token 上限。带图对话的输入会明显变大，默认给到 60 万；
+    // 真正防止"算错"的是 requestBudget 的估算口径（图片按 token 规则折算，不按 base64 字节）。
+    maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 600000, 10000, 4000000),
   };
 }
 
@@ -343,11 +345,19 @@ function maxAttemptsFor(cfg) {
 }
 
 async function chatCompletion(cfg, messages, options = {}) {
+  // attemptsRef：真实尝试次数，供预算按实际重试次数补偿输入（而不是按上限倍数放大）
+  const attemptsRef = { count: 0 };
   return require('./requestQueue.cjs').modelQueue.run(options.signal,
-    () => require('./requestBudget.cjs').withBudget(cfg, messages, [], () => chatCompletionInternal(cfg, messages, options)));
+    () => require('./requestBudget.cjs').withBudget(
+      cfg,
+      messages,
+      [],
+      () => chatCompletionInternal(cfg, messages, { ...options, attemptsRef }),
+      attemptsRef,
+    ));
 }
 
-async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000 } = {}) {
+async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
@@ -363,6 +373,7 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
     let lastError = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
+        if (attemptsRef) attemptsRef.count = attempt;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
@@ -426,11 +437,19 @@ function chatBody(cfg, messages, { stream, tools } = {}) {
  * 流式对话（SSE）：实时回调推理/内容/工具调用增量。tools 为 OpenAI tools 参数（可选）。
  */
 async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
+  // attemptsRef：真实尝试次数，让预算按实际重试次数补偿输入（而不是按上限倍数放大）
+  const attemptsRef = { count: 0 };
   return require('./requestQueue.cjs').modelQueue.run(options.signal,
-    () => require('./requestBudget.cjs').withBudget(cfg, messages, options.tools, () => chatCompletionStreamInternal(cfg, messages, onEvent, options)));
+    () => require('./requestBudget.cjs').withBudget(
+      cfg,
+      messages,
+      options.tools,
+      () => chatCompletionStreamInternal(cfg, messages, onEvent, { ...options, attemptsRef }),
+      attemptsRef,
+    ));
 }
 
-async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools } = {}) {
+async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
@@ -447,6 +466,7 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, ti
     const attempts = maxAttemptsFor(cfg);
     let res = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (attemptsRef) attemptsRef.count = attempt;
       try {
         res = await fetch(url, {
           method: 'POST',

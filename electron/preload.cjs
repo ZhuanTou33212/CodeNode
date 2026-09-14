@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('codenode', {
   chooseProject: () => ipcRenderer.invoke('project:choose'),
   createProject: () => ipcRenderer.invoke('project:create'),
   listProject: (root) => ipcRenderer.invoke('project:list', root),
-  readProjectFile: (root, relPath) => ipcRenderer.invoke('project:read', root, relPath),
+  readProjectFile: (root, relPath, options) => ipcRenderer.invoke('project:read', root, relPath, options),
   writeProjectFile: (root, relPath, content, backup) => ipcRenderer.invoke('project:write', root, relPath, content, backup),
   searchProject: (root, query, maxResults) => ipcRenderer.invoke('project:search', root, query, maxResults),
   runProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run', root, command, timeoutSeconds),
