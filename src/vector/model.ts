@@ -1,6 +1,6 @@
 /** 矢量设计工作室 —— 模型辅助：预设、路径构建、几何工具 */
 import type { Anchor, LogicOp, ProjectFile, VecGroup, VecObject, VecShapeKind } from './types';
-import { LOGIC_OP_META, PAPER_H, PAPER_W } from './types';
+import { LOGIC_OP_META } from './types';
 
 export const uid = (prefix = 'vobj') =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -354,9 +354,6 @@ export function sortedObjects(objects: VecObject[], ids: string[]): VecObject[] 
   const map = new Map(objects.map((o) => [o.id, o]));
   return ids.map((id) => map.get(id)).filter((o): o is VecObject => Boolean(o));
 }
-
-/** 纸张包围盒内的整块区域（用于框选/辅助线） */
-export const paperRect = { x: 0, y: 0, width: PAPER_W, height: PAPER_H };
 
 export function validateProject(raw: unknown): ProjectFile | null {
   try {

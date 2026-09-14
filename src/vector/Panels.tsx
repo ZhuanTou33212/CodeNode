@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVector, type VectorStore } from './vectorStore';
 import type { LogicAnalysis, VecArrowStyle, VecGroup, VecHAlign, VecObject, VecStrokeStyle } from './types';
-import { LOGIC_OP_META, PAPER_H, PAPER_W } from './types';
+import { LOGIC_OP_META } from './types';
 import {
   clamp,
   insertAnchorAt,

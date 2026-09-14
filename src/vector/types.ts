@@ -104,26 +104,31 @@ export type RegionStat = {
   area: number;
 };
 
+/** 世界坐标下的轴对齐包围盒。无限画布没有纸张边界，坐标可正可负。 */
+export type Bounds = { x0: number; y0: number; x1: number; y1: number };
+
 export type LogicAnalysis = {
   ready: boolean;
   sets: { id: string; name: string; color: string; area: number }[];
   relations: { a: string; b: string; kind: LogicRelationKind }[];
   stats: RegionStat[];
-  /** 结果区域掩码图（与纸张同尺寸比例，0.5 分辨率），null 表示不可见（如空集） */
+  /** 结果区域掩码图，null 表示不可见（如空集） */
   resultUrl: string | null;
+  /** 结果贴图对应的世界坐标范围（按参与图形的包围盒推导，不再固定为纸张） */
+  bounds: Bounds;
   resultArea: number;
   expression: string;
 };
 
-/** 纸张尺寸（世界坐标单位 = 未缩放时的 CSS px） */
-export const PAPER_W = 1100;
-export const PAPER_H = 680;
-/** 纸张在画布视口坐标系中的固定偏移 */
-export const PAPER_ORIGIN = { x: 96, y: 64 };
-export const VIEW_W = 1360;
-export const VIEW_H = 820;
+/* ==================== 无限画布视口常量 ==================== */
 
+/** 网格小格边长（世界坐标单位 = 未缩放时的 CSS px） */
 export const GRID_STEP = 20;
+/** 缩放范围 */
+export const MIN_ZOOM = 0.2;
+export const MAX_ZOOM = 4;
+/** 一次滚轮刻度 / 一次按钮点击的缩放倍率 */
+export const ZOOM_STEP = 1.2;
 
 export const LOGIC_OP_META: { op: LogicOp; symbol: string; label: string; desc: string }[] = [
   { op: 'union', symbol: '∪', label: '并集', desc: '属于任一集合的全部区域' },

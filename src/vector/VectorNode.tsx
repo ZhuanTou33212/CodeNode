@@ -21,7 +21,6 @@ import {
 } from './vectorStore';
 import { computeLogicAnalysisForSets } from './region';
 import type { LogicAnalysis, VecMode, VecShapeKind, VecTool } from './types';
-import { PAPER_H, PAPER_W } from './types';
 import { SHAPE_GLYPHS, SHAPE_TITLES, sortedObjects } from './model';
 import { VectorSurface } from './Surface';
 import { LayersPanel, LogicPanel, PropertiesPanel } from './Panels';
@@ -41,6 +40,7 @@ const EMPTY_ANALYSIS: LogicAnalysis = {
   relations: [],
   stats: [],
   resultUrl: null,
+  bounds: { x0: 0, y0: 0, x1: 0, y1: 0 },
   resultArea: 0,
   expression: '—',
 };
@@ -414,10 +414,9 @@ function VectorNodeRail({ store }: { store: VectorStore }) {
   const addPreset = useCallback(
     (kind: VecShapeKind) => {
       const st = store.getState();
-      const at = st.pointer || { x: PAPER_W / 2, y: PAPER_H / 2 };
-      const x = Math.min(PAPER_W - 30, Math.max(30, at.x));
-      const y = Math.min(PAPER_H - 30, Math.max(30, at.y));
-      st.addFromPreset(kind, { x, y });
+      // 无限画布：直接落在当前指针位置；指针尚未进入画布时落在世界原点
+      // （空画布下 fitView 已把原点居中，所以视觉上就是屏幕中心）
+      st.addFromPreset(kind, st.pointer || { x: 0, y: 0 });
       st.setTool('select');
     },
     [store]
@@ -526,7 +525,7 @@ function VectorNodeFoot({ store, accent }: { store: VectorStore; accent: string 
           {objects.length} 图形 · 选中 {selectedIds.length}
         </span>
       )}
-      <span className="wf-vector-foot-tag">{pointer ? `X ${Math.round(pointer.x)} Y ${Math.round(pointer.y)}` : `纸面 ${PAPER_W}×${PAPER_H}`}</span>
+      <span className="wf-vector-foot-tag">{pointer ? `X ${Math.round(pointer.x)} Y ${Math.round(pointer.y)}` : '无限画布'}</span>
       <span className="wf-vector-foot-tag">{Math.round(zoom * 100)}%</span>
     </div>
   );

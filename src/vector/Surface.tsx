@@ -5,11 +5,11 @@
  * 而是由画布节点（VectorNode）嵌入到 Agent 画布上，每个节点一份独立文档 store。
  * 全部指针手势统一在 svg 的 pointer 事件中按命中目标分类分发。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useVector, type VectorStore } from './vectorStore';
 import { computeLogicAnalysisForSets } from './region';
-import type { LogicAnalysis, VecObject, VecShapeKind } from './types';
-import { GRID_STEP, LOGIC_OP_META, PAPER_H, PAPER_ORIGIN, PAPER_W } from './types';
+import type { Bounds, LogicAnalysis, VecObject, VecShapeKind } from './types';
+import { GRID_STEP, LOGIC_OP_META, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP } from './types';
 import {
   bezierPathD,
   clamp,
@@ -40,6 +40,48 @@ type Gesture =
   | { kind: 'guide'; axis: 'v' | 'h'; from: number };
 
 const MIN_SIZE = 24;
+
+/* ==================== 无限画布辅助 ==================== */
+
+/**
+ * 按当前缩放挑选网格 / 标尺步长：保证屏幕上的最小间距，
+ * 缩小时不会糊成一片，放大时也不会稀疏到看不见。
+ */
+const STEP_LADDER = [10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
+
+function gridStepFor(zoom: number, minPx = 14): number {
+  for (const s of STEP_LADDER) if (s * zoom >= minPx) return s;
+  return STEP_LADDER[STEP_LADDER.length - 1];
+}
+
+/** 当前视口对应的世界矩形（含外扩余量），用于无限网格 / 参考线 / 标尺 */
+function visibleWorldOf(pan: Point, zoom: number, box: { w: number; h: number }, padSteps = 4) {
+  const m = (GRID_STEP * padSteps) / zoom;
+  return {
+    x: -pan.x / zoom - m,
+    y: -pan.y / zoom - m,
+    w: box.w / zoom + m * 2,
+    h: box.h / zoom + m * 2,
+  };
+}
+
+/** 可见图形的世界包围盒并集；空画布返回 null */
+function contentBounds(objects: VecObject[]): Bounds | null {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const o of objects) {
+    if (!o.visible) continue;
+    const b = worldBoundsOf(o);
+    if (b.x0 < x0) x0 = b.x0;
+    if (b.y0 < y0) y0 = b.y0;
+    if (b.x1 > x1) x1 = b.x1;
+    if (b.y1 > y1) y1 = b.y1;
+  }
+  if (!Number.isFinite(x0)) return null;
+  return { x0, y0, x1, y1 };
+}
 
 /* ==================== 主画布 ==================== */
 
@@ -80,6 +122,13 @@ export function VectorSurface(props: VectorSurfaceProps) {
   const penLastActionRef = useRef(0);
   const penSuppressRef = useRef(false);
   const [box, setBox] = useState({ w: 1000, h: 600 });
+  /**
+   * box 的 ref 镜像：fitView / zoomTo 只依赖 ref，引用保持稳定。
+   * 否则每次 ResizeObserver 上报都会生成新的 box 对象 → useCallback 身份变化 →
+   * 依赖 fitView 的防抖 effect 被反复重置，自动适配会永远等不到执行时机。
+   */
+  const boxRef = useRef(box);
+  boxRef.current = box;
   const [marquee, setMarquee] = useState<{ from: Point; to: Point } | null>(null);
   const [creating, setCreating] = useState<{ shape: VecShapeKind; from: Point; to: Point } | null>(null);
   const [penCursor, setPenCursor] = useState<Point | null>(null);
@@ -104,17 +153,29 @@ export function VectorSurface(props: VectorSurfaceProps) {
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
+    const measure = () => {
       const r = el.getBoundingClientRect();
       // getBoundingClientRect 返回的是屏幕（已被宿主缩放的）尺寸，换算回本地 px
-      setBox({ w: r.width / stageScale, h: r.height / stageScale });
-    });
+      const w = r.width / stageScale;
+      const h = r.height / stageScale;
+      // 布局尚未完成时不要用 0 覆盖已知的有效尺寸
+      if (w <= 0 || h <= 0) return;
+      // ResizeObserver 上报的尺寸常有亚像素抖动（宿主 transform 重算导致）。
+      // 这种抖动若每次都生成新的 box 对象，会让依赖 box 的防抖 effect 反复重置，
+      // 「尺寸变化后自动适配」将永远等不到执行时机 —— 所以这里做阈值去重。
+      setBox((prev) => (Math.abs(prev.w - w) < 0.5 && Math.abs(prev.h - h) < 0.5 ? prev : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, [stageScale]);
 
 
-  /** client → 世界坐标（svg 无 viewBox，用户单位即 px） */
+  /**
+   * client → 世界坐标（svg 无 viewBox，用户单位即 px）。
+   * 视口变换：local = world * zoom + pan（无限画布，无纸张偏移）。
+   */
   const toWorld = useCallback(
     (cx: number, cy: number): Point => {
       const rect = svgRef.current?.getBoundingClientRect();
@@ -122,56 +183,84 @@ export function VectorSurface(props: VectorSurfaceProps) {
       const lx = (cx - rect.left) / stageScale;
       const ly = (cy - rect.top) / stageScale;
       return {
-        x: (lx - PAPER_ORIGIN.x - pan.x) / zoom,
-        y: (ly - PAPER_ORIGIN.y - pan.y) / zoom,
+        x: (lx - pan.x) / zoom,
+        y: (ly - pan.y) / zoom,
       };
     },
     [pan, zoom, stageScale]
   );
 
-  /** 适应画布 */
+  /** 适应内容：居中显示全部可见图形；空画布时把世界原点放在视口中心 */
   const fitView = useCallback(() => {
     const st = store.getState();
-    const z = clamp(Math.min((box.w - 90) / PAPER_W, (box.h - 90) / PAPER_H), 0.18, 1.6);
-    st.setViewport(z, {
-      x: (box.w - PAPER_W * z) / 2 - PAPER_ORIGIN.x,
-      y: (box.h - PAPER_H * z) / 2 - PAPER_ORIGIN.y,
-    });
-  }, [box, store]);
+    const { w: vw, h: vh } = boxRef.current;
+    if (vw <= 0 || vh <= 0) return;
+    const bounds = contentBounds(st.objects);
+    if (!bounds) {
+      st.setViewport(1, { x: vw / 2, y: vh / 2 });
+      return;
+    }
+    const pad = 72;
+    const w = Math.max(1, bounds.x1 - bounds.x0);
+    const h = Math.max(1, bounds.y1 - bounds.y0);
+    const z = clamp(Math.min((vw - pad) / w, (vh - pad) / h), MIN_ZOOM, MAX_ZOOM);
+    const cx = (bounds.x0 + bounds.x1) / 2;
+    const cy = (bounds.y0 + bounds.y1) / 2;
+    st.setViewport(z, { x: vw / 2 - cx * z, y: vh / 2 - cy * z });
+  }, [store]);
 
-  /** 画布尺寸变化后，沿用当前纸张坐标重新居中，避免窗口/面板变化时纸张被裁切。 */
+  /** 以视口中心为锚点缩放到指定倍率（左下角 −/%/+ 控件） */
+  const zoomTo = useCallback(
+    (next: number) => {
+      const st = store.getState();
+      const { w: vw, h: vh } = boxRef.current;
+      const z = clamp(next, MIN_ZOOM, MAX_ZOOM);
+      const k = z / st.zoom;
+      const cx = vw / 2;
+      const cy = vh / 2;
+      st.setViewport(z, { x: cx - (cx - st.pan.x) * k, y: cy - (cy - st.pan.y) * k });
+    },
+    [store]
+  );
+
+  /** 画布尺寸变化后重新适配内容（防抖），避免节点/窗口缩放时内容被裁切。 */
   useEffect(() => {
     if (box.w <= 0 || box.h <= 0) return;
     const timer = window.setTimeout(() => fitView(), 160);
     return () => window.clearTimeout(timer);
   }, [box.w, box.h, fitView]);
 
-  useEffect(() => props.registerFit?.(fitView), [fitView, props]);
+  // 注意：必须丢弃 registerFit 的返回值，否则它会被 React 当成 cleanup，
+  // 在每次依赖变化（如新增图形）时意外重置视口。
+  useEffect(() => {
+    props.registerFit?.(fitView);
+  }, [fitView, props]);
 
-  /* —— 吸附：把 delta 修正到网格 / 参考线 —— */
+  /* —— 吸附：把 delta 修正到无限网格 / 参考线 —— */
   const snapDelta = useCallback(
     (delta: Point, anchor: Point): Point => {
       if (!snapOn) return delta;
       const st = store.getState();
-      const candidates = new Set<number>();
-      for (let g = 0; g <= PAPER_W; g += GRID_STEP) candidates.add(g);
-      st.guides.v.forEach((g) => candidates.add(g));
-      const best = (raw: number, target: number, maxV: number) => {
+      const tol = 7 / (zoom * stageScale);
+      // 无限画布没有纸张边界：目标始终吸附到最近的网格线或参考线
+      const axis = (raw: number, base: number, guideList: number[]) => {
+        const target = base + raw;
+        const nearest = Math.round(target / GRID_STEP) * GRID_STEP;
         let out = 0;
         let bestD = Infinity;
-        for (const c of candidates) {
-          if (c < 0 || c > maxV) continue;
-          const d = Math.abs(target + raw - c);
+        for (const c of [nearest - GRID_STEP, nearest, nearest + GRID_STEP, ...guideList]) {
+          const d = Math.abs(target - c);
           if (d < bestD) {
             bestD = d;
-            out = c - (target + raw);
+            out = c - target;
           }
         }
-        return bestD < 7 / (zoom * stageScale) ? out : 0;
+        return bestD < tol ? out : 0;
       };
-      const nx = best(delta.x, anchor.x, PAPER_W);
-      const ny = best(delta.y, anchor.y, PAPER_H);
-      return { x: delta.x + nx, y: delta.y + ny };
+      return {
+        x: delta.x + axis(delta.x, anchor.x, st.guides.v),
+        y: delta.y + axis(delta.y, anchor.y, st.guides.h),
+      };
     },
     [snapOn, zoom, store, stageScale]
   );
@@ -609,7 +698,7 @@ export function VectorSurface(props: VectorSurfaceProps) {
     [store, toWorld, tool]
   );
 
-  // 滚轮缩放（光标锚定）
+  // 滚轮缩放：光标锚定（复刻工程原画布的手感）
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -617,14 +706,13 @@ export function VectorSurface(props: VectorSurfaceProps) {
       e.preventDefault();
       const st = store.getState();
       const rect = svg.getBoundingClientRect();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const next = clamp(st.zoom * factor, 0.2, 4);
+      const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      const next = clamp(st.zoom * factor, MIN_ZOOM, MAX_ZOOM);
       const k = next / st.zoom;
-      const ox = PAPER_ORIGIN.x + st.pan.x;
-      const oy = PAPER_ORIGIN.y + st.pan.y;
       const mx = (e.clientX - rect.left) / stageScale;
       const my = (e.clientY - rect.top) / stageScale;
-      st.setViewport(next, { x: (ox + (mx - ox) * k) - PAPER_ORIGIN.x, y: (oy + (my - oy) * k) - PAPER_ORIGIN.y });
+      // 让光标下的世界坐标在缩放前后保持不动
+      st.setViewport(next, { x: mx - (mx - st.pan.x) * k, y: my - (my - st.pan.y) * k });
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
@@ -665,6 +753,17 @@ export function VectorSurface(props: VectorSurfaceProps) {
       : false;
   const penCloseR = 12 / zoom;
 
+  // 无限画布：网格步长随缩放自适应，网格/参考线只画当前视口对应的世界矩形
+  const minorStep = gridStepFor(zoom, 14);
+  const majorStep = minorStep * 5;
+  const visibleWorld = visibleWorldOf(pan, zoom, box);
+
+  // SVG 的 url(#id) 是文档级引用：画布上可能有多个画布节点，
+  // 每个节点的缩放/步长不同，必须用实例级唯一 id，否则会互相串用网格。
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const minorPatternId = `vs-grid-minor-${uid}`;
+  const majorPatternId = `vs-grid-major-${uid}`;
+
   return (
     <main className={`vs-stage${props.compact ? ' vs-stage-compact' : ''}`}>
       {props.compact ? null : (
@@ -676,17 +775,17 @@ export function VectorSurface(props: VectorSurfaceProps) {
           <span className="vs-hint">
             {tool === 'pen'
               ? '单击添加锚点 · 拖动末点拉出控制柄 · 单击首点或 Enter/双击 闭合 · 右键结束开放路径'
-              : '滚轮缩放（光标锚定）· 空格/中键拖动平移 · 双击图形直接编辑文字 · 从标尺拖出参考线'}
+              : '无限画布：滚轮缩放（光标锚定）· 空格/中键拖动平移 · 左下角 −/+ 缩放 · 双击图形编辑文字'}
           </span>
         </div>
       )}
 
       <div className="vs-canvas" ref={wrapRef}>
         <div className="vs-ruler vs-ruler-top" onPointerDown={(e) => { if (guidesOn) gestureRef.current = { kind: 'guide', axis: 'v', from: toWorld(e.clientX, e.clientY).x }; }}>
-          <RulerTicks axis="v" />
+          <RulerTicks axis="v" box={box} />
         </div>
         <div className="vs-ruler vs-ruler-left" onPointerDown={(e) => { if (guidesOn) gestureRef.current = { kind: 'guide', axis: 'h', from: toWorld(e.clientX, e.clientY).y }; }}>
-          <RulerTicks axis="h" />
+          <RulerTicks axis="h" box={box} />
         </div>
         <div className="vs-ruler-corner" />
 
@@ -706,22 +805,53 @@ export function VectorSurface(props: VectorSurfaceProps) {
           }}
         >
           <defs>
-            <pattern id="vs-grid-minor" width={GRID_STEP} height={GRID_STEP} patternUnits="userSpaceOnUse">
-              <path d={`M ${GRID_STEP} 0 L 0 0 0 ${GRID_STEP}`} fill="none" stroke="currentColor" strokeOpacity="0.06" strokeWidth="1" />
+            <pattern id={minorPatternId} width={minorStep} height={minorStep} patternUnits="userSpaceOnUse">
+              <path
+                d={`M ${minorStep} 0 L 0 0 0 ${minorStep}`}
+                fill="none"
+                stroke="currentColor"
+                strokeOpacity="0.07"
+                strokeWidth="1"
+                vectorEffect="non-scaling-stroke"
+              />
             </pattern>
-            <pattern id="vs-grid-major" width={100} height={100} patternUnits="userSpaceOnUse">
-              <rect width="100" height="100" fill="url(#vs-grid-minor)" />
-              <path d="M 100 0 L 0 0 0 100" fill="none" stroke="currentColor" strokeOpacity="0.13" strokeWidth="1" />
+            <pattern id={majorPatternId} width={majorStep} height={majorStep} patternUnits="userSpaceOnUse">
+              <rect width={majorStep} height={majorStep} fill={`url(#${minorPatternId})`} />
+              <path
+                d={`M ${majorStep} 0 L 0 0 0 ${majorStep}`}
+                fill="none"
+                stroke="currentColor"
+                strokeOpacity="0.16"
+                strokeWidth="1"
+                vectorEffect="non-scaling-stroke"
+              />
             </pattern>
-            <filter id="vs-paper-shadow" x="-50%" y="-50%" width="200%" height="200%">
-              <feDropShadow dx="0" dy="18" stdDeviation="26" floodColor="#000" floodOpacity="0.32" />
-            </filter>
           </defs>
 
-          <g className="vs-world" transform={`translate(${PAPER_ORIGIN.x + pan.x} ${PAPER_ORIGIN.y + pan.y}) scale(${zoom})`}>
-            <rect className="vs-paper" x={0} y={0} width={PAPER_W} height={PAPER_H} rx={2} filter="url(#vs-paper-shadow)" />
-            {gridOn ? <rect className="vs-grid-layer" x={0} y={0} width={PAPER_W} height={PAPER_H} fill="url(#vs-grid-major)" /> : null}
-            {mode === 'logic' && guidesOn ? <rect className="vs-logic-paper" x={0} y={0} width={PAPER_W} height={PAPER_H} /> : null}
+          <g className="vs-world" transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+            {/* 无限网格：铺满当前视口的世界矩形，随平移/缩放一起运动 */}
+            {gridOn ? (
+              <rect
+                className="vs-grid-layer"
+                x={visibleWorld.x}
+                y={visibleWorld.y}
+                width={visibleWorld.w}
+                height={visibleWorld.h}
+                fill={`url(#${majorPatternId})`}
+                pointerEvents="none"
+              />
+            ) : null}
+            {/* 逻辑模式：运算结果覆盖的世界区域底色 */}
+            {mode === 'logic' && props.analysis.ready ? (
+              <rect
+                className="vs-logic-region"
+                x={props.analysis.bounds.x0}
+                y={props.analysis.bounds.y0}
+                width={Math.max(1, props.analysis.bounds.x1 - props.analysis.bounds.x0)}
+                height={Math.max(1, props.analysis.bounds.y1 - props.analysis.bounds.y0)}
+                pointerEvents="none"
+              />
+            ) : null}
 
             {/* 参考线（置于对象之下） */}
             {guidesOn
@@ -729,10 +859,10 @@ export function VectorSurface(props: VectorSurfaceProps) {
                   <line
                     key={`${gd.axis}-${gd.pos}-${i}`}
                     className="vs-guide"
-                    x1={gd.axis === 'v' ? gd.pos : 0}
-                    y1={gd.axis === 'h' ? gd.pos : 0}
-                    x2={gd.axis === 'v' ? gd.pos : PAPER_W}
-                    y2={gd.axis === 'h' ? gd.pos : PAPER_H}
+                    x1={gd.axis === 'v' ? gd.pos : visibleWorld.x}
+                    y1={gd.axis === 'h' ? gd.pos : visibleWorld.y}
+                    x2={gd.axis === 'v' ? gd.pos : visibleWorld.x + visibleWorld.w}
+                    y2={gd.axis === 'h' ? gd.pos : visibleWorld.y + visibleWorld.h}
                     onPointerDown={(e) => {
                       e.stopPropagation();
                       const st = store.getState();
@@ -748,14 +878,14 @@ export function VectorSurface(props: VectorSurfaceProps) {
                 ))
               : null}
 
-            {/* 逻辑结果高亮 */}
+            {/* 逻辑结果高亮：贴图按参与图形的包围盒映射回世界坐标 */}
             {mode === 'logic' && props.analysis.resultUrl ? (
               <image
                 href={props.analysis.resultUrl}
-                x={0}
-                y={0}
-                width={PAPER_W}
-                height={PAPER_H}
+                x={props.analysis.bounds.x0}
+                y={props.analysis.bounds.y0}
+                width={Math.max(1, props.analysis.bounds.x1 - props.analysis.bounds.x0)}
+                height={Math.max(1, props.analysis.bounds.y1 - props.analysis.bounds.y0)}
                 pointerEvents="none"
                 preserveAspectRatio="none"
                 className="vs-logic-highlight"
@@ -860,10 +990,10 @@ export function VectorSurface(props: VectorSurfaceProps) {
             {guideGhost ? (
               <line
                 className="vs-guide-ghost"
-                x1={guideGhost.axis === 'v' ? guideGhost.pos : 0}
-                y1={guideGhost.axis === 'h' ? guideGhost.pos : 0}
-                x2={guideGhost.axis === 'v' ? guideGhost.pos : PAPER_W}
-                y2={guideGhost.axis === 'h' ? guideGhost.pos : PAPER_H}
+                x1={guideGhost.axis === 'v' ? guideGhost.pos : visibleWorld.x}
+                y1={guideGhost.axis === 'h' ? guideGhost.pos : visibleWorld.y}
+                x2={guideGhost.axis === 'v' ? guideGhost.pos : visibleWorld.x + visibleWorld.w}
+                y2={guideGhost.axis === 'h' ? guideGhost.pos : visibleWorld.y + visibleWorld.h}
                 pointerEvents="none"
               />
             ) : null}
@@ -880,6 +1010,27 @@ export function VectorSurface(props: VectorSurfaceProps) {
             {props.analysis.ready ? <b>{props.analysis.resultArea.toLocaleString()} px²</b> : null}
           </div>
         ) : null}
+
+        {/* 缩放控件（复刻工程原画布的操作集：− / 百分比 / + / 适应内容） */}
+        <div className="vs-zoombar nodrag" role="group" aria-label="画布缩放">
+          <button type="button" title="缩小" onClick={() => zoomTo(store.getState().zoom / ZOOM_STEP)}>
+            −
+          </button>
+          <button
+            type="button"
+            className="vs-zoom-pct"
+            title="重置为 100%"
+            onClick={() => zoomTo(1)}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button type="button" title="放大" onClick={() => zoomTo(store.getState().zoom * ZOOM_STEP)}>
+            ＋
+          </button>
+          <button type="button" className="vs-zoom-fit" title="适应内容" onClick={() => fitView()}>
+            ⛶
+          </button>
+        </div>
       </div>
     </main>
   );
@@ -1451,27 +1602,37 @@ function MultiChrome(props: { box: { x0: number; y0: number; x1: number; y1: num
   );
 }
 
-/* ==================== 标尺 ==================== */
+/* ==================== 标尺（无限画布：跟随视口延伸，坐标可正可负） ==================== */
 
-function RulerTicks({ axis }: { axis: 'v' | 'h' }) {
+function RulerTicks({ axis, box }: { axis: 'v' | 'h'; box: { w: number; h: number } }) {
   const zoom = useVector((s) => s.zoom);
   const pan = useVector((s) => s.pan);
   const pointer = useVector((s) => s.pointer);
   const horizontal = axis === 'v';
-  const o = horizontal ? PAPER_ORIGIN.x + pan.x : PAPER_ORIGIN.y + pan.y;
+  const off = horizontal ? pan.x : pan.y;
+  const size = horizontal ? box.w : box.h;
+  // 刻度比网格稀一档，保证标签不会挤在一起
+  const step = gridStepFor(zoom, 56);
+  const labelEvery = step * 5;
   const ticks: React.ReactNode[] = [];
-  const step = zoom < 0.4 ? 100 : 50;
-  for (let v = 0; v <= 1500; v += step) {
-    const pos = o + v * zoom;
-    const major = v % 100 === 0;
-    ticks.push(
-      <span key={v} className={`vs-tick ${major ? 'major' : ''} ${horizontal ? '' : 'rot'}`} style={horizontal ? { left: pos } : { top: pos }}>
-        {major ? <i>{v}</i> : null}
-      </span>
-    );
+
+  if (size > 0) {
+    const i0 = Math.floor((0 - off) / zoom / step);
+    const i1 = Math.ceil(((size - off) / zoom) / step);
+    for (let i = i0; i <= i1; i += 1) {
+      const v = i * step;
+      const pos = off + v * zoom;
+      const major = v % labelEvery === 0;
+      ticks.push(
+        <span key={v} className={`vs-tick ${major ? 'major' : ''} ${horizontal ? '' : 'rot'}`} style={horizontal ? { left: pos } : { top: pos }}>
+          {major ? <i>{v}</i> : null}
+        </span>
+      );
+    }
   }
+
   if (pointer) {
-    const pos = o + pointer[horizontal ? 'x' : 'y'] * zoom;
+    const pos = off + pointer[horizontal ? 'x' : 'y'] * zoom;
     ticks.push(<span key="c" className="vs-ruler-cursor" style={horizontal ? { left: pos } : { top: pos }} />);
   }
   return <>{ticks}</>;

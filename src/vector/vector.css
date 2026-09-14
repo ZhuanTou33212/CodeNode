@@ -807,18 +807,13 @@
   color: rgba(148, 163, 184, 0.4);
 }
 
-/* 画纸：暗色下比画布底亮一档，带投影与细描边 */
-.vs-paper {
-  fill: var(--vpaper);
-  stroke: var(--vpaper-edge);
-  stroke-width: 1;
-}
-
+/* 无限网格：线条颜色由世界层 currentColor 驱动，铺满整个视口 */
 .vs-grid-layer {
   color: var(--vtext4);
 }
 
-.vs-logic-paper {
+/* 逻辑运算结果覆盖的世界区域（无限画布下不再是固定纸张） */
+.vs-logic-region {
   fill: var(--vpaper-tint);
   pointer-events: none;
 }
@@ -2789,14 +2784,53 @@
     linear-gradient(135deg, #080a0d, #0d1016);
 }
 
-.vs-canvas::after {
-  content: "";
+/* 画纸已移除：无限画布由世界层里的网格提供纹理，
+   这里不再叠加屏幕空间的静态点阵，避免与随平移/缩放运动的网格互相干扰。 */
+
+/* 左下角缩放控件（− / 百分比 / + / 适应内容） */
+.vs-zoombar {
   position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: radial-gradient(rgba(169, 185, 211, 0.28) 0.7px, transparent 0.7px);
-  background-size: 24px 24px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.42), transparent 80%);
+  left: 34px;
+  bottom: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(11, 14, 19, 0.86);
+  border: 1px solid rgba(185, 201, 225, 0.14);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.vs-zoombar button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9fb0c6;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vs-zoombar button:hover {
+  background: rgba(169, 185, 211, 0.14);
+  color: #e6edf7;
+}
+
+.vs-zoombar .vs-zoom-pct {
+  min-width: 48px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vs-zoombar .vs-zoom-fit {
+  border-left: 1px solid rgba(185, 201, 225, 0.14);
+  border-radius: 0 6px 6px 0;
 }
 
 .vs-ruler {
@@ -2827,17 +2861,7 @@
   font-size: 9px;
 }
 
-.vs-paper {
-  fill: #1a1d28;
-  stroke: rgba(182, 193, 225, 0.18);
-  filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.28));
-}
-
-.vs-light .vs-paper {
-  fill: #ffffff;
-}
-
-.vs-logic-paper {
+.vs-logic-region {
   fill: rgba(124, 116, 255, 0.07);
 }
 
