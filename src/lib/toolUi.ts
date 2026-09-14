@@ -88,6 +88,10 @@ export function installToolListener(): () => void {
   if (!api || !api.onToolRequest) return () => {};
   return api.onToolRequest((req) => {
     if (!req || !req.id) return;
+    if (req.type === 'cancel') {
+      useToolStore.getState().cancel(req.id);
+      return;
+    }
     if (req.type === 'ui') {
       const applied = performUiAction(req.action || '', req.args || {});
       api.respondToolRequest(req.id, { applied });

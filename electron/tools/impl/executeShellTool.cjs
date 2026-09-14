@@ -7,6 +7,8 @@
 const { spawn } = require('child_process');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
+const { killProcessTree } = require('../../processTree.cjs');
+const { safeEnvironment } = require('../../envPolicy.cjs');
 
 const ALLOWED = new Set([
   'mvn', 'mvnw', 'mvnw.cmd', 'git', 'java', 'javac', 'gradle', 'gradlew', 'gradlew.bat',
@@ -26,7 +28,7 @@ function sweepJobs() {
   const now = Date.now();
   for (const [jobId, job] of BACKGROUND_JOBS) {
     if (job.status === 'running' && now - job.startedAt > JOB_TTL_MS) {
-      try { job.child && job.child.kill('SIGKILL'); } catch {}
+      killProcessTree(job.child, true);
       job.status = 'timeout';
       job.output += '\n…（后台任务超时，已强制终止）';
     }
@@ -41,7 +43,7 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
   sweepJobs();
   if (signal && signal.aborted) return { jobId: null, error: '已取消执行' };
   const jobId = 'job-' + Date.now().toString(36) + '-' + (++jobSeq).toString(36);
-  const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+  const env = safeEnvironment({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
   let child;
   try {
     const spec = spawnSpec(normalized, tokens);
@@ -55,14 +57,14 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
     if (job.status !== 'running') return;
     job.status = 'cancelled';
     job.output += '\n…（任务已取消）';
-    try { child.kill('SIGTERM'); } catch {}
+    killProcessTree(child);
   };
   signal && signal.addEventListener('abort', onAbort, { once: true });
   child.stdout.on('data', (d) => { job.output += decodeOutput(d); });
   child.stderr.on('data', (d) => { job.output += decodeOutput(d); });
   const timer = setTimeout(() => {
     if (job.status !== 'running') return;
-    try { child.kill('SIGKILL'); } catch {}
+    killProcessTree(child, true);
     job.status = 'timeout';
     job.output += '\n…（后台任务超时，已强制终止）';
   }, timeoutSeconds * 1000);
@@ -166,12 +168,15 @@ function splitCommand(command) {
 
 function isSensitiveCommand(tokens) {
   const flags = tokens.map((t) => t.toLowerCase());
+  const base = flags[0] || '';
+  if (['powershell', 'pwsh', 'cmd', 'node', 'python', 'python3', 'py', 'npm', 'npx', 'java', 'javac', 'mvn', 'mvnw', 'go'].includes(base)) {
+    return true;
+  }
   for (const f of flags) {
     if (['rm', 'del', 'rmdir', 'rd', 'clean', 'distclean', 'reset', 'hard', 'push', 'publish', '-f', '--force', '--hard'].includes(f)) {
       return true;
     }
   }
-  const base = flags[0] || '';
   if (base === 'powershell' || base === 'pwsh' || base === 'cmd') {
     const script = tokens.slice(1).join(' ');
     if (/\b(remove-item|set-content|add-content|move-item|copy-item|clear-content|format-volume|stop-process|invoke-expression|start-process)\b/i.test(script)) return true;
@@ -283,7 +288,7 @@ function register(registry) {
         let child;
         let cancelled = false;
         try {
-          const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+          const env = safeEnvironment({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
           const spec = spawnSpec(normalized, tokens);
           child = spawn(spec.file, spec.args, { cwd: root, shell: false, windowsHide: true, env });
         } catch (e) {
@@ -298,7 +303,7 @@ function register(registry) {
         });
         const onAbort = () => {
           cancelled = true;
-          try { child.kill('SIGTERM'); } catch {}
+          killProcessTree(child);
         };
         const signal = context.signal && context.signal();
         signal && signal.addEventListener('abort', onAbort, { once: true });
@@ -306,7 +311,7 @@ function register(registry) {
         const cleanup = () => signal && signal.removeEventListener('abort', onAbort);
         const timer = setTimeout(() => {
           try {
-            child.kill('SIGKILL');
+            killProcessTree(child, true);
           } catch {}
           cleanup();
           output += '\n…（执行超时，已强制终止）';

@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { shouldSkipDir, isBinaryFileName } = require('../toolFiles.cjs');
-const { globToRegExp, isSensitivePath } = require('./shared.cjs');
+const { globToRegExp, isSensitivePath, resolveInRoot } = require('./shared.cjs');
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -56,7 +56,8 @@ function register(registry) {
       const caseSensitive = args.caseSensitive === true;
       const root = path.resolve(context.projectRoot());
       const subDir = String(args.path || '').trim();
-      const start = subDir ? path.resolve(root, subDir) : root;
+      const start = resolveInRoot(root, subDir || '.');
+      if (!start) return AgentToolResult.error('路径越过项目边界');
       if (start !== root && !start.startsWith(root + path.sep)) return AgentToolResult.error('路径越过项目边界');
       if (!fs.existsSync(start) || !fs.statSync(start).isDirectory()) return AgentToolResult.error('目录不存在：' + (subDir || '.'));
       let regex;

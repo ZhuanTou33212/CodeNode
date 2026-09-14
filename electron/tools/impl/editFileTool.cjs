@@ -9,6 +9,7 @@ const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot, readTextFile } = require('./shared.cjs');
+const { atomicWriteFile } = require('../../atomicFile.cjs');
 
 function indexOfOccurrence(content, needle, occurrence) {
   let from = 0;
@@ -83,7 +84,7 @@ function register(registry) {
         const ok = await context.confirm(ConfirmationLevel.WRITE, '修改文件 ' + relative + '（替换 ' + replaced + ' 处）', '将把 ' + relative + ' 中的目标文本替换为 ' + abbreviate(newText) + '。');
         if (!ok) return AgentToolResult.error('已取消修改');
         fs.copyFileSync(file, file + '.bak');
-        fs.writeFileSync(file, updated, 'utf-8');
+        atomicWriteFile(file, updated, 'utf-8');
         context.audit('edit_file ' + relative + ' replaced=' + replaced);
         context.notifyFileChange(relative, 'modify', '替换 ' + replaced + ' 处');
         return AgentToolResult.ok('已替换 ' + replaced + ' 处：' + relative, { path: relative, replaced });

@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
+const { redact } = require('./redaction.cjs');
 
 const MAX_RUN_EVENTS = 4000;
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
@@ -20,19 +22,41 @@ function runFile(projectRoot, runId) {
 }
 
 function appendJsonl(file, record, maxBytes = MAX_LOG_BYTES) {
+  let temporary;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (fs.existsSync(file) && fs.statSync(file).size > maxBytes) {
-      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).slice(-MAX_RUN_EVENTS + 1);
-      const compact = file + '.compact';
-      fs.writeFileSync(compact, lines.join('\n') + (lines.length ? '\n' : ''), 'utf8');
-      fs.rmSync(file, { force: true });
-      fs.renameSync(compact, file);
+    const line = JSON.stringify(redact(record)) + '\n';
+    if (Buffer.byteLength(line) > maxBytes) throw new Error('Log event exceeds byte budget');
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (Buffer.byteLength(existing) + Buffer.byteLength(line) > maxBytes || (existing && !existing.endsWith('\n'))) {
+      const valid = existing.split(/\r?\n/).filter(text => {
+        try { JSON.parse(text); return !!text; } catch { return false; }
+      });
+      const start = valid.find(text => JSON.parse(text).type === 'run_start');
+      const kept = [];
+      let bytes = Buffer.byteLength(line);
+      if (start && bytes + Buffer.byteLength(start + '\n') <= maxBytes) bytes += Buffer.byteLength(start + '\n');
+      else if (start) throw new Error('Log budget cannot preserve run header');
+      for (let i = valid.length - 1; i >= 0 && kept.length < MAX_RUN_EVENTS - 2; i--) {
+        if (valid[i] === start) continue;
+        const size = Buffer.byteLength(valid[i] + '\n');
+        if (bytes + size > maxBytes) break;
+        kept.unshift(valid[i]);
+        bytes += size;
+      }
+      if (start) kept.unshift(start);
+      temporary = file + '.' + randomUUID() + '.tmp';
+      fs.writeFileSync(temporary, kept.map(text => text + '\n').join('') + line, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporary, file);
+    } else {
+      fs.appendFileSync(file, line, { encoding: 'utf8', mode: 0o600 });
     }
-    fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8');
     return true;
-  } catch {
+  } catch (error) {
+    console.error('[log-write-failed]', error.code || 'LOG_WRITE_FAILED');
     return false;
+  } finally {
+    if (temporary && fs.existsSync(temporary)) fs.unlinkSync(temporary);
   }
 }
 
@@ -62,7 +86,9 @@ function finishRun(projectRoot, runId, status, data) {
 function readRun(projectRoot, runId) {
   try {
     const lines = fs.readFileSync(runFile(projectRoot, runId), 'utf8').split(/\r?\n/).filter(Boolean);
-    return lines.slice(-MAX_RUN_EVENTS).map((line) => JSON.parse(line));
+    return lines.flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
   } catch {
     return [];
   }
@@ -72,14 +98,22 @@ function summarizeRun(events) {
   const list = Array.isArray(events) ? events : [];
   const start = list.find((event) => event.type === 'run_start');
   const finish = [...list].reverse().find((event) => event.type === 'run_finish');
+  const retry = [...list].reverse().find((event) => event.type === 'run_retry_started');
   return {
     runId: (finish || start || {}).runId || null,
-    status: finish ? finish.status : start ? 'interrupted' : 'unknown',
+    status: retry ? 'superseded' : finish ? finish.status : start ? 'interrupted' : 'unknown',
     startedAt: start ? start.ts : null,
     finishedAt: finish ? finish.ts : null,
     eventCount: list.length,
     lastEvent: list[list.length - 1] || null,
   };
+}
+
+function markRetry(projectRoot, runId, replacementRunId) {
+  const summary = summarizeRun(readRun(projectRoot, runId));
+  if (!summary.runId || summary.status !== 'interrupted') return { ok: false, error: 'Run 当前不可重试：' + (summary.status || 'unknown') };
+  appendEvent(projectRoot, runId, 'run_retry_started', { replacementRunId: normalizeRunId(replacementRunId) });
+  return { ok: true, runId: summary.runId, replacementRunId: normalizeRunId(replacementRunId) };
 }
 
 function listRuns(projectRoot, limit = 30) {
@@ -94,9 +128,10 @@ function listRuns(projectRoot, limit = 30) {
   }
 }
 
-function recoverInterrupted(projectRoot) {
+function recoverInterrupted(projectRoot, activeIds = new Set()) {
   const recovered = [];
   for (const run of listRuns(projectRoot, 200)) {
+    if (activeIds.has(run.runId)) continue;
     const events = readRun(projectRoot, run.runId);
     if (run.status === 'interrupted' && !events.some((event) => event.type === 'run_recovered')) {
       appendEvent(projectRoot, run.runId, 'run_recovered', { previousStatus: 'running', status: 'interrupted' });
@@ -106,4 +141,26 @@ function recoverInterrupted(projectRoot) {
   return recovered;
 }
 
-module.exports = { normalizeRunId, appendJsonl, appendEvent, startRun, finishRun, readRun, summarizeRun, listRuns, recoverInterrupted };
+function resumePlan(projectRoot, runId) {
+  const events = readRun(projectRoot, runId);
+  const summary = summarizeRun(events);
+  if (!summary.runId) return { ok: false, error: 'Run 不存在' };
+  if (summary.status !== 'interrupted') return { ok: false, error: 'Run 当前不可恢复：' + summary.status };
+  const start = events.find((event) => event.type === 'run_start') || {};
+  const tools = events.filter((event) => event.type === 'tool_result')
+    .flatMap((event) => Array.isArray(event.tools) ? event.tools : []);
+  return {
+    ok: true,
+    requiresReview: true,
+    runId: summary.runId,
+    prompt: String(start.prompt || ''),
+    model: start.model || null,
+    nodeId: start.nodeId || null,
+    startedAt: summary.startedAt,
+    lastEvent: summary.lastEvent,
+    completedToolNames: tools.map((tool) => tool.name).filter(Boolean),
+    warning: '这是全新重试计划，不会自动重放未知副作用；执行前请重新确认当前项目状态。',
+  };
+}
+
+module.exports = { normalizeRunId, appendJsonl, appendEvent, startRun, finishRun, readRun, summarizeRun, listRuns, recoverInterrupted, resumePlan, markRetry };

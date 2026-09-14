@@ -417,6 +417,7 @@ class LocalRagIndex {
       seen.add(item.relative);
       if (!this.accepts(item.relative, item.size)) {
         skippedFiles++;
+        this.dropFileVectors(item.relative);
         this.fileCache.delete(item.relative);
         this.dirtyFiles.delete(item.relative);
         continue;
@@ -428,6 +429,7 @@ class LocalRagIndex {
         continue;
       }
       const text = readUtf8(item.absolute, this.options.maxFileBytes);
+      this.dropFileVectors(item.relative);
       if (text == null) {
         skippedFiles++;
         this.fileCache.delete(item.relative);
@@ -445,6 +447,7 @@ class LocalRagIndex {
     let removedFiles = 0;
     for (const relative of [...this.fileCache.keys()]) {
       if (!seen.has(relative)) {
+        this.dropFileVectors(relative);
         this.fileCache.delete(relative);
         this.dirtyFiles.delete(relative);
         removedFiles++;
@@ -466,6 +469,11 @@ class LocalRagIndex {
       durationMs: Date.now() - started,
     };
     return this.stats;
+  }
+
+  dropFileVectors(relative) {
+    const previous = this.fileCache.get(relative);
+    for (const chunk of previous ? previous.chunks : []) this.chunkVectors.delete(chunk.id);
   }
 
   scopedCandidates(options) {

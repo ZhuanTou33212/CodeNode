@@ -8,6 +8,7 @@ const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot } = require('./shared.cjs');
+const { atomicWriteFile } = require('../../atomicFile.cjs');
 
 function register(registry) {
   registry.register(
@@ -39,7 +40,7 @@ function register(registry) {
           fs.copyFileSync(target, target + '.bak');
         }
         if (path.dirname(target)) fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, content, 'utf-8');
+        atomicWriteFile(target, content, 'utf-8');
         context.audit('write_file ' + relative + ' bytes=' + content.length);
         context.notifyFileChange(relative, existed ? 'modify' : 'create', content.length + ' 字节');
         return AgentToolResult.ok('已写入 ' + relative + '（' + content.length + ' 字节）', { path: relative, bytes: content.length });

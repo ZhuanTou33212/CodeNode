@@ -75,6 +75,7 @@ const { makeBridge } = require('./tools/bridge.cjs');
 const { getScalarStore } = require('./scalars/index.cjs');
 const memoryStore = require('./memory.cjs');
 const runStore = require('./runStore.cjs');
+const { atomicWriteFile } = require('./atomicFile.cjs');
 const extensionStore = require('./tools/extensions.cjs');
 const { SubagentManager } = require('./subagents.cjs');
 
@@ -836,14 +837,7 @@ function saveDoc(projectRoot, projectFile, model) {
     ? path.resolve(projectFile)
     : path.join(path.resolve(projectRoot || '.'), 'workflow.cnode');
   require('fs').mkdirSync(path.dirname(filePath), { recursive: true });
-  require('fs').writeFileSync(
-    filePath,
-    cnode.encodeCnode({
-      graph,
-      workspace: {},
-      manifest: {},
-    })
-  );
+  atomicWriteFile(filePath, cnode.encodeCnode({ graph, workspace: {}, manifest: {} }));
   return filePath;
 }
 
@@ -926,6 +920,22 @@ ipcMain.handle('agent:tools', async (_event, projectRoot) => {
   };
 });
 
+ipcMain.handle('agent:runs', async (_event, projectRoot) => {
+  if (!projectRoot) return [];
+  runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
+  return runStore.listRuns(projectRoot, 50);
+});
+
+ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {
+  if (!projectRoot) return { ok: false, error: '未选择项目' };
+  return runStore.resumePlan(projectRoot, runId);
+});
+
+ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
+  if (!projectRoot) return { ok: false, error: '未选择项目' };
+  return runStore.markRetry(projectRoot, runId, replacementRunId);
+});
+
 ipcMain.handle('agent:chat', async (event, payload) => {
   const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort } = payload || {};
   const sender = event.sender;
@@ -936,6 +946,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
   try {
     const cfg = agent.loadConfig(projectRoot);
     const maxConcurrentRuns = Number(cfg.limits && cfg.limits.maxConcurrentRuns) || 2;
+    cfg.requestBudget = new (require('./requestBudget.cjs').RequestBudget)(cfg.limits.maxTotalTokens);
     if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
     if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
     // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
@@ -953,7 +964,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       return { ok: false, error: '未配置 API Key（模型管理中填写或 config/agent.properties）' };
     }
     runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
-    runStore.recoverInterrupted(projectRoot);
+    runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
     runStore.startRun(projectRoot, runId, { prompt: String(prompt || '').slice(0, 4000), model: cfg.model, nodeId: nodeId || null });
     const onAgentDelta = (delta) => {
       sendDelta(delta);
@@ -1010,7 +1021,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
     let dirty = false;
     const controller = new AbortController();
     if (registry && registry.listTools().length > 0) {
-        bridge = makeBridge(sender);
+        bridge = makeBridge(sender, controller.signal);
         model = new GraphModel(document || undefined);
         const scalarStore = cfg.scalars && cfg.scalars.enabled !== false && projectRoot ? getScalarStore(projectRoot) : null;
         const undoStack = [];
@@ -1079,6 +1090,7 @@ ipcMain.handle('agent:chat', async (event, payload) => {
       });
     } finally {
       activeRequests.delete(runId);
+      if (bridge) bridge.cleanup();
     }
     agent.logConversation(projectRoot, {
       ts: new Date().toISOString(),

@@ -6,6 +6,7 @@ const { chatCompletionStream } = require('../electron/agent.cjs');
 async function main() {
   const apiKey = String(process.env.CODENODE_E2E_API_KEY || '').trim();
   if (!apiKey) {
+    if (process.env.CODENODE_E2E_REQUIRED === 'true') throw new Error('Required provider test missing API key');
     console.log('PROVIDER SMOKE: SKIP (set CODENODE_E2E_API_KEY to enable)');
     return;
   }

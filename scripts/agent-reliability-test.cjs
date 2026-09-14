@@ -7,7 +7,7 @@ const path = require('path');
 const { chatCompletion, chatCompletionStream } = require('../electron/agent.cjs');
 const modelStore = require('../electron/modelStore.cjs');
 const runStore = require('../electron/runStore.cjs');
-const { extensionEnv } = require('../electron/tools/extensions.cjs');
+const { safeEnvironment } = require('../electron/envPolicy.cjs');
 const { AgentToolRegistry } = require('../electron/tools/registry.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
@@ -73,13 +73,15 @@ async function main() {
 
   const modelRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-model-store-'));
   try {
-    modelStore.writeModels(modelRoot, [{ id: 'test', apiKey: 'super-secret', label: 'Test' }], 'test');
+    assert.throws(() => modelStore.writeModels(modelRoot, [{ id: 'test', apiKey: 'super-secret', label: 'Test' }], 'test'), /拒绝保存/);
+    assert.strictEqual(fs.existsSync(path.join(modelRoot, 'models.json')), false);
+    modelStore.writeModels(modelRoot, [{ id: 'test', apiKey: '', label: 'Test' }], 'test');
     const persisted = fs.readFileSync(path.join(modelRoot, 'models.json'), 'utf8');
     assert.ok(!persisted.includes('super-secret'), '模型配置文件不得保存明文 API Key');
     const internal = modelStore.readModels(modelRoot);
-    assert.strictEqual(internal.models[0].apiKey, 'super-secret');
+    assert.strictEqual(internal.models[0].apiKey, '');
     assert.strictEqual(modelStore.toPublicModel(internal.models[0]).apiKey, '');
-    assert.strictEqual(modelStore.toPublicModel(internal.models[0]).apiKeySet, true);
+    assert.strictEqual(modelStore.toPublicModel(internal.models[0]).apiKeySet, false);
   } finally {
     fs.rmSync(modelRoot, { recursive: true, force: true });
   }
@@ -101,7 +103,7 @@ async function main() {
   const oldSecret = process.env.CODE_NODE_SECRET_TEST;
   process.env.CODE_NODE_SECRET_TEST = 'should-not-pass';
   try {
-    const env = extensionEnv({ CODENODE_TEST: '1' }, []);
+    const env = safeEnvironment({ CODENODE_TEST: '1' }, []);
     assert.strictEqual(env.CODENODE_TEST, '1');
     assert.strictEqual(env.CODE_NODE_SECRET_TEST, undefined, '扩展环境不得继承未知密钥变量');
   } finally {
@@ -126,6 +128,13 @@ async function main() {
     fs.writeFileSync(path.join(root, '.env'), 'PRIVATE_TOKEN=must-not-leak\n', 'utf8');
     const context = new AgentToolContext({ projectRoot: root });
     const tools = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true });
+    let confirmed = false;
+    const guarded = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true });
+    const guardedResult = await guarded.execute('execute_shell', { command: 'powershell -Command Write-Output safe' }, new AgentToolContext({
+      projectRoot: root, confirm: async () => { confirmed = true; return false; },
+    }));
+    assert.strictEqual(guardedResult.ok, false);
+    assert.strictEqual(confirmed, true, 'interpreter command must require high confirmation');
     const read = await tools.execute('read_file', { path: '.env' }, context);
     assert.strictEqual(read.ok, false, 'read_file 不得读取 .env');
     const search = await tools.execute('search_files', { pattern: 'PRIVATE_TOKEN' }, context);

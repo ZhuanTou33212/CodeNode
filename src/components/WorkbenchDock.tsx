@@ -5,10 +5,13 @@ import { useCheckpointStore } from '../store/checkpointStore';
 import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
 import { saveProject } from '../lib/projectActions';
+import { useChatStore } from '../store/chatStore';
 import type { Node } from '@xyflow/react';
 
 type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
 type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
+type AgentRun = { runId: string | null; status: string; startedAt: string | null; eventCount: number };
+type ResumePlan = { runId?: string; prompt?: string; warning?: string; error?: string; ok: boolean };
 
 const TABS: { id: DockTab; label: string }[] = [
   { id: 'editor', label: '代码编辑器' },
@@ -250,11 +253,46 @@ function RunsPanel() {
   const cancel = useRef(false);
   const runStateKey = `codenode.runstate.${root || 'no-project'}.${useSessionStore((s) => s.activeId) || 'canvas'}`;
   const [resumeAvailable, setResumeAvailable] = useState(false);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [resumePlan, setResumePlan] = useState<ResumePlan | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const sendChat = useChatStore((s) => s.send);
 
   useEffect(() => {
     setItems(nodes.map((n) => ({ id: n.id, label: String((n.data as Record<string, unknown>)?.label || n.id), type: n.type || 'task', status: String((n.data as Record<string, unknown>)?.status || 'pending') as RunItem['status'] })));
     try { setResumeAvailable(!!localStorage.getItem(runStateKey)); } catch {}
   }, [nodes.length, runStateKey]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!root || !window.codenode?.agentRuns) { setAgentRuns([]); return () => { alive = false; }; }
+    void window.codenode.agentRuns(root).then((runs) => {
+      if (alive) setAgentRuns(runs.filter((run) => run.status === 'interrupted'));
+    }).catch(() => { if (alive) setAgentRuns([]); });
+    return () => { alive = false; };
+  }, [root]);
+
+  const inspectResume = async (runId: string) => {
+    if (!root || !window.codenode?.agentResumePlan) return;
+    setRecoveryBusy(true);
+    try { setResumePlan(await window.codenode.agentResumePlan(root, runId)); }
+    finally { setRecoveryBusy(false); }
+  };
+
+  const retryResume = async () => {
+    if (!resumePlan?.ok || !resumePlan.prompt) return;
+    setRecoveryBusy(true);
+    try {
+      const replacementRunId = 'retry-' + Date.now().toString(36);
+      const marked = root && window.codenode?.agentResumeStart
+        ? await window.codenode.agentResumeStart(root, resumePlan.runId || '', replacementRunId)
+        : { ok: false, error: '恢复接口不可用' };
+      if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
+      await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
+      setResumePlan(null);
+      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter((run) => run.status === 'interrupted'));
+    } finally { setRecoveryBusy(false); }
+  };
 
   const start = async () => {
     if (running || !nodes.length) return;
@@ -323,6 +361,17 @@ function RunsPanel() {
     <div className="dock-runs">
       <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button><button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
+      {agentRuns.length > 0 && <div className="dock-agent-recovery">
+        <strong>中断的 Agent 运行</strong>
+        {agentRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
+          <span>{run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
+          <button onClick={() => run.runId && void inspectResume(run.runId)} disabled={recoveryBusy}>查看恢复计划</button>
+        </div>)}
+        {resumePlan && <div className="dock-recovery-plan">
+          <pre>{resumePlan.warning || resumePlan.error || '无恢复计划'}</pre>
+          {resumePlan.ok && <button className="dock-primary" onClick={() => void retryResume()} disabled={recoveryBusy}>按当前状态重试</button>}
+        </div>}
+      </div>}
       <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span></div>{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
     </div>
   );

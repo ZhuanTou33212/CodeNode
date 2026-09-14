@@ -59,11 +59,13 @@ class AgentToolContext {
   cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
 
   async confirm(level, what, detail) {
+    if (this.cancelled()) return false;
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
     if (level === ConfirmationLevel.LOW) return true;
-    if (!this.confirmHandler) return true;
+    if (!this.confirmHandler) return false;
     try {
-      return await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '');
+      const approved = await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '');
+      return !this.cancelled() && approved === true;
     } catch {
       return false;
     }

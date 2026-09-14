@@ -273,7 +273,7 @@ function retryDelay(cfg, attempt, retryAfter) {
   const reliability = (cfg && cfg.reliability) || {};
   const base = Number(reliability.retryBaseMs) || 400;
   const max = Number(reliability.retryMaxMs) || 5000;
-  const serverDelay = Number(retryAfter);
+  const serverDelay = retryAfter == null || String(retryAfter).trim() === '' ? NaN : Number(retryAfter);
   if (Number.isFinite(serverDelay) && serverDelay >= 0) return Math.min(max, Math.max(0, serverDelay * 1000));
   const exponential = Math.min(max, base * (2 ** Math.max(0, attempt - 1)));
   const jitter = Math.floor(exponential * (0.8 + Math.random() * 0.4));
@@ -305,7 +305,13 @@ function maxAttemptsFor(cfg) {
   return Math.max(1, Math.min(5, Number(attempts) || 3));
 }
 
-async function chatCompletion(cfg, messages, { signal, timeoutMs = 120000 } = {}) {
+async function chatCompletion(cfg, messages, options = {}) {
+  return require('./requestQueue.cjs').modelQueue.run(options.signal,
+    () => require('./requestBudget.cjs').withBudget(cfg, messages, [], () => chatCompletionInternal(cfg, messages, options)));
+}
+
+async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000 } = {}) {
+  if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
   let timedOut = false;
@@ -330,7 +336,7 @@ async function chatCompletion(cfg, messages, { signal, timeoutMs = 120000 } = {}
           const text = await res.text().catch(() => '');
           const message = `HTTP ${res.status}: ${text.slice(0, 300)}`;
           if (isRetryableStatus(res.status) && attempt < attempts && !timedOut && !(signal && signal.aborted)) {
-            await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), signal);
+            await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
             continue;
           }
           const error = new Error(message);
@@ -348,7 +354,7 @@ async function chatCompletion(cfg, messages, { signal, timeoutMs = 120000 } = {}
       } catch (error) {
         lastError = error;
         if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
-        await waitForRetry(retryDelay(cfg, attempt), signal);
+        await waitForRetry(retryDelay(cfg, attempt), controller.signal);
       }
     }
     throw lastError || new Error('模型请求失败');
@@ -382,7 +388,13 @@ function chatBody(cfg, messages, { stream, tools } = {}) {
 /**
  * 流式对话（SSE）：实时回调推理/内容/工具调用增量。tools 为 OpenAI tools 参数（可选）。
  */
-async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools } = {}) {
+async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
+  return require('./requestQueue.cjs').modelQueue.run(options.signal,
+    () => require('./requestBudget.cjs').withBudget(cfg, messages, options.tools, () => chatCompletionStreamInternal(cfg, messages, onEvent, options)));
+}
+
+async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools } = {}) {
+  if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
   let timedOut = false;
@@ -408,7 +420,7 @@ async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs 
         if (res.ok) break;
         const text = await res.text().catch(() => '');
         if (isRetryableStatus(res.status) && attempt < attempts && !timedOut && !(signal && signal.aborted)) {
-          await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), signal);
+          await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
           continue;
         }
         const error = new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
@@ -416,7 +428,7 @@ async function chatCompletionStream(cfg, messages, onEvent, { signal, timeoutMs 
         throw error;
       } catch (error) {
         if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
-        await waitForRetry(retryDelay(cfg, attempt), signal);
+        await waitForRetry(retryDelay(cfg, attempt), controller.signal);
       }
     }
     if (!res || !res.body) throw new Error('模型响应没有可读取的流');
@@ -499,16 +511,7 @@ function logConversation(projectRoot, entry) {
 }
 
 function redactSecrets(value) {
-  if (typeof value === 'string') {
-    return value
-      .replace(/(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
-      .replace(/((?:api[_-]?key|token|password|secret|private[_-]?key)\s*[=:]\s*)[^\s,;"']+/gi, '$1[REDACTED]');
-  }
-  if (Array.isArray(value)) return value.map(redactSecrets);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /api.?key|token|password|secret|private.?key/i.test(key) ? '[REDACTED]' : redactSecrets(item)]));
-  }
-  return value;
+  return require('./redaction.cjs').redact(value);
 }
 
 const MAX_TOOL_ITERATIONS = 12;
@@ -554,7 +557,7 @@ function shouldCompress(compression, toolName, contentLength, usedCalls) {
  * 子代理压缩：用一次独立的 LLM 调用把超大的工具结果压缩成关键信息摘要。
  * 子代理只看到原始结果本身（不共享主对话上下文）；失败时降级为截断，保证主 Agent 仍能拿到部分信息。
  */
-async function compressToolContent(cfg, toolName, text) {
+async function compressToolContent(cfg, toolName, text, signal) {
   const comp = (cfg && cfg.compression) || {};
   const budget = comp.budgetChars || 1500;
   const maxInput = comp.maxInputChars || 300000;
@@ -565,7 +568,7 @@ async function compressToolContent(cfg, toolName, text) {
     { role: 'user', content: '<tool_result name="' + toolName + '">\n' + clipped + '\n</tool_result>\n请压缩上述工具结果为关键信息摘要。' },
   ];
   try {
-    const res = await chatCompletion({ ...cfg, maxTokens: Math.min(cfg.maxTokens || 8192, 4096) }, messages, { timeoutMs: 60000 });
+    const res = await chatCompletion({ ...cfg, maxTokens: Math.min(cfg.maxTokens || 8192, 4096) }, messages, { timeoutMs: 60000, signal });
     const out = String(res.content || '').trim();
     if (!out) return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
     return out;
@@ -750,6 +753,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let totalToolCalls = 0;
   let loopIterations = 0;
   let compressCalls = 0;
+  let endedNaturally = false;
+  let stopReason = 'iteration_limit';
   try {
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
       loopIterations = iter + 1;
@@ -869,7 +874,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             if (shouldCompress(cfg && cfg.compression, tc.name, toolContent.length, compressCalls)) {
               compressCalls++;
               const before = toolContent.length;
-              toolContent = await compressToolContent(cfg, tc.name, toolContent);
+              toolContent = await compressToolContent(cfg, tc.name, toolContent, signal);
               record.compressed = true;
               record.compressedChars = { from: before, to: toolContent.length };
               if (cacheKey && result.ok) {
@@ -927,16 +932,22 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           capped,
         });
         if (capped) {
-          if (!content) content = '已达单次任务工具调用上限（' + MAX_TOTAL_TOOL_CALLS + ' 次），已停止继续调用工具，请基于已获取的信息作答。';
+          stopReason = 'tool_limit';
           break;
         }
         continue;
       }
       content = content || res.content || '';
+      endedNaturally = true;
       if (!content && reasoning) {
         onDelta && onDelta({ kind: 'content', text: '' });
       }
       break;
+    }
+    if (!endedNaturally) {
+      const error = stopReason === 'tool_limit' ? '已达到工具调用上限，任务未完成。' : '已达到模型迭代上限，任务未完成。';
+      onDelta && onDelta({ kind: 'error', error, stopReason });
+      return { content, reasoning, toolCalls: allToolCalls, usage, error, stopReason };
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);

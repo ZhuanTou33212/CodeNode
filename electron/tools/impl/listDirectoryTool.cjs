@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
+const { resolveInRoot } = require('./shared.cjs');
 const { shouldSkipDir } = require('../toolFiles.cjs');
 
 const MAX_ENTRIES = 2000;
@@ -29,7 +30,8 @@ function register(registry) {
       if (!p) p = '.';
       const recursive = args.recursive === true;
       const root = path.resolve(context.projectRoot());
-      const dir = path.resolve(root, p);
+      const dir = resolveInRoot(root, p);
+      if (!dir) return AgentToolResult.error('路径越过项目边界');
       if (dir !== root && !dir.startsWith(root + path.sep)) return AgentToolResult.error('路径越过项目边界');
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return AgentToolResult.error('目录不存在：' + p);
 

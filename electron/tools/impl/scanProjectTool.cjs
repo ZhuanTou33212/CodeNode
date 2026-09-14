@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
+const { resolveInRoot } = require('./shared.cjs');
 const { scan } = require('../projectScan.cjs');
 
 const MAX_WORKBENCH_NODES = 200;
@@ -51,7 +52,8 @@ function register(registry) {
     },
     async (context, args) => {
       const rawPath = String(args.path || '').trim();
-      const root = rawPath ? path.resolve(rawPath) : path.resolve(context.projectRoot());
+      const root = resolveInRoot(context.projectRoot(), rawPath || '.');
+      if (!root) return AgentToolResult.error('路径越过项目边界');
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('目录不存在：' + root);
       try {
         const result = scan(root);
