@@ -3,12 +3,14 @@ import { useReactFlow } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
 import ProjectManager from './components/ProjectManager';
 import Canvas from './components/Canvas';
+import ProjectGate from './components/ProjectGate';
 import Inspector from './components/Inspector';
 import InspectorBadge from './components/InspectorBadge';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
 import { useUiStore } from './store/uiStore';
+import { useProjectStore } from './store/projectStore';
 import { newProject, openProject, saveProject, restoreLastProject } from './lib/projectActions';
 import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
@@ -40,6 +42,8 @@ export default function App() {
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const inspectorOpen = useUiStore((s) => s.inspectorOpen);
   const dockOpen = useUiStore((s) => s.dockOpen);
+  const booted = useUiStore((s) => s.booted);
+  const projectRoot = useProjectStore((s) => s.root);
   const { fitView } = useReactFlow();
 
   useEffect(() => {
@@ -49,7 +53,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    restoreLastProject();
+    void restoreLastProject();
     const uninstall = installToolListener();
     return uninstall;
   }, []);
@@ -71,11 +75,25 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+
+      // 启动门禁页（还没有工程）：只保留与「取得工程」有关的快捷键。
+      // 其余画布快捷键一律不生效——此时既没有工程可保存，也没有 ReactFlow 实例。
+      if (!useProjectStore.getState().root) {
+        if (mod && e.key.toLowerCase() === 'n') {
+          e.preventDefault();
+          void newProject();
+        } else if (mod && e.key.toLowerCase() === 'o') {
+          e.preventDefault();
+          void openProject();
+        }
+        return;
+      }
+
       // 选中的是画布节点 / 焦点在矢量画布内时，快捷键交给画布节点处理
       const activeVector = getActiveVectorNode();
       if (activeVector && activeVector === selectedId) return;
       if (isVectorNodeFocus()) return;
-      const mod = e.ctrlKey || e.metaKey;
 
       // 全局保存/打开/新建：即使在输入框中也生效
       if (mod && e.key.toLowerCase() === 's') {
@@ -140,6 +158,22 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo, duplicateNode, selectedId, deleteNodes, fitView, layoutNodes, arrangeNodes, createScopeFromSelection]);
+
+  // 启动引导尚未结束：先显示占位，避免「门禁页 -> 工作台」之间闪一下
+  if (!booted) {
+    return (
+      <div className="gate gate-boot">
+        <div className="gate-card">
+          <div className="gate-logo">CN</div>
+          <h1>CodeNode</h1>
+          <p className="gate-sub">正在恢复上次工程…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 强制门禁：没有工程根目录时只渲染启动页，必须先「打开工程」或「新建工程」
+  if (!projectRoot) return <ProjectGate />;
 
   return (
     <div className="app">

@@ -266,19 +266,45 @@ export async function saveProject(): Promise<void> {
   }
 }
 
-export function restoreLastProject(): void {
-  if (!window.codenode) return;
-  const lastFile = localStorage.getItem(LAST_FILE_KEY);
-  const lastRoot = localStorage.getItem(LAST_ROOT_KEY);
-  const target = lastFile || lastRoot;
-  if (!target) return;
-  const api = window.codenode;
-  const root = lastFile ? dirOf(lastFile) : lastRoot;
-  void useProjectStore.getState().loadRoot(root || '');
-  void api.loadProject(target).then((lr) => {
+/**
+ * 启动时恢复上次打开的工程。
+ * 变成 async 并由 App 以 void 调用：结束时置 booted，让启动页/门禁页知道"引导已完成"。
+ * 若上次的工程目录已不可用（被删、无权限），清空 root 退回门禁页，避免进到坏掉的工作台。
+ */
+export async function restoreLastProject(): Promise<void> {
+  try {
+    if (!window.codenode) return;
+    const lastFile = localStorage.getItem(LAST_FILE_KEY);
+    const lastRoot = localStorage.getItem(LAST_ROOT_KEY);
+    const target = lastFile || lastRoot;
+    if (!target) return;
+    const api = window.codenode;
+    const root = lastFile ? dirOf(lastFile) : lastRoot;
+    await useProjectStore.getState().loadRoot(root || '');
+
+    const st = useProjectStore.getState();
+    if (!st.root) return;
+    if (st.error) {
+      // 目录读不到：清掉 root 让门禁页接管，并把原因显示出来
+      useProjectStore.setState({
+        root: null,
+        projectFile: null,
+        tree: [],
+        error: '上次打开的工程已不可用：' + st.error,
+      });
+      localStorage.removeItem(LAST_ROOT_KEY);
+      localStorage.removeItem(LAST_FILE_KEY);
+      return;
+    }
+
+    const lr = await api.loadProject(target);
     if (lr.ok && lr.data && lr.filePath) {
       useProjectStore.getState().setProjectFile(lr.filePath);
       applyLoaded(root || '', lr.data);
     }
-  });
+  } catch (e) {
+    console.error('[CodeNode] 恢复上次工程失败:', e);
+  } finally {
+    useUiStore.getState().setBooted(true);
+  }
 }

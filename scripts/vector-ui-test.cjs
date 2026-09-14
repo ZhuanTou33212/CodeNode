@@ -22,8 +22,6 @@ const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-vec-'));
 
 /** 画布节点根选择器 */
 const NODE = '[data-testid="vector-node"]';
-/** 纸张在世界坐标中的固定偏移，与 src/vector/types.ts 的 PAPER_ORIGIN 一致 */
-const PAPER_ORIGIN = { x: 96, y: 64 };
 
 let browser = null;
 let passed = 0;
@@ -205,8 +203,8 @@ async function dragWorld(cdp, worldFrom, worldTo, button = 0, startSelector = nu
     const st = window.__codenodeVectorNode(document.querySelector('.react-flow__node-vector').dataset.id).getState();
     const scale = ${scale};
     const toClient = (w) => ({
-      x: rect.left + (${PAPER_ORIGIN.x} + st.pan.x + w.x * st.zoom) * scale,
-      y: rect.top + (${PAPER_ORIGIN.y} + st.pan.y + w.y * st.zoom) * scale,
+      x: rect.left + (st.pan.x + w.x * st.zoom) * scale,
+      y: rect.top + (st.pan.y + w.y * st.zoom) * scale,
     });
     const a = toClient(${JSON.stringify(worldFrom)});
     const b = toClient(${JSON.stringify(worldTo)});
@@ -266,6 +264,13 @@ async function main() {
 
   try {
     /* ========== 0. 基础加载 ========== */
+    /* 启动门禁：未打开工程时必须拦住工作台（本次新增的启动页契约） */
+    await waitFor(cdp, `!!document.querySelector('.gate')`, 9000, '启动门禁页出现');
+    ok('未打开工程时被启动门禁拦住（无工具栏 / 无画布）', await cdp.eval(`!document.querySelector('.toolbar') && !document.querySelector('.react-flow')`));
+    const gateBtns = await cdp.eval(`[...document.querySelectorAll('.gate-btn-title')].map((b) => b.textContent)`);
+    ok(`门禁页提供打开/新建工程入口（${JSON.stringify(gateBtns)}）`, gateBtns.length >= 2 && gateBtns[0].includes('打开工程') && gateBtns[1].includes('新建工程'));
+    // 等价于「打开工程」：直接把工程根目录载入，放行到工作台
+    await cdp.eval(`window.__codenodeProject.getState().loadRoot('E:\\\\demo')`);
     await waitFor(cdp, `document.querySelector('.toolbar') && !!window.__codenodeVectorNode`);
     out('— Agent 工作台已加载，画布节点 store 工厂已挂载');
 
@@ -283,7 +288,8 @@ async function main() {
     const modeBtns = await cdp.eval(`[...document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-vector-mode')].map(b => b.textContent.trim())`);
     ok(`模式按钮为 设计/逻辑（${JSON.stringify(modeBtns)}）`, modeBtns.length === 2 && modeBtns[0].includes('设计') && modeBtns[1].includes('逻辑'));
     ok('初始为设计模式', await cdp.eval(`document.querySelector(${JSON.stringify(NODE)} + ' .wf-vector-mode').classList.contains('on')`));
-    ok('纸张与网格渲染', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-paper') && !!document.querySelector(${JSON.stringify(NODE)} + ' .vs-grid-layer')`));
+    ok('无限网格渲染（且无纸张矩形）', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-grid-layer') && !document.querySelector(${JSON.stringify(NODE)} + ' .vs-paper')`));
+    ok('左下角缩放控件渲染', await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-zoombar button').length === 4`));
     ok('标尺渲染', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-ruler-top') && !!document.querySelector(${JSON.stringify(NODE)} + ' .vs-ruler-left')`));
     const toolCount = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-vector-tool').length`);
     const presetCount = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-vector-asset').length`);
@@ -313,7 +319,7 @@ async function main() {
       const svg = document.querySelector(${JSON.stringify(NODE)} + ' .vs-svg');
       const st = window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState();
       const r = svg.getBoundingClientRect();
-      const p = { x: r.left + (${PAPER_ORIGIN.x} + st.pan.x + ${rectObj.cx} * st.zoom) * ${scale}, y: r.top + (${PAPER_ORIGIN.y} + st.pan.y + ${rectObj.cy} * st.zoom) * ${scale} };
+      const p = { x: r.left + (st.pan.x + ${rectObj.cx} * st.zoom) * ${scale}, y: r.top + (st.pan.y + ${rectObj.cy} * st.zoom) * ${scale} };
       const el = document.elementFromPoint(p.x, p.y) || svg;
       el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, view: window }));
       return 'ok';

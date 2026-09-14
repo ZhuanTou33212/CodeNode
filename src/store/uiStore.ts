@@ -13,6 +13,8 @@ interface UiState {
   hoverScopeId: string | null;
   dockOpen: boolean;
   dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
+  /** 启动引导是否完成（恢复上次工程结束）。false 时先显示启动占位，避免门禁页闪现 */
+  booted: boolean;
 
   toggleLeft: () => void;
   setHoverScopeId: (id: string | null) => void;
@@ -31,6 +33,7 @@ interface UiState {
   openDock: (tab?: UiState['dockTab']) => void;
   closeDock: () => void;
   setDockTab: (tab: UiState['dockTab']) => void;
+  setBooted: (v: boolean) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -48,6 +51,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   hoverScopeId: null,
   dockOpen: false,
   dockTab: 'editor',
+  booted: false,
 
   toggleLeft: () => set((s) => ({ leftOpen: !s.leftOpen })),
   setHoverScopeId: (id) => set({ hoverScopeId: id }),
@@ -74,4 +78,5 @@ export const useUiStore = create<UiState>((set, get) => ({
   openDock: (tab) => set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
   closeDock: () => set({ dockOpen: false }),
   setDockTab: (tab) => set({ dockOpen: true, dockTab: tab }),
+  setBooted: (v) => set({ booted: v }),
 }));

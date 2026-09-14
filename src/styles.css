@@ -3193,3 +3193,227 @@ textarea:focus-visible {
 .dock-metrics-alert{color:#e0a45e}
 .dock-recovery-meta{color:var(--text-dim,#8b8f98);font-size:11px;margin-bottom:4px}
 .dock-recovery-meta strong{color:inherit}
+
+/* ==================== 启动门禁页（参考 svgVideoMaker 的 ProjectGate） ==================== */
+.gate {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 50% 26%, rgba(59, 130, 246, 0.16), transparent 56%),
+    var(--bg, #14161a);
+}
+
+.gate-card {
+  width: 620px;
+  max-width: 94vw;
+  padding: 38px 34px;
+  text-align: center;
+  background: var(--bg-panel, #1b1e25);
+  border: 1px solid var(--border, #2c313b);
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.gate-logo {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--accent, #3b82f6), #8b5cf6);
+  color: #fff;
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: 0.5px;
+}
+
+.gate-card h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  color: var(--text, #d7dce4);
+}
+
+.gate-sub {
+  margin: 0 auto 24px;
+  max-width: 470px;
+  color: var(--text-dim, #8b93a3);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.gate-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.gate-btn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 14px 18px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text, #d7dce4);
+  background: var(--bg-panel-2, #20242c);
+  border: 1px solid var(--border, #2c313b);
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.gate-btn:hover:not(:disabled) {
+  border-color: var(--accent, #3b82f6);
+  background: var(--bg-panel-3, #262c36);
+  transform: translateY(-1px);
+}
+
+.gate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gate-btn.primary {
+  border-color: rgba(120, 167, 255, 0.5);
+  background: var(--accent-soft, rgba(120, 167, 255, 0.14));
+}
+
+.gate-btn-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.gate-btn-desc {
+  font-size: 12px;
+  color: var(--text-dim, #8b93a3);
+}
+
+.gate-hint {
+  margin-top: 20px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim, #8b93a3);
+}
+
+.gate-card code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-panel-2, #20242c);
+  color: var(--accent, #3b82f6);
+  font-size: 11px;
+}
+
+.gate-status {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-dim, #8b93a3);
+}
+
+.gate-status.err {
+  color: var(--danger, #ff7d94);
+}
+
+/* ==================== 渲染崩溃兜底页（顶层 ErrorBoundary） ==================== */
+.crash {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg, #14161a);
+}
+
+.crash-card {
+  width: 720px;
+  max-width: 94vw;
+  max-height: 88vh;
+  overflow: auto;
+  padding: 28px 26px;
+  background: var(--bg-panel, #1b1e25);
+  border: 1px solid var(--border-strong, rgba(166, 187, 211, 0.26));
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.crash-badge {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(255, 125, 148, 0.16);
+  color: var(--danger, #ff7d94);
+  font-size: 11px;
+}
+
+.crash-card h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: var(--text, #d7dce4);
+}
+
+.crash-sub {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-dim, #8b93a3);
+}
+
+.crash-stack {
+  margin: 0;
+  padding: 12px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--bg-panel-2, #20242c);
+  border: 1px solid var(--border, #2c313b);
+  border-radius: 10px;
+  color: var(--text, #d7dce4);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.crash-details {
+  margin-top: 12px;
+}
+
+.crash-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim, #8b93a3);
+}
+
+.crash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.crash-btn {
+  padding: 9px 16px;
+  border-radius: 9px;
+  cursor: pointer;
+  color: var(--text, #d7dce4);
+  background: var(--bg-panel-2, #20242c);
+  border: 1px solid var(--border, #2c313b);
+  font-size: 12.5px;
+}
+
+.crash-btn:hover {
+  border-color: var(--accent, #3b82f6);
+}
+
+.crash-btn.primary {
+  background: var(--accent-soft, rgba(120, 167, 255, 0.14));
+  border-color: rgba(120, 167, 255, 0.5);
+}
