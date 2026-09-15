@@ -81,5 +81,10 @@ B4 磁盘实际内容 = "NEW-CONTENT"
 
 ## 验证
 
-`npm run verify`（build + check:js + `npm test` 27 项 core，含 11/11 离线评测）全绿；
-报告见 `docs/eval-reports/`。
+- 本提交（`f518041` + `7a06a2e`）在**独立 worktree** 里跑 `npm run verify`：build + check:js + `npm test` **27/27 通过**
+  （含 11/11 离线评测）。worktree 隔离掉并行改动，证明该提交单独成立；报告
+  `docs/eval-reports/agent-eval-7a06a2e-offline-20260915-214506.{json,md}`（`dirty:false`，11/11）。
+- 合并后在分支 `0_2` 的 `69e000e`（另一条线随后提交了可插拔向量后端 + `test:vector-store`）上再跑一次
+  `npm run verify`：**28/28 通过**，check:js 0 错误。
+- 说明：`check:js` 中途曾报 11 个 TS 错误，全部落在当时**未提交**的 `electron/rag/index.cjs` 与
+  `scripts/vector-store-test.cjs`（不是本次修复的文件）；对方提交后这些错误消失。
