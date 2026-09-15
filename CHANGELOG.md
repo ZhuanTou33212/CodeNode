@@ -4,6 +4,23 @@
 
 ## [未发布]
 
+### 修复（Agent harness）
+
+- **引用校验把真实引用判成伪造引用**：白名单只认 `retrieve_context` 的精确 citation 串，于是块内更精确的行区间
+  （`docs/session.md#L1-L4` 里引用 `L3-L3`）、以及按系统提示用 `read_file` 深读候选文件后的实读路径都被判无效，
+  提示还被拼进交付回答正文。现在可信来源改判「本轮真实读过的内容」（检索块范围 / `read_file` 实读区间 /
+  `search_files` 命中行 / `query_scalars` 命中 key），没读过、或行号与读到的范围不相交仍判无效；提示改为独立事件
+  （`onDelta {kind:'grounding'}`），不再污染回答正文。顺带修掉引用正则匹配不到 `[scalar:<key>]` 形态的问题。
+- **只读结果缓存失效盲区**：缓存失效此前按「写工具清单」(`MUTATION_TOOLS`) 判定，而 `execute_shell`（脚本/构建）、
+  `poll_job`（正在写盘的后台任务）、`delegate_task`（builder 子代理落盘）、扩展与 MCP 工具都可能改文件，
+  执行后缓存不失效（实测 shell 写入后 `read_file` 仍返回旧内容）。现在按只读白名单保活：只有纯只读工具之间缓存
+  继续有效，其余任何工具（含失败、未注册的）执行后一律清空；新增 core 用例 `test:agent-cache`。
+- **执行隔离策略经 context 注入时被当成函数而静默降级**：`electron/ipc/agent.cjs` 写成 `sandbox: () => sandboxPolicy`，
+  而 `AgentToolContext.sandbox()` 原样返回注入值 → `sandbox.currentPolicy()` 拿到函数、`mode/capabilities` 全为
+  `undefined` → Windows 上 Job Object 的进程数/内存/CPU 限额不生效，macOS/Linux 退化成无隔离 spawn，
+  `strict` 的 fail-closed 检查也被绕过（`sandbox-test` 因显式传策略对象而一直全绿）。现在传策略对象本身，
+  `context.sandbox()` 兼容 getter 形式，并在 `sandbox-test` 增补接线断言。
+
 ### 修复（工程与门禁，本轮）
 
 - **CI 触发条件写死 `n0_12`**：`ci.yml` 的 push 与 `production-gate.yml` 的 push/PR 都过滤了 `n0_12`，
