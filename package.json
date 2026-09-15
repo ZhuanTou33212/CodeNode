@@ -2,7 +2,8 @@
   "name": "codenode-desktop-next",
   "version": "0.13.0",
   "private": true,
-  "author": "yimi528 <2534311904@qq.com>",
+  "license": "MIT",
+  "author": "yimi528 <148250049+yimi528@users.noreply.github.com>",
   "description": "CodeNode Agent 工作台：画布、工具循环与本地 Agentic RAG",
   "main": "electron/main.cjs",
   "engines": {

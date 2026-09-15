@@ -264,3 +264,10 @@ $arc = Get-ChildItem "$cache\winCodeSign\*.7z" | Select-Object -First 1
 - [x] 节点 = Agent 工作流：进度 / 顺序 / 结果摘要可视化
 - [x] Agent 通过工具控制画布（创建 / 连线 / 推进状态）
 - [x] 打包分发配置（electron-builder）与 `.cnode` 文件关联；实际签名/发布由 CI 或发行机执行
+
+## 发布与许可证
+
+- 发布流程（版本唯一来源、哈希清单、签名、升级/回滚判据）见 [`docs/release-process.md`](docs/release-process.md)：
+  `npm run release:hash` 生成 sha256/sha512 清单（不签名，CI 可跑）；`npm run release:sign` 用证书签名
+  （Windows 走 signtool；凭据与 fail-closed 规则见文档第 4 节）。
+- 许可证：**MIT**，见 [`LICENSE`](LICENSE)。

@@ -38,6 +38,10 @@
 - 新增 `npm run check:js`：对 `electron/**`、`scripts/**`（.cjs，不受 `src/` 的 tsc 覆盖）做 checkJs 静态检查；
   `npm run verify` = build + check:js + 全量回归。
 - `.nvmrc` / `engines.node` 固定 Node 22；`.gitattributes`（一律 LF，二进制标记）+ `.editorconfig`。
+- **LICENSE：MIT**（此前缺失，仓库是 public）。`package.json` 补 `license` 字段，作者邮箱统一为
+  `yimi528 <148250049+yimi528@users.noreply.github.com>`（此前挂着另一台机器的 `2534311904@qq.com`）。
+  发布入口 `npm run release:sign` / `release:hash` 指向 `scripts/release-sign.cjs`，补上"写了模块但无调用方"
+  这个缺口；凭据（`CODENODE_WIN_CERT_PFX_BASE64` 等）与 fail-closed 规则见 `docs/release-process.md` 第 4 节。
 - 新增 CONTRIBUTING.md、PR 模板、CODEOWNERS、dependabot（npm 每周 + Actions 每月）、`docs/release-process.md`。
 - `scripts/vector-ui-test.cjs` 现在自己拉起 vite dev server（没有就跑，已有就复用），
   并让 `waitFor` 超时打印当时 DOM——此前该用例要求"先手动起 vite"，单跑必然超时。
@@ -95,7 +99,6 @@ CI 一旦真的跑起来（此前只在已删除的 `n0_12` 上触发），六�
 
 ### 已知问题（未修，需要产品决策）
 
-- `LICENSE` 仍然缺失（仓库是 public）：选哪个许可证属于你的决定，未擅自添加。
 - 历史 tag（`0.11`/`0.12`/`0.13`/`n0_11`/`v0.12.0`/`v0.3.0`/`v0.3.1`）与 `package.json` 版本号对不上，
   历史无法追改，从 `docs/release-process.md` 起统一为 `vX.Y.Z`。
 - `npm run test:display` 仍未纳入 CI：`test:vector` 目前只认 `msedge.exe`（Windows 路径），
