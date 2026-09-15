@@ -1,9 +1,13 @@
 'use strict';
 
 const { app, BrowserWindow } = require('electron');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// 启动门禁：未打开工程时应用停在门禁页（没有侧栏、没有消息列表），所以先准备一个真实工程根再放行。
+const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-rag-ui-'));
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
@@ -18,6 +22,26 @@ app.whenReady().then(async () => {
     const result = await win.webContents.executeJavaScript(`(async()=>{
       const session = window.__codenodeSession;
       if (!session) return { error: 'session store unavailable' };
+      const waitFor = async (fn, ms) => {
+        const deadline = Date.now() + (ms || 3000);
+        while (Date.now() < deadline) {
+          const v = fn();
+          if (v) return v;
+          await new Promise((resolve)=>setTimeout(resolve, 50));
+        }
+        return null;
+      };
+      // 侧栏 tab 化之后，消息列表只在 Agent 标签下挂载（SidePanel: tab === 'agent' && <AgentPanel/>），
+      // 这里先放行启动门禁（载入工程根）→ 展开侧栏 → 切到该标签，否则 .rag-grounding-* 根本不在 DOM 里。
+      const project = window.__codenodeProject;
+      if (!project) return { error: 'project store unavailable' };
+      await project.getState().loadRoot(${JSON.stringify(projectRoot)});
+      const panel = await waitFor(()=>document.querySelector('.side-panel'), 5000);
+      const ui = window.__codenodeUi;
+      if (ui) {
+        ui.getState().setSideOpen(true);
+        ui.getState().setSideTab('agent');
+      }
       session.setState({
         messages: [{
           role: 'assistant',
@@ -29,8 +53,7 @@ app.whenReady().then(async () => {
           }
         }]
       });
-      await new Promise((resolve)=>setTimeout(resolve, 100));
-      const valid = document.querySelector('.rag-grounding-valid');
+      const valid = await waitFor(()=>document.querySelector('.rag-grounding-valid'));
       const validText = valid ? valid.textContent : '';
       session.setState({
         messages: [{
@@ -43,9 +66,10 @@ app.whenReady().then(async () => {
           }
         }]
       });
-      await new Promise((resolve)=>setTimeout(resolve, 100));
-      const invalid = document.querySelector('.rag-grounding-invalid');
+      const invalid = await waitFor(()=>document.querySelector('.rag-grounding-invalid'));
       return {
+        sideTab: ui ? ui.getState().sideTab : '(no ui store)',
+        hasPanel: Boolean(document.querySelector('.side-panel')),
         validText,
         invalidText: invalid ? invalid.textContent : '',
         invalidTitle: invalid ? invalid.getAttribute('title') : ''
@@ -57,6 +81,9 @@ app.whenReady().then(async () => {
       result.invalidTitle && result.invalidTitle.includes('src/fake.ts#L1-L2');
     console.log('RAG UI TEST:', JSON.stringify(result));
     console.log(ok ? 'RAG UI TEST: PASS' : 'RAG UI TEST: FAIL');
+    try {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    } catch {}
     app.exit(ok ? 0 : 1);
   } catch (error) {
     console.error('RAG UI TEST: ERROR ' + ((error && error.stack) || error));

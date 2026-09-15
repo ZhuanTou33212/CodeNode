@@ -369,6 +369,20 @@ function VectorNodeBody({
   const selectedIds = useVector((s) => s.selectedIds);
   const logicIds = useVector((s) => s.logicIds);
   const logicOp = useVector((s) => s.logicOp);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * 指针落在画布内容上时，把焦点收到节点本体（.vs-scope）。
+   * 画布内容（svg / div）本身不可聚焦，而画布内快捷键的守卫要求 document.activeElement
+   * 落在 .vs-scope 内 —— 不这样做的话，鼠标点进画布后按 Delete/Ctrl+Z/工具键全部落到工作台，
+   * 表现就是「在画布节点里选中图形按 Delete，把整个画布节点删掉了」。
+   * 真正的交互控件（输入框/按钮等）自带焦点，不抢。
+   */
+  const focusBodyOnPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.('input, textarea, select, button, a[href], [contenteditable="true"]')) return;
+    bodyRef.current?.focus({ preventScroll: true });
+  };
 
   const analysis = useMemo<LogicAnalysis>(() => {
     if (mode !== 'logic') return EMPTY_ANALYSIS;
@@ -378,7 +392,12 @@ function VectorNodeBody({
   const dockOpen = data.dockOpen !== false;
 
   return (
-    <div className={`wf-vector-body vs-scope nowheel ${dark ? '' : 'vs-light'}`}>
+    <div
+      ref={bodyRef}
+      className={`wf-vector-body vs-scope nowheel ${dark ? '' : 'vs-light'}`}
+      tabIndex={-1}
+      onPointerDown={focusBodyOnPointerDown}
+    >
       <VectorNodeRail store={store} />
 
       <div className="wf-vector-stage">

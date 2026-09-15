@@ -263,8 +263,56 @@ async function readStageScale(cdp) {
   })()`);
 }
 
+/**
+ * 等画布视口动画停下：工具栏放置节点后会做 240ms 的 rfSetViewport 动画，
+ * 动画期间节点会缩放/平移，按「世界坐标 → client 坐标」派发的拖拽会整体漂掉
+ * （实测同一个 160×110 的拖拽被记成 564×359 —— zoom 从 ~1.9 动画到 0.55 的比值）。
+ * 判据用节点自身的 bounding rect 连续两次一致，与实现无关。
+ */
+async function waitForViewportIdle(cdp, timeoutMs = 4000) {
+  const read = () =>
+    cdp.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(NODE)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)].join(',');
+    })()`);
+  let last = await read();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(160);
+    const now = await read();
+    if (now && now === last) return;
+    last = now;
+  }
+}
+
+/** 在画布节点的 svg 上按世界坐标派发一次真实点击（pointerdown + pointerup，不移动） */
+async function clickWorld(cdp, world) {
+  await waitForViewportIdle(cdp);
+  const scale = await readStageScale(cdp);
+  return cdp.eval(`(() => {
+    const svg = document.querySelector(${JSON.stringify(NODE)} + ' .vs-svg');
+    if (!svg) return 'no-svg';
+    const rect = svg.getBoundingClientRect();
+    const st = window.__codenodeVectorNode(document.querySelector('.react-flow__node-vector').dataset.id).getState();
+    const scale = ${scale};
+    const p = {
+      x: rect.left + (st.pan.x + ${JSON.stringify(world)}.x * st.zoom) * scale,
+      y: rect.top + (st.pan.y + ${JSON.stringify(world)}.y * st.zoom) * scale,
+    };
+    const opts = { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: p.x, clientY: p.y };
+    const hit = document.elementFromPoint(p.x, p.y);
+    const el = hit && svg.contains(hit) ? hit : svg;
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 }));
+    return 'ok';
+  })()`);
+}
+
 /** 在画布节点的 svg 上按世界坐标派发一次指针拖动 */
 async function dragWorld(cdp, worldFrom, worldTo, button = 0, startSelector = null) {
+  await waitForViewportIdle(cdp);
   const scale = await readStageScale(cdp);
   return cdp.eval(`(async () => {
     const svg = document.querySelector(${JSON.stringify(NODE)} + ' .vs-svg');
@@ -324,7 +372,16 @@ async function main() {
   out('▶ 启动无头 Edge…');
   await startBrowser();
   const targets = /** @type {any[]} */ (await fetch(`http://127.0.0.1:${PORT}/json`).then((r) => r.json()));
-  const page = targets.find((t) => t.type === 'page');
+  // 必须挑「被测应用」那个 target：Edge 启动时可能先开自己的内部页（#app-root + 混淆类名 + Edge logo），
+  // 直接取第一个 page target 会连到它上面，表现是一直等不到应用自己的元素（.gate / .toolbar）。
+  const pages = targets.filter((t) => t.type === 'page');
+  const page = pages.find((t) => String(t.url || '').startsWith(BASE)) || pages[0];
+  if (!page) throw new Error('没有可用的 page target（Edge 未起来？）');
+  if (!String(page.url || '').startsWith(BASE)) {
+    out(`  ⚠ 没有匹配 ${BASE} 的页面，退回第一个 page target：${page.url}`);
+  } else {
+    out(`  ✓ 已选中应用页面 ${page.url}`);
+  }
   const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
   out('▶ 页面已连接，等待应用加载…');
 
@@ -477,7 +534,17 @@ async function main() {
 
     /* ========== 11. Delete 删除选中图形 ========== */
     const n1 = await vs('s.objects.length');
-    await cdp.eval(`(() => { const s = window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState(); s.selectIds([s.objects[0].id]); return 'ok'; })()`);
+    // 真实点一下图形：既选中它，也让焦点落进画布节点（画布内快捷键的守卫要求焦点在 .vs-scope 内，
+    // 见 VectorNode.tsx 的 focusBodyOnPointerDown）；此前这里直接程序化 selectIds + 派发 Delete，
+    // 走的不是用户真实路径，Delete 会落到工作台的「删除选中节点」上，把整个画布节点删掉。
+    const firstObj = await vs(`(() => { const o = s.objects[0]; return { x: o.x + o.width / 2, y: o.y + o.height / 2 }; })()`);
+    await clickWorld(cdp, firstObj);
+    await waitFor(
+      cdp,
+      `window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().selectedIds.length === 1`,
+      3000,
+      '点击图形后被选中'
+    );
     await keyOnWindow(cdp, 'Delete');
     await sleep(200);
     const n2 = await vs('s.objects.length');
@@ -494,6 +561,7 @@ async function main() {
     const firstId = nodeId;
     const firstCount = await vs('s.objects.length');
     await clickEl(cdp, '.toolbar-vector');
+    await waitForViewportIdle(cdp);
     await waitFor(cdp, `document.querySelectorAll('.react-flow__node-vector').length === 2`, 6000, '第二个画布节点');
     const ids = await cdp.eval(`[...document.querySelectorAll('.react-flow__node-vector')].map(n => n.dataset.id)`);
     const secondId = ids.find((x) => x !== firstId);

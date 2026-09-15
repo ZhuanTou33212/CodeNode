@@ -109,12 +109,14 @@ export default function App() {
         return;
       }
 
-      // 删除选中节点：必须放在「矢量画布让位」之前。
-      // 「画布节点」(vector) 内部就是一个 .vs-scope 矢量画布，焦点常常落在它上面，
-      // 若沿用下面的让位规则，Delete 会被吞掉 —— 这正是「选中画布节点后删不掉」的原因。
-      // 只有焦点在真正的文字输入里（节点内编辑文字）时才让位，避免误删字符。
+      // 删除选中节点。
+      // 与画布节点的分工：焦点落在画布节点内部（.vs-scope）时让位——由画布节点自己的快捷键删图形，
+      // 而不是把整个画布节点删掉；焦点不在里面（例如点的是节点标题栏）才删节点本身。
+      // 这条规则的两端分别是「选中画布节点后删不掉」和「在画布节点里按 Delete 把节点整个删了」。
+      // 画布节点会在指针按下时把焦点收回 .vs-scope（VectorNode.tsx 的 focusBodyOnPointerDown），
+      // 所以这里判断焦点归属是可靠的。
       if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
-        if (!isTextEditingNow()) {
+        if (!isTextEditingNow() && !isVectorNodeFocus()) {
           const st = useGraphStore.getState();
           const ids = st.selectedIds.length ? st.selectedIds : st.selectedId ? [st.selectedId] : [];
           if (ids.length) {

@@ -63,17 +63,37 @@ CI 一旦真的跑起来（此前只在已删除的 `n0_12` 上触发），六�
 
 结果：`CodeNode CI` 的 3× Verify + 3× Package 与 `production-gate` 的 5 个任务在三个平台上全部通过。
 
-### 已知问题（未修，需要产品决策或交互式桌面）
+### 修复（display 组：画布节点键盘归属 + 用例自备环境）
 
-- `npm run test:display` 里两项目前是红的（**与本次改动无关，改动前用 `git stash` 复现过**）：
-  - `test:vector`：41/45 通过；失败项为「Delete 删除节点内选中图形」「画布节点本身仍然存在」以及
-    「第二个画布节点」创建超时——`addef0c`/`5a21a17` 的侧栏 tab 化与无限画布重构把画布节点的这两条行为打散了。
-  - `test:rag-ui`：断言的三处文案为空——侧栏 tab 化后 RAG 面板不在默认可见 tab 上，脚本按旧结构取不到元素。
-  这两个套件此前不在 CI 里（CI 只跑 Linux 的 `test:smoke`），所以坏了没人发现；
-  修完 UI 行为后应把 `npm run test:display` 纳入带显示环境（xvfb）的 CI 任务。
+`npm run test:display` 三项目前全绿（此前 2 红）。关键不是改用例迁就实现，而是修掉两个真问题：
+
+- **在画布节点里按 Delete 会把整个画布节点删掉**（数据损失级）：画布内快捷键的守卫要求
+  `document.activeElement` 落在 `.vs-scope` 内，但 `src/` 里没有任何可聚焦元素（无 `tabIndex`），
+  鼠标点进画布后焦点仍留在 `body` → 工作台的「删除选中节点」先一步触发，把节点删了。
+  现在 `VectorNode.tsx` 在指针按到画布内容时把焦点收回 `.vs-scope`
+  （`tabIndex={-1}` + `onPointerDown`，真正的输入控件不抢焦点），
+  `App.tsx` 的 Delete 分支相应改为「焦点在画布节点内则让位」——
+  两端分别是「选中画布节点后删不掉」与「在画布节点里 Delete 把节点删掉」，现在各归其位。
+- **用例自身的两处环境缺口**（与实现无关，改的是脚本）：
+  - `test:vector` 的 Edge target 选择取「第一个 page target」，Edge 启动时可能先开自己的内部页
+    （`#app-root` + 混淆类名），于是连到错误的页面并一直等不到应用元素；现在按 BASE URL 匹配。
+  - `test:vector` 在工具栏放置节点后有 240ms 的视口动画，动画期间按世界坐标派发的拖拽会整体漂掉
+    （实测 160×110 的拖拽被记成 564×359）；新增 `waitForViewportIdle()`（判据是节点 rect 连续两次一致），
+    `dragWorld`/`clickWorld` 都会先等它稳定。
+  - `test:vector` 的 Delete 检查改为「真实点击图形 → Delete」，与用户路径一致（原先程序化 `selectIds`
+    不带焦点，测的是另一条路径）。
+  - `test:rag-ui` 放行启动门禁（先 `loadRoot` 到一个临时工程根）、展开侧栏并切到 Agent 标签——
+    侧栏 tab 化之后消息列表只在 `tab === 'agent'` 时挂载，`.rag-grounding-*` 之前根本不在 DOM 里；
+    固定 `setTimeout(100)` 也换成轮询等待。
+
+### 已知问题（未修，需要产品决策）
+
 - `LICENSE` 仍然缺失（仓库是 public）：选哪个许可证属于你的决定，未擅自添加。
 - 历史 tag（`0.11`/`0.12`/`0.13`/`n0_11`/`v0.12.0`/`v0.3.0`/`v0.3.1`）与 `package.json` 版本号对不上，
   历史无法追改，从 `docs/release-process.md` 起统一为 `vX.Y.Z`。
+- `npm run test:display` 仍未纳入 CI：`test:vector` 目前只认 `msedge.exe`（Windows 路径），
+  要进 CI 需先把浏览器探测做成 `EDGE → CHROME → chromium` 的跨平台回退，再挂到带 xvfb 的任务上。
+
 
 ## [0.13.0] - 2026-09-14
 

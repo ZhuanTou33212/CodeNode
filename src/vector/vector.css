@@ -66,6 +66,13 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* .vs-scope 只作为「键盘归属」的焦点容器（见 VectorNode.tsx 的 focusBodyOnPointerDown）：
+   点击画布内容会把焦点收进来，但不该画出焦点环 */
+.vs-scope:focus,
+.vs-scope:focus-visible {
+  outline: none;
+}
+
 .vs {
   position: fixed;
   inset: 0;
