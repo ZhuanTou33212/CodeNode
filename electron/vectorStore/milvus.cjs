@@ -76,13 +76,21 @@ function truthyCollection(result) {
   return false;
 }
 
+/** 命中列表在不同 SDK 版本下可能是 [[hits]] / [{data:[hits],top_k}] / [hits]，逐层解包。 */
+function pickHitList(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') {
+    for (const key of ['results', 'data', 'hits', 'rows']) {
+      if (Array.isArray(value[key])) return value[key];
+    }
+  }
+  return null;
+}
+
 /** search 返回 [[{id, score}]] / {results:[[...]]} / {data:[...]} 等形状的归一。 */
 function normalizeSearchHits(result) {
-  const rows = Array.isArray(result)
-    ? result
-    : (result && (result.results || result.data || result.hits)) || [];
-  const first = Array.isArray(rows) && Array.isArray(rows[0]) ? rows[0] : rows;
-  if (!Array.isArray(first)) return [];
+  const rows = pickHitList(result) || [];
+  const first = pickHitList(rows[0]) || rows;
   const out = [];
   for (const hit of first) {
     if (!hit || typeof hit !== 'object') continue;
@@ -126,8 +134,18 @@ function extractVectorDim(result) {
       if (node[key] != null && Number.isFinite(n) && n > 0) return n;
     }
     for (const key of ['typeParams', 'type_params']) {
-      const n = Number(node[key] && node[key].dim);
-      if (Number.isFinite(n) && n > 0) return n;
+      const raw = node[key];
+      const direct = Number(raw && raw.dim);
+      if (Number.isFinite(direct) && direct > 0) return direct;
+      // SDK 的 FieldSchema.type_params 是 KeyValuePair[]：[{key:'dim', value:'256'}]
+      if (Array.isArray(raw)) {
+        for (const pair of raw) {
+          const name = String((pair && (pair.key != null ? pair.key : pair.name)) || '').toLowerCase();
+          if (name !== 'dim' && name !== 'dimension') continue;
+          const n = Number(pair.value);
+          if (Number.isFinite(n) && n > 0) return n;
+        }
+      }
     }
     if (typeof node.name === 'string' && node.name === VECTOR_FIELD) {
       for (const key of ['dim', 'dimension']) {
@@ -150,6 +168,27 @@ function stringLiteral(value) {
 
 function chunkText(chunk) {
   return chunk.path + '\n' + chunk.content;
+}
+
+/** SDK 把失败放在 status.error_code 里（不抛异常），且不同方法有的返回裸 status、有的包一层 {status}。 */
+function statusOf(result) {
+  if (!result || typeof result !== 'object') return null;
+  if (result.status && typeof result.status === 'object') return result.status;
+  if (result.error_code != null || result.code != null) return result;
+  return null;
+}
+
+/** 统一把 SDK 的失败状态转成异常：否则会出现「零命中」这种静默错误（实测 topk 缺失即如此）。 */
+function assertSuccess(result, action) {
+  const status = statusOf(result);
+  if (!status) return result;
+  const code = status.error_code != null ? status.error_code : status.code;
+  const ok = code == null || code === 'Success' || code === 0;
+  if (!ok) {
+    const reason = status.reason || status.detail || 'unknown';
+    throw new Error('Milvus ' + action + ' 失败：' + reason + '（error_code=' + code + '）');
+  }
+  return result;
 }
 
 class MilvusVectorStore {
@@ -190,12 +229,12 @@ class MilvusVectorStore {
   async ensureCollection() {
     if (this.ready) return this.ready;
     const client = this.ensureClient();
-    const existed = truthyCollection(await client.hasCollection({ collection_name: this.collection }));
+    const existed = truthyCollection(assertSuccess(await client.hasCollection({ collection_name: this.collection }), 'hasCollection'));
     if (existed) {
       let remoteDim = null;
       try {
         const described = typeof client.describeCollection === 'function'
-          ? await client.describeCollection({ collection_name: this.collection })
+          ? assertSuccess(await client.describeCollection({ collection_name: this.collection }), 'describeCollection')
           : null;
         remoteDim = extractVectorDim(described);
       } catch (error) {
@@ -209,7 +248,7 @@ class MilvusVectorStore {
       }
       if (typeof client.loadCollection === 'function') {
         try {
-          await client.loadCollection({ collection_name: this.collection });
+          assertSuccess(await client.loadCollection({ collection_name: this.collection }), 'loadCollection');
         } catch (error) {
           this.lastError = (error && error.message) || String(error);
         }
@@ -229,18 +268,21 @@ class MilvusVectorStore {
       ],
       enable_dynamic_field: false,
     };
-    await client.createCollection(schema);
+    await assertSuccess(await client.createCollection(schema), 'createCollection');
     if (typeof client.createIndex === 'function') {
-      await client.createIndex({
-        collection_name: this.collection,
-        field_name: VECTOR_FIELD,
-        index_type: 'AUTOINDEX',
-        metric_type: 'COSINE',
-        params: {},
-      });
+      await assertSuccess(
+        await client.createIndex({
+          collection_name: this.collection,
+          field_name: VECTOR_FIELD,
+          index_type: 'AUTOINDEX',
+          metric_type: 'COSINE',
+          params: {},
+        }),
+        'createIndex'
+      );
     }
     if (typeof client.loadCollection === 'function') {
-      await client.loadCollection({ collection_name: this.collection });
+      await assertSuccess(await client.loadCollection({ collection_name: this.collection }), 'loadCollection');
     }
     this.ready = { collection: this.collection, dim: this.dim, created: true };
     return this.ready;
@@ -285,7 +327,7 @@ class MilvusVectorStore {
         throw new Error('嵌入维度 ' + first.length + ' 与 rag.embed_dim=' + this.dim + ' 不一致（collection ' + this.collection + '）');
       }
       const rows = batch.map((item, i) => ({ id: item.id, file: item.path, [VECTOR_FIELD]: vectors[i] }));
-      const result = await client.insert({ collection_name: this.collection, data: rows });
+      const result = assertSuccess(await client.insert({ collection_name: this.collection, data: rows }), 'insert');
       inserted += extractCount(result) || rows.length;
       this.counters.batches += 1;
       this.counters.inserted += rows.length;
@@ -312,10 +354,13 @@ class MilvusVectorStore {
     let removed = 0;
     if (deleted.length) {
       for (const item of deleted) {
-        const result = await client.delete({
-          collection_name: this.collection,
-          filter: 'file == ' + stringLiteral(item.relative),
-        });
+        const result = assertSuccess(
+          await client.delete({
+            collection_name: this.collection,
+            filter: 'file == ' + stringLiteral(item.relative),
+          }),
+          'delete'
+        );
         const cnt = extractCount(result);
         removed += cnt || (Array.isArray(item.chunkIds) ? item.chunkIds.length : 0);
         this.counters.deleted += 1;
@@ -349,14 +394,23 @@ class MilvusVectorStore {
     await this.ensureCollection();
     const [queryVec] = await embedder.embed([query]);
     if (!Array.isArray(queryVec) || !queryVec.length) return out;
-    const result = await this.client.search({
-      collection_name: this.collection,
-      data: [queryVec],
-      limit: this.searchLimit,
-      anns_field: VECTOR_FIELD,
-      output_fields: ['file'],
-      search_params: { metric_type: 'COSINE', params: {} },
-    });
+    // 注意（真机实测两条）：
+    // 1) 主键 id 不会自动出现在命中里，必须显式列入 output_fields（否则只剩 score + 请求字段）；
+    // 2) 一旦显式传 search_params，SDK 会原样透传（utils/Search.js 的 buildSearchParams 不再注入 topk），
+    //    服务端会以 "topk is required" 报错；这里走 SDK 的简单形态（limit/metric_type/params）由 SDK 组装。
+    const result = assertSuccess(
+      await this.client.search({
+        collection_name: this.collection,
+        data: [queryVec],
+        limit: this.searchLimit,
+        topk: this.searchLimit,
+        anns_field: VECTOR_FIELD,
+        output_fields: ['id', 'file'],
+        metric_type: 'COSINE',
+        params: {},
+      }),
+      'search'
+    );
     this.counters.searches += 1;
     for (const hit of normalizeSearchHits(result)) {
       out.set(hit.id, Math.max(0, hit.score));

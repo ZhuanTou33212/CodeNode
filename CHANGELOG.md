@@ -22,6 +22,13 @@
   `rag.milvus_token` / `rag.milvus_username` / `rag.milvus_password` 见 `config/agent.properties.example`。
 - 新增 core 用例 `test:vector-store`：memory 契约、Milvus 适配器全分支（建表/索引/load/分批写入/按文件删除/维度校验）、
   端到端 vector-only 与降级链路；真实 Milvus 端到端由 `MILVUS_ADDR` 守卫（未设置则明确 SKIP，不静默通过）。
+- **已完成真机验证**（2026-09-15，Milvus v2.6.5 + SDK 3.0.5，本机 docker compose 栈）：
+  写入 / 全库 ANN 检索 / 纯语义命中并入 / 按文件删除传播 / 索引端到端全部跑通，`realMilvus: pass`。
+  真机暴露并已修的四个坑：显式传 `search_params` 会让 SDK 不注入 `topk`（服务端 `topk is required`）；
+  SDK 把失败放在 `status.error_code` 而不抛异常（会退化成「静默零命中」，现统一 `assertSuccess` 转异常）；
+  命中默认不含主键，`output_fields` 必须显式带 `id`（否则无法映射回 chunk）；
+  默认 Bounded 一致性下删除有数秒可见性延迟（用例改为轮询等待）。用例新增「状态失败不得被当成零命中」回归项。
+  详见 `docs/agentic-rag-scalar-vector.md` 2.2.1.1。
 - 文档同步：`docs/agentic-rag-scalar-vector.md` 增 2.2.1 节（含「Windows 无可用 Milvus Lite，只有外部服务形态」
   的边界说明）、README 与配置示例。
 
@@ -141,9 +148,9 @@ CI 一旦真的跑起来（此前只在已删除的 `n0_12` 上触发），六�
   历史无法追改，从 `docs/release-process.md` 起统一为 `vX.Y.Z`。
 - `npm run test:display` 仍未纳入 CI：`test:vector` 目前只认 `msedge.exe`（Windows 路径），
   要进 CI 需先把浏览器探测做成 `EDGE → CHROME → chromium` 的跨平台回退，再挂到带 xvfb 的任务上。
-- **Milvus 后端只跑通了适配器级验证**：`test:vector-store` 用假客户端覆盖建表/写入/删除/检索/维度校验/降级全部分支，
-  但真实 Milvus 服务端到端依赖 `MILVUS_ADDR`（需自建服务）未纳入门禁，官方 SDK 的返回结构兼容
-  （2.x/3.x 形状差异）也未经真机确认；本机无 Docker 守护进程时该路径只输出 SKIP。
+- **Milvus 真机用例未纳入 CI 门禁**：`test:vector-store` 的核心部分用假客户端覆盖全分支，真机端到端依赖
+  `MILVUS_ADDR`（需外部服务，本机另需 Docker Desktop + 三个容器），CI 里只会输出 SKIP——这是**有意的**
+  （门禁必须零外部依赖），但意味着 SDK 升级/服务端升级后的兼容性变化不会被 CI 拦住，需手动跑一次真机用例。
 
 
 ## [0.13.0] - 2026-09-14

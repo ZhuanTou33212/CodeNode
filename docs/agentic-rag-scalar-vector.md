@@ -84,6 +84,28 @@
   唯一会把 chunk 向量落到外部服务的形态；Windows 上**没有**可嵌入的 Milvus Lite（官方与 Node 封装
   均无 win32 目标），所以「桌面应用开箱即用 Milvus」这条路不通，只有外部服务形态。
 
+#### 2.2.1.1 真机验证结论（2026-09-15：Milvus v2.6.5 + SDK 3.0.5）
+
+已跑通真实服务端到端：写入 → 全库 ANN 检索 → 纯语义命中并入 → 按 file 删除传播 → 索引端到端
+（`MILVUS_ADDR=http://127.0.0.1:19530 node scripts/vector-store-test.cjs`，`realMilvus: pass`）。
+过程中暴露四个「只有真机才会出现」的坑，均已修入 `electron/vectorStore/milvus.cjs`：
+
+1. **不要显式传 `search_params`**：SDK 的 `buildSearchParams` 只在未提供 `search_params` 时才注入
+   `topk`；一旦显式传就把你的对象原样透传，服务端直接报 `topk is required`。
+   正确形态是简单形态：`{ data:[vec], limit:N, topk:N, anns_field, output_fields, metric_type:'COSINE', params:{} }`。
+2. **SDK 的失败不抛异常**：错误放在 `status.error_code` 里（且有的方法返回裸 status、有的包一层 `{status}`），
+   若只看 `results` 就会把「请求被拒」当成「零命中」——静默错误。适配器统一走 `assertSuccess()` 转异常，
+   于是降级原因能出现在 `stats.vector.error` 与工具文本里。
+3. **主键必须显式取回**：命中默认只含 `score` + 请求的字段，`id` 不会自动返回；
+   `output_fields` 要写成 `['id', 'file']`，否则索引侧无法把命中映射回 chunk（表现为检索永远 0 命中）。
+4. **删除/写入可见性有数秒延迟**（默认 Bounded 一致性，实测删除约 3s 后消失）：检索侧不要「写完立刻断言」，
+   用例里改为轮询等待；对 RAG 的影响是刚改完文件的几秒内向量侧可能仍是旧内容（BM25 侧已即时更新）。
+
+建栈要点（2.6 起）：官方 standalone 配方是 etcd + minio + milvus 三件套，**嵌入式 etcd 已不可用**
+（`ETCD_USE_EMBED=true` 直接 `panic: embedded etcd can not be used under distributed mode`）；
+minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/minio:RELEASE.2024-05-28T17-19-04Z`。
+本仓库内的现成 compose（gitignore 区域）：`.cache/milvus-dev/docker-compose.yml`，只暴露 19530/9091。
+
 ### 2.3 自动路由（名字/具体数据 → 标量库；代码/语义 → 向量库）
 
 `retrieve_context.mode`：

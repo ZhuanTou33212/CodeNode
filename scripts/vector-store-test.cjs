@@ -56,6 +56,7 @@ function createFakeMilvusClient() {
     deletedRows: 0,
     closed: false,
     failing: false,
+    statusError: null,
     forceHits: null,
   };
   return {
@@ -110,6 +111,8 @@ function createFakeMilvusClient() {
     async search({ data, limit }) {
       state.searches += 1;
       if (state.failing) throw new Error('fake milvus 不可用');
+      // 真实 SDK 的失败形态：不抛异常，而是 status.error_code + 空 results（实测 "topk is required" 即如此）
+      if (state.statusError) return { status: { error_code: 'UnexpectedError', reason: state.statusError, code: 65535 }, results: [] };
       if (state.forceHits) return { results: [state.forceHits.slice()] };
       const query = data[0];
       const ranked = state.rows
@@ -287,23 +290,104 @@ async function main() {
   assert.ok(!/向量后端降级/.test(healthyTool.text), '恢复后不应再提示降级');
   assert.strictEqual(healthyTool.data.index.vector.backend, 'milvus');
 
+  // ---- 8b. 服务端「状态失败」不得被当成零命中（真机实测：topk 缺失时 SDK 不抛异常，只回空 results） ----
+  indexClient.state.statusError = 'topk is required';
+  const statusFailed = await index.retrieve('refreshSessionToken 轮换', { mode: 'vector' });
+  assert.match(
+    String(vectorStats(statusFailed).error),
+    /topk is required/,
+    '服务端 status 失败必须浮出到 stats.vector.error（否则表现为「静默零命中」）'
+  );
+  assert.ok(statusFailed.results.some((item) => item.path === 'src/auth/session.ts'), 'status 失败时仍应返回 BM25 结果');
+  const statusFailedTool = await registry.execute('retrieve_context', { query: 'refreshSessionToken 轮换', mode: 'vector' }, toolContext);
+  assert.match(statusFailedTool.text, /向量后端降级/);
+  indexClient.state.statusError = null;
+
+  // 写入侧同理：insert 的 status 失败必须抛错（不能把失败算成写入成功）
+  const insertStatusClient = createFakeMilvusClient();
+  insertStatusClient.insert = async () => ({ status: { error_code: 'UnexpectedError', reason: 'insert rejected', code: 65535 }, insert_cnt: '0' });
+  const insertStatusStore = createVectorStore({ backend: 'milvus', client: insertStatusClient, root, dim: 256, topK: 5, collection: 'codenode_status_guard' });
+  await assert.rejects(
+    () => insertStatusStore.applyChanges({ deleted: [], upserted: records }, embedder),
+    /insert rejected/,
+    'insert 的 status 失败必须抛错，不能静默计为成功'
+  );
+  await insertStatusStore.close();
+
   // ---- 9. 真实 Milvus 端到端（MILVUS_ADDR 守卫） ----
   const address = String(process.env.MILVUS_ADDR || '').trim();
   let realMilvus = 'skipped';
+  let realDetail = null;
   if (!address) {
     console.log('[skip] 未设置 MILVUS_ADDR：跳过真实 Milvus 端到端（不影响适配器覆盖）');
   } else {
-    const realCollection = String(process.env.MILVUS_COLLECTION || '').trim() || milvus.defaultCollectionName(root);
-    const realStore = createVectorStore({ backend: 'milvus', root, dim: 256, topK: 8, address, collection: realCollection });
+    const userCollection = String(process.env.MILVUS_COLLECTION || '').trim();
+    const baseCollection = userCollection || milvus.defaultCollectionName(root);
+    const storeCollection = baseCollection + '_store';
+    const indexCollection = baseCollection + '_index';
+    // 用户显式指定的 collection 不删除；测试自建的两个在结束时清理
+    const ownedCollections = userCollection ? [] : [storeCollection, indexCollection];
+    const realStore = createVectorStore({ backend: 'milvus', root, dim: 256, topK: 8, address, collection: storeCollection });
     try {
+      // 9a 后端直连：建表/写入/检索/删除
       const realApplied = await realStore.applyChanges({ deleted: [], upserted: records }, embedder);
       assert.ok(realApplied.inserted >= records.length, '真实 Milvus 应写入全部记录');
       const realScores = await realStore.scoreCandidates('refreshSessionToken', null, embedder);
       assert.ok(realScores.size > 0, '真实 Milvus 应返回检索命中');
+      assert.ok([...realScores.values()].every((value) => Number.isFinite(value) && value >= 0));
+
+      // 9b 索引端到端：不注入客户端，走真服务（refresh → syncVectorStore → 全库 ANN → 融合）
+      const realConfig = { ...config, vectorStoreClient: null, milvusCollection: indexCollection };
+      const realIndex = new LocalRagIndex(root, realConfig);
+      const realRetrieval = await realIndex.retrieve('refreshSessionToken 轮换 令牌', { mode: 'vector' });
+      assert.strictEqual(vectorStats(realRetrieval).backend, 'milvus', '真实服务下后端应为 milvus');
+      assert.strictEqual(vectorStats(realRetrieval).error, undefined, '真实 Milvus 不应降级（' + vectorStats(realRetrieval).error + '）');
+      assert.ok(realRetrieval.results.length > 0, '真实 Milvus 下应召回结果');
+      assert.ok(realRetrieval.results.some((item) => item.vectorScore > 0), '真实 Milvus 应给出非零向量分');
+      assert.strictEqual(realRetrieval.results[0].path, 'src/auth/session.ts', '向量模式应优先命中实现文件');
+
+      // 9c 删除传播：按 file 过滤删除后不得再召回该文件的块
+      //    Milvus 默认 Bounded 一致性，删除有几秒可见性延迟（实测 ~3s），故轮询等待而非立即断言
       await realStore.applyChanges({ deleted: [{ relative: 'src/auth.ts', chunkIds: [] }], upserted: [] }, embedder);
+      let afterDelete = await realStore.scoreCandidates('refreshSessionToken', null, embedder);
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        if (![...afterDelete.keys()].some((id) => id.startsWith('src/auth.ts'))) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        afterDelete = await realStore.scoreCandidates('refreshSessionToken', null, embedder);
+      }
+      assert.ok(
+        ![...afterDelete.keys()].some((id) => id.startsWith('src/auth.ts')),
+        '按 file 删除后（等待可见性）不应再召回该文件的块，实际仍为：' + [...afterDelete.keys()].join(',')
+      );
+
+      const storeStats = await realStore.stats();
+      realDetail = {
+        store: storeCollection,
+        index: indexCollection,
+        inserted: realApplied.inserted,
+        hits: realScores.size,
+        indexResults: realRetrieval.results.length,
+        topVectorScore: realRetrieval.results[0].vectorScore,
+        afterDeleteRemaining: afterDelete.size,
+        distanceMetric: 'COSINE',
+        storeCounters: { batches: storeStats.batches, searches: storeStats.searches },
+      };
       realMilvus = 'pass';
     } finally {
       await realStore.close();
+      if (ownedCollections.length) {
+        try {
+          const sdk = milvus.loadSdk();
+          const admin = new sdk.MilvusClient({ address });
+          for (const name of ownedCollections) {
+            await admin.dropCollection({ collection_name: name });
+          }
+          if (typeof admin.close === 'function') admin.close();
+          realDetail = { ...(realDetail || {}), dropped: ownedCollections };
+        } catch (error) {
+          console.log('[warn] 测试自建 collection 清理失败（可忽略）：' + ((error && error.message) || error));
+        }
+      }
     }
   }
 
@@ -318,6 +402,7 @@ async function main() {
       vectorOnlySources: vectorStats(semantic).vectorOnly,
       degradedReported: true,
       realMilvus,
+      realDetail,
     })
   );
 }
