@@ -321,7 +321,32 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **验证证据**：`npm run verify`（build + check:js + test）= **35/35 PASS，189.6s**；变异测试 **2/2 有判别力** —— 把 `malformed` 判定回退后，spy 工具被**空参执行 1 次**（正是 P1-2 的危害，4 项 FAIL；用例的 spy schema 故意不写 `required`，避免被 registry 的必填校验挡住而误绿），把重复 name 处理回退后 `name` 拼成 `read_fileread_file`。
 
-**仍未处理（S1 之后）**：P0-3（破坏性工具无确认）、P0-5（无 per-tool 超时 / 同步工具不可取消）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S2：正式状态机（把 `LIMIT_REACHED` / `WAITING_USER` 显式化，别再把上限折叠进 `error`）。
+### S2 实施记录（运行状态机，2026-09-15）
+
+| 内容 | 文件 |
+|---|---|
+| 新增纯函数状态机：7 状态 + 显式迁移表（非法迁移拒绝并记 violation）+ 状态语义表（`label`/`terminal`/`recoverable`/`persists`）+ `classifyOutcome`/`toRunStatus` | `electron/agentState.cjs` |
+| 主循环驱动状态机并逐次上报 `onDelta({kind:'state'})`；返回值带终态 `state`/`stateHistory` | `electron/agent.cjs` |
+| 状态上报钩子（`setStateNotifier`/`notifyState`）：`confirm()`/`askUser()` 真正等用户时上报 `WAITING_USER`，应答后回 `WAITING_TOOL` | `electron/tools/context.cjs` |
+| 迁移落成 run 事件 `run_state`（带 `previous`/`reason`）；`finishRun` 增加 `state`/`stopReason`（`status` 取值不变） | `electron/ipc/agent.cjs` |
+| `summarizeRun` 新增附加字段 `state`（`finish.state` → 最近 `run_state` → `RUNNING`），`status` 不变 | `electron/runStore.cjs` |
+| 用例（进 CORE，门禁 35 → 36） | `scripts/agent-state-test.cjs`（34 断言） |
+
+状态与终态映射：abort → `CANCELLED`；迭代/调用触顶 → `LIMIT_REACHED`；异常 → `FAILED`；正常结束 → `COMPLETED`。`toRunStatus` 保持既有 `status` 取值（`LIMIT_REACHED` 仍写 `error`，靠 `state` 字段区分），因此 UI 与续跑判定（只按 `status === 'interrupted'` 过滤）不受影响。
+
+**验证证据**：`npm run verify` = **36/36 PASS，189.7s**。用例 B 段走**真实 IPC 链路**（假 `ipcMain`/`sender` + `require('electron')` 桩，直接调 `agent:chat` handler），判据取自真实 run JSONL：
+
+| 场景 | 断言到的状态序列 / 终态 |
+|---|---|
+| 正常一轮工具 + 回答 | `RUNNING → WAITING_TOOL → RUNNING → COMPLETED`，`summarizeRun().state === 'COMPLETED'` |
+| `write_file`（触发 WRITE 确认） | `RUNNING → WAITING_TOOL → WAITING_USER → WAITING_TOOL → RUNNING → COMPLETED`，且确认请求真的到达渲染进程、文件真实落盘 |
+| 模型无限重复同一工具调用 | `LIMIT_REACHED`（`status` 仍为 `error`，`run_finish.stopReason=iteration_limit`） |
+| 运行中调用 `agent:stop` | `CANCELLED` + `status='cancelled'`，且不把工具结果误报成最终答复 |
+| 模型请求 HTTP 500 | `FAILED` + `status='error'` |
+
+变异测试 **3/3 有判别力**：不再上报 `WAITING_USER` → B2 红；`run_state` 丢 `state` → B1.2/B2 红；迁移表去掉 `WAITING_TOOL → WAITING_USER` → A4/A5 红（且 confirm 路径优雅降级：状态停在 `WAITING_TOOL`，不崩）。
+
+**仍未处理（S2 之后）**：P0-3（破坏性工具无确认）、P0-5（无 per-tool 超时 / 同步工具不可取消）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S3：`ToolDescriptor` 适配层（旧 `register()` 合成默认 descriptor，`readOnly` 由只读白名单反推、**未声明即 write**），让缓存/并行/确认/审计都由声明驱动而不是硬编码名单。
 
 ---
 
