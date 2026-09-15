@@ -43,6 +43,13 @@
   （`MILVUS_DIM=1024 MILVUS_ADDR=… node scripts/vector-store-test.cjs` → realMilvus=pass）；
   同机小 collection 单次 ANN 检索 p50 5ms / p90 6ms（200 条 × 1024 维，含 gRPC 往返，30 轮），
   分布式部署与读写分离属服务端拓扑（客户端只需指向 LB/proxy 入口）。见 docs 2.2.1.2。
+- **真嵌入链路已验证**（2026-09-15）：llama.cpp `llama-server`（CPU 版 + `bge-m3-Q8_0.gguf`，`--embeddings
+  --pooling cls`）暴露 OpenAI 兼容 `/v1/embeddings` → `embed_provider=openai` 指向它 → Milvus v2.6.5
+  （HNSW/COSINE/Strong，1024 维）跑通 `realMilvus=pass`（中文查询 `topVectorScore=0.7033`）。
+  语义判别：中文问句对相关代码 cosine 0.4597 vs 无关代码 0.3366（哈希向量无法通过该断言）。
+  语义收益：三个与英文代码**无词面交集**的中文问句在纯 BM25 下 0 命中，真嵌入 + 全库 ANN 下全部命中
+  正确文件并标记 `vector-only`（`scripts/vector-store-semantic-probe.cjs`，可复跑；未设 `MILVUS_ADDR`/`EMBED_BASE` 时 SKIP）。
+  注：本机 `huggingface.co` 不可达，模型走 `hf-mirror.com`。见 docs 2.2.1.3。
 - 文档同步：`docs/agentic-rag-scalar-vector.md` 增 2.2.1 节（含「Windows 无可用 Milvus Lite，只有外部服务形态」
   的边界说明）、README 与配置示例。
 

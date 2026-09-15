@@ -216,6 +216,8 @@ node scripts/rag-grounding-test.cjs
 node scripts/scalar-vector-test.cjs
 # 向量后端（memory 默认 + Milvus 适配器 / 降级 / vector-only）测试
 node scripts/vector-store-test.cjs
+# 真嵌入 + Milvus 的语义检索验证（需 MILVUS_ADDR 与 EMBED_BASE，未设置则 SKIP）
+node scripts/vector-store-semantic-probe.cjs
 # 画布节点读写一致性（缓存失效）回归测试
 node scripts/cache-consistency-test.cjs
 # 画布-会话解耦（就地修改 vs 新开画布 / 不复活已删节点）回归测试

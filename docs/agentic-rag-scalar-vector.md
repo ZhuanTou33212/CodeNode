@@ -130,6 +130,28 @@ minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/mini
 一致性取舍（2.2.1.1 第 4 条）：`strong` 保证「刚改完文件立即可见」，在分布式集群上会带来额外的
 同步等待；若生产更看重延迟，可切 `rag.milvus_consistency=bounded`（代价：按文件删除的旧块在数秒内仍可能被召回）。
 
+#### 2.2.1.3 真嵌入验证（bge-m3 / 1024 维，2026-09-15）
+
+链路：`llama.cpp llama-server`（CPU 版，`bge-m3-Q8_0.gguf`，`--embeddings --pooling cls --ctx-size 8192`）
+暴露 OpenAI 兼容 `/v1/embeddings` → 本适配器 `embed_provider=openai` 指向它 → Milvus v2.6.5（HNSW/COSINE/Strong）。
+
+- 端到端：`MILVUS_ADDR=… MILVUS_DIM=1024 EMBED_PROVIDER=openai EMBED_MODEL=bge-m3 EMBED_BASE=http://127.0.0.1:8080/v1 node scripts/vector-store-test.cjs`
+  → `realMilvus=pass`，`dim=1024`、`indexType=HNSW`、`M16/efC200/ef64`；中文查询 `topVectorScore=0.7033`。
+- **语义判别**（哈希向量必然通不过的断言）：中文问句「会话令牌续期怎么做」对
+  「刷新令牌实现代码」cosine **0.4597** vs 对「发票金额计算代码」**0.3366** —— 真嵌入能区分相关/无关。
+- **语义收益**（`node scripts/vector-store-semantic-probe.cjs`，可复跑）：
+
+  | 中文问句（与代码无词面交集） | 纯 BM25 | 真嵌入 + 全库 ANN |
+  | --- | --- | --- |
+  | 会话怎么续期 | 0 命中 | `src/auth/session.ts`（0.5218，vector-only） |
+  | 账单金额怎么算 | 0 命中 | `src/payments/invoice.ts`（0.5848，vector-only） |
+  | 日期格式化 | 0 命中 | `src/format/date.ts`（0.5699，vector-only） |
+
+  这就是 `vector-only` 合并路径的真实价值：BM25 一条都召不回，向量层每次都对。
+- 本机取模型的注意点：`huggingface.co` 在本机不可达，用 `hf-mirror.com`
+  （`/gpustack/bge-m3-GGUF/resolve/main/bge-m3-Q8_0.gguf`，605MB）；向 llama-server 发含中文的请求体
+  要用 UTF-8 文件承载（Windows 控制台 GBK 会把 body 里的中文转坏，服务端报 ill-formed UTF-8）。
+
 ### 2.3 自动路由（名字/具体数据 → 标量库；代码/语义 → 向量库）
 
 `retrieve_context.mode`：

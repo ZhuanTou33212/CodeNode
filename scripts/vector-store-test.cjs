@@ -397,8 +397,20 @@ async function main() {
   if (!address) {
     console.log('[skip] 未设置 MILVUS_ADDR：跳过真实 Milvus 端到端（不影响适配器覆盖）');
   } else {
+    const realProvider = String(process.env.EMBED_PROVIDER || 'local');
+    const realModel = String(process.env.EMBED_MODEL || '');
+    const realBase = String(process.env.EMBED_BASE || '');
+    const realKey = String(process.env.EMBED_KEY || (realProvider === 'local' ? '' : 'local-embed'));
     const realDim = Number(process.env.MILVUS_DIM || 256);
-    const realEmbedder = createEmbedder({ embedProvider: 'local', embedDim: realDim });
+    const realEmbedder = createEmbedder({
+      embedProvider: realProvider,
+      embedModel: realModel,
+      embedBase: realBase,
+      embedKey: realKey,
+      embedDim: realDim,
+      embedDimensions: process.env.EMBED_DIMENSIONS || '',
+    });
+    let semanticDetail = null;
     const userCollection = String(process.env.MILVUS_COLLECTION || '').trim();
     const baseCollection = userCollection || milvus.defaultCollectionName(root);
     const storeCollection = baseCollection + '_store';
@@ -417,17 +429,75 @@ async function main() {
       assert.ok([...realScores.values()].every((value) => Number.isFinite(value) && value >= 0));
 
       // 9b 索引端到端：不注入客户端，走真服务（refresh → syncVectorStore → 全库 ANN → 融合）
-      const realConfig = { ...config, embedDim: realDim, vectorStoreClient: null, milvusCollection: indexCollection };
+      const realConfig = {
+        ...config,
+        embedProvider: realProvider,
+        embedModel: realModel,
+        embedBase: realBase,
+        embedKey: realKey,
+        embedDim: realDim,
+        vectorStoreClient: null,
+        milvusCollection: indexCollection,
+      };
       const realIndex = new LocalRagIndex(root, realConfig);
       const realRetrieval = await realIndex.retrieve('refreshSessionToken 轮换 令牌', { mode: 'vector' });
       assert.strictEqual(vectorStats(realRetrieval).backend, 'milvus', '真实服务下后端应为 milvus');
       assert.strictEqual(vectorStats(realRetrieval).error, undefined, '真实 Milvus 不应降级（' + vectorStats(realRetrieval).error + '）');
       assert.ok(realRetrieval.results.length > 0, '真实 Milvus 下应召回结果');
       assert.ok(realRetrieval.results.some((item) => item.vectorScore > 0), '真实 Milvus 应给出非零向量分');
-      assert.strictEqual(realRetrieval.results[0].path, 'src/auth/session.ts', '向量模式应优先命中实现文件');
+      if (realProvider === 'local') {
+        assert.strictEqual(realRetrieval.results[0].path, 'src/auth/session.ts', '向量模式应优先命中实现文件');
+      } else {
+        assert.ok(
+          realRetrieval.results.some((item) => item.path === 'src/auth/session.ts'),
+          '真嵌入下实现文件应出现在结果中'
+        );
+      }
       const realStoreStats = vectorStats(realRetrieval).store || {};
       assert.strictEqual(realStoreStats.indexType, 'HNSW', '真实服务应按配置建 HNSW 索引');
       assert.strictEqual(realStoreStats.metricType, 'COSINE');
+
+      // 9b2 真嵌入的语义判别（哈希向量必然通不过）：中文改写 vs 无关代码，无共同词面
+      if (realProvider !== 'local') {
+        const semanticRecords = [
+          {
+            id: 'src/auth.ts:1:8',
+            path: 'src/auth.ts',
+            text: 'src/auth.ts\nexport function refreshSessionToken(token) { return token + "-rotated"; }',
+          },
+          {
+            id: 'src/payments/invoice.ts:1:2',
+            path: 'src/payments/invoice.ts',
+            text: 'src/payments/invoice.ts\nexport function calculateInvoiceTotal(items) { return items.reduce((n, x) => n + x.price, 0); }',
+          },
+        ];
+        await realStore.applyChanges(
+          {
+            deleted: [
+              { relative: 'src/auth.ts', chunkIds: [] },
+              { relative: 'src/payments/invoice.ts', chunkIds: [] },
+            ],
+            upserted: semanticRecords,
+          },
+          realEmbedder
+        );
+        const paraphraseQuery = '会话令牌续期怎么做';
+        const paraphrase = await realStore.scoreCandidates(paraphraseQuery, null, realEmbedder);
+        const authScore = paraphrase.get('src/auth.ts:1:8') || 0;
+        const paymentsScore = paraphrase.get('src/payments/invoice.ts:1:2') || 0;
+        assert.ok(authScore > 0.3, '真嵌入应对相关代码给出正相关（实测 ' + authScore.toFixed(4) + '）');
+        assert.ok(
+          authScore > paymentsScore,
+          '真嵌入应能区分相关/无关（会话令牌 ' + authScore.toFixed(4) + ' vs 支付发票 ' + paymentsScore.toFixed(4) + '）'
+        );
+        semanticDetail = {
+          provider: realProvider,
+          model: realModel || '(默认)',
+          query: paraphraseQuery,
+          authScore: Number(authScore.toFixed(4)),
+          paymentsScore: Number(paymentsScore.toFixed(4)),
+        };
+      }
 
       // 9c 删除传播：按 file 过滤删除后不得再召回该文件的块
       //    Milvus 默认 Bounded 一致性，删除有几秒可见性延迟（实测 ~3s），故轮询等待而非立即断言
@@ -448,6 +518,9 @@ async function main() {
         store: storeCollection,
         index: indexCollection,
         dim: realDim,
+        embedProvider: realProvider,
+        embedModel: realModel || '(provider 默认)',
+        semantic: semanticDetail,
         indexType: storeStats.indexType,
         metricType: storeStats.metricType,
         indexM: storeStats.indexM,
