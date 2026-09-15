@@ -269,8 +269,9 @@ function pidAlive(pid) {
 
     const macPolicy = sandbox.resolvePolicy({ mode: 'best-effort', network: 'deny' }, { projectRoot, capabilities: { platform: 'darwin', backend: 'sandbox-exec', isolation: { lifetime: true, filesystem: true, network: true } } });
     const profile = sandbox.sandboxExecProfile(macPolicy);
+    // profile 里的可写根是真实路径（sandbox-exec 按真实路径匹配），平台差异走 canonicalPath 对齐
     check('sandbox-exec profile：默认拒绝 + 全读 + 仅白名单可写 + 断网',
-      profile.includes('(deny default)') && profile.includes('(allow file-read*)') && profile.includes('(deny network*)') && profile.includes(path.resolve(projectRoot)),
+      profile.includes('(deny default)') && profile.includes('(allow file-read*)') && profile.includes('(deny network*)') && profile.includes(sandbox.canonicalPath(projectRoot)),
       profile.replace(/\n/g, ' ').slice(0, 240));
   }
 
@@ -300,7 +301,9 @@ function pidAlive(pid) {
 
   // ---- 9. 真实文件系统隔离实测（Linux/macOS 后端存在时） ----
   if (caps.isolation.filesystem) {
-    const outside = path.join(tmpRoot, 'forbidden-' + Date.now() + '.txt');
+    // 越界探针必须落在所有可写根之外：默认策略把系统临时目录也算可写根，所以不能用 tmpRoot 下的路径
+    // （macOS 上会因此判定"越界写盘被允许"，Linux 上则是靠 --tmpfs /tmp 的巧合才"通过"）。
+    const outside = path.join(os.homedir(), 'codenode-forbidden-' + Date.now() + '.txt');
     const script = "try { require('fs').writeFileSync(" + JSON.stringify(outside) + ", 'x'); process.stdout.write('WRITE-ALLOWED'); } catch (e) { process.stdout.write('WRITE-DENIED'); }";
     const fsPolicy = sandbox.resolvePolicy({ mode: 'strict', requireFilesystem: true }, { projectRoot, capabilities: caps });
     const child = sandbox.guardedSpawn({ file: process.execPath, args: ['-e', script], cwd: projectRoot, env: safeEnvironment() }, { policy: fsPolicy, context });

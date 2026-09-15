@@ -679,6 +679,7 @@ module.exports = {
   guardedInteractiveSpawn,
   killSandboxed,
   withinWriteRoots,
+  canonicalPath,
   sandboxExecProfile,
   bwrapArgs,
   ensureWinJobHelper,
