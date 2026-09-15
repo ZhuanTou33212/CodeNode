@@ -247,9 +247,9 @@ function resolvePolicy(rawConfig, options = {}) {
   const writeRoots = [];
   const push = (dir) => {
     if (!dir) return;
-    // 用真实路径入账：macOS 上 os.tmpdir() 是 /var/folders/...（符号链接到 /private/var/...），
-    // 而 sandbox-exec 的 (subpath ...) 按真实路径匹配——留符号链接形式会让工作区内写盘被误拒。
-    const resolved = canonicalPath(dir);
+    // 注意：writeRoots 是策略的对外形状（调用方/用例直接比对路径），这里保持 path.resolve；
+    // 需要真实路径的地方（sandbox-exec profile、边界校验）各自 canonicalPath。
+    const resolved = path.resolve(dir);
     if (!writeRoots.some((item) => item.toLowerCase() === resolved.toLowerCase())) writeRoots.push(resolved);
   };
   push(projectRoot);
@@ -325,7 +325,9 @@ function describe(policy) {
 // ---------------------------------------------------------------------------
 
 function sandboxExecProfile(policy) {
-  const roots = (policy.writeRoots || []).map((root) => String(root).replace(/"/g, '\\"'));
+  // sandbox-exec 的 (subpath ...) 按**真实路径**匹配：macOS 的 os.tmpdir() 是 /var/folders/...
+  // （符号链接到 /private/var/...），直接用写入策略里的符号链接形式会让工作区内写盘被误拒。
+  const roots = (policy.writeRoots || []).map((root) => canonicalPath(root).replace(/"/g, '\\"'));
   const allowWrite = roots.map((root) => '(subpath "' + root + '")').join(' ');
   const lines = [
     '(version 1)',

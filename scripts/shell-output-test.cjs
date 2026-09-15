@@ -7,12 +7,9 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 (async () => {
   const registry = toolkit.buildDefaultRegistry();
   const context = new AgentToolContext({ projectRoot: process.cwd(), confirm: async () => true });
-  // Windows 上借 PowerShell 造长输出；POSIX 上 harness 没有 powershell（会把 Write-Output 翻译成 printf，
-  // 只剩 33 字符），因此走 cmd → 原生 sh -lc 的逃生口，用 yes|head 造同样级别的长输出。
-  const command =
-    process.platform === 'win32'
-      ? 'powershell -NoProfile -NonInteractive -Command "Write-Output ([string]::new([char]120,20000))"'
-      : 'cmd -c "yes x | head -c 25000"';
+  // 一条命令跨平台通用：node 在 allowlist 内、由 harness 直接 spawn（不经 shell），引号由分词器处理。
+  // 不用 powershell/Write-Output：POSIX 上它会被 harness 翻译成 printf，只剩几十个字符。
+  const command = 'node -e "process.stdout.write(\'x\'.repeat(25000))"';
   // 冷启动的 CI Windows 上，PowerShell 首次启动 + 2 万字符经隔离层回传会超过默认 30s 超时，
   // 超时后输出被截断导致 hasMore 断言失败——这里显式给足超时，断言强度不变。
   const first = await registry.execute('execute_shell', { command, maxOutputChars: 1000, timeoutSeconds: 120 }, context);
