@@ -71,14 +71,29 @@ function registry() {
 (async () => {
   const okContext = new AgentToolContext({
     projectRoot: root,
+    // save_project 已迁到显式契约（requiresConfirmation='WRITE'），注册表会在执行前询问用户
+    confirm: async () => true,
     saveProject: async () => saveDoc(root, 'workflow.cnode', model),
   });
   const okRes = await registry().execute('save_project', {}, okContext);
   check('save_project 成功：ok=true 且返回真实落盘路径', okRes.ok === true && String(okRes.data.filePath || '').endsWith('workflow.cnode'),
     JSON.stringify({ ok: okRes.ok, data: okRes.data }));
 
+  // 用户不批准：工具压根不执行（契约确认门的终态判据）
+  let savedWhileDenied = 0;
+  const deniedContext = new AgentToolContext({
+    projectRoot: root,
+    confirm: async () => false,
+    saveProject: async () => { savedWhileDenied += 1; return path.join(root, 'workflow.cnode'); },
+  });
+  const deniedRes = await registry().execute('save_project', {}, deniedContext);
+  check('save_project 未获批准：ok=false、APPROVAL_DENIED 且没有真的保存',
+    deniedRes.ok === false && deniedRes.data.code === 'APPROVAL_DENIED' && savedWhileDenied === 0,
+    JSON.stringify({ ok: deniedRes.ok, code: deniedRes.data.code, savedWhileDenied }));
+
   const failContext = new AgentToolContext({
     projectRoot: root,
+    confirm: async () => true,
     saveProject: async () => { throw Object.assign(new Error('保存目标越出项目根目录（或项目根不存在）：C:/evil.cnode'), { code: 'PATH_OUT_OF_ROOT' }); },
   });
   const failRes = await registry().execute('save_project', {}, failContext);
@@ -86,13 +101,14 @@ function registry() {
   check('save_project 失败：错误文本带上真实原因（便于模型修正而非空转重试）',
     /保存工程失败/.test(String(failRes.text)) && /PATH_OUT_OF_ROOT|越出项目根/.test(String(failRes.text)), String(failRes.text));
 
-  const unwired = new AgentToolContext({ projectRoot: root });
+  const unwired = new AgentToolContext({ projectRoot: root, confirm: async () => true });
   const unwiredRes = await registry().execute('save_project', {}, unwired);
   check('未接线保存回调：ok=false 且给出可读原因', unwiredRes.ok === false && /保存工程失败/.test(String(unwiredRes.text)), JSON.stringify({ ok: unwiredRes.ok, text: unwiredRes.text }));
 
-  const readOnly = new AgentToolContext({ projectRoot: root, readOnly: true, saveProject: async () => saveDoc(root, 'workflow.cnode', model) });
+  const readOnly = new AgentToolContext({ projectRoot: root, readOnly: true, confirm: async () => true, saveProject: async () => saveDoc(root, 'workflow.cnode', model) });
   const readOnlyRes = await registry().execute('save_project', {}, readOnly);
-  check('只读上下文：ok=false（不允许子代理/只读角色落盘）', readOnlyRes.ok === false, JSON.stringify({ ok: readOnlyRes.ok, text: readOnlyRes.text }));
+  check('只读上下文：ok=false（注册表只读守卫直接拒绝，不进工具体）',
+    readOnlyRes.ok === false && readOnlyRes.data.code === 'PERMISSION_DENIED', JSON.stringify({ ok: readOnlyRes.ok, code: readOnlyRes.data.code, text: readOnlyRes.text }));
 
   console.log(failures === 0 ? 'SAVE PROJECT BOUNDARY TEST: PASS' : 'SAVE PROJECT BOUNDARY TEST: FAIL (' + failures + ')');
   process.exitCode = failures === 0 ? 0 : 1;

@@ -12,6 +12,8 @@ const path = require('path');
 const runStore = require('./runStore.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
 const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
+// 工具的只读/缓存/变更语义只有一份来源（electron/tools/descriptor.cjs），不再各文件各留一份名单
+const TOOL_SEMANTICS = require('./tools/descriptor.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
@@ -584,14 +586,9 @@ const MAX_TRUNCATION_NUDGES = 2;
 /**
  * 画布/标量类工具：结果本身已压缩到最小必要信息，完整属性已落本地标量库。
  * 这些工具返回的 [data] 不追加进上下文（避免把画布节点 prompt 等大段数据发送到云端）。
+ * 名单定义在 tools/descriptor.cjs（唯一来源）。
  */
-const SCALAR_BACKED_TOOLS = new Set([
-  'get_workbench_model',
-  'workbench_edit',
-  'bulk_edit',
-  'write_analysis_md',
-  'query_scalars',
-]);
+const SCALAR_BACKED_TOOLS = TOOL_SEMANTICS.SCALAR_BACKED_TOOLS;
 
 /** 子代理压缩的系统提示：独立上下文，只接收单份工具结果，不共享主对话。 */
 function compressorSystemPrompt(budgetChars) {
@@ -673,28 +670,10 @@ function buildToolContent(result, toolName, malformed, repeated, cap) {
  * 执行后缓存不失效 → 随后 read_file 命中旧结果（实测：shell 写入后 read_file 仍返回旧内容，磁盘已是新内容）。
  * 列举「谁可能写」永远列不全，所以反向枚举「谁一定只读」。
  */
-const CACHEABLE_TOOLS = new Set([
-  'scan_project',
-  'analyze_project',
-  'project_info',
-  'read_file',
-  'find_files',
-  'search_files',
-  'list_directory',
-  'code_review',
-  'ask_user',
-]);
+const CACHEABLE_TOOLS = TOOL_SEMANTICS.CACHEABLE_TOOLS;
 
-/** 会改变画布模型 / 文件 / 工程状态的工具（语义清单，供阅读与文档引用）。 */
-const MUTATION_TOOLS = new Set([
-  'workbench_edit',
-  'bulk_edit',
-  'write_file',
-  'edit_file',
-  'write_analysis_md',
-  'save_project',
-  'ui_control',
-]);
+/** 会改变画布模型 / 文件 / 工程状态的工具（语义清单，供阅读与文档引用；定义在 descriptor.cjs）。 */
+const MUTATION_TOOLS = TOOL_SEMANTICS.MUTATION_TOOLS;
 
 /** 参数归一化：JSON 解析后按键排序重序列化，使语义相同的调用共享缓存键（消除引号转义/键顺序差异） */
 function canonicalArgs(raw) {

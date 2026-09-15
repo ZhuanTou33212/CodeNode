@@ -24,6 +24,7 @@ const runStore = require('../runStore.cjs');
 const runCheckpoint = require('../runCheckpoint.cjs');
 const { SideEffectLedger, createGuard } = require('../sideEffects.cjs');
 const agentState = require('../agentState.cjs');
+const descriptorLib = require('../tools/descriptor.cjs');
 const sandbox = require('../sandbox.cjs');
 const { CostLedger } = require('../costLedger.cjs');
 const { AlertDispatcher } = require('../alerts.cjs');
@@ -107,6 +108,10 @@ function register(ctx) {
         name: spec.name,
         description: spec.description,
         parameters: spec.inputSchema,
+        // 契约摘要：只读/幂等/是否改工作区/要不要确认/需要的能力/超时/缓存与并行策略
+        descriptor: registry.descriptorOf(spec.name)
+          ? descriptorLib.describeDescriptor(registry.descriptorOf(spec.name))
+          : null,
       })),
     };
   });

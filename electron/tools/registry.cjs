@@ -1,10 +1,24 @@
 /**
- * AgentToolRegistry：register / unregister / listTools / execute（复刻原版 AgentToolRegistry）
+ * AgentToolRegistry：register / registerDescriptor / unregister / listTools / execute
  * 工具默认本地直调；toOpenAiTools() 生成 OpenAI chat.completions 的 tools 参数。
+ *
+ * 每个工具都带一份 **descriptor**（见 descriptor.cjs）：只读/幂等/会改工作区/是否需要确认/
+ * 需要什么能力/超时/缓存策略/并行策略。`register()` 是旧接口，会按名单合成契约（缺省保守：
+ * 未声明只读 = 可写），迁移中的工具可以逐个改用 `registerDescriptor()` 声明真实语义。
+ *
+ * execute() 按契约执行三道门（都在真正调用工具之前，fail-closed）：
+ *   1. 只读上下文（只读角色子代理）不允许执行会改工作区的工具；
+ *   2. 声明了 network.request 的工具，在隔离策略 network=deny 时直接拒绝；
+ *   3. 显式声明 requiresConfirmation 的工具，用户不批准就不执行。
+ * 之后按契约超时等待，超时返回 code=TIMEOUT 的失败结果（不再傻等）。
  */
 'use strict';
 
 const { AgentToolResult } = require('./result.cjs');
+const descriptorLib = require('./descriptor.cjs');
+
+/** 超时哨兵：工具返回值不可能等于它 */
+const TOOL_TIMEOUT = Symbol('tool-timeout');
 
 function typeMatches(value, type) {
   if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -59,12 +73,35 @@ function validateInput(value, schema, path = '$') {
 
 class AgentToolRegistry {
   constructor(options) {
-    this.tools = new Map(); // name -> { spec, executor }
+    this.tools = new Map(); // name -> { spec, descriptor, executor }
     this.allowedTools = options && options.allowedTools ? new Set(options.allowedTools) : null;
+    // 注册表兜底超时：工具未声明 timeoutMs 时用它（0 = 不加限制）
+    this.defaultTimeoutMs = descriptorLib.DEFAULT_TIMEOUT_MS;
   }
 
+  /** 旧接口：按名单合成保守契约（未声明只读 = 可写） */
   register(name, description, inputSchema, executor) {
-    this.tools.set(name, { spec: { name, description, inputSchema: inputSchema || null }, executor });
+    const spec = { name, description, inputSchema: inputSchema || null };
+    this.tools.set(name, {
+      spec,
+      descriptor: descriptorLib.descriptorForLegacy(name, description, spec.inputSchema),
+      executor,
+    });
+    return this;
+  }
+
+  /**
+   * 新接口：显式声明契约。未给的字段由 normalizeDescriptor 补全（保守缺省）。
+   * @param {any} input descriptor（至少含 name）
+   * @param {(context: any, args: any) => Promise<any>} executor
+   */
+  registerDescriptor(input, executor) {
+    const descriptor = descriptorLib.normalizeDescriptor({ ...(input || {}), explicit: true });
+    this.tools.set(descriptor.name, {
+      spec: { name: descriptor.name, description: descriptor.description, inputSchema: descriptor.inputSchema },
+      descriptor,
+      executor,
+    });
     return this;
   }
 
@@ -74,6 +111,29 @@ class AgentToolRegistry {
 
   listTools() {
     return [...this.tools.values()].map((t) => t.spec);
+  }
+
+  /** 单个工具的契约；未注册返回 null */
+  descriptorOf(name) {
+    const tool = this.tools.get(String(name || ''));
+    return tool ? tool.descriptor : null;
+  }
+
+  /** 全部契约（顺序与 listTools 一致，便于 UI/审计对照） */
+  listDescriptors() {
+    return [...this.tools.values()].map((t) => t.descriptor);
+  }
+
+  /** UI / 审计用的精简契约视图 */
+  describeAll() {
+    return this.listDescriptors().map((d) => descriptorLib.describeDescriptor(d));
+  }
+
+  /** 设置注册表兜底超时（毫秒）；0 = 不对未声明超时的工具设限 */
+  setDefaultTimeoutMs(ms) {
+    const n = Number(ms);
+    this.defaultTimeoutMs = Number.isFinite(n) && n >= 0 ? Math.floor(n) : descriptorLib.DEFAULT_TIMEOUT_MS;
+    return this.defaultTimeoutMs;
   }
 
   contains(name) {
@@ -86,13 +146,96 @@ class AgentToolRegistry {
     }
     const tool = this.tools.get(name);
     if (!tool) return AgentToolResult.error('未知工具：' + name);
+    const descriptor = tool.descriptor;
     const args = arguments_ == null ? {} : arguments_;
+
+    // 门 1：只读上下文不允许执行会改工作区的工具——但角色白名单**明确授予**的除外
+    // （verifier 要能跑 execute_shell 才有验证能力；拦的是「白名单没授予却混进来的写工具」这类越权）
+    const grantedByRole = this.allowedTools ? this.allowedTools.has(name) : false;
+    if (descriptor.mutatesWorkspace && !grantedByRole && context && typeof context.readOnly === 'function' && context.readOnly() === true) {
+      return AgentToolResult.error('只读上下文不允许执行会修改工作区的工具：' + name, {
+        code: 'PERMISSION_DENIED',
+        tool: name,
+        capability: descriptor.requiredCapability,
+        userActionRequired: false,
+      });
+    }
+
+    // 门 2：声明需要网络能力的工具，在隔离策略切断网络时直接拒绝（不让它去试一次才发现连不上）
+    if (descriptor.requiredCapability === 'network.request' && context && typeof context.sandbox === 'function') {
+      const policy = context.sandbox();
+      if (policy && policy.network === 'deny') {
+        return AgentToolResult.error('当前执行隔离策略已切断网络（sandbox.network=deny），不能执行 ' + name, {
+          code: 'PERMISSION_DENIED',
+          tool: name,
+          capability: descriptor.requiredCapability,
+          userActionRequired: false,
+        });
+      }
+    }
+
     const schemaError = validateInput(args, tool.spec.inputSchema, '$');
     if (schemaError) return AgentToolResult.error('工具参数校验失败：' + schemaError, { code: 'INVALID_TOOL_ARGUMENTS', path: schemaError });
+
+    // 门 3：显式声明需要确认的工具，用户不批准就不执行（旧 register() 合成的契约不触发，保持既有行为）
+    if (descriptor.confirmationEnforced && descriptor.requiresConfirmation) {
+      if (!context || typeof context.confirm !== 'function') {
+        return AgentToolResult.error('工具 ' + name + ' 需要用户确认，但当前上下文无法询问用户，已拒绝执行。', {
+          code: 'APPROVAL_REQUIRED',
+          tool: name,
+          userActionRequired: true,
+        });
+      }
+      let approved = false;
+      try {
+        approved = await context.confirm(descriptor.requiresConfirmation, name, descriptor.description);
+      } catch {
+        approved = false;
+      }
+      if (approved !== true) {
+        return AgentToolResult.error('用户未批准，已跳过 ' + name + '（未执行任何操作）。', {
+          code: 'APPROVAL_DENIED',
+          tool: name,
+          userActionRequired: true,
+        });
+      }
+    }
+
     try {
-      return await tool.executor(context, args);
+      return await this._executeWithTimeout(tool, descriptor, name, args, context);
     } catch (e) {
       return AgentToolResult.error('工具 ' + name + ' 执行失败：' + ((e && e.message) || e));
+    }
+  }
+
+  /**
+   * 按契约超时执行。timeoutMs=0 表示不加限制；未声明时用注册表兜底。
+   * 注意：超时只终止「等待」，同步阻塞的操作（大目录扫描、同步 fs 计算）无法被 JS 单线程打断——
+   * 真正的可中断需要把这些工具挪到 worker/子进程（后续阶段）。
+   */
+  async _executeWithTimeout(tool, descriptor, name, args, context) {
+    const limit = descriptor.timeoutMs === 0 ? 0 : (descriptor.timeoutMs == null ? this.defaultTimeoutMs : descriptor.timeoutMs);
+    if (!limit || limit <= 0) return await tool.executor(context, args);
+    let timer = null;
+    const timeout = new Promise((resolve) => {
+      // 注意：这里**不能** unref —— 被 unref 的定时器不维持事件循环，当被等待的工具自己也不再持有
+      // 任何 handle 时会直接退出进程，超时分支永远不会执行（表现为「测试静默通过/跳过后续断言」）。
+      timer = setTimeout(() => resolve(TOOL_TIMEOUT), limit);
+    });
+    try {
+      const outcome = await Promise.race([Promise.resolve(tool.executor(context, args)), timeout]);
+      if (outcome === TOOL_TIMEOUT) {
+        return AgentToolResult.error('工具 ' + name + ' 执行超时（' + limit + 'ms），已放弃等待。', {
+          code: 'TIMEOUT',
+          tool: name,
+          timeoutMs: limit,
+          retryable: tool.descriptor.retryPolicy.maxAttempts > 1,
+          userActionRequired: false,
+        });
+      }
+      return outcome;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

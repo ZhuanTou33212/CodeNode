@@ -6,10 +6,27 @@
 const { AgentToolResult } = require('../result.cjs');
 
 function register(registry) {
-  registry.register(
-    'save_project',
-    '保存当前工程（.cnode）到磁盘。',
-    { type: 'object', properties: {} },
+  // 显式契约：save_project 会**整体覆盖**工程文件（workflow.cnode），属于不可撤销的破坏性写，
+  // 因此声明 requiresConfirmation='WRITE' —— 由注册表在执行前询问用户（不批准就不执行）。
+  // 旧的 register() 合成契约不会触发注册表级确认，所以这是本阶段唯一行为有变化的工具。
+  registry.registerDescriptor(
+    {
+      name: 'save_project',
+      version: '1',
+      description: '保存当前工程（.cnode）到磁盘。',
+      inputSchema: { type: 'object', properties: {} },
+      outputSchema: { type: 'object', properties: { filePath: { type: 'string' } } },
+      readOnly: false,
+      idempotent: true,
+      mutatesWorkspace: true,
+      requiresConfirmation: 'WRITE',
+      requiredCapability: 'project.save',
+      timeoutMs: 60000,
+      cachePolicy: { mode: 'none' },
+      retryPolicy: { maxAttempts: 1, backoff: 'none', retryOn: [] },
+      concurrencyPolicy: { parallelSafe: false },
+      roleAllowlist: null,
+    },
     async (context) => {
       const filePath = await context.saveProject();
       if (!filePath) {
