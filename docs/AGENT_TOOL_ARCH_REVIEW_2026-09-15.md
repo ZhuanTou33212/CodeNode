@@ -368,7 +368,27 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 变异测试 **4/4 有判别力**：`readOnly` 改 fail-open → A1/A2 红；只读守卫关掉 → C1/C2b/C4b 红；确认门关掉 → F1/F3/F4/F5 红；`save_project` 去掉 `WRITE` 声明 → B6/F1/F3/F4/F5 红。
 
-**仍未处理（S3 之后）**：P0-3 的其余工具（`workbench_edit`/`create_nodes`/`workbench_connect`/`ui_control` 仍无确认——它们已具备契约字段，但要连同审批令牌与「一次批准覆盖本轮」的交互一起做，避免每步弹窗）、P0-5 的同步工具可取消（需 worker/子进程化）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S4：把 `AgentToolContext` 拆成能力面（`ExecutionContext` + `ApprovalService`/`AuditService`/`ProjectService`/`UiInteractionService`/`CheckpointService`/`CancellationContext`/`TraceContext`），工具只拿完成自身任务所需的最小能力，旧方法保留为 deprecated 转发。
+### S4 实施记录（工具最小能力面 ExecutionContext，2026-09-15）
+
+| 内容 | 文件 |
+|---|---|
+| 新增按契约组装的最小能力面：`exec`（四个 id + 角色 + 能力集）+ `project`/`approval`/`audit`/`ui`/`checkpoint`/`cancel`/`trace` 七面 + 能力蕴含关系 | `electron/tools/executionContext.cjs` |
+| `registry.execute(name, args, ctx, callInfo)` 改为给工具传能力面；`callInfo`（`turnId`/`toolCallId`/`attemptId`）由主循环传入 | `electron/tools/registry.cjs`、`electron/agent.cjs` |
+| 能力面按真实用法校准：标量索引（派生数据）归读面；`scan_project` 因 `applyToWorkbench` 归 `workspace.write` | `electron/tools/descriptor.cjs` |
+| 用例（进 CORE，门禁 37 → 38） | `scripts/context-capability-test.cjs`（25 断言） |
+
+**关键设计取舍**：
+
+- **越权即拒绝且可观测**：没授予的能力不是「能调但没人管」，而是返回安全默认值（`false`/`null`/`[]`）并写一条 `capability-denied` 审计（带 `tool`/`method`/能力/所需能力）—— fail-closed，同时旧工具不会因缺能力直接崩。
+- **双轨并存**：旧方法名（`projectRoot()`/`confirm()`/`mutateWorkbench()`/`saveProject()` …）保留为 deprecated 转发，24 个既有工具不改一行仍能跑（用例 B4/B5 用真实 `read_file` 与 `workbench_edit` 锁住）。`audit`/`checkpoint`/`ui` 三个名字在新旧两套里重名，做成**可调用对象**：`ctx.audit('文本')`（旧）与 `ctx.audit.log({...})`（新）同时可用（新面会显式序列化对象 —— 底层 `auditLog` 是 `String(entry)`，直接传对象会落成 `[object Object]`）。
+- **能力蕴含**：写蕴含读、`project.save` 蕴含写、`shell.execute` 蕴含写；读是能力下限，不构成提权。刻意的宽松两处：标量索引属派生数据 → 读面即可用（`get_workbench_model` 读画布时顺手同步索引靠这条）；`saveProject` 旧面对写工具放行（`write_analysis_md` 等既有行为不收紧），严格的新面 `project.save()` 只认 `project.save` 能力。
+- **顺手修掉的接线 bug**：网络能力门必须从**底层上下文**读策略，不能走工具的能力面 —— `sandbox` 属 `shell.execute` 能力，对 `network.request` 工具是被闸住的，读到的会是 `null`，网络门就静默失效（被 `test:tool-descriptor` 的 D1 当场红出来）。
+
+**验证证据**：`npm run verify` = **38/38 PASS，201.6s**。用例 A 段（能力面组装/越权拒绝/审计留痕/拒绝时底层零调用/套娃解包/可调用对象）、B 段（注册表集成 + 真实工具回归）、C 段（主循环端到端：`exec.toolCallId` 与 assistant 声明的 id 一致、`attemptId`/`runId` 可用）全部有终态断言。
+
+变异测试 **3/3 有判别力**：能力门改 fail-open → A5/A6/A7/A10/B3 红；注册表不组装能力面 → B 段红；`attemptId` 置空 → A1/C2 红。
+
+**仍未处理（S4 之后）**：P0-3 的其余工具（`workbench_edit`/`create_nodes`/`workbench_connect`/`ui_control` 仍无确认，留到 S7 与审批令牌一起做）、P0-5 的同步工具可取消（需 worker/子进程化）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S5：结构化 `ToolResult` + `FailureCode` 分类（参数/权限/取消/超时/可重试/不可重试/部分成功/副作用提交状态），把「一条模糊的 nudge user 消息」换成按错误类别分派的重试与提示策略。
 
 ---
 
