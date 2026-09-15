@@ -46,6 +46,15 @@ async function main() {
   for (const pattern of [/sandbox\.resolvePolicy/, /new CostLedger\(/, /new SideEffectLedger\(/, /runCheckpoint\.planResume/, /agent:metrics/, /AlertDispatcher/]) {
     assert.ok(pattern.test(mainSource), '主进程未接线：' + pattern);
   }
+  // 拆出的每个 IPC 模块都必须被 main.cjs 真正 require+register（拆模块 ≠ 接线）。
+  // 这条是有教训的：把 agent:chat 那一大块搬走时，连带删掉了夹在中间的 models/metrics register 调用，
+  // 只按"源码里出现过通道名"的检查看不出来。
+  const mainOnly = read('electron/main.cjs');
+  const ipcDir = path.join(__dirname, '..', 'electron', 'ipc');
+  for (const name of fs.readdirSync(ipcDir).sort()) {
+    if (!name.endsWith('.cjs')) continue;
+    assert.ok(mainOnly.includes(`require('./ipc/${name}')`), `IPC 模块未被 main.cjs 接线：electron/ipc/${name}`);
+  }
   const shellTool = read('electron/tools/impl/executeShellTool.cjs');
   assert.ok(/sandbox\.guardedSpawn/.test(shellTool), 'execute_shell 未接入执行隔离层');
   const extensions = read('electron/tools/extensions.cjs');

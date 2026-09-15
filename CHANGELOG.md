@@ -28,6 +28,13 @@
 
 ### 工程
 
+- `electron/main.cjs` **按域拆分**（1372 → 519 行，只剩应用/窗口生命周期）：
+  IPC 分到 `electron/ipc/{models,metrics,project,agent}.cjs`，每个导出 `register(ctx)`，
+  依赖由显式 ctx 传入；通道集合与拆分前逐一对账一致（28 个）。工程域那套 helper
+  （目录遍历/路径边界/命令白名单/流式执行/审计）随工程域一起搬走。
+  为此新增 core 用例 `test:ipc`（用假 `ipcMain` 真跑各模块 `register()`，断言"哪个模块注册了哪几个通道"），
+  并在 `runtime-gate` 里加了「每个 ipc 模块都必须被 main.cjs require 接线」的断言——
+  拆分过程中真漏过一次 models/metrics 的接线，静态的"通道名出现过"检查看不出来。
 - 新增 `npm run check:js`：对 `electron/**`、`scripts/**`（.cjs，不受 `src/` 的 tsc 覆盖）做 checkJs 静态检查；
   `npm run verify` = build + check:js + 全量回归。
 - `.nvmrc` / `engines.node` 固定 Node 22；`.gitattributes`（一律 LF，二进制标记）+ `.editorconfig`。

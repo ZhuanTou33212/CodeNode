@@ -35,6 +35,7 @@ const CORE = [
   'test:atomic-file',
   'test:subagent',
   'test:security',
+  'test:ipc',
   'test:rag',
   'test:shell-output',
   'test:bg',
