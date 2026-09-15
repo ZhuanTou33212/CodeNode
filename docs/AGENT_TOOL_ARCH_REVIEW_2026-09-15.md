@@ -307,7 +307,21 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **协作注意**：`electron/agent.cjs` 的 `tool_call_id` 统一改动被并行会话的提交 `10b70e5`（主题是 Milvus 生产参数档）一并卷走——内容正确但提交信息未覆盖该改动；按「不重写已推送历史」原则只在此记录，未做任何 amend/force push。另一条线在同一文件上还改过 `parseRagConfig`，两者已确认互不冲突。
 
-**仍未处理（下一阶段）**：P0-3（破坏性工具无确认）、P0-5（无 per-tool 超时 / 同步工具不可取消）、P1 与 P2 全部条目、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。建议下一步做 S1：把流式 tool_call 解析抽成独立可测模块并处理 `finish_reason` 异常。
+### S1 实施记录（流式解析抽出 + 截断安全，2026-09-15）
+
+| 内容 | 文件 |
+|---|---|
+| 新增纯函数累加器：`createAccumulator` / `applySseText` / `consumeLine` / `finalize` / `isJsonComplete`（不碰网络与全局，坏数据只记 anomaly，不抛异常） | `electron/streamAccumulator.cjs` |
+| 主循环改用累加器（事件转发语义保持不变）；`finish_reason=length` 的三条安全行为；trace 记录 `finishReason` | `electron/agent.cjs` |
+| 用例（进 CORE，门禁 33 → 35） | `scripts/stream-accumulator-test.cjs`（22 断言 / 14 类分片形态）、`scripts/truncation-safety-test.cjs`（12 断言） |
+
+累加器覆盖的分片形态：重复下发整段 name·args、前缀累积、补完式累积、参数整段重发（拼接后非法 → 替换而非拼接）、多调用交错、`index` 缺失/漂移、`index` 被复用给另一个调用（拆槽，避免 id/参数串味）、id 分片与重复、`finish_reason` 变化、usage、坏数据行、流内联 `error`、末尾无换行残行。每个工具调用额外给出 `argsValid`（参数是否已构成完整 JSON）。
+
+`finish_reason=length` 的三条安全行为：① 参数不是完整 JSON → **拒绝执行**（`code=ARG_INVALID_JSON`，附 `finishReason` / `argsLength`）并把错误回灌给模型重写参数，而不是拿 `{}` 去调用工具；② 回答被截断且没有工具调用 → 把已输出部分作为 assistant 消息带回并补问（最多 2 次）；③ 补问用尽仍截断 → 返回 `stopReason='length_truncated'`，不把半截回答伪装成完整答案。
+
+**验证证据**：`npm run verify`（build + check:js + test）= **35/35 PASS，189.6s**；变异测试 **2/2 有判别力** —— 把 `malformed` 判定回退后，spy 工具被**空参执行 1 次**（正是 P1-2 的危害，4 项 FAIL；用例的 spy schema 故意不写 `required`，避免被 registry 的必填校验挡住而误绿），把重复 name 处理回退后 `name` 拼成 `read_fileread_file`。
+
+**仍未处理（S1 之后）**：P0-3（破坏性工具无确认）、P0-5（无 per-tool 超时 / 同步工具不可取消）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S2：正式状态机（把 `LIMIT_REACHED` / `WAITING_USER` 显式化，别再把上限折叠进 `error`）。
 
 ---
 
