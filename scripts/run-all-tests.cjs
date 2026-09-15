@@ -34,6 +34,7 @@ const CORE = [
   'test:run-store',
   'test:atomic-file',
   'test:subagent',
+  'test:agent-cache',
   'test:security',
   'test:ipc',
   'test:rag',

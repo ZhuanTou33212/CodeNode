@@ -320,6 +320,47 @@ function pidAlive(pid) {
     note('本平台无 OS 级文件系统隔离后端，跳越界写盘实测（Windows 走工具层 writeRoots 校验，上面已单独验证）');
   }
 
+  // ---- 10. 接线：策略经 AgentToolContext 注入时必须仍是策略对象 ----
+  // 回归 bug：ipc 曾写成 `sandbox: () => policy`，而 context.sandbox() 原样返回注入值 →
+  // currentPolicy() 拿到的是函数、mode/capabilities 全为 undefined → 隔离静默降级（Windows 限额不生效、
+  // macOS/Linux 退化成无隔离 spawn），strict 也不再 fail-closed。这里锁住「注入后仍解析为策略对象」。
+  {
+    const { AgentToolContext } = require('../electron/tools/context.cjs');
+    const wiringPolicy = sandbox.resolvePolicy({ mode: 'best-effort', maxProcesses: 2 }, { projectRoot, capabilities: caps });
+    const viaObject = new AgentToolContext({ projectRoot, sandbox: wiringPolicy });
+    const viaGetter = new AgentToolContext({ projectRoot, sandbox: () => wiringPolicy });
+    const resolvedObject = sandbox.currentPolicy(viaObject);
+    const resolvedGetter = sandbox.currentPolicy(viaGetter);
+    check('策略对象注入：currentPolicy 拿到的是策略对象而不是函数',
+      !!resolvedObject && typeof resolvedObject === 'object' && resolvedObject.mode === 'best-effort',
+      'typeof=' + typeof resolvedObject + ' mode=' + JSON.stringify(resolvedObject && resolvedObject.mode));
+    check('getter 形式注入（兼容旧写法）同样解析为策略对象',
+      !!resolvedGetter && typeof resolvedGetter === 'object' && resolvedGetter.mode === 'best-effort',
+      'typeof=' + typeof resolvedGetter + ' mode=' + JSON.stringify(resolvedGetter && resolvedGetter.mode));
+    check('注入的策略保留后端能力声明（据此判断隔离是否真的生效）',
+      !!resolvedObject && ((resolvedObject.capabilities || {}).backend || 'none') === (caps.backend || 'none'),
+      'backend=' + ((resolvedObject && resolvedObject.capabilities && resolvedObject.capabilities.backend) || 'none'));
+
+    const strictPolicy = sandbox.resolvePolicy({ mode: 'strict', requireFilesystem: true }, { projectRoot, capabilities: caps });
+    const strictCtx = new AgentToolContext({ projectRoot, sandbox: strictPolicy });
+    if (!caps.isolation.filesystem) {
+      let strictThrew = null;
+      try {
+        sandbox.guardedSpawn(
+          { file: process.execPath, args: ['-e', '0'], cwd: projectRoot, env: safeEnvironment() },
+          { policy: sandbox.currentPolicy(strictCtx), context: strictCtx },
+        );
+      } catch (e) {
+        strictThrew = e;
+      }
+      check('strict 策略经 context 注入仍然 fail-closed（此前函数注入会绕过该检查）',
+        !!strictThrew && strictThrew.code === 'SANDBOX_UNAVAILABLE',
+        strictThrew ? String(strictThrew.code) : 'no throw');
+    } else {
+      note('平台支持文件系统隔离，跳过 strict 经 context 注入的 fail-closed 断言');
+    }
+  }
+
   // 清理
   try {
     cleanupDir(tmpRoot);

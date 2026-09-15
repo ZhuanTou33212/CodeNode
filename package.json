@@ -28,6 +28,7 @@
     "test:rag-ui": "node scripts/run-electron.cjs scripts/rag-ui-test.cjs",
     "test:shell-output": "node scripts/shell-output-test.cjs",
     "test:subagent": "node scripts/subagent-test.cjs",
+    "test:agent-cache": "node scripts/agent-cache-invalidation-test.cjs",
     "test:ipc": "node scripts/ipc-registry-test.cjs",
     "test:agent-reliability": "node scripts/agent-reliability-test.cjs",
     "test:security": "node scripts/model-store-security-test.cjs && node scripts/public-http-security-test.cjs && node scripts/path-boundary-test.cjs",

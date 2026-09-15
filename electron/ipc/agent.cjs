@@ -285,7 +285,10 @@ function register(ctx) {
           role: 'supervisor',
           signal: controller.signal,
           scalarStore,
-          sandbox: () => sandboxPolicy,
+          // 注意：这里必须传策略对象本身。曾写成 `sandbox: () => sandboxPolicy`，而 context.sandbox()
+          // 会把注入值原样返回 → currentPolicy() 拿到函数、mode/capabilities 全为 undefined →
+          // 隔离静默降级（Windows 的 Job Object 限额不生效；macOS/Linux 退化成无隔离 spawn；strict 不再 fail-closed）。
+          sandbox: sandboxPolicy,
           sideEffectGuard,
           checkpoint: checkpointSink,
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),

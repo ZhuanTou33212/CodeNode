@@ -159,9 +159,18 @@ class AgentToolContext {
     return this.checkpoint('messages', { messages, reason: reason || 'round_end' });
   }
 
-  /** 执行隔离策略（sandbox.cjs 解析结果）；工具启动子进程时应交给 sandbox.guardedSpawn。 */
+  /** 执行隔离策略（sandbox.cjs 解析结果）；工具启动子进程时应交给 sandbox.guardedSpawn。
+   * 兼容 getter 形式（() => policy）：注入值若为函数则取其返回值，避免误传函数导致隔离静默降级。 */
   sandbox() {
-    return this.sandboxPolicyValue || null;
+    const value = this.sandboxPolicyValue;
+    if (typeof value === 'function') {
+      try {
+        return value() || null;
+      } catch {
+        return null;
+      }
+    }
+    return value || null;
   }
 
   /**

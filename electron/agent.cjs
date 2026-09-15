@@ -108,6 +108,13 @@ function parseRagConfig(cfg) {
     embedKey: cfg['rag.embed_key'] || '',
     embedTopK: configInteger(cfg, 'rag.embed_top_k', 40, 5, 500),
     vectorWeight: configNumber(cfg, 'rag.vector_weight', 0.4, 0, 1),
+    // 向量后端：memory（默认，零外部服务）| milvus（外部 ANN，需 npm i @zilliz/milvus2-sdk-node）
+    vectorStore: (cfg['rag.vector_store'] || 'memory').toLowerCase().trim(),
+    milvusAddress: cfg['rag.milvus_address'] || '',
+    milvusToken: cfg['rag.milvus_token'] || '',
+    milvusUsername: cfg['rag.milvus_username'] || '',
+    milvusPassword: cfg['rag.milvus_password'] || '',
+    milvusCollection: cfg['rag.milvus_collection'] || '',
   };
 }
 
@@ -672,8 +679,15 @@ function buildToolContent(result, toolName, malformed, repeated, cap) {
   return content;
 }
 
-/** 只读/分析类工具：相同参数重复调用直接复用上次结果，避免模型空转。
- * 注意：get_workbench_model 不在此列——画布是权威读源，必须在变更后立即读到最新状态。 */
+/**
+ * 只读/分析类工具：相同参数重复调用直接复用上次结果，避免模型空转。
+ * 注意 1：get_workbench_model 不在此列——画布是权威读源，必须在变更后立即读到最新状态。
+ * 注意 2：这个集合同时是「缓存保活白名单」——只有这些工具执行后缓存继续有效，其余一律清空（fail-closed）。
+ * 能改文件/画布状态的不止写入类工具：execute_shell 跑脚本或构建、poll_job 轮询正在写盘的后台任务、
+ * delegate_task 里 builder 子代理落盘、项目扩展与 MCP 工具执行外部命令，都曾不在写工具清单里，
+ * 执行后缓存不失效 → 随后 read_file 命中旧结果（实测：shell 写入后 read_file 仍返回旧内容，磁盘已是新内容）。
+ * 列举「谁可能写」永远列不全，所以反向枚举「谁一定只读」。
+ */
 const CACHEABLE_TOOLS = new Set([
   'scan_project',
   'analyze_project',
@@ -686,7 +700,7 @@ const CACHEABLE_TOOLS = new Set([
   'ask_user',
 ]);
 
-/** 会改变画布模型 / 文件 / 工程状态的工具：执行后清空只读结果缓存，保证后续读取为最新（修复读写不同步） */
+/** 会改变画布模型 / 文件 / 工程状态的工具（语义清单，供阅读与文档引用）。 */
 const MUTATION_TOOLS = new Set([
   'workbench_edit',
   'bulk_edit',
@@ -729,7 +743,95 @@ function parseToolArgs(raw) {
 }
 
 
-/** 校验最终回答中的 RAG 引用（path#Lx-Ly 与 scalar:<key>）是否来自本轮 retrieve_context 结果。 */
+/** 归一化引用里的路径：统一正斜杠、去掉 ./ 前缀；Windows 下大小写不敏感。 */
+function normalizeCitePath(raw) {
+  let p = String(raw || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  while (p.startsWith('/')) p = p.slice(1);
+  return process.platform === 'win32' ? p.toLowerCase() : p;
+}
+
+/** 解析引用串：`path#Lx-Ly` → 行区间；`scalar:<key>` → 标量键；其它 → other。 */
+function parseCitation(raw) {
+  const text = String(raw || '').replace(/^source:\s*/i, '').trim();
+  const scalar = /^scalar:(.+)$/i.exec(text);
+  if (scalar) return { kind: 'scalar', key: scalar[1].trim() };
+  const range = /^(.*?)#L(\d+)-L(\d+)$/i.exec(text);
+  if (!range) return { kind: 'other', raw: text };
+  const a = Number(range[2]);
+  const b = Number(range[3]);
+  return { kind: 'range', path: normalizeCitePath(range[1]), start: Math.min(a, b), end: Math.max(a, b) };
+}
+
+/**
+ * 收集本轮「可信来源」——判据不只看检索返回值，而是本轮真实读过的内容：
+ * - retrieve_context：文件来源的 path + startLine/endLine（块级范围）、标量来源的 scalar:<key>
+ * - read_file：实际读到的行区间（offset/截断后的真实范围；无行号信息时按整文件）
+ * - search_files：命中的具体行
+ * - query_scalars：命中的标量 key
+ * 这样「先检索、再按系统提示用 read_file 深读候选文件后引用」（系统提示第 11 条就是这么要求的）
+ * 不会被误判成伪造引用；而本轮没读过、或行号与读到的范围完全不相交的引用仍判无效。
+ */
+function collectTrustedSources(toolCalls) {
+  const ranges = new Map();
+  const scalars = new Set();
+  const citations = new Set();
+  const addRange = (rawPath, start, end) => {
+    const p = normalizeCitePath(rawPath);
+    if (!p) return;
+    const s = Math.max(1, Math.floor(Number(start)) || 1);
+    const e = Math.max(s, Math.floor(Number(end)) || s);
+    const list = ranges.get(p);
+    if (list) list.push([s, e]);
+    else ranges.set(p, [[s, e]]);
+  };
+  for (const call of toolCalls || []) {
+    if (!call || !call.data || typeof call.data !== 'object') continue;
+    const data = call.data;
+    if (call.name === 'retrieve_context') {
+      for (const source of Array.isArray(data.sources) ? data.sources : []) {
+        if (!source || !source.citation) continue;
+        const raw = String(source.citation);
+        citations.add(raw);
+        const parsed = parseCitation(raw);
+        if (parsed.kind === 'scalar') scalars.add(parsed.key);
+        else if (parsed.kind === 'range') addRange(parsed.path, parsed.start, parsed.end);
+        else if (source.path) addRange(source.path, source.startLine, source.endLine || Number.MAX_SAFE_INTEGER);
+      }
+    } else if (call.name === 'read_file') {
+      if (data.binary === true) continue;
+      const p = data.path || data.matched;
+      if (!p) continue;
+      if (Number.isFinite(Number(data.startLine)) && Number.isFinite(Number(data.endLine))) {
+        addRange(p, data.startLine, data.endLine);
+      } else {
+        addRange(p, 1, Number(data.lineCount) || Number.MAX_SAFE_INTEGER);
+      }
+    } else if (call.name === 'search_files') {
+      for (const line of Array.isArray(data.matches) ? data.matches : []) {
+        const m = /^(.*?):(\d+):/.exec(String(line));
+        if (m) addRange(m[1], Number(m[2]), Number(m[2]));
+      }
+    } else if (call.name === 'query_scalars') {
+      for (const item of Array.isArray(data.items) ? data.items : []) {
+        if (item && item.key) scalars.add(String(item.key));
+      }
+    }
+  }
+  return { ranges, scalars, citations };
+}
+
+/** 引用是否可信：标量按 key 命中；文件引用要求本轮读过该路径，且行区间与读到的范围相交。 */
+function citationTrusted(parsed, trusted) {
+  if (parsed.kind === 'scalar') return trusted.scalars.has(parsed.key) || trusted.citations.has('scalar:' + parsed.key);
+  if (parsed.kind === 'range') {
+    const list = trusted.ranges.get(parsed.path);
+    if (!list || !list.length) return false;
+    return list.some(([start, end]) => parsed.start <= end && parsed.end >= start);
+  }
+  return false;
+}
+
+/** 校验最终回答中的引用（path#Lx-Ly 与 scalar:<key>）是否落在本轮真实读过的来源里。 */
 function validateRagGrounding(content, toolCalls) {
   const allowed = new Set();
   let requiresCitation = false;
@@ -746,14 +848,19 @@ function validateRagGrounding(content, toolCalls) {
   if (allowed.size === 0) {
     return { status: 'not_required', valid: true, required: false, allowed: [], used: [], invalid: [] };
   }
+  const trusted = collectTrustedSources(toolCalls);
   const used = new Set();
-  const regex = /\[([^\]\r\n]+(?:#L\d+-L\d+|scalar:[^\]\r\n]+))\]/g;
+  const regex = /\[((?:source:\s*)?(?:[^\]\r\n]*#L\d+-L\d+|scalar:[^\]\r\n]+))\]/gi;
   let match;
   while ((match = regex.exec(String(content || '')))) {
     used.add(match[1].replace(/^source:\s*/i, '').trim());
   }
-  const invalid = [...used].filter((citation) => !allowed.has(citation));
-  const validUsed = [...used].filter((citation) => allowed.has(citation));
+  const invalid = [];
+  const validUsed = [];
+  for (const citation of used) {
+    if (citationTrusted(parseCitation(citation), trusted)) validUsed.push(citation);
+    else invalid.push(citation);
+  }
   let status = 'valid';
   if (invalid.length) status = 'invalid';
   else if (requiresCitation && validUsed.length === 0) status = 'missing';
@@ -767,12 +874,13 @@ function validateRagGrounding(content, toolCalls) {
   };
 }
 
+/** 引用校验提示文案：只作为独立事件上报，绝不拼进交付内容。 */
 function groundingWarning(grounding) {
   if (grounding.status === 'invalid') {
-    return '\n\n> RAG 来源校验：回答包含未由检索工具返回的引用：' + grounding.invalid.join(', ') + '。请勿将这些引用视为有效证据。';
+    return 'RAG 来源校验：回答里有本轮未读到（路径未见或行号越界）的引用：' + grounding.invalid.join(', ') + '。请回到来源核对，不要把它们当作证据。';
   }
   if (grounding.status === 'missing') {
-    return '\n\n> RAG 来源校验：本轮检索到了可用来源，但回答没有引用真实的 [path#Lx-Ly]；关键结论仍需回到来源核对。';
+    return 'RAG 来源校验：本轮检索到了可用来源，但回答没有引用真实的 [path#Lx-Ly]；关键结论仍需回到来源核对。';
   }
   return '';
 }
@@ -809,7 +917,7 @@ function mergeUsage(previous, next) {
  * @param {object} opts
  *   cfg          loadConfig 返回值
  *   messages     已含 system 的完整消息数组（会被原地追加）
- *   onDelta       增量回调 {kind:'start'|'reasoning'|'content'|'tool'|'tool_result'|'done'|'error', ...}
+ *   onDelta       增量回调 {kind:'start'|'reasoning'|'content'|'tool'|'tool_result'|'grounding'|'done'|'error', ...}
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
  *   timeoutMs     单轮超时（默认 180s）
@@ -955,9 +1063,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             onDelta && onDelta({ kind: 'stopped' });
             return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
           }
-          // 变更类工具执行后，清空只读结果缓存（get_workbench_model/read_file/scan_project 等），
-          // 保证随后读取的一定是最新的画布模型/文件状态，避免“写入成功但读到旧数据/0 节点”
-          if (MUTATION_TOOLS.has(tc.name)) toolResultCache.clear();
+          // 缓存失效按「只读白名单」判定：只要本轮执行的不是纯只读工具（execute_shell / poll_job /
+          // delegate_task / 扩展与 MCP 工具 / 任何变更类工具），就整表清空，保证随后读取拿到最新状态。
+          if (!CACHEABLE_TOOLS.has(tc.name)) toolResultCache.clear();
           // 副作用结算：写操作提交/失败都落账本，中断后能判断哪些写已经发生
           if (sideEffectToken && tools.context) {
             try {
@@ -1080,10 +1188,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
-    if (warning) {
-      content += warning;
-      onDelta && onDelta({ kind: 'content', text: warning });
-    }
+    // 校验结果只作为独立事件上报（界面另有来源徽标），不拼进交付内容：
+    // 引用校验本身可能误判，把提示写进回答正文会污染交付文本。
+    if (warning) onDelta && onDelta({ kind: 'grounding', grounding, warning });
     onDelta && onDelta({ kind: 'done', grounding });
     logToolTrace(tools && tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
       kind: 'turn_end', totalToolCalls, executedUnique: allToolCalls.filter((t) => !t.repeated).length,
