@@ -632,28 +632,32 @@ function killSandboxed(child, force = false) {
   }
 }
 
+/** 真实路径解析：对「尚不存在的目标」也做最长存在前缀的 realpath。
+ *  只对 root 做 realpath、对候选路径直接 path.resolve，会在 CI 的短路径名下误判
+ *  （runneradmin → RUNNER~1：root 解析成长路径，候选仍是短路径，前缀对不上 → 合法路径被拒）。 */
+function canonicalPath(target) {
+  const absolute = path.resolve(target);
+  try {
+    return fs.realpathSync.native ? fs.realpathSync.native(absolute) : fs.realpathSync(absolute);
+  } catch {}
+  const parent = path.dirname(absolute);
+  if (parent === absolute) return absolute;
+  try {
+    return path.join(canonicalPath(parent), path.basename(absolute));
+  } catch {
+    return absolute;
+  }
+}
+
 /** 工具层路径边界：真实路径解析 + 前缀校验 + 拒绝符号链接越界（Windows 上替代文件系统隔离） */
 function withinWriteRoots(candidate, policy) {
   if (!policy) return true;
   const roots = policy.writeRoots || [];
   if (!roots.length) return true;
-  let resolved;
-  try {
-    resolved = fs.realpathSync.native ? fs.realpathSync.native(candidate) : fs.realpathSync(candidate);
-  } catch {
-    try {
-      resolved = path.resolve(candidate);
-    } catch {
-      return false;
-    }
-  }
-  const normalized = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const normalize = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
+  const normalized = normalize(canonicalPath(candidate));
   return roots.some((root) => {
-    let rootReal = root;
-    try {
-      rootReal = fs.realpathSync.native ? fs.realpathSync.native(root) : fs.realpathSync(root);
-    } catch {}
-    const target = process.platform === 'win32' ? rootReal.toLowerCase() : rootReal;
+    const target = normalize(canonicalPath(root));
     return normalized === target || normalized.startsWith(target + path.sep);
   });
 }

@@ -32,8 +32,10 @@ jobs:
           cache: npm
       - name: 安装依赖（package-lock.json 可用，使用 npm ci）
         run: npm ci
-      - name: 构建（Linux：xvfb 提供显示环境；图标脚本另有明确的无头安全分支）
+      - name: 构建（Linux：xvfb 提供显示环境；容器里需关闭 Electron 沙箱才能重建图标）
         if: runner.os == 'Linux'
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
         run: xvfb-run -a npm run build
       - name: 构建（Windows / macOS）
         if: runner.os != 'Linux'

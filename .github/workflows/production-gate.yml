@@ -76,8 +76,10 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: 构建（Linux 用 xvfb；图标脚本在无显示环境会显式跳过并说明，不会假失败）
+      - name: 构建（Linux 用 xvfb；容器里需关闭 Electron 沙箱才能重建图标）
         if: runner.os == 'Linux'
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
         run: xvfb-run -a npm run build
       - name: 构建（Windows / macOS）
         if: runner.os != 'Linux'

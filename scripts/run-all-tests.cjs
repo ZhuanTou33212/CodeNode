@@ -86,16 +86,17 @@ function runScript(name) {
     return { name, ok: false, ms: 0, status: 1, signal: null };
   }
   console.log('\n' + '─'.repeat(72) + '\n▶ ' + name + '\n' + '─'.repeat(72));
-  // Windows 上直接 spawn npm.cmd 会 EINVAL，必须走 shell；用整条命令字符串形式避免 DEP0190。
-  const command = (isWindows ? 'npm.cmd' : 'npm') + ' run --silent ' + name;
-  const result = spawnSync(command, {
-    cwd,
-    stdio: 'inherit',
-    shell: isWindows,
-  });
+  // Windows 上直接 spawn npm.cmd 会 EINVAL，必须走 shell；POSIX 上必须用参数数组（把整条命令
+  // 当字符串交给 execve 会 ENOENT → status=null，CI 上表现为"25 项全部 0.00s 失败"）。
+  const result = isWindows
+    ? spawnSync('npm.cmd run --silent ' + name, { cwd, stdio: 'inherit', shell: true })
+    : spawnSync('npm', ['run', '--silent', name], { cwd, stdio: 'inherit' });
   const ms = Date.now() - started;
   const ok = result.status === 0;
-  return { name, ok, ms, status: result.status, signal: result.signal };
+  // spawn 本身失败（ENOENT/EINVAL）时 status 为 null、error 有值：必须显式带出来，
+  // 否则只剩 `exit=null`，看不出是脚本失败还是根本没跑起来。
+  const spawnError = result.error ? String(result.error.message || result.error) : null;
+  return { name, ok, ms, status: result.status, signal: result.signal, error: spawnError };
 }
 
 console.log('CodeNode 测试套件：组=' + (only.length ? '自定义' : group) + '，共 ' + scripts.length + ' 项');
@@ -118,7 +119,7 @@ console.log('测试汇总');
 console.log('='.repeat(72));
 for (const r of results) {
   const mark = r.ok ? 'PASS' : 'FAIL';
-  console.log('  ' + mark + '  ' + r.name.padEnd(26) + (r.ms / 1000).toFixed(2).padStart(7) + 's' + (r.ok ? '' : '  (exit=' + r.status + ')'));
+  console.log('  ' + mark + '  ' + r.name.padEnd(26) + (r.ms / 1000).toFixed(2).padStart(7) + 's' + (r.ok ? '' : '  (exit=' + r.status + (r.error ? ', spawn 失败: ' + r.error : '') + ')'));
 }
 if (skipped.length) console.log('  跳过: ' + skipped.join(', '));
 

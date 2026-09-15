@@ -59,9 +59,12 @@ function headlessLinuxWithoutDisplay() {
   return process.env.CODENODE_ICON_REQUIRE_HEADLESS !== '1';
 }
 
-/** 源图 + 脚本的指纹（见 MANIFEST 注释）。 */
+/** 源图 + 脚本的指纹（见 MANIFEST 注释）。脚本内容按 LF 归一化后再入哈希：
+ *  否则 Windows 工作区（CRLF）算出的指纹与 CI 检出（LF）不一致，每次 CI 都会去重渲染。 */
 function sourceFingerprint() {
-  return crypto.createHash('sha256').update(fs.readFileSync(SOURCE)).update(fs.readFileSync(__filename)).digest('hex');
+  const script = fs.readFileSync(__filename, 'utf8').replace(/\r\n/g, '\n');
+
+  return crypto.createHash('sha256').update(fs.readFileSync(SOURCE)).update(script).digest('hex');
 }
 
 function outputsPresent() {
@@ -100,6 +103,12 @@ async function main() {
   const sourceUrl = pathToFileURL(SOURCE).href;
   fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;width:256px;height:256px;overflow:hidden;background:transparent"><img id="icon" src="${sourceUrl}" width="256" height="256" style="display:block;width:256px;height:256px"></body></html>`, 'utf8');
 
+  // Linux 容器 / CI（没有 setuid chrome-sandbox）里 Electron 会以 FATAL 直接退出。
+  // 这里只渲染一张本地图片，与 CI 的 smoke 步骤一致，显式关闭沙箱。
+  if (process.platform === 'linux' && (process.env.CI || process.env.ELECTRON_DISABLE_SANDBOX === '1')) {
+    app.commandLine.appendSwitch('no-sandbox');
+  }
+
   await app.whenReady();
   const window = new BrowserWindow({
     show: false,
@@ -137,6 +146,11 @@ async function main() {
     fs.writeFileSync(OUTPUT, makeIco(images));
     fs.writeFileSync(MANIFEST, fingerprint + '\n', 'utf8');
     console.log(`icon -> ${OUTPUT} (${images.map((item) => item.size).join(', ')} px)`);
+  } catch (error) {
+    // 渲染失败（如无显示环境 / 容器里 Electron 起不来）不该让整个 npm run build 挂掉：
+    // 图标已存在就沿用已提交版本，源图变更后需要在有显示环境的机器上重建并提交。
+    if (!outputsPresent()) throw error;
+    console.warn('[icons] 重建失败，沿用已提交的图标：' + (error && error.message ? error.message : error));
   } finally {
     window.destroy();
     try { fs.unlinkSync(htmlPath); } catch {}
