@@ -247,7 +247,9 @@ function resolvePolicy(rawConfig, options = {}) {
   const writeRoots = [];
   const push = (dir) => {
     if (!dir) return;
-    const resolved = path.resolve(dir);
+    // 用真实路径入账：macOS 上 os.tmpdir() 是 /var/folders/...（符号链接到 /private/var/...），
+    // 而 sandbox-exec 的 (subpath ...) 按真实路径匹配——留符号链接形式会让工作区内写盘被误拒。
+    const resolved = canonicalPath(dir);
     if (!writeRoots.some((item) => item.toLowerCase() === resolved.toLowerCase())) writeRoots.push(resolved);
   };
   push(projectRoot);
