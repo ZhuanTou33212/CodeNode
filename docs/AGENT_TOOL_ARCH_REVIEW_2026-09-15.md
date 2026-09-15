@@ -346,7 +346,29 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 变异测试 **3/3 有判别力**：不再上报 `WAITING_USER` → B2 红；`run_state` 丢 `state` → B1.2/B2 红；迁移表去掉 `WAITING_TOOL → WAITING_USER` → A4/A5 红（且 confirm 路径优雅降级：状态停在 `WAITING_TOOL`，不崩）。
 
-**仍未处理（S2 之后）**：P0-3（破坏性工具无确认）、P0-5（无 per-tool 超时 / 同步工具不可取消）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S3：`ToolDescriptor` 适配层（旧 `register()` 合成默认 descriptor，`readOnly` 由只读白名单反推、**未声明即 write**），让缓存/并行/确认/审计都由声明驱动而不是硬编码名单。
+### S3 实施记录（工具契约 ToolDescriptor，2026-09-15）
+
+| 内容 | 文件 |
+|---|---|
+| 新增契约定义 + 适配层：15 字段契约、`normalizeDescriptor`（缺省一律保守）、`descriptorForLegacy`、`describeDescriptor`；只读/缓存/变更/能力/自管超时名单**收敛为唯一来源** | `electron/tools/descriptor.cjs` |
+| 注册表按契约执行：`registerDescriptor`/`descriptorOf`/`listDescriptors`/`describeAll`/`setDefaultTimeoutMs` + 三道 fail-closed 门（只读守卫 / 网络能力 / 确认门）+ 契约超时 | `electron/tools/registry.cjs` |
+| `save_project` 迁到显式契约（本阶段唯一行为变化）：覆盖工程文件属破坏性写 → `requiresConfirmation='WRITE'`，不批准就一个字节都不写 | `electron/tools/impl/saveProjectTool.cjs` |
+| 三份名单改为引用同一对象；`agent:tools` 顺带返回契约摘要（UI/审计可读） | `electron/agent.cjs`、`electron/ipc/agent.cjs` |
+| 用例（进 CORE，门禁 36 → 37） | `scripts/tool-descriptor-test.cjs`（40 断言） |
+
+**三道门与超时的实现要点**：
+
+- **只读守卫**：只读上下文（只读角色子代理）拒绝 `mutatesWorkspace` 的工具，**但角色白名单明确授予的除外** —— 实测若一刀切，`verifier` 角色会失去 `execute_shell`（跑测试）这一核心能力，属过度修复。
+- **网络能力**：声明 `network.request` 的工具在 `sandbox.network=deny` 时**直接拒绝、不试连**（此前只有 Linux/macOS 的子进程包装层管网络）。
+- **确认门**：只对**显式声明** `requiresConfirmation` 的工具生效（旧 `register()` 合成的契约不触发）→ 避免一次性给所有工具加弹窗导致行为突变。
+- **契约超时**：未声明用注册表兜底（默认 120s），显式 `0` = 不限时（`execute_shell`/`poll_job`/`delegate_*`/`retrieve_context`/`scan_project` 等自管超时或合法长任务）。超时只终止「等待」——**同步阻塞操作（大目录扫描、同步 fs 计算）无法被 JS 单线程打断**，真正可中断需要把这类工具挪到 worker/子进程（后续阶段）。
+- 顺带修掉一个被新用例当场抓出的真 bug：`normalizeDescriptor` 里 `toPositiveInt(null)` 经 `Number(null)=0` 落到 `0`，而 `0` 表示「显式不限时」→ 所有旧接口工具的兜底超时会被静默关掉（表现为超时用例挂死）。已改为 `null/undefined/''` 一律视为未声明。
+
+**验证证据**：`npm run verify` = **37/37 PASS，188.5s**。契约/名单一致性、只读守卫（含角色授予例外与「名单缺失 → fail-closed」）、网络门、契约超时（含 `timeoutMs=0` 不被兜底拦截）、确认门（无通道 → `APPROVAL_REQUIRED`；拒绝 → `APPROVAL_DENIED` 且副作用计数 0；批准 → 执行；旧接口写工具不被拦）全部有终态断言。
+
+变异测试 **4/4 有判别力**：`readOnly` 改 fail-open → A1/A2 红；只读守卫关掉 → C1/C2b/C4b 红；确认门关掉 → F1/F3/F4/F5 红；`save_project` 去掉 `WRITE` 声明 → B6/F1/F3/F4/F5 红。
+
+**仍未处理（S3 之后）**：P0-3 的其余工具（`workbench_edit`/`create_nodes`/`workbench_connect`/`ui_control` 仍无确认——它们已具备契约字段，但要连同审批令牌与「一次批准覆盖本轮」的交互一起做，避免每步弹窗）、P0-5 的同步工具可取消（需 worker/子进程化）、P1 其余条目、P2 全部、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。下一步建议 S4：把 `AgentToolContext` 拆成能力面（`ExecutionContext` + `ApprovalService`/`AuditService`/`ProjectService`/`UiInteractionService`/`CheckpointService`/`CancellationContext`/`TraceContext`），工具只拿完成自身任务所需的最小能力，旧方法保留为 deprecated 转发。
 
 ---
 
