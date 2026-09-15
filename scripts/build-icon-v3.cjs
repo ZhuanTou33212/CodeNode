@@ -14,6 +14,11 @@ const SOURCE = path.join(ROOT, 'codenode-icon.png');
 const OUTPUT_DIR = path.join(ROOT, 'build');
 const OUTPUT = path.join(OUTPUT_DIR, 'icon.ico');
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
+/** 只出 PNG、不进 ICO 的尺寸（ICO 规范上限 256）：electron-builder 的 Linux 目标要求 ≥256 的 PNG，
+ *  512 是官方推荐值，源图 1254px 足够，不必放大。 */
+const PNG_SIZES = [512];
+/** 统一按 1024 渲染再下采样，保证 512 这类较大尺寸也清晰（DOM 里 <img> 的渲染尺寸即采样的源尺寸）。 */
+const RENDER_SIZE = 1024;
 // 源图 + 本脚本的指纹：图标渲染依赖平台（Windows/macOS/Linux 的缩放与抗锯齿不同），
 // 因此"已提交的图标是否仍然有效"只能靠源指纹判断，不能靠每次重建（那会让每次
 // npm run build 都改写 8 个已入库的二进制文件，把工作区弄脏）。
@@ -69,7 +74,7 @@ function sourceFingerprint() {
 
 function outputsPresent() {
   if (!fs.existsSync(OUTPUT)) return false;
-  return SIZES.every((size) => fs.existsSync(path.join(OUTPUT_DIR, `icon-${size}.png`)));
+  return SIZES.concat(PNG_SIZES).every((size) => fs.existsSync(path.join(OUTPUT_DIR, `icon-${size}.png`)));
 }
 
 async function main() {
@@ -101,7 +106,7 @@ async function main() {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   const htmlPath = path.join(OUTPUT_DIR, '.icon-render.html');
   const sourceUrl = pathToFileURL(SOURCE).href;
-  fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;width:256px;height:256px;overflow:hidden;background:transparent"><img id="icon" src="${sourceUrl}" width="256" height="256" style="display:block;width:256px;height:256px"></body></html>`, 'utf8');
+  fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;width:${RENDER_SIZE}px;height:${RENDER_SIZE}px;overflow:hidden;background:transparent"><img id="icon" src="${sourceUrl}" width="${RENDER_SIZE}" height="${RENDER_SIZE}" style="display:block;width:${RENDER_SIZE}px;height:${RENDER_SIZE}px"></body></html>`, 'utf8');
 
   // Linux 容器里没有 setuid chrome-sandbox：Electron **进程启动阶段**就会 FATAL 退出，
   // 真正兜住它的是调用方的 ELECTRON_DISABLE_SANDBOX=1（CI 已配）；这里的开关只是同进程内的补充，
@@ -116,8 +121,8 @@ async function main() {
     frame: false,
     resizable: false,
     transparent: true,
-    width: 256,
-    height: 256,
+    width: RENDER_SIZE,
+    height: RENDER_SIZE,
     useContentSize: true,
     backgroundColor: '#00000000',
     webPreferences: { offscreen: true, sandbox: false },
@@ -128,7 +133,7 @@ async function main() {
     await window.webContents.executeJavaScript(`new Promise((resolve, reject) => { const image = document.querySelector('#icon'); if (!image) return reject(new Error('图标图片元素不存在')); if (image.complete) resolve(); else image.addEventListener('load', resolve, { once: true }); })`);
 
     const images = [];
-    for (const size of SIZES) {
+    for (const size of SIZES.concat(PNG_SIZES)) {
       const dataUrl = await window.webContents.executeJavaScript(`(() => {
         const image = document.querySelector('#icon');
         const canvas = document.createElement('canvas');
@@ -144,9 +149,9 @@ async function main() {
       images.push({ size, data });
     }
 
-    fs.writeFileSync(OUTPUT, makeIco(images));
+    fs.writeFileSync(OUTPUT, makeIco(images.filter((item) => item.size <= 256)));
     fs.writeFileSync(MANIFEST, fingerprint + '\n', 'utf8');
-    console.log(`icon -> ${OUTPUT} (${images.map((item) => item.size).join(', ')} px)`);
+    console.log(`icon -> ${OUTPUT} (ICO: ${images.filter((item) => item.size <= 256).map((item) => item.size).join(', ')} px；PNG: ${PNG_SIZES.join(', ')} px)`);
   } catch (error) {
     // 渲染失败（如无显示环境 / 容器里 Electron 起不来）不该让整个 npm run build 挂掉：
     // 图标已存在就沿用已提交版本，源图变更后需要在有显示环境的机器上重建并提交。
