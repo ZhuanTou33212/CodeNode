@@ -40,8 +40,9 @@ function cleanup(dir) {
 }
 
 async function main() {
-  // 0. 模块必须真的接进主进程（避免「写了模块但没接线」的假完成）
-  const mainSource = read('electron/main.cjs');
+  // 0. 模块必须真的接进主进程（避免「写了模块但没接线」的假完成）。
+  //    "主进程源码"含 electron/ipc/*.cjs —— 按域拆模块之后只看 main.cjs 会把已迁移误报成未接线。
+  const mainSource = require('./lib/main-process-source.cjs').readMainProcessSource();
   for (const pattern of [/sandbox\.resolvePolicy/, /new CostLedger\(/, /new SideEffectLedger\(/, /runCheckpoint\.planResume/, /agent:metrics/, /AlertDispatcher/]) {
     assert.ok(pattern.test(mainSource), '主进程未接线：' + pattern);
   }

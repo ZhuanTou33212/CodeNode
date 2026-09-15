@@ -13,7 +13,8 @@ function read(relative) {
 }
 
 function main() {
-  const mainSource = read('electron/main.cjs');
+  // 主进程源码含 electron/ipc/*.cjs：按域拆模块后，接线检查必须看并集
+  const mainSource = require('./lib/main-process-source.cjs').readMainProcessSource();
   assert.match(mainSource, /contextIsolation:\s*true/);
   assert.match(mainSource, /nodeIntegration:\s*false/);
   assert.match(mainSource, /sandbox:\s*true/);

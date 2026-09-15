@@ -984,39 +984,13 @@ ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {
   return runCheckpoint.planResume(projectRoot, runId, { activeIds: new Set(activeRequests.keys()), ledger });
 });
 
-/** 运行指标：成本账本 / 队列 / 告警 / 隔离状态 / 最近 Run（供 UI 与外部监控查询） */
-ipcMain.handle('agent:metrics', async (_event, projectRoot) => {
-  const cfg = agent.loadConfig(projectRoot);
-  const policy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: app.getPath('userData') });
-  const ledger = new CostLedger({ projectRoot, runId: 'metrics-view', prices: cfg.costPrices });
-  const dispatcher = new AlertDispatcher({
-    projectRoot,
-    thresholds: cfg.alertThresholds,
-    webhook: cfg.alertWebhook || null,
-  });
-  const snapshot = ledger.snapshot(modelQueue.stats());
-  const fired = await dispatcher.check({
-    ...snapshot,
-    degradedSandbox: policy.degraded.length > 0,
-    degradedReason: policy.degraded.join('/'),
-  }).catch(() => []);
-  return {
-    ok: true,
-    cost: snapshot,
-    firedAlerts: fired,
-    alertHistory: dispatcher.recent(20),
-    queue: modelQueue.stats(),
-    sandbox: {
-      backend: sandbox.capabilities().backend,
-      isolation: sandbox.capabilities().isolation,
-      detail: sandbox.capabilities().detail,
-      mode: policy.mode,
-      network: policy.network,
-      degraded: policy.degraded,
-      description: sandbox.describe(policy),
-    },
-    runs: projectRoot ? runStore.listRuns(projectRoot, 20) : [],
-  };
+// ---- 运行指标：成本账本 / 队列 / 告警 / 隔离状态 / 最近 Run（实现在 electron/ipc/metrics.cjs） ----
+require('./ipc/metrics.cjs').register({
+  ipcMain,
+  agent,
+  sandbox,
+  runStore,
+  userDataDir: () => app.getPath('userData'),
 });
 
 ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
