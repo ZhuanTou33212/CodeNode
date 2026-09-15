@@ -23,7 +23,8 @@
 
 - 渲染层权限请求默认全量拒绝（`setPermissionRequestHandler`，`src/` 内不使用任何浏览器权限）。
 - 窗口外链一律交系统浏览器打开，站外导航拦截（`setWindowOpenHandler` + `will-navigate`）。
-- CSP 补强：新增 `object-src 'none'`、`base-uri 'self'`、`frame-ancestors 'none'`、`form-action 'none'`。
+- CSP 补强：新增 `object-src 'none'`、`base-uri 'self'`、`form-action 'none'`
+  （`frame-ancestors` 只对 HTTP 响应头有效，写在 `<meta>` 里会被浏览器忽略并报 console error，故未加）。
 
 ### 工程
 
@@ -33,6 +34,34 @@
 - 新增 CONTRIBUTING.md、PR 模板、CODEOWNERS、dependabot（npm 每周 + Actions 每月）、`docs/release-process.md`。
 - `scripts/vector-ui-test.cjs` 现在自己拉起 vite dev server（没有就跑，已有就复用），
   并让 `waitFor` 超时打印当时 DOM——此前该用例要求"先手动起 vite"，单跑必然超时。
+
+### 修复（门禁首次真跑三平台后暴露的平台差异）
+
+CI 一旦真的跑起来（此前只在已删除的 `n0_12` 上触发），六个平台组合里连爆 5 个**"本地绿、CI 红"**的问题，
+全部与平台差异有关，且其中 3 个是被测代码的真缺陷：
+
+- `scripts/run-all-tests.cjs` 在 macOS/Linux 上把整条命令当可执行文件 spawn（POSIX 上 `shell:false` + 命令串
+  → ENOENT），CI 表现为 **25 项全部 0.00s、`exit=null`**；现在 POSIX 走参数数组，并把 spawn 的 `error`
+  带进汇总表（否则只剩 `exit=null`，看不出是脚本失败还是没跑起来）。
+- `electron/sandbox.cjs` 的 `withinWriteRoots` 只对可写根做 realpath、候选路径直接 `path.resolve`：
+  CI Windows 的临时目录是短路径名（`RUNNER~1`），两侧前缀对不上 → **可写根内的合法路径被误判为越界**。
+  现在两侧统一走 `canonicalPath()`（对不存在的目标也做"最长存在前缀 realpath"）。
+- `sandboxExecProfile()` 的 `(subpath ...)` 需要真实路径：macOS 的 `os.tmpdir()` 是 `/var/folders/...`
+  （符号链接到 `/private/var/...`），用符号链接形式会让**工作区内写盘被 sandbox-exec 拒绝**。
+- 图标指纹把脚本文件原样入哈希：Windows 工作区是 CRLF、CI 检出是 LF → 指纹永不匹配 → CI 每次都重建图标，
+  并在容器里因 `FATAL:setuid_sandbox_host` 挂掉。现在按 LF 归一化后再哈希；
+  另外 Linux/CI 的构建与打包步骤显式给 `ELECTRON_DISABLE_SANDBOX=1`（该崩溃发生在脚本代码执行之前）。
+- `test:shell-output` 借 `powershell ... Write-Output` 造长输出：harness 在 POSIX 上会把这类 Windows 命令
+  翻译成 `printf`，只剩 33 字符 → `hasMore` 断言失败。改为平台无关的
+  `node -e "process.stdout.write('x'.repeat(25000))"`。
+- `test:bg` / `test:shell-output` 的时间余量与 `test:sandbox` 的两处平台假设（profile 断言按真实路径比对、
+  越界探针必须落在所有可写根之外——默认策略把系统临时目录也算可写根）一并修正。
+- `build.linux` 未配 `icon`：electron-builder 回落到 `build/icon.ico` 并报
+  `image build/icon.ico must be at least 256x256`（Linux 目标要 PNG，推荐 512）。
+  图标脚本新增 `PNG_SIZES = [512]`（只出 PNG、不进 ICO）与 `RENDER_SIZE = 1024` 下采样，
+  `build.linux.icon` 指向 `build/icon-512.png`。
+
+结果：`CodeNode CI` 的 3× Verify + 3× Package 与 `production-gate` 的 5 个任务在三个平台上全部通过。
 
 ### 已知问题（未修，需要产品决策或交互式桌面）
 
