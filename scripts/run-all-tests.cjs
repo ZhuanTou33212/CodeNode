@@ -41,6 +41,7 @@ const CORE = [
   'test:truncation-safety',
   'test:agent-state',
   'test:tool-descriptor',
+  'test:context-capability',
   'test:side-effect-idem',
   'test:save-project',
   'test:shell-timeout',

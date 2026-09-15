@@ -45,6 +45,12 @@ const MUTATION_TOOLS = new Set([
   'create_nodes', 'workbench_connect', 'delegate_task', 'delegate_tasks',
 ]);
 
+/**
+ * 「条件写入者」：默认只读（结果可缓存），但带某个可选参数时会改工作台。
+ * 它们的 mutatesWorkspace 必须为 true —— 只读上下文里若无角色白名单授予就该被拦下。
+ */
+const CONDITIONAL_MUTATORS = new Set(['scan_project']);
+
 /** 结果里的 [data] 不再附加进上下文（数据已落到本地标量库，避免把画布大字段发到云端） */
 const SCALAR_BACKED_TOOLS = new Set([
   'get_workbench_model', 'workbench_edit', 'bulk_edit', 'write_analysis_md', 'query_scalars',
@@ -62,13 +68,14 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   find_files: 'workspace.read',
   search_files: 'workspace.read',
   list_directory: 'workspace.read',
-  scan_project: 'workspace.read',
   analyze_project: 'workspace.read',
   project_info: 'workspace.read',
   code_review: 'workspace.read',
   get_workbench_model: 'workspace.read',
   query_scalars: 'workspace.read',
   retrieve_context: 'workspace.read',
+  // scan_project 默认只读，但带 applyToWorkbench 参数时会写画布 → 能力上按写处理（fail-closed）
+  scan_project: 'workspace.write',
   recall: 'workspace.read',
   get_subagent_task: 'workspace.read',
   poll_job: 'shell.execute',
@@ -195,7 +202,7 @@ function descriptorForLegacy(name, description, inputSchema) {
     inputSchema,
     readOnly,
     idempotent: readOnly || IDEMPOTENT_WRITES.has(name),
-    mutatesWorkspace: !readOnly,
+    mutatesWorkspace: !readOnly || CONDITIONAL_MUTATORS.has(name),
     requiredCapability: capability,
     timeoutMs: timeout,
     // 旧 register() 不做注册表级确认（工具自己内部确认的照旧），避免行为突变
@@ -226,6 +233,7 @@ function describeDescriptor(descriptor) {
 
 module.exports = {
   READ_ONLY_TOOLS,
+  CONDITIONAL_MUTATORS,
   CACHEABLE_TOOLS,
   MUTATION_TOOLS,
   SCALAR_BACKED_TOOLS,

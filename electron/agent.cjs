@@ -1078,12 +1078,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               result = cached.result;
               repeated = true;
             } else {
-              result = await tools.registry.execute(tc.name, args, tools.context);
+              result = await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
               // 只缓存成功结果：失败不缓存（文件/节点可能随后被创建，需允许重试时重新执行）
               if (result.ok) toolResultCache.set(cacheKey, { result, content: '' });
             }
           } else {
-            result = await tools.registry.execute(tc.name, args, tools.context);
+            result = await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
           }
           if (signal && signal.aborted) {
             machine.go(STATES.CANCELLED, 'aborted');

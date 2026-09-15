@@ -16,6 +16,7 @@
 
 const { AgentToolResult } = require('./result.cjs');
 const descriptorLib = require('./descriptor.cjs');
+const { createExecutionContext } = require('./executionContext.cjs');
 
 /** 超时哨兵：工具返回值不可能等于它 */
 const TOOL_TIMEOUT = Symbol('tool-timeout');
@@ -140,7 +141,15 @@ class AgentToolRegistry {
     return this.tools.has(name);
   }
 
-  async execute(name, arguments_, context) {
+  /**
+   * 执行工具。
+   * @param {string} name
+   * @param {any} arguments_
+   * @param {any} context 底层 AgentToolContext（或已被包装过的 ExecutionContext）
+   * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string }} [callInfo]
+   *   调用标识：每个动作都能带回 runId/turnId/toolCallId/attemptId（审查第 5 项要求）
+   */
+  async execute(name, arguments_, context, callInfo) {
     if (this.allowedTools && !this.allowedTools.has(name)) {
       return AgentToolResult.error('当前子代理角色无权使用工具：' + name);
     }
@@ -148,11 +157,13 @@ class AgentToolRegistry {
     if (!tool) return AgentToolResult.error('未知工具：' + name);
     const descriptor = tool.descriptor;
     const args = arguments_ == null ? {} : arguments_;
+    // 按该工具的契约现场组装最小能力面（工具只看到自己需要的那几个面 + deprecated 旧方法转发）
+    const execContext = createExecutionContext(context, descriptor, callInfo);
 
     // 门 1：只读上下文不允许执行会改工作区的工具——但角色白名单**明确授予**的除外
     // （verifier 要能跑 execute_shell 才有验证能力；拦的是「白名单没授予却混进来的写工具」这类越权）
     const grantedByRole = this.allowedTools ? this.allowedTools.has(name) : false;
-    if (descriptor.mutatesWorkspace && !grantedByRole && context && typeof context.readOnly === 'function' && context.readOnly() === true) {
+    if (descriptor.mutatesWorkspace && !grantedByRole && typeof execContext.readOnly === 'function' && execContext.readOnly() === true) {
       return AgentToolResult.error('只读上下文不允许执行会修改工作区的工具：' + name, {
         code: 'PERMISSION_DENIED',
         tool: name,
@@ -162,8 +173,11 @@ class AgentToolRegistry {
     }
 
     // 门 2：声明需要网络能力的工具，在隔离策略切断网络时直接拒绝（不让它去试一次才发现连不上）
-    if (descriptor.requiredCapability === 'network.request' && context && typeof context.sandbox === 'function') {
-      const policy = context.sandbox();
+    if (descriptor.requiredCapability === 'network.request') {
+      // 注意：策略要从**底层上下文**读，不能走工具的能力面 —— sandbox 属于 shell.execute 能力，
+      // 对 network.request 工具是被闸住的（读到的会是 null，网络门就静默失效了）
+      const base = (context && context.__context) || context;
+      const policy = base && typeof base.sandbox === 'function' ? base.sandbox() : null;
       if (policy && policy.network === 'deny') {
         return AgentToolResult.error('当前执行隔离策略已切断网络（sandbox.network=deny），不能执行 ' + name, {
           code: 'PERMISSION_DENIED',
@@ -179,7 +193,7 @@ class AgentToolRegistry {
 
     // 门 3：显式声明需要确认的工具，用户不批准就不执行（旧 register() 合成的契约不触发，保持既有行为）
     if (descriptor.confirmationEnforced && descriptor.requiresConfirmation) {
-      if (!context || typeof context.confirm !== 'function') {
+      if (typeof execContext.confirm !== 'function') {
         return AgentToolResult.error('工具 ' + name + ' 需要用户确认，但当前上下文无法询问用户，已拒绝执行。', {
           code: 'APPROVAL_REQUIRED',
           tool: name,
@@ -188,7 +202,7 @@ class AgentToolRegistry {
       }
       let approved = false;
       try {
-        approved = await context.confirm(descriptor.requiresConfirmation, name, descriptor.description);
+        approved = await execContext.confirm(descriptor.requiresConfirmation, name, descriptor.description);
       } catch {
         approved = false;
       }
@@ -202,14 +216,14 @@ class AgentToolRegistry {
     }
 
     try {
-      return await this._executeWithTimeout(tool, descriptor, name, args, context);
+      return await this._executeWithTimeout(tool, descriptor, name, args, execContext);
     } catch (e) {
       return AgentToolResult.error('工具 ' + name + ' 执行失败：' + ((e && e.message) || e));
     }
   }
 
   /**
-   * 按契约超时执行。timeoutMs=0 表示不加限制；未声明时用注册表兜底。
+   * 按契约超时执行（execContext 是按契约组装的能力面）。timeoutMs=0 表示不加限制；未声明时用注册表兜底。
    * 注意：超时只终止「等待」，同步阻塞的操作（大目录扫描、同步 fs 计算）无法被 JS 单线程打断——
    * 真正的可中断需要把这些工具挪到 worker/子进程（后续阶段）。
    */

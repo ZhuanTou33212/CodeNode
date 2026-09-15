@@ -72,7 +72,8 @@
     "release:hash": "node scripts/release-sign.cjs --no-sign",
     "icons:build": "electron scripts/build-icon-v3.cjs",
     "postbuild": "npm run icons:build",
-    "test:tool-descriptor": "node scripts/tool-descriptor-test.cjs"
+    "test:tool-descriptor": "node scripts/tool-descriptor-test.cjs",
+    "test:context-capability": "node scripts/context-capability-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",
