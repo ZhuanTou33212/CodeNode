@@ -31,6 +31,20 @@
   `npm run verify` = build + check:js + 全量回归。
 - `.nvmrc` / `engines.node` 固定 Node 22；`.gitattributes`（一律 LF，二进制标记）+ `.editorconfig`。
 - 新增 CONTRIBUTING.md、PR 模板、CODEOWNERS、dependabot（npm 每周 + Actions 每月）、`docs/release-process.md`。
+- `scripts/vector-ui-test.cjs` 现在自己拉起 vite dev server（没有就跑，已有就复用），
+  并让 `waitFor` 超时打印当时 DOM——此前该用例要求"先手动起 vite"，单跑必然超时。
+
+### 已知问题（未修，需要产品决策或交互式桌面）
+
+- `npm run test:display` 里两项目前是红的（**与本次改动无关，改动前用 `git stash` 复现过**）：
+  - `test:vector`：41/45 通过；失败项为「Delete 删除节点内选中图形」「画布节点本身仍然存在」以及
+    「第二个画布节点」创建超时——`addef0c`/`5a21a17` 的侧栏 tab 化与无限画布重构把画布节点的这两条行为打散了。
+  - `test:rag-ui`：断言的三处文案为空——侧栏 tab 化后 RAG 面板不在默认可见 tab 上，脚本按旧结构取不到元素。
+  这两个套件此前不在 CI 里（CI 只跑 Linux 的 `test:smoke`），所以坏了没人发现；
+  修完 UI 行为后应把 `npm run test:display` 纳入带显示环境（xvfb）的 CI 任务。
+- `LICENSE` 仍然缺失（仓库是 public）：选哪个许可证属于你的决定，未擅自添加。
+- 历史 tag（`0.11`/`0.12`/`0.13`/`n0_11`/`v0.12.0`/`v0.3.0`/`v0.3.1`）与 `package.json` 版本号对不上，
+  历史无法追改，从 `docs/release-process.md` 起统一为 `vX.Y.Z`。
 
 ## [0.13.0] - 2026-09-14
 

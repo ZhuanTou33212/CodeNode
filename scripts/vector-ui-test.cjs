@@ -15,10 +15,68 @@ const os = require('node:os');
 const path = require('node:path');
 
 const BASE = process.env.VECTOR_TEST_URL || 'http://localhost:5199';
+const BASE_PORT = Number(new URL(BASE).port || 80);
 // 调试端口每次随机，避免上一次残留的 Edge 进程占用固定端口导致连不上
 const PORT = Number(process.env.VECTOR_TEST_PORT) || 9500 + Math.floor(Math.random() * 400);
 const EDGE = process.env.VECTOR_TEST_EDGE || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-vec-'));
+const ROOT_DIR = path.join(__dirname, '..');
+
+let devServer = null;
+
+function portOpen(port) {
+  const net = require('node:net');
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', () => resolve(false));
+    socket.setTimeout(500, () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * 保证被测页面可用：已有 dev server 就复用，否则自己拉起 vite（--strictPort）。
+ * 之前这里要求"先手动起 vite"，于是 npm run test:vector 单独跑必然超时——
+ * 测试脚本应当自己能准备好被测环境。
+ */
+async function ensureDevServer() {
+  if (await portOpen(BASE_PORT)) {
+    out(`▶ 复用已在运行的 dev server（${BASE}）`);
+    return;
+  }
+  const isWindows = process.platform === 'win32';
+  out(`▶ 未发现 dev server，自行启动 vite（端口 ${BASE_PORT}）…`);
+  devServer = spawn(isWindows ? 'npx.cmd' : 'npx', ['vite', '--port', String(BASE_PORT), '--strictPort'], {
+    cwd: ROOT_DIR,
+    stdio: 'ignore',
+    shell: isWindows,
+    windowsHide: true,
+  });
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    if (await portOpen(BASE_PORT)) {
+      out('  ✓ dev server 就绪');
+      return;
+    }
+    await sleep(300);
+  }
+  throw new Error('dev server 启动超时（' + BASE + '）；可设 VECTOR_TEST_URL 指向已有服务');
+}
+
+function stopDevServer() {
+  if (!devServer) return;
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(devServer.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
+    else devServer.kill('SIGTERM');
+  } catch {}
+  devServer = null;
+}
+process.on('exit', stopDevServer);
 
 /** 画布节点根选择器 */
 const NODE = '[data-testid="vector-node"]';
@@ -178,7 +236,19 @@ async function waitFor(cdp, expression, timeoutMs = 8000, label = expression) {
     }
     await sleep(120);
   }
-  throw new Error(`等待超时: ${label} (last=${JSON.stringify(last)})`);
+  // 超时信息带上真实 DOM 片段：应用改了启动流程时，报错能直接看出当时渲染的是什么
+  let snapshot = '';
+  try {
+    snapshot = await cdp.eval(`(() => {
+      const body = document.body;
+      if (!body) return '(no body)';
+      const cls = [...body.querySelectorAll('[class]')].slice(0, 12).map((el) => el.className).join(' | ');
+      return (body.innerHTML || '').slice(0, 300) + '\\n--- class 样本: ' + cls;
+    })()`);
+  } catch (e) {
+    snapshot = 'DOM 读取失败: ' + String(e);
+  }
+  throw new Error(`等待超时: ${label} (last=${JSON.stringify(last)})\n--- 当时 DOM ---\n${snapshot}`);
 }
 
 /**
@@ -250,6 +320,7 @@ async function keyOnWindow(cdp, key, ctrl = false, shift = false) {
 }
 
 async function main() {
+  await ensureDevServer();
   out('▶ 启动无头 Edge…');
   await startBrowser();
   const targets = /** @type {any[]} */ (await fetch(`http://127.0.0.1:${PORT}/json`).then((r) => r.json()));
