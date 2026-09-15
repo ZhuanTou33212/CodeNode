@@ -68,6 +68,8 @@ soul_file=config/soul.md
 # rag.milvus_token=               # Zilliz Cloud / 带鉴权的服务端
 # rag.milvus_username=
 # rag.milvus_password=
+# rag.milvus_consistency=strong   # strong（默认，刚写入/删除立即可见）| bounded | eventually | session | default
+#   服务端不支持该级别时（部分云托管只支持 bounded）自动退回服务端默认，并在 stats.vector.store.consistencyFallback 记录原因
 # 说明：milvus 后端下 rag.embed_top_k 作为全库召回上限；embed_provider=local 的哈希向量
 # 语义能力有限，接 Milvus 建议同时切 openai/ollama 真嵌入。写入失败/服务不可用会降级为
 # 纯 BM25 并在检索结果中标注「向量后端降级」，不会中断检索。

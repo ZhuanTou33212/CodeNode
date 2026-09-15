@@ -115,6 +115,8 @@ function parseRagConfig(cfg) {
     milvusUsername: cfg['rag.milvus_username'] || '',
     milvusPassword: cfg['rag.milvus_password'] || '',
     milvusCollection: cfg['rag.milvus_collection'] || '',
+    // 检索一致性：strong（默认，刚写入/删除立即可见）| bounded | eventually | session | default
+    milvusConsistency: cfg['rag.milvus_consistency'] || 'strong',
   };
 }
 

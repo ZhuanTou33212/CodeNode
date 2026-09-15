@@ -28,7 +28,25 @@ const DEFAULTS = Object.freeze({
   batchSize: 32,
   maxIdLength: 2048,
   maxFileLength: 2048,
+  consistencyLevel: 'strong',
 });
+
+/** 一致性级别归一：strong/bounded/eventually/session；default/空 = 用服务端默认（不下发该字段）。 */
+const CONSISTENCY_LEVELS = Object.freeze({
+  strong: 'Strong',
+  bounded: 'Bounded',
+  eventually: 'Eventually',
+  session: 'Session',
+  default: '',
+  none: '',
+});
+
+function normalizeConsistency(value) {
+  const raw = String(value == null ? DEFAULTS.consistencyLevel : value).trim();
+  if (!raw) return '';
+  const mapped = CONSISTENCY_LEVELS[raw.toLowerCase()];
+  return mapped === undefined ? raw : mapped;
+}
 
 const SDK_NAME = '@zilliz/milvus2-sdk-node';
 const VECTOR_FIELD = 'vector';
@@ -205,6 +223,8 @@ class MilvusVectorStore {
     this.collection = String(o.collection || '').trim() || defaultCollectionName(this.root);
     this.batchSize = clampInteger(o.batchSize, DEFAULTS.batchSize, 1, 256);
     this.searchLimit = clampInteger(o.topK, 40, 1, 16384);
+    this.consistencyLevel = normalizeConsistency(o.consistencyLevel === undefined ? DEFAULTS.consistencyLevel : o.consistencyLevel);
+    this.consistencyFallback = null;
     this.injectedClient = o.client || null;
     this.client = o.client || null;
     this.sdk = null;
@@ -387,6 +407,23 @@ class MilvusVectorStore {
     return null;
   }
 
+  /** 检索参数（不传 search_params：显式传会让 SDK 不再注入 topk）。 */
+  buildSearchArgs(queryVec) {
+    const args = {
+      collection_name: this.collection,
+      data: [queryVec],
+      limit: this.searchLimit,
+      topk: this.searchLimit,
+      anns_field: VECTOR_FIELD,
+      output_fields: ['id', 'file'],
+      metric_type: 'COSINE',
+      params: {},
+    };
+    // Strong 让「刚写入的向量 / 刚按文件删除的旧块」立即可见（默认 Bounded 时删除有数秒延迟）
+    if (this.consistencyLevel) args.consistency_level = this.consistencyLevel;
+    return args;
+  }
+
   /** 全库 ANN：candidates 参数在 Milvus 后端被忽略（这正是接入向量库的意义）。 */
   async scoreCandidates(query, candidates, embedder) {
     const out = new Map();
@@ -394,23 +431,21 @@ class MilvusVectorStore {
     await this.ensureCollection();
     const [queryVec] = await embedder.embed([query]);
     if (!Array.isArray(queryVec) || !queryVec.length) return out;
-    // 注意（真机实测两条）：
+    // 注意（真机实测）：
     // 1) 主键 id 不会自动出现在命中里，必须显式列入 output_fields（否则只剩 score + 请求字段）；
     // 2) 一旦显式传 search_params，SDK 会原样透传（utils/Search.js 的 buildSearchParams 不再注入 topk），
-    //    服务端会以 "topk is required" 报错；这里走 SDK 的简单形态（limit/metric_type/params）由 SDK 组装。
-    const result = assertSuccess(
-      await this.client.search({
-        collection_name: this.collection,
-        data: [queryVec],
-        limit: this.searchLimit,
-        topk: this.searchLimit,
-        anns_field: VECTOR_FIELD,
-        output_fields: ['id', 'file'],
-        metric_type: 'COSINE',
-        params: {},
-      }),
-      'search'
-    );
+    //    服务端会以 "topk is required" 报错；这里走 SDK 的简单形态由 SDK 组装 search_params。
+    let result;
+    try {
+      result = assertSuccess(await this.client.search(this.buildSearchArgs(queryVec)), 'search');
+    } catch (error) {
+      const message = (error && error.message) || String(error);
+      // 服务端不接受该一致性级别（如部分云托管只支持 Bounded）：退回服务端默认并记录一次
+      if (!this.consistencyLevel) throw error;
+      this.consistencyFallback = message;
+      this.consistencyLevel = '';
+      result = assertSuccess(await this.client.search(this.buildSearchArgs(queryVec)), 'search');
+    }
     this.counters.searches += 1;
     for (const hit of normalizeSearchHits(result)) {
       out.set(hit.id, Math.max(0, hit.score));
@@ -429,6 +464,8 @@ class MilvusVectorStore {
       ready: !!this.ready,
       created: !!(this.ready && this.ready.created),
       searchLimit: this.searchLimit,
+      consistencyLevel: this.consistencyLevel || 'server-default',
+      consistencyFallback: this.consistencyFallback || undefined,
       ...this.counters,
       lastError: this.lastError || undefined,
       sdkLoaded: !!this.sdk || !!this.injectedClient,

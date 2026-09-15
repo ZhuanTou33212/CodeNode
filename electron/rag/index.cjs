@@ -139,6 +139,7 @@ function normalizeOptions(options) {
     milvusUsername: String(o.milvusUsername || '').trim(),
     milvusPassword: String(o.milvusPassword || '').trim(),
     milvusCollection: String(o.milvusCollection || '').trim(),
+    milvusConsistency: String(o.milvusConsistency || 'strong').trim(),
     // 仅供测试注入向量后端客户端（真实运行时不使用）
     vectorStoreClient: o.vectorStoreClient || null,
   };
@@ -397,6 +398,7 @@ class LocalRagIndex {
         username: this.options.milvusUsername,
         password: this.options.milvusPassword,
         collection: this.options.milvusCollection,
+        consistencyLevel: this.options.milvusConsistency,
         client: this.options.vectorStoreClient || null,
       });
     } catch (error) {

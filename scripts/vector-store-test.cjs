@@ -57,6 +57,8 @@ function createFakeMilvusClient() {
     closed: false,
     failing: false,
     statusError: null,
+    rejectConsistency: false,
+    lastSearchArgs: null,
     forceHits: null,
   };
   return {
@@ -108,9 +110,15 @@ function createFakeMilvusClient() {
       state.deletedRows += removed;
       return { delete_cnt: removed };
     },
-    async search({ data, limit }) {
+    async search(args) {
+      const { data, limit } = args;
       state.searches += 1;
+      state.lastSearchArgs = args;
       if (state.failing) throw new Error('fake milvus 不可用');
+      // 模拟「服务端不支持该一致性级别」（如部分云托管只支持 Bounded）
+      if (state.rejectConsistency && args.consistency_level) {
+        return { status: { error_code: 'UnexpectedError', reason: 'consistency level not supported', code: 65535 }, results: [] };
+      }
       // 真实 SDK 的失败形态：不抛异常，而是 status.error_code + 空 results（实测 "topk is required" 即如此）
       if (state.statusError) return { status: { error_code: 'UnexpectedError', reason: state.statusError, code: 65535 }, results: [] };
       if (state.forceHits) return { results: [state.forceHits.slice()] };
@@ -186,6 +194,23 @@ async function main() {
   assert.ok(scores instanceof Map && scores.size > 0, '全库检索应返回 Map<id, score>');
   assert.ok([...scores.values()].every((value) => Number.isFinite(value) && value >= 0));
   assert.ok(scores.has('src/auth.ts:1:8'), '命中应包含写入过的块 id');
+  // 真机踩坑的回归断言：不传 search_params（否则 SDK 不注入 topk）、主键进 output_fields、默认 Strong 一致性
+  assert.strictEqual(fake.state.lastSearchArgs.search_params, undefined, '不得显式传 search_params（SDK 会原样透传，服务端报 topk is required）');
+  assert.ok(fake.state.lastSearchArgs.limit > 0 && fake.state.lastSearchArgs.topk > 0, '必须下发 limit/topk');
+  assert.deepStrictEqual(fake.state.lastSearchArgs.output_fields, ['id', 'file'], '主键必须显式列入 output_fields');
+  assert.strictEqual(fake.state.lastSearchArgs.consistency_level, 'Strong', '默认应以 Strong 一致性检索（否则刚删的旧块仍可见）');
+
+  // 服务端不支持 Strong（如部分云托管）→ 自动退回服务端默认并记录一次
+  const fallbackClient = createFakeMilvusClient();
+  fallbackClient.state.rejectConsistency = true;
+  const fallbackStore = createVectorStore({ backend: 'milvus', client: fallbackClient, root, dim: 256, topK: 8, collection: 'codenode_consistency_fallback' });
+  await fallbackStore.applyChanges({ deleted: [], upserted: [records[0]] }, embedder);
+  const fallbackScores = await fallbackStore.scoreCandidates('refreshSessionToken', null, embedder);
+  assert.ok(fallbackScores.size > 0, '一致性级别被拒后应退回服务端默认并正常返回命中');
+  const fallbackStats = await fallbackStore.stats();
+  assert.strictEqual(fallbackStats.consistencyLevel, 'server-default');
+  assert.match(String(fallbackStats.consistencyFallback), /consistency level not supported/, '降级原因必须可诊断');
+  await fallbackStore.close();
 
   const deleted = await store.applyChanges({ deleted: [{ relative: 'src/auth.ts', chunkIds: ['src/auth.ts:1:8', 'src/auth.ts:9:16'] }], upserted: [] }, embedder);
   assert.ok(deleted.deleted >= 2, '按 file 过滤的删除应回报条数');

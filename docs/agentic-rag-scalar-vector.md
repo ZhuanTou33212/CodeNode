@@ -76,6 +76,10 @@
   未变文件不重写——向量写入天然是增量的。
 - **纯语义命中**：milvus 后端命中的块若 BM25 完全未召回，会以 `vector-only` 并入结果
   （要求向量贡献 ≥ 1 分，避免灌入无关行），工具文本中标注 `vector-only（BM25 未召回，仅语义命中）`。
+- **检索一致性默认 `strong`**（`rag.milvus_consistency`，可选 bounded/eventually/session/default）：
+  默认 Bounded 时**按文件删除的旧块有几秒仍会被召回**（实测 ~3s），刚改完文件就问会出现旧内容；
+  Strong 让刚写入/刚删除立即可见（真机探针 4/4 稳定）。服务端不支持该级别时（部分云托管只支持 Bounded）
+  自动退回服务端默认，并在 `stats.vector.store.consistencyFallback` 记录原因，不影响可用性。
 - **降级**：Milvus 连接失败、collection 维度不一致或 SDK 缺失时，本次检索降级为纯 BM25——
   不抛错、不中断，但会在 `stats.vector.error`、审计日志与工具文本中显式标注「向量后端降级」。
 - **SDK 策略**：`@zilliz/milvus2-sdk-node` **刻意不写进默认依赖**（保持零依赖与打包体积）；
@@ -98,8 +102,10 @@
    于是降级原因能出现在 `stats.vector.error` 与工具文本里。
 3. **主键必须显式取回**：命中默认只含 `score` + 请求的字段，`id` 不会自动返回；
    `output_fields` 要写成 `['id', 'file']`，否则索引侧无法把命中映射回 chunk（表现为检索永远 0 命中）。
-4. **删除/写入可见性有数秒延迟**（默认 Bounded 一致性，实测删除约 3s 后消失）：检索侧不要「写完立刻断言」，
-   用例里改为轮询等待；对 RAG 的影响是刚改完文件的几秒内向量侧可能仍是旧内容（BM25 侧已即时更新）。
+4. **删除/写入的可见性取决于一致性级别**（默认 Bounded 下按文件删除的旧块约 3s 内仍会被召回，
+   刚改完文件就问会遇到旧内容）：检索默认改为 `consistency_level=Strong`（`rag.milvus_consistency` 可切回
+   bounded/eventually/session/default），服务端不支持时自动退回服务端默认并在
+   `stats.vector.store.consistencyFallback` 记录原因；用例相应补「默认下发 Strong」「被拒后自动退回并仍返回命中」。
 
 建栈要点（2.6 起）：官方 standalone 配方是 etcd + minio + milvus 三件套，**嵌入式 etcd 已不可用**
 （`ETCD_USE_EMBED=true` 直接 `panic: embedded etcd can not be used under distributed mode`）；
@@ -154,6 +160,7 @@ rag.milvus_collection=            # 留空 = codenode_rag_<目录名>_<hash8>
 rag.milvus_token=
 rag.milvus_username=
 rag.milvus_password=
+rag.milvus_consistency=strong     # strong（默认）| bounded | eventually | session | default
 # 标量层
 scalars.enabled=true
 # 工具结果子代理压缩（减少上下文占用，不压缩 RAG/标量/交互类工具）

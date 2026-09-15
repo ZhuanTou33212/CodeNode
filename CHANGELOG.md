@@ -29,6 +29,10 @@
   命中默认不含主键，`output_fields` 必须显式带 `id`（否则无法映射回 chunk）；
   默认 Bounded 一致性下删除有数秒可见性延迟（用例改为轮询等待）。用例新增「状态失败不得被当成零命中」回归项。
   详见 `docs/agentic-rag-scalar-vector.md` 2.2.1.1。
+- **Milvus 检索一致性可配、默认 `Strong`**：实测默认 Bounded 下「按文件删除的旧块」约 3s 内仍会被召回
+  （刚改完文件就提问会遇到旧内容），Strong 稳定即时可见；配置项 `rag.milvus_consistency`
+  （strong|bounded|eventually|session|default），服务端不支持时自动退回服务端默认并在
+  `stats.vector.store.consistencyFallback` 记录原因。
 - 文档同步：`docs/agentic-rag-scalar-vector.md` 增 2.2.1 节（含「Windows 无可用 Milvus Lite，只有外部服务形态」
   的边界说明）、README 与配置示例。
 
