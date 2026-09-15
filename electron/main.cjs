@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -264,6 +264,33 @@ function startProjectStream(event, root, command, timeoutSeconds = 180) {
   return { ok: true, sessionId };
 }
 
+/** 仅把 http(s) 外链交给系统浏览器；file:、javascript: 等其它协议直接丢弃。 */
+function openExternalSafely(url) {
+  const target = String(url || '');
+  if (!/^https?:\/\//i.test(target)) return;
+  try {
+    shell.openExternal(target).catch(() => {});
+  } catch {}
+}
+
+/** 只有应用自身页面（开发服务器或打包后的 file:// 入口）算站内导航。 */
+function isInternalUrl(url) {
+  const target = String(url || '');
+  if (DEV_SERVER_URL && target.startsWith(DEV_SERVER_URL)) return true;
+  if (!target.startsWith('file://')) return false;
+  try {
+    const filePath = decodeURIComponent(new URL(target).pathname);
+    const normalized = process.platform === 'win32' ? filePath.replace(/^\//, '') : filePath;
+    return path.resolve(normalized).startsWith(path.resolve(path.join(__dirname, '..')));
+  } catch {
+    return false;
+  }
+}
+
+// 渲染层不使用任何浏览器权限（src/ 内无 getUserMedia / Notification / clipboard / fullscreen 调用），
+// 因此默认全量拒绝；将来确有需要，必须在这里显式放行并说明用途。
+const ALLOWED_PERMISSIONS = new Set([]);
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -282,6 +309,22 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
     },
+  });
+
+  // ---- 窗口加固：外链交系统浏览器、站外导航一律拦截、浏览器权限默认拒绝 ----
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalSafely(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isInternalUrl(url)) return;
+    event.preventDefault();
+    openExternalSafely(url);
+  });
+  win.webContents.session.setPermissionRequestHandler((_contents, permission, callback) => {
+    const allowed = ALLOWED_PERMISSIONS.has(permission);
+    if (!allowed) console.log('[security] 已拒绝渲染层权限请求: ' + permission);
+    callback(allowed);
   });
 
   if (DEV_SERVER_URL) {
