@@ -28,6 +28,8 @@ class AgentToolContext {
     this.auditLogger = o.audit || null;
     this.workbenchMutator = o.mutateWorkbench || null;
     this.saveAction = o.saveProject || null;
+    // 最近一次 saveProject 的失败原因（供 save_project 工具如实报错）
+    this.saveErrorValue = null;
     this.questionHandler = o.askUser || null;
     this.uiAction = o.ui || null;
     this.conversationSupplier = o.conversationHistory || null;
@@ -99,10 +101,20 @@ class AgentToolContext {
     if (this.readOnlyValue) return null;
     if (this.saveAction) {
       try {
-        return await this.saveAction();
-      } catch {}
+        const saved = await this.saveAction();
+        this.saveErrorValue = null;
+        return saved;
+      } catch (error) {
+        // 不吞掉失败原因：调用方需要据此报错，而不是谎报「已保存」
+        this.saveErrorValue = String((error && error.message) || error);
+      }
     }
     return null;
+  }
+
+  /** 最近一次 saveProject 的失败原因（null = 未发生错误） */
+  saveError() {
+    return this.saveErrorValue || null;
   }
 
   async askUser(question, options) {

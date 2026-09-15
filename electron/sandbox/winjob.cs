@@ -268,7 +268,11 @@ internal static class WinJob
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = false,
+            // 子进程必须拿到「立即 EOF」的 stdin：写成 false 时子进程继承 broker 的 stdin
+            // （node 侧用于存活探测的长生命管道，永不关闭也不写数据），任何会读 stdin 的程序
+            // 会永久阻塞且零输出、只能等超时强杀（实测 MSYS git.exe：git --version 挂满 60s）。
+            // 该后端本就不支持交互式 stdin（guardedInteractiveSpawn 走别的路径），故直接关闭。
+            RedirectStandardInput = true,
             CreateNoWindow = true,
             WorkingDirectory = Convert.ToString(spec.ContainsKey("cwd") ? spec["cwd"] : Directory.GetCurrentDirectory()),
         };
@@ -298,6 +302,7 @@ internal static class WinJob
             return 4;
         }
         if (_child == null) { Fail("spawn returned null", 4); return 4; }
+        try { _child.StandardInput.Close(); } catch { }
 
         Emit("{\"ev\":\"started\",\"pid\":" + _child.Id + "}");
 

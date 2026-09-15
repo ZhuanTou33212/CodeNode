@@ -24,20 +24,21 @@ function buildStream(turn) {
   }
   if (Array.isArray(turn.toolCalls) && turn.toolCalls.length) {
     turn.toolCalls.forEach((call, index) => {
+      const toolCall = {
+        index,
+        type: 'function',
+        function: { name: call.name, arguments: typeof call.args === 'string' ? call.args : JSON.stringify(call.args || {}) },
+      };
+      // id 语义：不传 → 默认 'call_<index>'（真实供应商的常态）；传 '' → 原样发空 id；
+      // 传 omitId:true → 整个 id 字段都不出现。后两种用来复现「供应商不给 id」的兼容性缺陷。
+      if (call.omitId !== true) toolCall.id = call.id === undefined ? 'call_' + index : call.id;
       chunks.push(
         sseChunk({
           choices: [
             {
               index: 0,
               delta: {
-                tool_calls: [
-                  {
-                    index,
-                    id: call.id || 'call_' + index,
-                    type: 'function',
-                    function: { name: call.name, arguments: typeof call.args === 'string' ? call.args : JSON.stringify(call.args || {}) },
-                  },
-                ],
+                tool_calls: [toolCall],
               },
             },
           ],

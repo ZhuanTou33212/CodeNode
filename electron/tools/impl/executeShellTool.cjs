@@ -335,7 +335,14 @@ function register(registry) {
           cleanup();
           output += '\n…（执行超时，已强制终止）';
           context.audit('execute_shell ' + command + ' exit=TIMEOUT');
-          resolve(AgentToolResult.ok('退出码 -1（超时强杀）\n' + output.trim(), { exitCode: -1, command, timedOut: true, output: output.slice(0, 4000) }));
+          // 超时强杀不是成功：ok=true 会让模型把「被杀掉的命令」当作已完成（实测后台 git 超时仍报成功）
+          resolve(AgentToolResult.error('执行超时（' + timeoutSeconds + ' 秒），已强制终止\n' + output.trim(), {
+            code: 'TIMEOUT',
+            exitCode: -1,
+            command,
+            timedOut: true,
+            output: output.slice(0, 4000),
+          }));
         }, timeoutSeconds * 1000);
         child.on('error', (e) => {
           clearTimeout(timer);
@@ -431,13 +438,14 @@ function register(registry) {
         return AgentToolResult.error('后台任务已取消：' + jobId, { jobId, status: 'cancelled', exitCode: job.exitCode, output: job.output });
       }
       const done = job.status === 'done';
-      const statusText = done ? '退出码 ' + job.exitCode : '超时强制终止';
       const page = outputPage(job.output, args.offset, args.maxChars, args.tail === true);
       if (!page.hasMore) BACKGROUND_JOBS.delete(jobId);
-      return AgentToolResult.ok(
-        '后台任务完成：' + statusText + '\n' + page.output.trim() + (page.hasMore ? '\n输出未读完，请使用 offset=' + page.nextOffset + ' 继续读取。' : ''),
-        { jobId, status: job.status, exitCode: job.exitCode, ...page }
-      );
+      // 后台任务超时被强杀同样不是成功（与前台一致：超时必须让模型知道任务没做完）
+      const head = '后台任务' + (done ? '完成：退出码 ' + job.exitCode : '超时被强制终止') + '\n';
+      const body = page.output.trim() + (page.hasMore ? '\n输出未读完，请使用 offset=' + page.nextOffset + ' 继续读取。' : '');
+      return done
+        ? AgentToolResult.ok(head + body, { jobId, status: job.status, exitCode: job.exitCode, ...page })
+        : AgentToolResult.error(head + body, { code: 'TIMEOUT', jobId, status: job.status, exitCode: job.exitCode, timedOut: true, ...page });
     }
   );
 }

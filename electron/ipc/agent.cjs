@@ -38,6 +38,7 @@ const { makeBridge } = require('../tools/bridge.cjs');
 const { SubagentManager } = require('../subagents.cjs');
 const { atomicWriteFile } = require('../atomicFile.cjs');
 const cnode = require('../cnode.cjs');
+const { resolveInRoot } = require('../tools/impl/shared.cjs');
 const { auditLog } = require('./project.cjs');
 
 /** 正在运行的 Agent 请求：requestId/runId → AbortController（「停止思考」与中断恢复判定都用它） */
@@ -47,9 +48,17 @@ const activeRequests = new Map();
 function saveDoc(projectRoot, projectFile, model) {
   const doc = model ? model.doc : null;
   const graph = (doc && doc.root) || { nodes: [], edges: [] };
-  const filePath = projectFile
-    ? path.resolve(projectFile)
-    : path.join(path.resolve(projectRoot || '.'), 'workflow.cnode');
+  // 保存目标必须落在项目根内：projectFile 由渲染层传入，不能当作任意路径写入的入口。
+  // 与 write_file / edit_file 共用 resolveInRoot 的边界语义（含符号链接与悬空链接处理）；
+  // 越界或项目根不存在时抛错，由 save_project 工具如实报错（不再静默写出去）。
+  const root = path.resolve(projectRoot || '.');
+  const filePath = resolveInRoot(root, projectFile ? String(projectFile) : path.join(root, 'workflow.cnode'));
+  if (!filePath) {
+    throw Object.assign(
+      new Error('保存目标越出项目根目录（或项目根不存在）：' + String(projectFile || path.join(root, 'workflow.cnode'))),
+      { code: 'PATH_OUT_OF_ROOT' }
+    );
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   atomicWriteFile(filePath, cnode.encodeCnode({ graph, workspace: {}, manifest: {} }));
   return filePath;

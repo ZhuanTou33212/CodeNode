@@ -57,8 +57,40 @@ function digest(value) {
   return crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 32);
 }
 
+/**
+ * 规范化序列化：对象键排序后再 JSON 化，使「语义相同、键序不同」的参数得到同一个字符串。
+ * 口径必须与 agent.cjs 的 canonicalArgs（缓存键）一致：两处不一致会出现
+ * 「缓存判定为重复、幂等账本判定为新操作」，续跑时重复执行同一写操作（重复副作用）。
+ * @param {any} args
+ * @returns {string}
+ */
+function canonicalArgsText(args) {
+  if (typeof args === 'string') {
+    try {
+      return canonicalArgsText(JSON.parse(args));
+    } catch {
+      return args.trim();
+    }
+  }
+  const sort = (value) => {
+    if (Array.isArray(value)) return value.map(sort);
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((acc, key) => {
+        acc[key] = sort(value[key]);
+        return acc;
+      }, {});
+    }
+    return value;
+  };
+  try {
+    return JSON.stringify(sort(args == null ? {} : args));
+  } catch {
+    return String(args);
+  }
+}
+
 function idempotencyKey(scopeRunId, toolName, args) {
-  return digest(String(scopeRunId || '') + '\u0000' + String(toolName || '') + '\u0000' + (typeof args === 'string' ? args : JSON.stringify(args == null ? {} : args)));
+  return digest(String(scopeRunId || '') + '\u0000' + String(toolName || '') + '\u0000' + canonicalArgsText(args));
 }
 
 function ledgerPath(projectRoot, scopeRunId) {
@@ -113,6 +145,13 @@ class SideEffectLedger {
     const key = idempotencyKey(this.scopeRunId, toolName, args);
     const existing = this.records.get(key);
     if (existing && existing.phase === 'committed' && effect === 'write') {
+      // 保持 committed 语义不变（只累计意图次数）：一旦降级回 pending，review()/planResume
+      // 就看不到「这条写已完成」，续跑只能整轮人工复核。去重路径不会再调用 commit()，
+      // 所以这里必须自己保住状态。
+      existing.intents = (existing.intents || 0) + 1;
+      existing.lastIntentAt = this.clock();
+      this.records.set(key, existing);
+      this._persist();
       return { skip: true, effect, idemKey: key, prior: existing, reason: '该写操作在中断前已提交（幂等去重），本次不再重复执行' };
     }
     const record = existing || { idemKey: key, tool: String(toolName), effect, argsDigest: digest(args), phase: 'pending', intents: 0 };
@@ -183,6 +222,7 @@ module.exports = {
   classify,
   digest,
   idempotencyKey,
+  canonicalArgsText,
   ledgerPath,
   READ_TOOLS,
   WRITE_TOOLS,
