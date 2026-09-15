@@ -4,6 +4,27 @@
 
 ## [未发布]
 
+### 新增（向量后端可插拔：memory / Milvus）
+
+- **RAG 向量层从内联实现改为可插拔后端契约**（`electron/vectorStore/{index,memory,milvus}.cjs`）：
+  `memory`（默认，进程内记忆化 + 只对 BM25 预筛 Top-K 打余弦，零外部服务）与 `milvus`
+  （外部 Milvus 服务，chunk 向量写入 collection，检索走**全库 ANN**，不再受 BM25 预筛限制）。
+  索引侧只依赖统一契约（`prefiltered / applyChanges / scoreCandidates / dropLocal / stats / close`），
+  默认路径行为与重构前一致（`test:rag`、`test:scalar`、`test:agent-boundary` 未改断言即通过）。
+- **向量写入天然增量**：`refresh()` 只收集「本次重新分块的文件」与其旧块，`retrieve()` 开头 `syncVectorStore()`
+  按 `file` 先删后写；未变文件不重写（用例断言第二次检索不产生新写入、变更文件旧块必须删除）。
+- **纯语义命中并入结果**：milvus 后端命中但 BM25 完全未召回的块以 `vector-only` 并入（要求向量贡献 ≥ 1 分，
+  避免灌入无关行），工具文本与 `sources[]` 中标注，便于区分「词法命中」与「语义召回」。
+- **降级而不中断**：Milvus 连接失败 / collection 维度不一致 / SDK 缺失时，本次检索降级为纯 BM25，
+  在 `stats.vector.error`、审计日志与工具文本中显式告警（用例覆盖「失败 → 仍返回 BM25 结果 + 文本告警 → 恢复后不再告警」）。
+- **SDK 刻意不进默认依赖**：启用 milvus 时才 `npm i @zilliz/milvus2-sdk-node`（保持零依赖与打包体积不变），
+  缺失时抛出可执行的安装指令；配置项 `rag.vector_store` / `rag.milvus_address` / `rag.milvus_collection` /
+  `rag.milvus_token` / `rag.milvus_username` / `rag.milvus_password` 见 `config/agent.properties.example`。
+- 新增 core 用例 `test:vector-store`：memory 契约、Milvus 适配器全分支（建表/索引/load/分批写入/按文件删除/维度校验）、
+  端到端 vector-only 与降级链路；真实 Milvus 端到端由 `MILVUS_ADDR` 守卫（未设置则明确 SKIP，不静默通过）。
+- 文档同步：`docs/agentic-rag-scalar-vector.md` 增 2.2.1 节（含「Windows 无可用 Milvus Lite，只有外部服务形态」
+  的边界说明）、README 与配置示例。
+
 ### 修复（Agent harness）
 
 - **引用校验把真实引用判成伪造引用**：白名单只认 `retrieve_context` 的精确 citation 串，于是块内更精确的行区间
@@ -120,6 +141,9 @@ CI 一旦真的跑起来（此前只在已删除的 `n0_12` 上触发），六�
   历史无法追改，从 `docs/release-process.md` 起统一为 `vX.Y.Z`。
 - `npm run test:display` 仍未纳入 CI：`test:vector` 目前只认 `msedge.exe`（Windows 路径），
   要进 CI 需先把浏览器探测做成 `EDGE → CHROME → chromium` 的跨平台回退，再挂到带 xvfb 的任务上。
+- **Milvus 后端只跑通了适配器级验证**：`test:vector-store` 用假客户端覆盖建表/写入/删除/检索/维度校验/降级全部分支，
+  但真实 Milvus 服务端到端依赖 `MILVUS_ADDR`（需自建服务）未纳入门禁，官方 SDK 的返回结构兼容
+  （2.x/3.x 形状差异）也未经真机确认；本机无 Docker 守护进程时该路径只输出 SKIP。
 
 
 ## [0.13.0] - 2026-09-14

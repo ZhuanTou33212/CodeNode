@@ -21,17 +21,20 @@
                     └──────────────────────┬─────────────────────┘
                                            │
                     ┌──────────────────────▼─────────────────────┐
-                    │ 本地层（零云端索引）                          │
+                    │ 本地层（默认零云端索引）                       │
                     │  ┌──────────────┐   ┌─────────────────────┐ │
                     │  │ 标量库 ScalarStore                        │ │
                     │  │ .codenode/   │   │ 向量层 Embedder        │ │
                     │  │ scalars.json │   │ provider=local        │ │
                     │  │ node:<id>... │   │   (n-gram 哈希向量)    │ │
                     │  └──────────────┘   │ provider=openai/ollama│ │
-                    │                     └─────────────────────┘ │
-                    │  ┌─────────────────────────────────────────┐│
-                    │  │ 文件索引 LocalRagIndex（BM25 增量缓存）    ││
-                    │  └─────────────────────────────────────────┘│
+                    │                     └──────────┬──────────┘ │
+                    │  ┌─────────────────────────────▼──────────┐ │
+                    │  │ 文件索引 LocalRagIndex（BM25 增量缓存）    │ │
+                    │  └────────────────────────────────────────┘ │
+                    │  向量后端 rag.vector_store：                 │
+                    │    memory（默认，进程内记忆化 + BM25 预筛）   │
+                    │    milvus（可选，外部服务 + 全库 ANN）        │
                     └──────────────────────────────────────────────┘
 ```
 
@@ -58,6 +61,28 @@
   - `file`：weight=0（纯词法）
   - `auto`/`hybrid`：weight=`rag.vector_weight`（默认 0.35）
   - `vector`：weight=1（语义优先）
+
+### 2.2.1 向量后端（`rag.vector_store`，chunk 向量存哪里）
+
+| 后端 | 位置 | 检索方式 | 外部依赖 |
+| --- | --- | --- | --- |
+| `memory`（默认） | 进程内 `Map`（记忆化） | 仅对 BM25 预筛 Top-K 打余弦 | 无 |
+| `milvus` | 外部 Milvus collection | **全库 ANN**（不受 BM25 预筛限制），命中并回 BM25 结果一起融合 | Milvus 服务 + `@zilliz/milvus2-sdk-node` |
+
+- 实现：`electron/vectorStore/{index,memory,milvus}.cjs`；`LocalRagIndex` 只依赖统一契约
+  （`prefiltered / applyChanges / scoreCandidates / dropLocal / stats / close`），两种后端可互换。
+- **写入时机**：`refresh()` 只收集「本次重新分块的文件」与「变更/删除文件的旧块」，
+  `retrieve()` 开头调用 `syncVectorStore()` 落库（先按 `file` 过滤删除旧块，再写入新块），
+  未变文件不重写——向量写入天然是增量的。
+- **纯语义命中**：milvus 后端命中的块若 BM25 完全未召回，会以 `vector-only` 并入结果
+  （要求向量贡献 ≥ 1 分，避免灌入无关行），工具文本中标注 `vector-only（BM25 未召回，仅语义命中）`。
+- **降级**：Milvus 连接失败、collection 维度不一致或 SDK 缺失时，本次检索降级为纯 BM25——
+  不抛错、不中断，但会在 `stats.vector.error`、审计日志与工具文本中显式标注「向量后端降级」。
+- **SDK 策略**：`@zilliz/milvus2-sdk-node` **刻意不写进默认依赖**（保持零依赖与打包体积）；
+  需要时 `npm i @zilliz/milvus2-sdk-node`，`npm run dist:win` 会把它一并打进产物。
+- **代价与边界**：Milvus 需要自建服务（docker compose standalone）或 Zilliz Cloud——这是本项目
+  唯一会把 chunk 向量落到外部服务的形态；Windows 上**没有**可嵌入的 Milvus Lite（官方与 Node 封装
+  均无 win32 目标），所以「桌面应用开箱即用 Milvus」这条路不通，只有外部服务形态。
 
 ### 2.3 自动路由（名字/具体数据 → 标量库；代码/语义 → 向量库）
 
@@ -100,6 +125,13 @@ rag.embed_base=                   # openai: https://api.openai.com/v1 / ollama: 
 rag.embed_key=
 rag.embed_top_k=40
 rag.vector_weight=0.35
+# 向量后端
+rag.vector_store=memory           # memory（默认）| milvus（外部服务，需 npm i @zilliz/milvus2-sdk-node）
+rag.milvus_address=http://127.0.0.1:19530
+rag.milvus_collection=            # 留空 = codenode_rag_<目录名>_<hash8>
+rag.milvus_token=
+rag.milvus_username=
+rag.milvus_password=
 # 标量层
 scalars.enabled=true
 # 工具结果子代理压缩（减少上下文占用，不压缩 RAG/标量/交互类工具）
@@ -112,7 +144,11 @@ agent.compression.max_calls=8
 ## 6. 后续演进（未在本期实现）
 
 1. **向量增量失效**：文件变更时同步失效对应 chunk 向量，避免本地 API 向量重算全量。
+   （已部分落地：milvus 后端按文件 delete+insert；chunk 级复用仍未实现）
 2. **索引内存换磁盘**：chunk 向量/词频持久化，支持大仓库内存可控。
+   （已部分落地：milvus 后端把向量外置到服务端持久化；memory 后端仍全内存）
 3. **标量命名空间化**：`node:`/`edge:`/`tool:`/`project:` 独立命名空间 + TTL，支持过期清理。
 4. ~~**混合路由自动打分**~~ ✅ **已落地**：`ScalarStore.search` 语义检索 + `retrieve_context` 的 `routeIntent` 关键词路由，Agent 无需预判来源。
 5. **跨工程标量**：项目模板/共享模块的标量只读复用。
+6. **向量后端多租户/共享**：同一 Milvus 服务上按工程分 collection（已按 `codenode_rag_<目录名>_<hash8>` 自动命名），
+   进一步支持团队共享语料库与跨机复用索引。

@@ -56,6 +56,22 @@ soul_file=config/soul.md
 # rag.vector_weight=0.35        # 向量分融合权重（0~1）
 # retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
 
+# ---------- 向量后端（chunk 向量存放与检索方式） ----------
+# memory（默认）：进程内记忆化 + 仅对 BM25 预筛 Top-K 打分；零外部服务、零网络。
+# milvus：外部 Milvus 服务，chunk 向量写入 collection，检索走全库 ANN（不再受 BM25 预筛限制）。
+#   注意：milvus 是本项目唯一会把 chunk 向量落到外部服务的形态，默认关闭；
+#   需先在项目根执行 `npm i @zilliz/milvus2-sdk-node`（SDK 刻意不进默认依赖，保持零依赖与体积）；
+#   服务端自建参考 milvus standalone（docker compose）或 Zilliz Cloud。
+# rag.vector_store=memory
+# rag.milvus_address=http://127.0.0.1:19530
+# rag.milvus_collection=          # 留空则按工程根自动命名 codenode_rag_<目录名>_<hash8>
+# rag.milvus_token=               # Zilliz Cloud / 带鉴权的服务端
+# rag.milvus_username=
+# rag.milvus_password=
+# 说明：milvus 后端下 rag.embed_top_k 作为全库召回上限；embed_provider=local 的哈希向量
+# 语义能力有限，接 Milvus 建议同时切 openai/ollama 真嵌入。写入失败/服务不可用会降级为
+# 纯 BM25 并在检索结果中标注「向量后端降级」，不会中断检索。
+
 # ---------- 本地标量（画布精准数据，不入云） ----------
 # 画布节点等精准数据（prompt/goal/members/filePath）在工具执行时写入工程 .codenode/scalars.json，
 # 不随上下文返回云端；Agent 需要时用 query_scalars key=node:<id> 或 retrieve_context mode=scalar 读取。

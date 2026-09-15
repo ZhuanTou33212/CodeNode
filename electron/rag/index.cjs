@@ -1,11 +1,13 @@
 /**
  * CodeNode 本地 Agentic RAG 索引。
  *
- * - 零网络、零外部服务；
+ * - 默认零网络、零外部服务；向量层可选接入 Milvus（rag.vector_store=milvus，显式配置才启用）；
  * - 文件级增量缓存与显式失效；
  * - BM25 + 路径/短语/覆盖率加权；
  * - 多查询 Reciprocal Rank Fusion；
  * - 行号来源、相关性诊断与敏感文件硬排除。
+ *
+ * 向量层通过 electron/vectorStore 的可插拔后端实现（memory 默认 / milvus 外部 ANN）。
  */
 'use strict';
 
@@ -14,6 +16,7 @@ const path = require('path');
 const { shouldSkipDir, isBinaryFileName } = require('../tools/toolFiles.cjs');
 const { globToRegExp } = require('../tools/impl/shared.cjs');
 const { createEmbedder, cosine } = require('../embedder/index.cjs');
+const { createVectorStore, normalizeBackend } = require('../vectorStore/index.cjs');
 
 const DEFAULTS = Object.freeze({
   enabled: true,
@@ -34,7 +37,16 @@ const DEFAULTS = Object.freeze({
   embedKey: '',
   embedTopK: 40,
   vectorWeight: 0.35,
+  vectorStore: 'memory',
+  milvusAddress: '',
+  milvusToken: '',
+  milvusUsername: '',
+  milvusPassword: '',
+  milvusCollection: '',
 });
+
+/** 纯语义命中（BM25 未召回、仅由向量后端带回）并入结果的最小 rankScore 贡献，避免灌入无关行。 */
+const VECTOR_ONLY_MIN_CONTRIBUTION = 1;
 
 const EXTRA_IGNORED_DIRS = new Set([
   '.codenode',
@@ -121,6 +133,14 @@ function normalizeOptions(options) {
     embedKey: String(o.embedKey || '').trim(),
     embedTopK: clampInteger(o.embedTopK, DEFAULTS.embedTopK, 5, 500),
     vectorWeight: clampNumber(o.vectorWeight, DEFAULTS.vectorWeight, 0, 1),
+    vectorStore: normalizeBackend(o.vectorStore),
+    milvusAddress: String(o.milvusAddress || '').trim(),
+    milvusToken: String(o.milvusToken || '').trim(),
+    milvusUsername: String(o.milvusUsername || '').trim(),
+    milvusPassword: String(o.milvusPassword || '').trim(),
+    milvusCollection: String(o.milvusCollection || '').trim(),
+    // 仅供测试注入向量后端客户端（真实运行时不使用）
+    vectorStoreClient: o.vectorStoreClient || null,
   };
 }
 
@@ -335,8 +355,20 @@ class LocalRagIndex {
     this.chunks = [];
     this.lastRefresh = null;
     this.embedder = null;
-    this.chunkVectors = new Map();
+    this.vectorStore = null;
+    this.vectorStoreFatal = null;
+    this.vectorStoreChange = null;
+    this.lastVectorError = null;
+    this.pendingChange = { deleted: [], upserted: [] };
+    this.chunkById = new Map();
     this.stats = { indexedFiles: 0, chunks: 0, skippedFiles: 0, changedFiles: 0, removedFiles: 0, invalidatedFiles: 0, truncated: false };
+  }
+
+  /** 进程内记忆化向量表（仅 memory 后端有内容；milvus 后端返回空表，供诊断/测试观察）。 */
+  get chunkVectors() {
+    /** @type {any} */
+    const store = this.vectorStore;
+    return store && store.kind === 'memory' ? store.vectors : new Map();
   }
 
   ensureEmbedder() {
@@ -350,40 +382,70 @@ class LocalRagIndex {
     return this.embedder;
   }
 
-  async chunkVector(chunk) {
-    let vec = this.chunkVectors.get(chunk.id);
-    if (!vec) {
-      const emb = this.ensureEmbedder();
-      if (!emb) return null;
-      const [computed] = await emb.embed([chunk.path + '\n' + chunk.content]);
-      if (!computed) return null;
-      this.chunkVectors.set(chunk.id, computed);
-      vec = computed;
+  /** 惰性装配向量后端。embedProvider=none 或装配失败 → null（向量层整体退化，检索仍可走 BM25）。 */
+  ensureVectorStore() {
+    if (this.vectorStore || this.vectorStoreFatal) return this.vectorStore;
+    if ((this.options.embedProvider || 'none').toLowerCase() === 'none') return null;
+    try {
+      this.vectorStore = createVectorStore({
+        backend: this.options.vectorStore,
+        root: this.root,
+        dim: this.options.embedDim,
+        topK: this.options.embedTopK,
+        address: this.options.milvusAddress,
+        token: this.options.milvusToken,
+        username: this.options.milvusUsername,
+        password: this.options.milvusPassword,
+        collection: this.options.milvusCollection,
+        client: this.options.vectorStoreClient || null,
+      });
+    } catch (error) {
+      this.vectorStoreFatal = (error && error.message) || String(error);
+      this.vectorStore = null;
     }
-    return vec;
+    return this.vectorStore;
   }
 
-  /** 查询向量 vs 候选块向量的余弦相似度。local 提供方按块记忆化；API 提供方批量一次请求。 */
-  async vectorScores(query, candidates) {
-    const emb = this.ensureEmbedder();
-    if (!emb || !candidates.length) return new Map();
-    const out = new Map();
-    if (emb.isLocal()) {
-      const [queryVec] = await emb.embed([query]);
-      if (!queryVec) return out;
-      for (const chunk of candidates) {
-        const vec = await this.chunkVector(chunk);
-        if (vec) out.set(chunk.id, Math.max(0, cosine(queryVec, vec)));
-      }
-    } else {
-      const vectors = await emb.embed([query, ...candidates.map((chunk) => chunk.path + '\n' + chunk.content)]);
-      const queryVec = vectors[0];
-      for (let i = 0; i < candidates.length; i++) {
-        const vec = vectors[i + 1];
-        if (queryVec && vec) out.set(candidates[i].id, Math.max(0, cosine(queryVec, vec)));
-      }
+  /** 取/算单块向量（memory 后端记忆化；milvus 后端向量在服务端，返回 null）。 */
+  async chunkVector(chunk) {
+    const store = this.ensureVectorStore();
+    if (!store) return null;
+    return store.chunkVector(chunk, this.ensureEmbedder());
+  }
+
+  /** 把 refresh() 期间收集的文件增删落到向量后端（memory 后端无外部写入 → 空操作）。 */
+  async syncVectorStore() {
+    const store = this.ensureVectorStore();
+    const change = this.pendingChange;
+    this.pendingChange = { deleted: [], upserted: [] };
+    if (!store || (!change.deleted.length && !change.upserted.length)) return null;
+    try {
+      const applied = await store.applyChanges(change, this.ensureEmbedder());
+      this.vectorStoreChange = applied || this.vectorStoreChange;
+      this.lastVectorError = null;
+      return applied;
+    } catch (error) {
+      // 运行期失败（服务不可用/维度不一致）不固化：下一次检索仍会重试，但本次降级为纯 BM25
+      this.lastVectorError = (error && error.message) || String(error);
+      return null;
     }
-    return out;
+  }
+
+  /** 向量层诊断（含后端自身计数与降级原因），供 stats/工具输出使用。 */
+  async vectorDiagnostics() {
+    const store = this.vectorStore;
+    if (this.vectorStoreFatal) {
+      return { provider: this.options.embedProvider, backend: this.options.vectorStore, error: this.vectorStoreFatal };
+    }
+    if (!store) return null;
+    /** @type {any} */
+    let own = null;
+    try {
+      own = await store.stats();
+    } catch (error) {
+      own = { backend: store.kind, error: (error && error.message) || String(error) };
+    }
+    return { ...own, error: this.lastVectorError || (own && own.error) || undefined };
   }
 
   accepts(relative, size) {
@@ -440,6 +502,11 @@ class LocalRagIndex {
         signature,
         chunks: splitIntoChunks(item.relative, text, this.options.chunkLines, this.options.chunkOverlap),
       });
+      // 只有「本次重新分块」的文件才需要写入外部向量后端（未变文件复用已有向量）
+      const freshChunks = this.fileCache.get(item.relative).chunks;
+      for (const chunk of freshChunks) {
+        this.pendingChange.upserted.push({ id: chunk.id, path: chunk.path, text: chunk.path + '\n' + chunk.content });
+      }
       this.dirtyFiles.delete(item.relative);
       changedFiles++;
     }
@@ -456,6 +523,7 @@ class LocalRagIndex {
 
     this.forceRefresh = false;
     this.chunks = [...this.fileCache.values()].flatMap((entry) => entry.chunks);
+    this.chunkById = new Map(this.chunks.map((chunk) => [chunk.id, chunk]));
     this.lastRefresh = new Date().toISOString();
     this.stats = {
       indexedFiles: this.fileCache.size,
@@ -473,7 +541,18 @@ class LocalRagIndex {
 
   dropFileVectors(relative) {
     const previous = this.fileCache.get(relative);
-    for (const chunk of previous ? previous.chunks : []) this.chunkVectors.delete(chunk.id);
+    if (!previous) return;
+    const chunkIds = previous.chunks.map((chunk) => chunk.id);
+    // 同步清理进程内记忆化（refresh() 保持同步语义；memory 后端有实际作用，milvus 为 no-op）
+    if (this.vectorStore) {
+      try {
+        this.vectorStore.dropLocal(relative, chunkIds);
+      } catch (error) {
+        this.lastVectorError = (error && error.message) || String(error);
+      }
+    }
+    // 外部后端（milvus）的删除由 syncVectorStore() 异步执行
+    this.pendingChange.deleted.push({ relative, chunkIds });
   }
 
   scopedCandidates(options) {
@@ -546,6 +625,8 @@ class LocalRagIndex {
     const opts = options || {};
     const started = Date.now();
     const stats = this.refresh(opts.refresh === true);
+    // 外部向量后端（milvus）在 refresh 期间只收集增删，这里落库后再检索
+    const vectorChange = await this.syncVectorStore();
     const mode = String(opts.mode || 'auto').toLowerCase();
     const queries = normalizeQueries(query, opts.queries, this.options.maxQueries);
     if (!queries.length || this.chunks.length === 0) {
@@ -586,20 +667,48 @@ class LocalRagIndex {
     });
 
     const ranked = [...fused.values()];
-    // 向量层：对 BM25 预筛的候选做语义余弦，按 mode 调节融合权重（local 默认本地哈希向量）
-    let vectorScoresMap = new Map();
     const provider = (this.options.embedProvider || 'none').toLowerCase();
     const vectorEnabled = provider !== 'none' && (mode === 'auto' || mode === 'hybrid' || mode === 'vector');
-    if (vectorEnabled) {
-      const topCandidates = ranked.slice(0, this.options.embedTopK).map((item) => item.chunk);
+    const vectorWeight = mode === 'vector' ? 1 : mode === 'file' ? 0 : this.options.vectorWeight;
+    // 向量层：memory 后端只对 BM25 预筛候选打分；milvus 后端走全库 ANN，命中可能不在 BM25 候选内
+    let vectorScoresMap = new Map();
+    let vectorOnly = 0;
+    let vectorError = null;
+    const vectorStore = vectorEnabled ? this.ensureVectorStore() : null;
+    if (vectorEnabled && vectorStore) {
       try {
-        vectorScoresMap = await this.vectorScores(queries[0], topCandidates);
-      } catch {
+        if (vectorStore.prefiltered) {
+          const topCandidates = ranked.slice(0, this.options.embedTopK).map((item) => item.chunk);
+          vectorScoresMap = await vectorStore.scoreCandidates(queries[0], topCandidates, this.ensureEmbedder());
+        } else {
+          vectorScoresMap = await vectorStore.scoreCandidates(queries[0], null, this.ensureEmbedder());
+          const known = new Set(ranked.map((item) => item.chunk.id));
+          for (const [id, score] of vectorScoresMap) {
+            if (known.has(id)) continue;
+            const chunk = this.chunkById.get(id);
+            // 纯语义命中（BM25 完全未召回）：仅在其融合贡献足够时才并入，避免灌入无关行
+            if (!chunk || score * 100 * vectorWeight < VECTOR_ONLY_MIN_CONTRIBUTION) continue;
+            known.add(id);
+            ranked.push({
+              chunk,
+              fusion: 0,
+              score: 0,
+              coverage: 0,
+              exactPhrase: false,
+              matchedQueries: [],
+              matchedTerms: new Set(),
+              vectorOnly: true,
+            });
+            vectorOnly += 1;
+          }
+        }
+        this.lastVectorError = null;
+      } catch (error) {
         vectorScoresMap = new Map();
+        vectorError = (error && error.message) || String(error);
+        this.lastVectorError = vectorError;
       }
     }
-    const vectorWeight =
-      mode === 'vector' ? 1 : mode === 'file' ? 0 : this.options.vectorWeight;
     for (const item of ranked) {
       item.vectorScore = vectorScoresMap.get(item.chunk.id) || 0;
       item.rankScore =
@@ -631,6 +740,7 @@ class LocalRagIndex {
         fusionScore: Number(item.rankScore.toFixed(4)),
         coverage: Number(item.coverage.toFixed(4)),
         exactPhrase: item.exactPhrase,
+        vectorOnly: item.vectorOnly === true,
         vectorScore: Number(item.vectorScore.toFixed(4)),
         matchedQueries: [...new Set(item.matchedQueries)],
         matchedTerms: [...item.matchedTerms].slice(0, 16),
@@ -654,6 +764,7 @@ class LocalRagIndex {
     }
 
     const quality = confidenceFor(chosen, queryRuns, this.options.minCoverage);
+    const vectorStats = await this.vectorDiagnostics();
     return {
       query: queries[0],
       queries,
@@ -665,9 +776,16 @@ class LocalRagIndex {
         fusedCandidates: ranked.length,
         vector: {
           provider: vectorEnabled ? this.options.embedProvider : 'none',
+          backend: vectorEnabled && this.vectorStore ? this.vectorStore.kind : 'none',
+          prefiltered: vectorEnabled && this.vectorStore ? this.vectorStore.prefiltered : null,
           weight: vectorWeight,
           rankedWithVector: vectorScoresMap.size,
-        },        retrievalDurationMs: Date.now() - started,
+          vectorOnly,
+          applied: vectorChange || undefined,
+          store: vectorStats || undefined,
+          error: vectorError || (vectorStats && vectorStats.error) || undefined,
+        },
+        retrievalDurationMs: Date.now() - started,
       },
     };
   }
@@ -676,7 +794,10 @@ class LocalRagIndex {
 const INDEX_CACHE = new Map();
 
 function cacheKey(root, options) {
-  return path.resolve(root || '.') + '\n' + JSON.stringify(normalizeOptions(options));
+  const normalized = normalizeOptions(options);
+  // 注入的测试客户端不参与缓存键（同一工程 + 同一配置应复用同一索引）
+  delete normalized.vectorStoreClient;
+  return path.resolve(root || '.') + '\n' + JSON.stringify(normalized);
 }
 
 function getProjectIndex(root, options) {
@@ -701,6 +822,17 @@ function invalidateProjectIndex(root, relative) {
 }
 
 function clearIndexCache() {
+  // 顺带关闭外部向量后端连接（memory 后端为 no-op；注入的测试客户端不关闭）
+  for (const index of INDEX_CACHE.values()) {
+    const store = index.vectorStore;
+    if (!store || typeof store.close !== 'function') continue;
+    try {
+      const pending = store.close();
+      if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+    } catch {
+      /* 关闭失败不影响缓存清理 */
+    }
+  }
   INDEX_CACHE.clear();
 }
 

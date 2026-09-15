@@ -27,6 +27,7 @@ const CORE = [
   'test:scope-frame',
   'test:undo',
   'test:scalar',
+  'test:vector-store',
   'test:agent-reliability',
   'test:agent-boundary',
   'test:bridge',

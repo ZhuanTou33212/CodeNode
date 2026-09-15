@@ -86,13 +86,14 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 ### Agentic RAG（本地项目检索）
 - Agent 可把主问题、符号名、业务词和技术词作为多个查询，一次完成 RRF 融合排序
 - 本地增量索引复用未变化分块；文件工具写入后显式失效，外部变化由 mtime 自动发现
-- BM25 + 路径/短语/覆盖率排序 + 可插拔向量层（默认 local 确定性哈希向量，可切 openai/ollama），覆盖源码符号、自然语言与中文，无需向量数据库或云服务
+- BM25 + 路径/短语/覆盖率排序 + 可插拔向量层（默认 local 确定性哈希向量，可切 openai/ollama），覆盖源码符号、自然语言与中文，默认无需向量数据库或云服务
+- 向量后端可插拔（`rag.vector_store`）：默认 `memory`（进程内记忆化 + BM25 预筛打分）；可切 `milvus` 外部服务走全库 ANN（需 `npm i @zilliz/milvus2-sdk-node`，命中含纯语义结果并标注 `vector-only`；服务不可用时自动降级为纯 BM25 并在结果中显式告警）
 - `retrieve_context` 支持 `mode=auto/file/vector/hybrid/scalar`：scalar 模式走本地标量精确查询，vector/hybrid 把向量余弦分融合进排序
 - 返回高/中/低可信度、查询覆盖率、候选规模与 `path#Lx-Ly` 来源锚点
 - 低可信度会驱动 Agent 改写查询、限定目录或深读文件，不会强行把弱结果当答案
 - 检索片段被标记为不可信数据，项目文件内的提示注入不会被当作 Agent 指令
 - 默认硬排除 `.env`、SSH/证书密钥、凭据、`.codenode` 记录、依赖与构建产物
-- `rag.include` / `rag.exclude` 可配置范围，其他 `rag.*` 控制分块、Top-K、查询数、质量门槛与向量层（`rag.embed_provider/dim/model/base/key/top_k/vector_weight`）
+- `rag.include` / `rag.exclude` 可配置范围，其他 `rag.*` 控制分块、Top-K、查询数、质量门槛与向量层（`rag.embed_provider/dim/model/base/key/top_k/vector_weight`）与向量后端（`rag.vector_store/milvus_address/milvus_collection/milvus_token/milvus_username/milvus_password`）
 
 ### 本地标量（画布精准数据，不入云）
 - 画布节点的完整属性（name/label/prompt/goal/members/filePath 等）在画布工具执行时写入工程 `.codenode/scalars.json`，不随工具结果返回云端
@@ -213,6 +214,8 @@ node scripts/rag-test.cjs
 node scripts/rag-grounding-test.cjs
 # 标量库 / 可插拔向量 / 子代理压缩 端到端测试
 node scripts/scalar-vector-test.cjs
+# 向量后端（memory 默认 + Milvus 适配器 / 降级 / vector-only）测试
+node scripts/vector-store-test.cjs
 # 画布节点读写一致性（缓存失效）回归测试
 node scripts/cache-consistency-test.cjs
 # 画布-会话解耦（就地修改 vs 新开画布 / 不复活已删节点）回归测试

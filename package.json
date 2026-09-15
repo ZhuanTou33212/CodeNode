@@ -16,6 +16,7 @@
     "build": "tsc --noEmit && vite build",
     "test:rag": "node scripts/rag-test.cjs && node scripts/rag-grounding-test.cjs",
     "test:scalar": "node scripts/scalar-vector-test.cjs",
+    "test:vector-store": "node scripts/vector-store-test.cjs",
     "test:undo": "node scripts/graph-undo-test.cjs",
     "test:cache": "node scripts/cache-consistency-test.cjs",
     "test:session": "node scripts/session-canvas-test.cjs",
