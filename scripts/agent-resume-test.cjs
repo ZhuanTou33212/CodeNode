@@ -42,7 +42,7 @@ fs.writeFileSync(path.join(root, 'note.txt'), 'hello resume\n');
 
 let fetchStub = null;
 
-function makeContext(runId, { scopeRunId, onIntent, onCommit } = {}) {
+function makeContext(runId, /** @type {{ scopeRunId?: string, onIntent?: Function, onCommit?: Function }} */ { scopeRunId, onIntent, onCommit } = {}) {
   const ledger = new SideEffectLedger({ projectRoot: root, scopeRunId: scopeRunId || runId });
   const guard = createGuard(ledger);
   const events = [];
@@ -94,7 +94,7 @@ function cfgFor() {
   };
 }
 
-async function runTurn({ runId, script, scopeRunId, hooks, signal, loopLast }) {
+async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: string, hooks?: any, signal?: AbortSignal, loopLast?: boolean }} */ { runId, script, scopeRunId, hooks, signal, loopLast }) {
   const { context, ledger } = makeContext(runId, { scopeRunId, ...(hooks || {}) });
   const registry = makeRegistry();
   fetchStub = installScriptedModel(script, { loopLast: loopLast !== false });

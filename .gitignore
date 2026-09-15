@@ -13,5 +13,8 @@ docs/eval-reports/
 .codenode-selftest/
 .codenode/tmp-sandbox/
 
+# 运行时流水日志：跑一次测试就会追加，入库只会污染每次提交
+.codenode/tools_trace.jsonl
+
 # 生成物：右侧侧栏 UI 校验截图（scripts/side-panel-check.cjs 输出）
 /out/

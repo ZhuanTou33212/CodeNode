@@ -40,7 +40,7 @@ function compile() {
 }
 compile();
 process.env.NODE_PATH = path.join(PROJECT, 'node_modules');
-require('module').Module._initPaths();
+/** @type {any} */ (require('module').Module)._initPaths();
 
 const { useGraphStore } = require(path.join(OUT, 'store', 'graphStore.js'));
 const { useSessionStore } = require(path.join(OUT, 'store', 'sessionStore.js'));

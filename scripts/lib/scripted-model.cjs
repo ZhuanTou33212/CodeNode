@@ -52,11 +52,12 @@ function buildStream(turn) {
 
 /**
  * 安装脚本化模型。
- * @returns {{ calls: number, seen: Array, restore: Function }}
+ * @returns {{ calls: number, seen: Array<any>, restore: Function, state: any }}
  */
 function installScriptedModel(script, options = {}) {
   const originalFetch = global.fetch;
   const state = { calls: 0, seen: [], script, loopLast: options.loopLast !== false };
+  // @ts-expect-error 评测用脚本化 fetch 只实现被测代码用到的字段，不是完整 Response
   global.fetch = async (url, init) => {
     state.calls += 1;
     let body = {};

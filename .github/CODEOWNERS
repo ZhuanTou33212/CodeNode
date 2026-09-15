@@ -1,0 +1,14 @@
+# CodeNode 默认评审人
+# 单人维护项目：全部路径归 owner；后续若拆模块，可按目录指定不同 owner。
+* @yimi528
+
+# 生产门禁、执行隔离、发布签名属于高风险区：改动必须走 PR 评审（即使是 owner 也建议留 PR 记录）
+/.github/ @yimi528
+/electron/sandbox.cjs @yimi528
+/electron/costLedger.cjs @yimi528
+/electron/alerts.cjs @yimi528
+/electron/runCheckpoint.cjs @yimi528
+/electron/sideEffects.cjs @yimi528
+/scripts/runtime-gate.cjs @yimi528
+/scripts/sandbox-test.cjs @yimi528
+/scripts/release-sign.cjs @yimi528

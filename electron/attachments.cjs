@@ -30,8 +30,10 @@ function parseDataUrl(dataUrl) {
 }
 
 /**
- * 校验并规范化附件数组。
- * @returns {{ ok: true, attachments: {mime:string, dataUrl:string, name?:string, bytes:number}[] } | { ok: false, error: string }}
+ * 校验并归一化图片附件。失败分支带 error，成功分支带 attachments（旧实现的联合类型会让调用方
+ * 必须先用 ok 收窄，TS 反而判为不可访问，这里统一成可选字段）。
+ * @param {any} input
+ * @returns {{ ok: boolean, attachments?: Array<{ mime: string, dataUrl: string, name?: string, bytes: number }>, error?: string }}
  */
 function normalizeAttachments(input) {
   if (input == null) return { ok: true, attachments: [] };
@@ -69,6 +71,7 @@ function normalizeAttachments(input) {
 function buildUserMessage(text, attachments) {
   const list = Array.isArray(attachments) ? attachments : [];
   if (!list.length) return { role: 'user', content: String(text ?? '') };
+  /** @type {Array<{ type: string, text?: string, image_url?: { url: string } }>} */
   const parts = [{ type: 'text', text: String(text ?? '') }];
   for (const a of list) {
     if (a && a.dataUrl) parts.push({ type: 'image_url', image_url: { url: a.dataUrl } });

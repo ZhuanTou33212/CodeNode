@@ -31,6 +31,7 @@ function loadConfig(projectRoot) {
   const projectCfg = projectRoot
     ? loadProperties(path.join(projectRoot, '.codenode', 'agent.properties'))
     : {};
+  /** @type {Record<string, string>} */
   const cfg = { ...globalCfg, ...projectCfg };
   return {
     apiBase: (cfg.api_base || 'https://api.deepseek.com').replace(/\/+$/, ''),
@@ -344,6 +345,11 @@ function maxAttemptsFor(cfg) {
   return Math.max(1, Math.min(5, Number(attempts) || 3));
 }
 
+/**
+ * @param {any} cfg
+ * @param {Array<any>} messages
+ * @param {{ signal?: AbortSignal, tools?: any, timeoutMs?: number }} [options]
+ */
 async function chatCompletion(cfg, messages, options = {}) {
   // attemptsRef：真实尝试次数，供预算按实际重试次数补偿输入（而不是按上限倍数放大）
   const attemptsRef = { count: 0 };
@@ -357,6 +363,11 @@ async function chatCompletion(cfg, messages, options = {}) {
     ));
 }
 
+/**
+ * @param {any} cfg
+ * @param {Array<any>} messages
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, attemptsRef?: { count: number } }} [options]
+ */
 async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
@@ -387,10 +398,9 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
             await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
             continue;
           }
-          const error = new Error(message);
-          error.retryable = false;
-          throw error;
+          throw Object.assign(new Error(message), { retryable: false });
         }
+        /** @type {any} */
         const data = await res.json();
         const msg = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message : null;
         return {
@@ -416,7 +426,7 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
  * 构建 /chat/completions 请求体：模型 + 消息 + 推理强度 + 工具参数。
  * DeepSeek V4 全部支持 thinking 模式，reasoning_effort 始终随配置下发。
  */
-function chatBody(cfg, messages, { stream, tools } = {}) {
+function chatBody(cfg, messages, /** @type {{ stream?: boolean, tools?: any }} */ { stream, tools } = {}) {
   const body = {
     model: cfg.model,
     messages,
@@ -449,6 +459,12 @@ async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
     ));
 }
 
+/**
+ * @param {any} cfg
+ * @param {Array<any>} messages
+ * @param {(event: any) => void} onEvent
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, tools?: any, attemptsRef?: { count: number } }} [options]
+ */
 async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
@@ -480,9 +496,7 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, ti
           await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
           continue;
         }
-        const error = new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-        error.retryable = false;
-        throw error;
+        throw Object.assign(new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`), { retryable: false });
       } catch (error) {
         if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
         await waitForRetry(retryDelay(cfg, attempt), controller.signal);
@@ -799,7 +813,7 @@ function mergeUsage(previous, next) {
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
  *   timeoutMs     单轮超时（默认 180s）
- * @returns {Promise<{content,reasoning,toolCalls,usage,error?}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, grounding?: any, steps?: number, toolCount?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
   onDelta && onDelta({ kind: 'start' });

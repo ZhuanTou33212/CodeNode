@@ -80,7 +80,8 @@ function scoreScalarEntry(key, entry, searchable, qLower, terms) {
   }
   for (const [attr, aliases] of ATTR_ALIASES) {
     if (!keyLower.endsWith(':' + attr)) continue;
-    if (aliases.some((alias) => qLower.includes(alias))) score += 60;
+    const aliasList = Array.isArray(aliases) ? aliases : [aliases];
+    if (aliasList.some((alias) => qLower.includes(alias))) score += 60;
   }
   if (/^node:[\w-]+:label$/.test(keyLower) && terms.some((term) => searchable.text === term)) score += 50;
   return { score, matchedTerms, exact };
@@ -198,7 +199,9 @@ class ScalarStore {
 
   /** 精确 key 优先；无精确命中时按 prefix 前缀匹配。
    * 兼容写法：prefix=node:<部分id> 严格前缀无命中时，会按「同类型 key 的 id 是否包含该片段」回退，
-   * 从而命中 node:start-<部分id>-xxxx（修复“节点明明存在却查不到”的误判）。 */
+   * 从而命中 node:start-<部分id>-xxxx（修复“节点明明存在却查不到”的误判）。
+   * @param {{ key?: string, prefix?: string, max?: number }} [options]
+   */
   query({ key, prefix, max } = {}) {
     this.load();
     const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : 50;
@@ -297,6 +300,7 @@ class ScalarStore {
    * 语义搜索：无需知道精确 key，按名字/具体数据/prompt 等自然语言匹配标量记录。
    * 返回 [{ key, kind, value, ts, score, matchedTerms, exact }]，按分数降序。
    * 精确 key 命中（node:n1 等）会获得极高分数并被标记 exact=true。
+   * @param {{ query?: string, max?: number, minScore?: number, kinds?: string[] }} [options]
    */
   search({ query, max, minScore, kinds } = {}) {
     this.load();

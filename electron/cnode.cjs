@@ -160,6 +160,10 @@ function safeStringify(value) {
 }
 
 // ---------- 编码 ----------
+/**
+ * 编码 .cnode。manifest / canvases / checkpoints 允许缺省（新建空白工程、发布自检里的最小工程都会只给 graph）。
+ * @param {{ manifest?: any, graph?: any, workspace?: any, canvases?: any, checkpoints?: any }} payload
+ */
 function encodeCnode({ manifest, graph, workspace, canvases, checkpoints }) {
   const m = defaultManifest(manifest);
   const g = { revision: (graph && graph.revision) || 1, nodes: (graph && graph.nodes) || [], edges: (graph && graph.edges) || [] };

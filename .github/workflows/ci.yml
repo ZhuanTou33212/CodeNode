@@ -1,8 +1,9 @@
 name: CodeNode CI
 
+# 触发：所有分支的 push、所有 PR、手动触发。
+# 不再写死分支名——历史上这里写死过 n0_12，分支一改名 CI 就静默失效了（门禁形同虚设）。
 on:
   push:
-    branches: ["n0_12"]
   pull_request:
   workflow_dispatch:
 
@@ -26,7 +27,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 版本单一来源：.nvmrc（与 package.json engines 保持一致）
+          node-version-file: .nvmrc
           cache: npm
       - name: 安装依赖（package-lock.json 可用，使用 npm ci）
         run: npm ci
@@ -36,14 +38,10 @@ jobs:
       - name: 构建（Windows / macOS）
         if: runner.os != 'Linux'
         run: npm run build
-      - name: 回归：画布 / 工作台模型 / 缓存 / 容器 / 范围 / 撤销 / 标量
-        run: npm run test:session && npm run test:arrange && npm run test:model && npm run test:cache && npm run test:container && npm run test:scope-frame && npm run test:undo && npm run test:scalar
-      - name: 回归：Agent 边界 / 可靠性 / 取消 / 预算 / Run 日志 / 原子写 / 子代理
-        run: npm run test:agent-reliability && npm run test:agent-boundary && npm run test:bridge && npm run test:request-budget && npm run test:run-store && npm run test:atomic-file && npm run test:subagent
-      - name: 回归：安全 / 检索 / shell 分页 / 后台任务
-        run: npm run test:security && npm run test:rag && npm run test:shell-output && npm run test:bg
-      - name: 门禁：production-gate + Agent 多步评测（离线确定性模式，无网络）
-        run: npm run test:production-gate && npm run test:eval
+      - name: 静态检查（Electron 主进程 / 工具层 / 脚本，checkJs）
+        run: npm run check:js
+      - name: 回归 + 门禁（统一入口：含 production-gate / runtime-gate / 执行隔离 / 断点续跑 / 成本账本 / Agent 评测）
+        run: npm test
       - name: 上传评测报告（JSON + Markdown，绑定 commit/模型/参数/数据集版本）
         if: always()
         uses: actions/upload-artifact@v4
@@ -76,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: ${{ matrix.command }}

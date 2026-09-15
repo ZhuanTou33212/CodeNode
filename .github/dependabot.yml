@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # 运行时/构建依赖：每周检查，补丁与小版本合并成一个 PR，避免 PR 噪音
+  - package-ecosystem: npm
+    directory: '/'
+    target-branch: main
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ['minor', 'patch']
+    commit-message:
+      prefix: 'chore(deps)'
+    labels: ['dependencies']
+
+  # Actions 版本（actions/checkout、setup-node、upload-artifact …）
+  - package-ecosystem: github-actions
+    directory: '/'
+    target-branch: main
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'chore(ci)'
+    labels: ['dependencies', 'ci']

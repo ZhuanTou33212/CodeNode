@@ -252,7 +252,7 @@ async function keyOnWindow(cdp, key, ctrl = false, shift = false) {
 async function main() {
   out('▶ 启动无头 Edge…');
   await startBrowser();
-  const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) => r.json());
+  const targets = /** @type {any[]} */ (await fetch(`http://127.0.0.1:${PORT}/json`).then((r) => r.json()));
   const page = targets.find((t) => t.type === 'page');
   const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
   out('▶ 页面已连接，等待应用加载…');

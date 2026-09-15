@@ -210,7 +210,7 @@ function pidAlive(pid) {
     const grandchildPid = Number((/GRANDCHILD (\d+)/.exec(out.stdout) || [])[1] || 0);
     check('已捕获孙进程 pid（用于验证孤儿清理）', grandchildPid > 0, 'grandchildPid=' + grandchildPid);
     // 硬杀 broker：模拟 CodeNode 主进程崩溃/被强杀
-    child.killHard();
+    /** @type {any} */ (child).killHard();
     await wait(6000);
     const markerExists = fs.existsSync(marker);
     const stillAlive = grandchildPid > 0 ? pidAlive(grandchildPid) : false;

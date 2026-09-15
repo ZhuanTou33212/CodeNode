@@ -43,13 +43,13 @@ app.whenReady().then(async () => {
     // 框选 a、b
     win.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(minX), y: Math.round(minY), button: 'left', clickCount: 1 });
     for (let i = 1; i <= 12; i++) {
-      win.webContents.sendInputEvent({
+      win.webContents.sendInputEvent(/** @type {any} */ ({
         type: 'mouseMove',
         x: Math.round(minX + ((maxX - minX) * i) / 12),
         y: Math.round(minY + ((maxY - minY) * i) / 12),
         button: 'left',
         buttons: 1,
-      });
+      }));
       await sleep(12);
     }
     win.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(maxX), y: Math.round(maxY), button: 'left', clickCount: 1 });

@@ -214,7 +214,7 @@ function describeStep(step) {
  * - body.stream !== true  → 子代理压缩等非流式调用（返回确定性摘要，不消耗 script 步数）
  * 任何非评测目标的网络地址都会被记录为 unexpected（用于「离线模式没有真实联网」自检）。
  */
-function createScriptedTransport({ task, apiBase, onStep }) {
+function createScriptedTransport(/** @type {{ task: any, apiBase: string, onStep?: Function }} */ { task, apiBase, onStep }) {
   const usage = { ...DEFAULT_USAGE, ...(task.usage || {}) };
   const stats = { streamRequests: 0, nonStreamRequests: 0, unexpectedUrls: [], steps: [], exhausted: 0 };
   let mainStep = 0;

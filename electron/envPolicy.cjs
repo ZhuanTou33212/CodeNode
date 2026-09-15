@@ -5,6 +5,12 @@ const SAFE_ENV_KEYS = new Set([
   'LOCALAPPDATA', 'PROGRAMDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'OS',
   'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS',
 ]);
+/**
+ * 白名单化环境变量：只保留系统必需项 + 显式 extra / allowlist，避免把父进程的密钥透传给子进程。
+ * @param {Record<string, string|undefined>} [extra]
+ * @param {string[]} [allowlist]
+ * @returns {Record<string, string>}
+ */
 function safeEnvironment(extra = {}, allowlist = []) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) if (SAFE_ENV_KEYS.has(key)) env[key] = value;

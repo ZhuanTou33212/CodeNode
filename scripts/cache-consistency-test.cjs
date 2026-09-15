@@ -49,8 +49,8 @@ const server = http.createServer((req, res) => {
 });
 
 async function main() {
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(null)));
+  const port = /** @type {import('net').AddressInfo} */ (server.address()).port;
 
   const model = new GraphModel({ root: { nodes: [], edges: [] } });
   const registry = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true });

@@ -24,8 +24,8 @@ async function main() {
     else if (req.url === '/slow') { res.writeHead(200); res.flushHeaders(); }
     else { res.end('fixture-ok'); }
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(null)));
+  const port = /** @type {import('net').AddressInfo} */ (server.address()).port;
   let resolutions = 0;
   let requests = 0;
   const module = { exports: {} };

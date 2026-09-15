@@ -5,6 +5,9 @@
   "author": "yimi528 <2534311904@qq.com>",
   "description": "CodeNode Agent 工作台：画布、工具循环与本地 Agentic RAG",
   "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite",
@@ -31,6 +34,7 @@
     "test:agent-boundary": "node scripts/agent-boundary-test.cjs",
     "test:request-budget": "node scripts/request-budget-test.cjs",
     "test:atomic-file": "node scripts/atomic-file-test.cjs",
+    "test:runtime-gate": "node scripts/runtime-gate.cjs",
     "test:sandbox": "node scripts/sandbox-test.cjs",
     "test:resume": "node scripts/agent-resume-test.cjs",
     "test:cost": "node scripts/cost-monitor-test.cjs",
@@ -40,6 +44,11 @@
     "test:eval:list": "node scripts/agent-eval.cjs --list",
     "test:provider-smoke": "node scripts/provider-smoke.cjs",
     "test:vector": "node scripts/vector-ui-test.cjs",
+    "test": "node scripts/run-all-tests.cjs",
+    "test:display": "node scripts/run-all-tests.cjs --group display",
+    "test:list": "node scripts/run-all-tests.cjs --list",
+    "check:js": "tsc -p tsconfig.checkjs.json",
+    "verify": "npm run build && npm run check:js && npm test",
     "start": "node scripts/run-electron.cjs .",
     "start:prod": "npm run build && node scripts/run-electron.cjs .",
     "launcher": "node scripts/make-launcher.cjs",
@@ -47,6 +56,8 @@
     "dist:mac": "node scripts/build-release.cjs mac",
     "dist:linux": "node scripts/build-release.cjs linux",
     "dist": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs",
+    "release:sign": "node scripts/release-sign.cjs",
+    "release:hash": "node scripts/release-sign.cjs --no-sign",
     "icons:build": "electron scripts/build-icon-v3.cjs",
     "postbuild": "npm run icons:build"
   },
@@ -112,6 +123,7 @@
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@types/node": "^22.20.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",

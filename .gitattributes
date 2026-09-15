@@ -1,0 +1,18 @@
+# 行尾统一为 LF：仓库里的 .cjs/.ts/.md 曾经是 CRLF 与 LF 混杂
+# （164 CRLF + 14 LF），Windows 与 macOS 两台机器协同会出现整文件 diff。
+* text=auto eol=lf
+
+# 二进制资源：不做行尾转换（也让 diff 正确识别为 binary）
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.asar binary
+*.pak binary
+*.bin binary
+*.cnode binary
+
+# 生成的评测报告与临时产物不纳入 diff 噪音
+docs/eval-reports/** linguist-generated=true
+package-lock.json -diff linguist-generated=true

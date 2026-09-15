@@ -113,7 +113,7 @@ class Embedder {
   _report(kind, model, usage, startedAt) {
     if (!this.onUsage) return;
     try {
-      this.onUsage({ kind: kind || 'embedding', model, usage: usage || null, latencyMs: Date.now() - startedAt, runId: this.runId || null });
+      this.onUsage({ kind: kind || 'embedding', model, usage: usage || null, latencyMs: Date.now() - startedAt, runId: /** @type {any} */ (this).runId || null });
     } catch {}
   }
 
@@ -154,6 +154,7 @@ class Embedder {
       const text = await res.text().catch(() => '');
       throw new Error('openai 嵌入 HTTP ' + res.status + ': ' + text.slice(0, 200));
     }
+    /** @type {any} */
     const data = await res.json();
     if (settle) settle(data.usage || null);
     this._report('embedding', this.model || 'text-embedding-3-small', data.usage || null, startedAt);
@@ -180,6 +181,7 @@ class Embedder {
         const body = await res.text().catch(() => '');
         throw new Error('ollama 嵌入 HTTP ' + res.status + ': ' + body.slice(0, 200));
       }
+      /** @type {any} */
       const data = await res.json();
       out.push(data.embedding || []);
       reported += 1;

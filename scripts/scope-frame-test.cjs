@@ -16,7 +16,7 @@ const result = childProcess.spawnSync(
 );
 if (result.status !== 0) throw new Error(result.stdout || result.stderr || 'scope frame compile failed');
 process.env.NODE_PATH = path.join(PROJECT, 'node_modules');
-require('module').Module._initPaths();
+/** @type {any} */ (require('module').Module)._initPaths();
 
 const { useGraphStore } = require(path.join(OUT, 'store', 'graphStore.js'));
 const mk = (id, type, position, data = {}) => ({

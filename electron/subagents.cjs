@@ -189,7 +189,7 @@ class SubagentManager {
           model: this.cfg.model,
           usage: result.usage,
           runId: this.runId,
-          latencyMs: Date.now() - Date.parse(task.startedAt || Date.now()),
+          latencyMs: Date.now() - (Date.parse(String(task.startedAt || '')) || Date.now()),
           meta: { role, taskId: task.taskId },
         });
       } catch {}

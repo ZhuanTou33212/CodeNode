@@ -70,7 +70,13 @@ function recordCommit(projectRoot, runId, { callId, tool, ok, resultDigest, erro
   });
 }
 
-/** 保存对话快照：续跑时重建上下文用（裁剪 + 截断，只保留可恢复所需的最小信息） */
+/**
+ * 保存对话快照：续跑时重建上下文用（裁剪 + 截断，只保留可恢复所需的最小信息）
+ * @param {any} projectRoot
+ * @param {string} runId
+ * @param {Array<any>} messages
+ * @param {{ reason?: string }} [options]
+ */
 function saveMessages(projectRoot, runId, messages, { reason } = {}) {
   const list = Array.isArray(messages) ? messages : [];
   const trimmed = list
@@ -142,10 +148,39 @@ function lastMessages(checkpoints) {
 }
 
 /**
+ * 续跑计划：失败分支只带 error，成功分支带上下面这些字段（字段含义见 planResume 实现）。
+ * @typedef {Object} ResumePlan
+ * @property {boolean} ok
+ * @property {'complete'|'auto'|'review'|'unknown'} mode
+ * @property {string} [error]
+ * @property {string|null} [reason]
+ * @property {boolean} [requiresReview]
+ * @property {string|null} [warning]
+ * @property {string} [runId]
+ * @property {string} [status]
+ * @property {string} [prompt]
+ * @property {any} [model]
+ * @property {any} [nodeId]
+ * @property {string} [startedAt]
+ * @property {string} [finishedAt]
+ * @property {Array<any>} [completedSteps]
+ * @property {Array<any>} [failedSteps]
+ * @property {Array<any>} [pendingSteps]
+ * @property {Array<any>} [skippedByLedger]
+ * @property {Array<any>} [unknownEffects]
+ * @property {Array<any>} [messages]
+ * @property {number} [checkpointCount]
+ * @property {number} [ledgerCommitted]
+ */
+
+/**
  * 生成续跑计划。
- * @param {object} options
+ * @param {any} projectRoot
+ * @param {string} runId
+ * @param {object} [options]
  *   activeIds: 仍在运行的 runId 集合（这些不该被判为中断）
  *   ledger:    SideEffectLedger（幂等账本），用于把「意图未提交但账本已提交」的写操作判为已完成
+ * @returns {ResumePlan}
  */
 function planResume(projectRoot, runId, options = {}) {
   const events = runStore.readRun(projectRoot, runId);
@@ -236,7 +271,11 @@ function planResume(projectRoot, runId, options = {}) {
   };
 }
 
-/** 构造续跑消息：用检查点里的对话快照 + 明确的续跑指令，不需要用户重述任务 */
+/**
+ * 构造续跑消息：用检查点里的对话快照 + 明确的续跑指令，不需要用户重述任务
+ * @param {ResumePlan} plan
+ * @param {{ systemPrompt?: string }} [options]
+ */
 function buildResumeMessages(plan, { systemPrompt } = {}) {
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });

@@ -102,6 +102,10 @@ function readResponse(url, address, signal, maxBytes) {
   });
 }
 
+/**
+ * @param {string} value
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, maxBytes?: number }} [options]
+ */
 async function fetchPublicText(value, { signal, timeoutMs = 30000, maxBytes = 1024 * 1024 } = {}) {
   const controller = new AbortController();
   const onAbort = () => controller.abort(signal.reason);

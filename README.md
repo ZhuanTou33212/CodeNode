@@ -144,10 +144,11 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 ## 开发运行
 
 ```powershell
-# 需要 Node.js 18+（本项目自带 tool/node，见工作区）
+# 需要 Node.js 22（唯一来源：.nvmrc 与 package.json 的 engines；行尾一律 LF，见 .gitattributes）
 npm install          # 安装依赖
 npm run dev          # 开发模式（Vite HMR + Electron）
 npm run build        # 类型检查 + 构建到 dist/
+npm run verify       # 提交前必跑：build + check:js + 全量回归与门禁
 npm start            # 生产模式（加载 dist/）
 npm start:prod       # 先构建再启动
 ```
@@ -187,6 +188,19 @@ scripts/            冒烟测试
 ```
 
 ## 测试
+
+统一入口（推荐；CI 也走这里，门禁清单只在 `scripts/run-all-tests.cjs` 维护一处）：
+
+```powershell
+npm run verify         # 提交前必跑：build + check:js + core 套件（25 项）
+npm test               # core 套件：无显示环境 / 无网络 / 确定性
+npm run test:display   # 需要窗口或本机浏览器的用例（smoke / RAG UI / 矢量画布）
+npm run test:list      # 打印套件清单
+npm run check:js       # electron/** 与 scripts/** 的 checkJs 静态检查（.cjs 不受 src 的 tsc 覆盖）
+npm test -- --only test:eval,test:sandbox   # 单项排查
+```
+
+单项命令（与上面等价，便于定位）：
 
 ```powershell
 # DOM 冒烟（加载 dist/，校验画布/面板/控件；无 GUI 的 CI 会明确跳过）
