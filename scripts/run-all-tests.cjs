@@ -39,6 +39,7 @@ const CORE = [
   'test:tool-call-id',
   'test:stream-accumulator',
   'test:truncation-safety',
+  'test:agent-state',
   'test:side-effect-idem',
   'test:save-project',
   'test:shell-timeout',

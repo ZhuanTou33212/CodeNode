@@ -49,6 +49,8 @@ class AgentToolContext {
     this.sideEffectGuardValue = o.sideEffectGuard || null;
     // 断点检查点写入器（runCheckpoint.cjs）；未注入时为无操作
     this.checkpointSink = o.checkpoint || null;
+    // 状态上报钩子（由 runAgentChat 注入）：让「等待用户」这类过程状态能被状态机看到
+    this.stateNotifier = null;
   }
 
   projectRoot() {
@@ -71,9 +73,31 @@ class AgentToolContext {
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
     if (level === ConfirmationLevel.LOW) return true;
     if (!this.confirmHandler) return false;
+    // 真正在等用户：上报 WAITING_USER（等待结束后回到 WAITING_TOOL），
+    // 状态机据此区分「卡在等用户」与「正在执行」，UI/续跑判定不再只能看到 running
+    this.notifyState('WAITING_USER', 'confirm:' + String(what || '').slice(0, 80));
     try {
       const approved = await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '');
       return !this.cancelled() && approved === true;
+    } catch {
+      return false;
+    } finally {
+      this.notifyState('WAITING_TOOL', 'confirm_settled');
+    }
+  }
+
+  /** 注入状态上报钩子（runAgentChat 用状态机驱动）；传 null 关闭 */
+  setStateNotifier(fn) {
+    this.stateNotifier = typeof fn === 'function' ? fn : null;
+    return this.stateNotifier;
+  }
+
+  /** 上报过程状态；未注入钩子或钩子报错都只是无操作，绝不影响工具执行 */
+  notifyState(state, reason) {
+    if (!this.stateNotifier) return false;
+    try {
+      this.stateNotifier(String(state), String(reason || ''));
+      return true;
     } catch {
       return false;
     }
@@ -119,10 +143,13 @@ class AgentToolContext {
 
   async askUser(question, options) {
     if (!this.questionHandler) return '';
+    this.notifyState('WAITING_USER', 'ask_user');
     try {
       return await this.questionHandler(question, options || []);
     } catch {
       return '';
+    } finally {
+      this.notifyState('WAITING_TOOL', 'ask_user_settled');
     }
   }
 

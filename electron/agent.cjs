@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const runStore = require('./runStore.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
+const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
@@ -924,10 +925,21 @@ function mergeUsage(previous, next) {
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
  *   timeoutMs     单轮超时（默认 180s）
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, grounding?: any, steps?: number, toolCount?: number}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, steps?: number, toolCount?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
   onDelta && onDelta({ kind: 'start' });
+  // 状态机：把「执行中 / 等工具 / 等用户 / 完成 / 失败 / 取消 / 达上限」显式化，并逐次上报
+  const machine = createStateMachine({
+    runId: (cfg && cfg.costRunId) || null,
+    onTransition: (info) =>
+      onDelta && onDelta({ kind: 'state', state: info.to, previous: info.from, reason: info.reason, ts: info.ts }),
+  });
+  onDelta && onDelta({ kind: 'state', state: machine.state, previous: null, reason: 'start', ts: new Date().toISOString() });
+  // 让工具上下文能把「等待用户」透传进来（子代理 fork 出的上下文不带钩子，由各自 run 自己安装）
+  if (tools && tools.context && typeof tools.context.setStateNotifier === 'function') {
+    tools.context.setStateNotifier((state, reason) => machine.go(state, reason));
+  }
   let content = '';
   let reasoning = '';
   let usage = null;
@@ -945,8 +957,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
       loopIterations = iter + 1;
       if (signal && signal.aborted) {
+        machine.go(STATES.CANCELLED, 'aborted');
         onDelta && onDelta({ kind: 'stopped' });
-        return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
+        return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
       }
       const payload = {
         model: cfg.model,
@@ -1018,10 +1031,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         });
         let capped = false;
         let failedAny = false;
+        machine.go(STATES.WAITING_TOOL, 'tool_calls:' + toolCalls.length);
         for (const tc of toolCalls) {
           if (signal && signal.aborted) {
+            machine.go(STATES.CANCELLED, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
-            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
           }
           if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
             capped = true;
@@ -1092,8 +1107,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             result = await tools.registry.execute(tc.name, args, tools.context);
           }
           if (signal && signal.aborted) {
+            machine.go(STATES.CANCELLED, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
-            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
           }
           // 缓存失效按「只读白名单」判定：只要本轮执行的不是纯只读工具（execute_shell / poll_job /
           // delegate_task / 扩展与 MCP 工具 / 任何变更类工具），就整表清空，保证随后读取拿到最新状态。
@@ -1205,6 +1221,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           stopReason = 'tool_limit';
           break;
         }
+        machine.go(STATES.RUNNING, 'tools_settled');
         continue;
       }
       content = content || res.content || '';
@@ -1218,8 +1235,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     }
     if (!endedNaturally) {
       const error = stopReason === 'tool_limit' ? '已达到工具调用上限，任务未完成。' : '已达到模型迭代上限，任务未完成。';
-      onDelta && onDelta({ kind: 'error', error, stopReason });
-      return { content, reasoning, toolCalls: allToolCalls, usage, error, stopReason };
+      // 上限不是「执行失败」：状态单列为 LIMIT_REACHED（调用方可据此提示续跑而不是让用户去排查错误）
+      machine.go(classifyOutcome({ error, stopReason }), stopReason);
+      onDelta && onDelta({ kind: 'error', error, stopReason, state: machine.state });
+      return { content, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state };
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
@@ -1232,6 +1251,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations,
       resultLen: content.length, finishReason: lastFinishReason, grounding,
     });
+    machine.go(classifyOutcome({}), stopReason === 'length_truncated' ? 'length_truncated' : 'answer_complete');
     return {
       content,
       reasoning,
@@ -1239,15 +1259,19 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       usage,
       grounding,
       finishReason: lastFinishReason,
+      state: machine.state,
+      stateHistory: machine.history.slice(),
       ...(endedNaturally && stopReason === 'length_truncated' ? { stopReason: 'length_truncated' } : {}),
     };
   } catch (e) {
     if (signal && signal.aborted) {
+      machine.go(STATES.CANCELLED, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
-      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true };
+      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
     }
-    onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e) });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e) };
+    machine.go(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
+    onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e), state: machine.state });
+    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state };
   }
 }
 

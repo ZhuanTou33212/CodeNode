@@ -23,6 +23,7 @@ const modelStore = require('../modelStore.cjs');
 const runStore = require('../runStore.cjs');
 const runCheckpoint = require('../runCheckpoint.cjs');
 const { SideEffectLedger, createGuard } = require('../sideEffects.cjs');
+const agentState = require('../agentState.cjs');
 const sandbox = require('../sandbox.cjs');
 const { CostLedger } = require('../costLedger.cjs');
 const { AlertDispatcher } = require('../alerts.cjs');
@@ -226,8 +227,16 @@ function register(ctx) {
           runStore.appendEvent(projectRoot, runId, 'tool_result', {
             tools: delta.toolCalls.map((item) => ({ name: item && item.name, ok: item && item.ok, elapsedMs: item && item.elapsedMs })),
           });
+        } else if (delta.kind === 'state') {
+          // 状态机迁移落成 run 事件：UI / 续跑 / 审计都能看到「等工具 / 等用户 / 达上限」，
+          // 而不是只有一个笼统的 running
+          runStore.appendEvent(projectRoot, runId, 'run_state', {
+            state: delta.state,
+            previous: delta.previous || null,
+            reason: delta.reason || null,
+          });
         } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
-          runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null });
+          runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null, state: delta.state || null });
         }
       };
       const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
@@ -368,7 +377,15 @@ function register(ctx) {
         usage: result.usage || null,
         grounding: result.grounding || null,
       });
-      runStore.finishRun(projectRoot, runId, result.error ? 'error' : result.aborted ? 'cancelled' : 'completed', {
+      // 终态由状态机给出（LIMIT_REACHED 与真正的 FAILED 分开记在 state 字段里）；
+      // status 取值保持既有语义不变（UI 与续跑判定按它过滤），避免影响既有读取路径
+      const terminalState = result.state || null;
+      const runStatus = terminalState
+        ? agentState.toRunStatus(terminalState)
+        : result.error ? 'error' : result.aborted ? 'cancelled' : 'completed';
+      runStore.finishRun(projectRoot, runId, runStatus, {
+        state: terminalState,
+        stopReason: result.stopReason || null,
         toolCount: Array.isArray(result.toolCalls) ? result.toolCalls.length : 0,
         usage: result.usage || null,
         grounding: result.grounding || null,
@@ -405,7 +422,7 @@ function register(ctx) {
       if (bridge) bridge.cleanup();
       return out;
     } catch (e) {
-      if (runId) runStore.finishRun(projectRoot, runId, 'error', { error: String((e && e.message) || e) });
+      if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
       sendDelta({ kind: 'error', error: String((e && e.message) || e) });
       return { ok: false, error: String((e && e.message) || e) };
     }

@@ -99,9 +99,12 @@ function summarizeRun(events) {
   const start = list.find((event) => event.type === 'run_start');
   const finish = [...list].reverse().find((event) => event.type === 'run_finish');
   const retry = [...list].reverse().find((event) => event.type === 'run_retry_started');
+  // 状态机终态（agentState.STATES.*）：附加字段，status 的取值与语义保持原样
+  const lastState = [...list].reverse().find((event) => event.type === 'run_state');
   return {
     runId: (finish || start || {}).runId || null,
     status: retry ? 'superseded' : finish ? finish.status : start ? 'interrupted' : 'unknown',
+    state: (finish && finish.state) || (lastState && lastState.state) || (start ? 'RUNNING' : null),
     startedAt: start ? start.ts : null,
     finishedAt: finish ? finish.ts : null,
     eventCount: list.length,
