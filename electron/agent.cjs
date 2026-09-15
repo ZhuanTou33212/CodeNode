@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const runStore = require('./runStore.cjs');
+const streamAccumulator = require('./streamAccumulator.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
@@ -524,67 +525,36 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, ti
     if (!res || !res.body) throw new Error('模型响应没有可读取的流');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buf = '';
-    let content = '';
-    let reasoning = '';
-    const toolMap = new Map();
-    const processLine = (line) => {
-      const t = line.trim();
-      if (!t.startsWith('data:')) return;
-      const data = t.slice(5).trim();
-      if (!data || data === '[DONE]') return;
-      let j;
-      try {
-        j = JSON.parse(data);
-      } catch {
-        return;
-      }
-      if (j.usage) usage = j.usage;
-      const delta = j.choices && j.choices[0] && j.choices[0].delta;
-      if (!delta) return;
-      if (delta.reasoning_content) {
-        reasoning += delta.reasoning_content;
-        onEvent && onEvent({ kind: 'reasoning', text: delta.reasoning_content });
-      }
-      if (delta.content) {
-        content += delta.content;
-        onEvent && onEvent({ kind: 'content', text: delta.content });
-      }
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index != null ? tc.index : 0;
-          let acc = toolMap.get(idx);
-          if (!acc) {
-            acc = { id: '', name: '', args: '' };
-            toolMap.set(idx, acc);
-          }
-          if (tc.id && !acc.id) acc.id += tc.id;
-          if (tc.function) {
-            if (tc.function.name) acc.name += tc.function.name;
-            if (tc.function.arguments) acc.args += tc.function.arguments;
-          }
-        }
-        onEvent &&
-          onEvent({
-            kind: 'tool',
-            toolCalls: [...toolMap.values()].map((v) => ({ id: v.id, name: v.name, args: v.args })),
-          });
+    // 分片解析统一交给 streamAccumulator（纯函数、可单测）：重复/累积分片、index 漂移与复用、
+    // finish_reason、坏 JSON 都在那里判定，主循环只把事件转成 onEvent。
+    const state = streamAccumulator.createAccumulator();
+    const forward = (events) => {
+      for (const event of events) {
+        if (!event) continue;
+        if (event.kind === 'reasoning') onEvent && onEvent({ kind: 'reasoning', text: event.text });
+        else if (event.kind === 'content') onEvent && onEvent({ kind: 'content', text: event.text });
+        else if (event.kind === 'tool') onEvent && onEvent({ kind: 'tool', toolCalls: event.toolCalls });
       }
     };
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) processLine(line);
+      forward(streamAccumulator.applySseText(state, decoder.decode(value, { stream: true })));
     }
     // Some OpenAI-compatible providers omit the final newline. Do not drop its
     // last content/tool-call event, otherwise the agent may end the turn early.
-    buf += decoder.decode();
-    if (buf.trim()) processLine(buf);
-    const toolCalls = [...toolMap.values()].map((v) => ({ id: v.id, name: v.name, args: v.args }));
-    return { content, reasoning, toolCalls, usage };
+    forward(streamAccumulator.applySseText(state, decoder.decode()));
+    forward(streamAccumulator.applySseText(state, '\n'));
+    const final = streamAccumulator.finalize(state);
+    usage = final.usage || usage;
+    return {
+      content: final.content,
+      reasoning: final.reasoning,
+      toolCalls: final.toolCalls,
+      usage,
+      finishReason: final.finishReason,
+      anomalies: final.anomalies,
+    };
   } finally {
     clearTimeout(timer);
     signal && signal.removeEventListener('abort', onAbort);
@@ -607,6 +577,8 @@ function redactSecrets(value) {
 const MAX_TOOL_ITERATIONS = 12;
 const MAX_TOTAL_TOOL_CALLS = 100;
 const DATA_TRUNCATE_CAP = 120000;
+/** finish_reason=length（被 max_tokens 截断）时最多补问几次，避免模型一直输出半截内容导致空转 */
+const MAX_TRUNCATION_NUDGES = 2;
 
 /**
  * 画布/标量类工具：结果本身已压缩到最小必要信息，完整属性已落本地标量库。
@@ -952,7 +924,7 @@ function mergeUsage(previous, next) {
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
  *   timeoutMs     单轮超时（默认 180s）
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, grounding?: any, steps?: number, toolCount?: number}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, grounding?: any, steps?: number, toolCount?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
   onDelta && onDelta({ kind: 'start' });
@@ -967,6 +939,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let compressCalls = 0;
   let endedNaturally = false;
   let stopReason = 'iteration_limit';
+  let lastFinishReason = null;
+  let truncationNudges = 0;
   try {
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
       loopIterations = iter + 1;
@@ -1014,6 +988,22 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       }
 
       const toolCalls = res.toolCalls || [];
+      const finishReason = res.finishReason || null;
+      if (finishReason) lastFinishReason = finishReason;
+      // 被 max_tokens 截断（finish_reason=length）且没有任何工具调用：不能把半截回答当最终答案，
+      // 也不能无限补问 —— 最多补 MAX_TRUNCATION_NUDGES 次，其余交给 MAX_TOOL_ITERATIONS 兜底。
+      if (!toolCalls.length && finishReason === 'length' && truncationNudges < MAX_TRUNCATION_NUDGES) {
+        truncationNudges += 1;
+        messages.push({ role: 'assistant', content: res.content || content });
+        messages.push({
+          role: 'user',
+          content: '【系统提示】上一轮输出被长度上限截断（finish_reason=length）。请把回复拆短：只给结论，或直接继续调用工具，不要重复已经输出过的内容。',
+        });
+        logToolTrace(tools && tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+          kind: 'truncation_nudge', iter, finishReason, count: truncationNudges,
+        });
+        continue;
+      }
       if (tools && tools.registry && toolCalls.length) {
         // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
         assignCallIds(toolCalls, iter);
@@ -1064,8 +1054,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               }
             } catch {}
           }
-          // 检测参数 JSON 损坏：模型可能把引号转义错误，导致工具拿到空参而失败、反复重试
-          const malformed = rawArgs !== '' && rawArgs !== '{}' && Object.keys(args).length === 0;
+          // 参数 JSON 损坏/未闭合：模型引号转义错误，或输出被 max_tokens 截断（finish_reason=length），
+          // 或分片拼坏。streamAccumulator 会在 tc.argsValid 上给出判定，这里再兜一层启发式。
+          const malformed = tc.argsValid === false || (rawArgs !== '' && rawArgs !== '{}' && Object.keys(args).length === 0);
           let result;
           let repeated = false;
           if (deduped) {
@@ -1079,6 +1070,14 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const cacheKey = !deduped && CACHEABLE_TOOLS.has(tc.name) ? tc.name + '\u0000' + canonicalArgs(tc.args) : null;
           if (deduped) {
             // 已在上方构造结果，跳过执行
+          } else if (malformed) {
+            // **拒绝执行**：拿解析失败后的 {} 去调工具，会让写操作在没有参数的情况下真的执行
+            // （例如 workbench_edit / write_file 拿到空参）。改为把错误回灌给模型让它重写参数。
+            result = require('./tools/result.cjs').AgentToolResult.error(
+              '参数不是完整 JSON，本次未执行 ' + tc.name + '（可能是 max_tokens 截断或引号转义错误）。' +
+                '请用更短的参数重新调用；长内容先写文件再用路径引用。',
+              { code: 'ARG_INVALID_JSON', tool: tc.name, finishReason: finishReason || null, argsLength: rawArgs.length }
+            );
           } else if (cacheKey) {
             const cached = toolResultCache.get(cacheKey);
             if (cached) {
@@ -1193,6 +1192,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
           kind: 'round_end',
           iter,
+          finishReason: finishReason || null,
           toolCount: toolCalls.length,
           executed: totalToolCalls,
           capped,
@@ -1209,6 +1209,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       }
       content = content || res.content || '';
       endedNaturally = true;
+      // 回答本身被截断（且补问次数已用尽）：如实标记，别让调用方以为这是完整的最终答案
+      if (finishReason === 'length') stopReason = 'length_truncated';
       if (!content && reasoning) {
         onDelta && onDelta({ kind: 'content', text: '' });
       }
@@ -1228,9 +1230,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     logToolTrace(tools && tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
       kind: 'turn_end', totalToolCalls, executedUnique: allToolCalls.filter((t) => !t.repeated).length,
       repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations,
-      resultLen: content.length, grounding,
+      resultLen: content.length, finishReason: lastFinishReason, grounding,
     });
-    return { content, reasoning, toolCalls: allToolCalls, usage, grounding };
+    return {
+      content,
+      reasoning,
+      toolCalls: allToolCalls,
+      usage,
+      grounding,
+      finishReason: lastFinishReason,
+      ...(endedNaturally && stopReason === 'length_truncated' ? { stopReason: 'length_truncated' } : {}),
+    };
   } catch (e) {
     if (signal && signal.aborted) {
       onDelta && onDelta({ kind: 'stopped' });

@@ -46,7 +46,7 @@ function buildStream(turn) {
       );
     });
   }
-  chunks.push(sseChunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: turn.usage || { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 } }));
+  chunks.push(sseChunk({ choices: [{ index: 0, delta: {}, finish_reason: turn.finishReason || 'stop' }], usage: turn.usage || { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 } }));
   chunks.push('data: [DONE]\n\n');
   return chunks.join('');
 }
