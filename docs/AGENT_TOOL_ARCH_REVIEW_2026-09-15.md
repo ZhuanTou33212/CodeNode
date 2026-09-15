@@ -38,6 +38,10 @@
 | P0-3 | **破坏性工具无确认** | `save_project`（覆盖 `workflow.cnode`，`ipc/agent.cjs: saveDoc`）、`workbench_edit`、`create_nodes`、`workbench_connect`、`ui_control` 均未调 `confirm` | 画布/工程文件可被模型静默覆盖；`atomicWriteFile` 只保证原子性，无备份、无确认 |
 | P0-4 | **`save_project` 路径来自渲染层且无边界校验** | `ipc/agent.cjs` 解构 `projectFile` 直接 `path.resolve` 写入，未过 `resolveInRoot`（对比 `tools/impl/shared.cjs`） | 写入目标可越出项目根；与 `write_file` 的路径约束口径不一致 |
 | P0-5 | **无 per-tool 超时 / 同步工具不可取消** | `registry.execute` 无 timeout 包装（`registry.cjs:83`）；`runAgentChat` 只在**工具之间**检查 `signal.aborted`（`:1000/:1062`） | 大 PDF `read_file`、大目录 `scan_project`、RAG 建索引、同步 `fs` 期间点"停止"无效，界面卡在 stopping 直到工具返回 |
+| **P0-6** | **沙箱子进程继承了 broker 的 stdin → 任何读 stdin 的命令永久挂死（已复现，已修）** | `sandbox/winjob.cs` 用 `RedirectStandardInput = false` 启动目标命令，子进程因此继承 broker 的 stdin——那是 node 侧存活探测用的长生命管道（永不写入、也不关闭）。实测 `git --version` / `cmd /c git --version` 在 `windows-job` 后端下**零输出挂满 60s 只能超时强杀**，而 `node --version` / `where git` 正常（250ms）。即：Windows 上默认沙箱开启时 **git 全部不可用** | 代码类任务（看历史、跑测试、提交）全线瘫掉；每次命令白烧一个超时周期；配合 P0-7 还被当成「成功」 |
+| **P0-7** | **超时被当成成功（已复现，已修）** | `executeShellTool` 前台超时分支返回 `AgentToolResult.ok('退出码 -1（超时强杀）…', { timedOut: true })`；`poll_job` 后台 `status==='timeout'` 也走成功分支 | 模型把「被强杀的 git/构建」当成已完成，据此继续推进并给出结论——判据不落终态的典型（正是 P0-6 的放大镜） |
+| **P0-8** | **保存失败被当成成功（已复现，已修）** | `AgentToolContext.saveProject()` 吞掉异常返回 `null`，而 `save_project` 工具无论拿到什么都返回 `ok('已保存当前工程到 磁盘')` | 工程实际没落盘，模型却以为已保存 → 后续步骤基于不存在的产物推进 |
+| **P0-9** | **幂等账本状态可被降级（已复现，已修）** | `SideEffectLedger.begin()` 无条件把记录置回 `pending`，而去重路径不会再调用 `commit()` → 一次正常的同参去重之后，已提交的写操作在 `review()`/`planResume` 里变成「未提交」 | 续跑判定丢失「这条写已完成」，只能整轮人工复核（功能退化，方向安全但代价高） |
 
 ### P1 —— 稳定性 / 重试 / 并发 / 超时 / 缓存
 
@@ -275,8 +279,35 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 6 | `save_project` 的 `projectFile` 在渲染层是否已有校验 | 读 renderer 侧调用点（本轮未读 `src/`） |
 | 7 | 幂等/检查点账本同步重写的实测开销（n=100） | 计时探针 |
 | 8 | 压缩 8 次上限之后的上下文体积曲线 | 探针记账 `body.messages` 字符数 |
-| 9 | **`execute_shell` 白名单实际接近"任意命令"**：`ALLOWED` 含 `cmd`/`powershell`/`npx`/`node`，只剩沙箱 writeRoots 兜底 | 用 `cmd /c` 试写越界路径，看沙箱是否拦住（倾向为真问题，优先复现） |
-| 10 | `CODENODE_TEST` 是否在 CI / 打包环境被设置（设置即审批被整体绕过） | `grep -rn CODENODE_TEST .github scripts electron` |
+| 9 | **`execute_shell` 白名单实际接近"任意命令"**：`ALLOWED` 含 `cmd`/`powershell`/`npx`/`node`，只剩沙箱 writeRoots 兜底 | ✅ **已复现（2026-09-15）**：`cmd /c echo PWNED > <项目外路径>` 与 `node -e "writeFileSync(<项目外路径>)"` 均在 `best-effort` 下**写成功**；策略自述为「后端=windows-job，已隔离:lifetime/processCount/memory/cpu，**未隔离:filesystem/network**，可写根=2 个」——即 writeRoots 在 Windows 后端根本不被执行（它只对 Linux bwrap / macOS sandbox-exec 生效）。两条命令都触发了 HIGH 确认，但确认文案只说「执行命令」，用户无法从文案判断它会越界写盘 → 需要在能力模型里给 `shell.execute` 加路径/网络约束，而不是靠用户点确认 |
+| 10 | `CODENODE_TEST` 是否在 CI / 打包环境被设置（设置即审批被整体绕过） | `grep -rn CODENODE_TEST .github scripts electron`（本轮未逐处核对打包脚本） |
+
+---
+
+## 9. S0 实施记录（2026-09-15）
+
+按本文第 6 节的分阶段方案先做 S0（纯修复、零接口变化），每一条都**先写会红的回归用例**，并用变异测试证明用例不是空转。
+
+| 修复项 | 改动文件 | 回归用例 | 变异测试（把修复点改回旧行为） |
+|---|---|---|---|
+| 幂等键规范化（键序无关，与缓存键同口径） | `electron/sideEffects.cjs` | `scripts/side-effect-idempotency-test.cjs`（进 CORE） | 回退成 `JSON.stringify(args)` → 3 项 FAIL（键序/去重/skip 原因） |
+| 幂等账本 `committed` 不再被 `begin()` 降级 | `electron/sideEffects.cjs` | 同上 | — |
+| `save_project` 路径边界（`resolveInRoot`） | `electron/ipc/agent.cjs` | `scripts/save-project-boundary-test.cjs`（进 CORE） | — |
+| 保存失败不再谎报成功 | `electron/tools/context.cjs`、`impl/saveProjectTool.cjs` | 同上 | — |
+| 前台/后台超时不再 `ok=true` | `electron/tools/impl/executeShellTool.cjs` | `scripts/shell-timeout-result-test.cjs`（进 CORE） | — |
+| 沙箱子进程 stdin 立即 EOF（修 `git` 挂死） | `electron/sandbox/winjob.cs` | `scripts/sandbox-stdin-eof-test.cjs`（进 CORE） | 回退成 `RedirectStandardInput = false` → 15.1s 挂死 FAIL |
+| `tool_call_id` 三处统一（P0-1） | `electron/agent.cjs` | `scripts/tool-call-id-test.cjs`（进 CORE） | 回退成 `tool_call_id: tc.id \|\| ''` → 4 项 FAIL（空 tool_call_id / 配对不符） |
+
+**验证证据**（全部为本机实测输出）：
+
+- `npm run verify`（= `npm run build` + `npm run check:js` + `npm test`）→ **33/33 PASS，188.8s**，基线提交 `fa7c862`（评测报告文件名内嵌该 sha：`docs/eval-reports/agent-eval-fa7c862-offline-*.json`）。
+- 新增 5 条用例已进 `scripts/run-all-tests.cjs` 的 `CORE` 与 `package.json`，随 `npm test` 一起跑：`test:tool-call-id` / `test:side-effect-idem` / `test:save-project` / `test:shell-timeout` / `test:sandbox-stdin`。
+- 变异测试：`mutation-check.cjs --spec <3 条>` → **3/3 条证明有判别力**，且每条结束后自动还原并核对 sha256 一致。
+- 实测前后对比：`git --version` 在 `windows-job` 后端下 **25052ms 超时零输出 → 273ms 正常返回**；`execute_shell` 超时 **`ok=true` → `ok=false` + `code=TIMEOUT` + `data.timedOut=true`**。
+
+**协作注意**：`electron/agent.cjs` 的 `tool_call_id` 统一改动被并行会话的提交 `10b70e5`（主题是 Milvus 生产参数档）一并卷走——内容正确但提交信息未覆盖该改动；按「不重写已推送历史」原则只在此记录，未做任何 amend/force push。另一条线在同一文件上还改过 `parseRagConfig`，两者已确认互不冲突。
+
+**仍未处理（下一阶段）**：P0-3（破坏性工具无确认）、P0-5（无 per-tool 超时 / 同步工具不可取消）、P1 与 P2 全部条目、以及已复现但需能力模型才能根治的 `execute_shell` 越界写（见第 8 节第 9 项）。建议下一步做 S1：把流式 tool_call 解析抽成独立可测模块并处理 `finish_reason` 异常。
 
 ---
 
