@@ -942,46 +942,11 @@ ipcMain.handle('agent:config', async (_event, projectRoot) => {
   };
 });
 
-// ---- 多模型接入管理（models.json，userData） ----
-ipcMain.handle('models:list', async (_event) => {
-  const cfg = agent.loadConfig(null);
-  const store = modelStore.getModels(app.getPath('userData'), cfg);
-  return { models: modelStore.toPublicModels(store.models), activeId: store.activeId };
-});
-
-ipcMain.handle('models:save', async (_event, model) => {
-  if (!model || !model.id) return { ok: false, error: '缺少模型 id' };
-  const cfg = agent.loadConfig(null);
-  const userDataDir = app.getPath('userData');
-  const store = modelStore.getModels(userDataDir, cfg);
-  const existing = store.models.find((item) => item && item.id === model.id);
-  const incoming = { ...model };
-  // UI 不会回传已保存的密钥；空值表示保留主进程中的旧密钥。
-  if (!String(incoming.apiKey || '').trim() && existing && existing.apiKey) incoming.apiKey = existing.apiKey;
-  delete incoming.apiKeySet;
-  const models = store.models.filter((m) => m.id !== incoming.id);
-  models.push(incoming);
-  modelStore.writeModels(userDataDir, models, store.activeId || model.id);
-  return { ok: true, models: modelStore.toPublicModels(models), activeId: store.activeId || model.id };
-});
-
-ipcMain.handle('models:delete', async (_event, id) => {
-  const cfg = agent.loadConfig(null);
-  const userDataDir = app.getPath('userData');
-  const store = modelStore.getModels(userDataDir, cfg);
-  const models = store.models.filter((m) => m.id !== id);
-  const activeId = store.activeId === id ? (models[0] ? models[0].id : null) : store.activeId;
-  modelStore.writeModels(userDataDir, models, activeId);
-  return { ok: true, models: modelStore.toPublicModels(models), activeId };
-});
-
-ipcMain.handle('models:active', async (_event, id) => {
-  const cfg = agent.loadConfig(null);
-  const userDataDir = app.getPath('userData');
-  const store = modelStore.getModels(userDataDir, cfg);
-  if (!store.models.some((m) => m.id === id)) return { ok: false, error: '模型不存在' };
-  modelStore.writeModels(userDataDir, store.models, id);
-  return { ok: true, activeId: id };
+// ---- 多模型接入管理（models.json，userData）：实现在 electron/ipc/models.cjs ----
+require('./ipc/models.cjs').register({
+  ipcMain,
+  agent,
+  userDataDir: () => app.getPath('userData'),
 });
 
 ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
