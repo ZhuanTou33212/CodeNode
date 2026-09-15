@@ -79,7 +79,17 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: ${{ matrix.command }}
+      # Linux 打包前会先跑 npm run build（postbuild 的 icons:build 要启 Electron）：
+      # 容器里没有 setuid chrome-sandbox，必须在**进程启动前**用环境变量关掉沙箱，否则 FATAL 直接退出；
+      # 渲染图标还需要显示环境，所以同样套 xvfb-run。
+      - name: 打包（Linux：xvfb + 关闭 Electron 沙箱）
+        if: runner.os == 'Linux'
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: xvfb-run -a ${{ matrix.command }}
+      - name: 打包（Windows / macOS）
+        if: runner.os != 'Linux'
+        run: ${{ matrix.command }}
       - uses: actions/upload-artifact@v4
         with:
           name: codenode-${{ runner.os }}

@@ -103,8 +103,9 @@ async function main() {
   const sourceUrl = pathToFileURL(SOURCE).href;
   fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;width:256px;height:256px;overflow:hidden;background:transparent"><img id="icon" src="${sourceUrl}" width="256" height="256" style="display:block;width:256px;height:256px"></body></html>`, 'utf8');
 
-  // Linux 容器 / CI（没有 setuid chrome-sandbox）里 Electron 会以 FATAL 直接退出。
-  // 这里只渲染一张本地图片，与 CI 的 smoke 步骤一致，显式关闭沙箱。
+  // Linux 容器里没有 setuid chrome-sandbox：Electron **进程启动阶段**就会 FATAL 退出，
+  // 真正兜住它的是调用方的 ELECTRON_DISABLE_SANDBOX=1（CI 已配）；这里的开关只是同进程内的补充，
+  // 万一走到这一步说明外层没设环境变量，本地无显示环境请显式带上。
   if (process.platform === 'linux' && (process.env.CI || process.env.ELECTRON_DISABLE_SANDBOX === '1')) {
     app.commandLine.appendSwitch('no-sandbox');
   }
