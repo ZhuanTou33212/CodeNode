@@ -7,10 +7,16 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 (async () => {
   const registry = toolkit.buildDefaultRegistry();
   const context = new AgentToolContext({ projectRoot: process.cwd(), confirm: async () => true });
-  const command = 'powershell -Command "Write-Output ([string]::new([char]120,20000))"';
-  const first = await registry.execute('execute_shell', { command, maxOutputChars: 1000 }, context);
+  const command = 'powershell -NoProfile -NonInteractive -Command "Write-Output ([string]::new([char]120,20000))"';
+  // 冷启动的 CI Windows 上，PowerShell 首次启动 + 2 万字符经隔离层回传会超过默认 30s 超时，
+  // 超时后输出被截断导致 hasMore 断言失败——这里显式给足超时，断言强度不变。
+  const first = await registry.execute('execute_shell', { command, maxOutputChars: 1000, timeoutSeconds: 120 }, context);
   assert.strictEqual(first.ok, true);
-  assert.strictEqual(first.data.hasMore, true, '长输出应返回分页游标');
+  assert.strictEqual(
+    first.data.hasMore,
+    true,
+    '长输出应返回分页游标（实际 exitCode=' + first.data.exitCode + ' totalChars=' + first.data.totalOutputChars + ' 输出头部=' + JSON.stringify(String(first.data.output || '').slice(0, 200)) + '）'
+  );
   assert.ok(first.data.jobId, '长输出应保留可继续读取的 jobId');
   assert.strictEqual(first.data.totalOutputChars > 20000, true);
 

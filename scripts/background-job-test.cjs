@@ -31,14 +31,18 @@ async function main() {
   const p1 = await reg.execute('poll_job', { jobId }, ctx);
   assert.ok(['running', 'done'].includes(p1.data.status), '立即 poll 应处于 running 或 done');
 
-  // 轮询等待任务完成（CI 上 PowerShell 冷启动慢，最多等 25 秒）
+  // 轮询等待任务完成（CI 冷启动的 Windows runner 上 PowerShell + 隔离层初始化明显更慢，最多等 90 秒）
   let p2 = null;
-  const deadline = Date.now() + 25000;
+  const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     p2 = await reg.execute('poll_job', { jobId, waitSeconds: 4 }, ctx);
     if (p2.data.status === 'done' || p2.data.status === 'error' || p2.data.status === 'timeout') break;
   }
-  assert.strictEqual(p2.data.status, 'done', '轮询后应完成');
+  assert.strictEqual(
+    p2.data.status,
+    'done',
+    '轮询后应完成（实际 status=' + p2.data.status + ' exitCode=' + p2.data.exitCode + ' 输出=' + JSON.stringify(String(p2.data.output || '').slice(0, 200)) + '）'
+  );
   assert.strictEqual(p2.data.exitCode, 0, '退出码应为 0');
   assert.ok((p2.data.output || '').includes('BG_DONE'), '应包含命令输出');
 
