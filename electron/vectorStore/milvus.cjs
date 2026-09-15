@@ -25,11 +25,23 @@ const DEFAULTS = Object.freeze({
   address: 'http://127.0.0.1:19530',
   collection: '',
   dim: 4096,
-  batchSize: 32,
+  batchSize: 128,
+  flushEveryBatches: 4,
   maxIdLength: 2048,
   maxFileLength: 2048,
   consistencyLevel: 'strong',
+  // 生产档（百万级向量 / 1024 维 / HNSW）：默认按此建索引与检索，可用 rag.milvus_* 覆盖
+  indexType: 'HNSW',
+  metricType: 'COSINE',
+  indexM: 16,
+  indexEfConstruction: 200,
+  searchEf: 64,
 });
+
+/** HNSW 家族才吃 search 参数 ef（其他索引带 ef 可能被服务端拒绝）。 */
+function usesSearchEf(indexType) {
+  return /^HNSW/i.test(String(indexType || '').trim());
+}
 
 /** 一致性级别归一：strong/bounded/eventually/session；default/空 = 用服务端默认（不下发该字段）。 */
 const CONSISTENCY_LEVELS = Object.freeze({
@@ -184,6 +196,16 @@ function stringLiteral(value) {
   return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
+/** describeIndex 的描述里 index_type/metric_type 放在 params: KeyValuePair[]（也兼容扁平字段）。 */
+function extractIndexField(description, key) {
+  if (!description || typeof description !== 'object') return null;
+  const params = Array.isArray(description.params) ? description.params : [];
+  for (const pair of params) {
+    if (pair && String(pair.key) === key) return String(pair.value);
+  }
+  return description[key] == null ? null : String(description[key]);
+}
+
 function chunkText(chunk) {
   return chunk.path + '\n' + chunk.content;
 }
@@ -221,8 +243,15 @@ class MilvusVectorStore {
     this.password = String(o.password || '').trim();
     this.dim = clampInteger(o.dim, DEFAULTS.dim, 256, 8192);
     this.collection = String(o.collection || '').trim() || defaultCollectionName(this.root);
-    this.batchSize = clampInteger(o.batchSize, DEFAULTS.batchSize, 1, 256);
+    this.batchSize = clampInteger(o.batchSize, DEFAULTS.batchSize, 1, 1024);
+    this.flushEveryBatches = clampInteger(o.flushEveryBatches, DEFAULTS.flushEveryBatches, 1, 1000);
     this.searchLimit = clampInteger(o.topK, 40, 1, 16384);
+    this.indexType = String(o.indexType || DEFAULTS.indexType).trim() || DEFAULTS.indexType;
+    this.metricType = String(o.metricType || DEFAULTS.metricType).trim() || DEFAULTS.metricType;
+    this.indexM = clampInteger(o.indexM, DEFAULTS.indexM, 4, 2048);
+    this.indexEfConstruction = clampInteger(o.indexEfConstruction, DEFAULTS.indexEfConstruction, 8, 4096);
+    this.searchEf = clampInteger(o.searchEf, DEFAULTS.searchEf, 8, 16384);
+    this.indexNote = null;
     this.consistencyLevel = normalizeConsistency(o.consistencyLevel === undefined ? DEFAULTS.consistencyLevel : o.consistencyLevel);
     this.consistencyFallback = null;
     this.injectedClient = o.client || null;
@@ -273,6 +302,36 @@ class MilvusVectorStore {
           this.lastError = (error && error.message) || String(error);
         }
       }
+      // 既有 collection 不会重建索引：把「实际索引 ≠ 配置」这个事实记下来（不阻断，但可诊断）
+      if (typeof client.describeIndex === 'function') {
+        try {
+          const described = assertSuccess(
+            await client.describeIndex({ collection_name: this.collection, field_name: VECTOR_FIELD }),
+            'describeIndex'
+          );
+          const descriptions = Array.isArray(described.index_descriptions) ? described.index_descriptions : [];
+          const current = descriptions
+            .map((item) => ({
+              field: item.field_name,
+              type: extractIndexField(item, 'index_type'),
+              metric: extractIndexField(item, 'metric_type'),
+            }))
+            .find((item) => !item.field || item.field === VECTOR_FIELD);
+          const notes = [];
+          if (current && current.type && current.type.toUpperCase() !== this.indexType.toUpperCase()) {
+            notes.push(
+              '既有 collection 的向量索引为 ' + current.type + '，与 rag.milvus_index_type=' + this.indexType +
+                ' 不一致（已存在的 collection 不会重建索引；要按新参数建索引需重建该 collection）'
+            );
+          }
+          if (current && current.metric && current.metric.toUpperCase() !== this.metricType.toUpperCase()) {
+            notes.push('既有索引的 metric 为 ' + current.metric + '，与 rag.milvus_metric_type=' + this.metricType + ' 不一致');
+          }
+          if (notes.length) this.indexNote = notes.join('；');
+        } catch (error) {
+          this.lastError = (error && error.message) || String(error);
+        }
+      }
       this.ready = { collection: this.collection, dim: remoteDim || this.dim, created: false };
       return this.ready;
     }
@@ -294,9 +353,10 @@ class MilvusVectorStore {
         await client.createIndex({
           collection_name: this.collection,
           field_name: VECTOR_FIELD,
-          index_type: 'AUTOINDEX',
-          metric_type: 'COSINE',
-          params: {},
+          index_type: this.indexType,
+          metric_type: this.metricType,
+          // HNSW 建索引参数：M（每层邻居数）与 efConstruction（建图深度）
+          params: usesSearchEf(this.indexType) ? { M: this.indexM, efConstruction: this.indexEfConstruction } : {},
         }),
         'createIndex'
       );
@@ -336,6 +396,7 @@ class MilvusVectorStore {
   async insertChunks(records, embedder) {
     const client = this.ensureClient();
     let inserted = 0;
+    let batchesSinceFlush = 0;
     for (let start = 0; start < records.length; start += this.batchSize) {
       const batch = records.slice(start, start + this.batchSize);
       const vectors = await embedder.embed(batch.map((item) => item.text));
@@ -351,8 +412,14 @@ class MilvusVectorStore {
       inserted += extractCount(result) || rows.length;
       this.counters.batches += 1;
       this.counters.inserted += rows.length;
-      await this.flush();
+      batchesSinceFlush += 1;
+      // 百万级写入时逐批 flushSync 代价太高：每 flushEveryBatches 批刷一次，收尾再补一次
+      if (batchesSinceFlush >= this.flushEveryBatches) {
+        await this.flush();
+        batchesSinceFlush = 0;
+      }
     }
+    if (batchesSinceFlush > 0) await this.flush();
     return inserted;
   }
 
@@ -416,8 +483,9 @@ class MilvusVectorStore {
       topk: this.searchLimit,
       anns_field: VECTOR_FIELD,
       output_fields: ['id', 'file'],
-      metric_type: 'COSINE',
-      params: {},
+      metric_type: this.metricType,
+      // HNSW 检索参数 ef（候选面宽）：经简单形态的 params 下发，SDK 会 JSON 化后塞进 search_params
+      params: usesSearchEf(this.indexType) ? { ef: this.searchEf } : {},
     };
     // Strong 让「刚写入的向量 / 刚按文件删除的旧块」立即可见（默认 Bounded 时删除有数秒延迟）
     if (this.consistencyLevel) args.consistency_level = this.consistencyLevel;
@@ -464,6 +532,14 @@ class MilvusVectorStore {
       ready: !!this.ready,
       created: !!(this.ready && this.ready.created),
       searchLimit: this.searchLimit,
+      indexType: this.indexType,
+      metricType: this.metricType,
+      indexM: this.indexM,
+      indexEfConstruction: this.indexEfConstruction,
+      searchEf: usesSearchEf(this.indexType) ? this.searchEf : null,
+      batchSize: this.batchSize,
+      flushEveryBatches: this.flushEveryBatches,
+      indexNote: this.indexNote || undefined,
       consistencyLevel: this.consistencyLevel || 'server-default',
       consistencyFallback: this.consistencyFallback || undefined,
       ...this.counters,
@@ -497,9 +573,11 @@ module.exports = {
   createMilvusVectorStore,
   defaultCollectionName,
   extractCount,
+  extractIndexField,
   extractVectorDim,
   loadSdk,
   normalizeSearchHits,
   stringLiteral,
   truthyCollection,
+  usesSearchEf,
 };

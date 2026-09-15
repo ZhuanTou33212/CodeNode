@@ -87,7 +87,7 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 - Agent 可把主问题、符号名、业务词和技术词作为多个查询，一次完成 RRF 融合排序
 - 本地增量索引复用未变化分块；文件工具写入后显式失效，外部变化由 mtime 自动发现
 - BM25 + 路径/短语/覆盖率排序 + 可插拔向量层（默认 local 确定性哈希向量，可切 openai/ollama），覆盖源码符号、自然语言与中文，默认无需向量数据库或云服务
-- 向量后端可插拔（`rag.vector_store`）：默认 `memory`（进程内记忆化 + BM25 预筛打分）；可切 `milvus` 外部服务走全库 ANN（需 `npm i @zilliz/milvus2-sdk-node`，命中含纯语义结果并标注 `vector-only`；服务不可用时自动降级为纯 BM25 并在结果中显式告警）
+- 向量后端可插拔（`rag.vector_store`）：默认 `memory`（进程内记忆化 + BM25 预筛打分）；可切 `milvus` 外部服务走全库 ANN（需 `npm i @zilliz/milvus2-sdk-node`，命中含纯语义结果并标注 `vector-only`；服务不可用时自动降级为纯 BM25 并在结果中显式告警）；Milvus 侧默认即生产档（HNSW `M=16`/`efConstruction=200`、检索 `ef=64`、1024 维、批量 128、`Strong` 一致性，全部由 `rag.milvus_*` 可配）
 - `retrieve_context` 支持 `mode=auto/file/vector/hybrid/scalar`：scalar 模式走本地标量精确查询，vector/hybrid 把向量余弦分融合进排序
 - 返回高/中/低可信度、查询覆盖率、候选规模与 `path#Lx-Ly` 来源锚点
 - 低可信度会驱动 Agent 改写查询、限定目录或深读文件，不会强行把弱结果当答案

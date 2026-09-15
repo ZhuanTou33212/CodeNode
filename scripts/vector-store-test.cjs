@@ -85,7 +85,22 @@ function createFakeMilvusClient() {
     },
     async createIndex(args) {
       state.indexes.push(args);
+      state.indexType = args.index_type;
       return { status: {} };
+    },
+    async describeIndex() {
+      return {
+        status: { error_code: 'Success', code: 0 },
+        index_descriptions: [
+          {
+            field_name: 'vector',
+            params: [
+              { key: 'index_type', value: state.indexType || 'HNSW' },
+              { key: 'metric_type', value: 'COSINE' },
+            ],
+          },
+        ],
+      };
     },
     async loadCollection({ collection_name }) {
       state.loaded.push(collection_name);
@@ -183,8 +198,10 @@ async function main() {
   const applied = await store.applyChanges({ deleted: [], upserted: records }, embedder);
   assert.strictEqual(fake.state.created.length, 1, '首次写入应创建 collection');
   assert.strictEqual(fake.state.created[0].dim, 256, 'collection 维度应取 rag.embed_dim');
-  assert.strictEqual(fake.state.indexes[0].index_type, 'AUTOINDEX');
+  // 生产档：HNSW + COSINE + M16/efConstruction200
+  assert.strictEqual(fake.state.indexes[0].index_type, 'HNSW', '默认应按生产档建 HNSW 索引');
   assert.strictEqual(fake.state.indexes[0].metric_type, 'COSINE');
+  assert.deepStrictEqual(fake.state.indexes[0].params, { M: 16, efConstruction: 200 }, 'HNSW 建索引参数应可配且默认 M16/efC200');
   assert.deepStrictEqual(fake.state.loaded, [collection], '建表后必须 load 才能检索');
   assert.strictEqual(applied.inserted, records.length);
   assert.strictEqual(fake.state.rows.length, records.length);
@@ -199,6 +216,40 @@ async function main() {
   assert.ok(fake.state.lastSearchArgs.limit > 0 && fake.state.lastSearchArgs.topk > 0, '必须下发 limit/topk');
   assert.deepStrictEqual(fake.state.lastSearchArgs.output_fields, ['id', 'file'], '主键必须显式列入 output_fields');
   assert.strictEqual(fake.state.lastSearchArgs.consistency_level, 'Strong', '默认应以 Strong 一致性检索（否则刚删的旧块仍可见）');
+  assert.strictEqual(fake.state.lastSearchArgs.metric_type, 'COSINE');
+  assert.deepStrictEqual(fake.state.lastSearchArgs.params, { ef: 64 }, 'HNSW 检索参数 ef 应经简单形态 params 下发且默认 64');
+
+  // ---- 3b. 写入批量与 flush 节流（百万级不能逐批 flushSync） ----
+  const bulkClient = createFakeMilvusClient();
+  const bulkStore = createVectorStore({
+    backend: 'milvus',
+    client: bulkClient,
+    root,
+    dim: 256,
+    topK: 8,
+    collection: 'codenode_bulk_rag',
+    batchSize: 2,
+    flushEveryBatches: 2,
+  });
+  const bulkRecords = [1, 2, 3, 4, 5].map((n) => ({ id: 'bulk.ts:' + n + ':' + n, path: 'bulk.ts', text: 'chunk ' + n }));
+  const bulkApplied = await bulkStore.applyChanges({ deleted: [], upserted: bulkRecords }, embedder);
+  const bulkStats = await bulkStore.stats();
+  assert.strictEqual(bulkApplied.inserted, 5, '分批写入应覆盖全部记录');
+  assert.strictEqual(bulkStats.batches, 3, 'batchSize=2 时 5 条应分 3 批');
+  assert.strictEqual(bulkStats.flushes, 2, 'flushEveryBatches=2 时应只刷 2 次（逐批刷会是 3 次）');
+  assert.strictEqual(bulkStats.batchSize, 2);
+  await bulkStore.close();
+
+  // ---- 3c. 既有 collection 的索引与配置不一致 → 可诊断提示（不阻断） ----
+  const legacyClient = createFakeMilvusClient();
+  legacyClient.state.collections.set('codenode_legacy_rag', { dim: 256 });
+  legacyClient.state.indexType = 'AUTOINDEX';
+  const legacyStore = createVectorStore({ backend: 'milvus', client: legacyClient, root, dim: 256, topK: 8, collection: 'codenode_legacy_rag' });
+  await /** @type {any} */ (legacyStore).ensureCollection();
+  const legacyStats = await legacyStore.stats();
+  assert.match(String(legacyStats.indexNote), /AUTOINDEX/, '既有索引与配置不一致时必须给出提示');
+  assert.strictEqual(legacyStats.indexType, 'HNSW', '配置侧的期望索引类型应如实暴露');
+  await legacyStore.close();
 
   // 服务端不支持 Strong（如部分云托管）→ 自动退回服务端默认并记录一次
   const fallbackClient = createFakeMilvusClient();
@@ -346,23 +397,27 @@ async function main() {
   if (!address) {
     console.log('[skip] 未设置 MILVUS_ADDR：跳过真实 Milvus 端到端（不影响适配器覆盖）');
   } else {
+    const realDim = Number(process.env.MILVUS_DIM || 256);
+    const realEmbedder = createEmbedder({ embedProvider: 'local', embedDim: realDim });
     const userCollection = String(process.env.MILVUS_COLLECTION || '').trim();
     const baseCollection = userCollection || milvus.defaultCollectionName(root);
     const storeCollection = baseCollection + '_store';
     const indexCollection = baseCollection + '_index';
     // 用户显式指定的 collection 不删除；测试自建的两个在结束时清理
     const ownedCollections = userCollection ? [] : [storeCollection, indexCollection];
-    const realStore = createVectorStore({ backend: 'milvus', root, dim: 256, topK: 8, address, collection: storeCollection });
+    const realStore = createVectorStore({ backend: 'milvus', root, dim: realDim, topK: 8, address, collection: storeCollection });
     try {
-      // 9a 后端直连：建表/写入/检索/删除
-      const realApplied = await realStore.applyChanges({ deleted: [], upserted: records }, embedder);
+      // 9a 后端直连：建表（HNSW）/写入/检索/删除
+      const realApplied = await realStore.applyChanges({ deleted: [], upserted: records }, realEmbedder);
       assert.ok(realApplied.inserted >= records.length, '真实 Milvus 应写入全部记录');
-      const realScores = await realStore.scoreCandidates('refreshSessionToken', null, embedder);
+      const searchStarted = Date.now();
+      const realScores = await realStore.scoreCandidates('refreshSessionToken', null, realEmbedder);
+      const searchMs = Date.now() - searchStarted;
       assert.ok(realScores.size > 0, '真实 Milvus 应返回检索命中');
       assert.ok([...realScores.values()].every((value) => Number.isFinite(value) && value >= 0));
 
       // 9b 索引端到端：不注入客户端，走真服务（refresh → syncVectorStore → 全库 ANN → 融合）
-      const realConfig = { ...config, vectorStoreClient: null, milvusCollection: indexCollection };
+      const realConfig = { ...config, embedDim: realDim, vectorStoreClient: null, milvusCollection: indexCollection };
       const realIndex = new LocalRagIndex(root, realConfig);
       const realRetrieval = await realIndex.retrieve('refreshSessionToken 轮换 令牌', { mode: 'vector' });
       assert.strictEqual(vectorStats(realRetrieval).backend, 'milvus', '真实服务下后端应为 milvus');
@@ -370,15 +425,18 @@ async function main() {
       assert.ok(realRetrieval.results.length > 0, '真实 Milvus 下应召回结果');
       assert.ok(realRetrieval.results.some((item) => item.vectorScore > 0), '真实 Milvus 应给出非零向量分');
       assert.strictEqual(realRetrieval.results[0].path, 'src/auth/session.ts', '向量模式应优先命中实现文件');
+      const realStoreStats = vectorStats(realRetrieval).store || {};
+      assert.strictEqual(realStoreStats.indexType, 'HNSW', '真实服务应按配置建 HNSW 索引');
+      assert.strictEqual(realStoreStats.metricType, 'COSINE');
 
       // 9c 删除传播：按 file 过滤删除后不得再召回该文件的块
       //    Milvus 默认 Bounded 一致性，删除有几秒可见性延迟（实测 ~3s），故轮询等待而非立即断言
-      await realStore.applyChanges({ deleted: [{ relative: 'src/auth.ts', chunkIds: [] }], upserted: [] }, embedder);
-      let afterDelete = await realStore.scoreCandidates('refreshSessionToken', null, embedder);
+      await realStore.applyChanges({ deleted: [{ relative: 'src/auth.ts', chunkIds: [] }], upserted: [] }, realEmbedder);
+      let afterDelete = await realStore.scoreCandidates('refreshSessionToken', null, realEmbedder);
       for (let attempt = 0; attempt < 15; attempt += 1) {
         if (![...afterDelete.keys()].some((id) => id.startsWith('src/auth.ts'))) break;
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        afterDelete = await realStore.scoreCandidates('refreshSessionToken', null, embedder);
+        afterDelete = await realStore.scoreCandidates('refreshSessionToken', null, realEmbedder);
       }
       assert.ok(
         ![...afterDelete.keys()].some((id) => id.startsWith('src/auth.ts')),
@@ -389,13 +447,20 @@ async function main() {
       realDetail = {
         store: storeCollection,
         index: indexCollection,
+        dim: realDim,
+        indexType: storeStats.indexType,
+        metricType: storeStats.metricType,
+        indexM: storeStats.indexM,
+        indexEfConstruction: storeStats.indexEfConstruction,
+        searchEf: storeStats.searchEf,
+        consistency: storeStats.consistencyLevel,
         inserted: realApplied.inserted,
         hits: realScores.size,
         indexResults: realRetrieval.results.length,
         topVectorScore: realRetrieval.results[0].vectorScore,
+        singleSearchMs: searchMs,
         afterDeleteRemaining: afterDelete.size,
-        distanceMetric: 'COSINE',
-        storeCounters: { batches: storeStats.batches, searches: storeStats.searches },
+        storeCounters: { batches: storeStats.batches, searches: storeStats.searches, flushes: storeStats.flushes },
       };
       realMilvus = 'pass';
     } finally {

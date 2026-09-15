@@ -131,6 +131,7 @@ function normalizeOptions(options) {
     embedModel: String(o.embedModel || '').trim(),
     embedBase: String(o.embedBase || '').trim(),
     embedKey: String(o.embedKey || '').trim(),
+    embedDimensions: String(o.embedDimensions || '').trim(),
     embedTopK: clampInteger(o.embedTopK, DEFAULTS.embedTopK, 5, 500),
     vectorWeight: clampNumber(o.vectorWeight, DEFAULTS.vectorWeight, 0, 1),
     vectorStore: normalizeBackend(o.vectorStore),
@@ -140,6 +141,14 @@ function normalizeOptions(options) {
     milvusPassword: String(o.milvusPassword || '').trim(),
     milvusCollection: String(o.milvusCollection || '').trim(),
     milvusConsistency: String(o.milvusConsistency || 'strong').trim(),
+    // Milvus 索引/检索/写入参数（生产档：HNSW + 1024 维 + 大批量）
+    milvusIndexType: String(o.milvusIndexType || 'HNSW').trim(),
+    milvusMetricType: String(o.milvusMetricType || 'COSINE').trim(),
+    milvusIndexM: clampInteger(o.milvusIndexM, 16, 4, 2048),
+    milvusIndexEfConstruction: clampInteger(o.milvusIndexEfConstruction, 200, 8, 4096),
+    milvusSearchEf: clampInteger(o.milvusSearchEf, 64, 8, 16384),
+    milvusBatchSize: clampInteger(o.milvusBatchSize, 128, 1, 1024),
+    milvusFlushEvery: clampInteger(o.milvusFlushEvery, 4, 1, 1000),
     // 仅供测试注入向量后端客户端（真实运行时不使用）
     vectorStoreClient: o.vectorStoreClient || null,
   };
@@ -399,6 +408,13 @@ class LocalRagIndex {
         password: this.options.milvusPassword,
         collection: this.options.milvusCollection,
         consistencyLevel: this.options.milvusConsistency,
+        indexType: this.options.milvusIndexType,
+        metricType: this.options.milvusMetricType,
+        indexM: this.options.milvusIndexM,
+        indexEfConstruction: this.options.milvusIndexEfConstruction,
+        searchEf: this.options.milvusSearchEf,
+        batchSize: this.options.milvusBatchSize,
+        flushEveryBatches: this.options.milvusFlushEvery,
         client: this.options.vectorStoreClient || null,
       });
     } catch (error) {

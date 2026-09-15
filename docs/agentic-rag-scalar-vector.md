@@ -112,6 +112,24 @@
 minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/minio:RELEASE.2024-05-28T17-19-04Z`。
 本仓库内的现成 compose（gitignore 区域）：`.cache/milvus-dev/docker-compose.yml`，只暴露 19530/9091。
 
+#### 2.2.1.2 生产参数档（百万级向量 / 1024 维 / HNSW）
+
+按生产环境口径（约百万条向量、每条 **1024 维**、**HNSW** 索引、单次查询 20–50ms）落成的默认档：
+
+| 生产口径 | 配置键（默认值） | 说明 |
+| --- | --- | --- |
+| 1024 维 | `rag.embed_dim=1024`（+ `rag.embed_dimensions=1024` 用于 OpenAI v3 降维） | local 哈希向量维度上限 8192，1024 合法；真语义建议 `ollama` + `bge-m3`（原生 1024，中文友好）或 `openai` + `text-embedding-3-*` 降维 |
+| HNSW 索引 | `rag.milvus_index_type=HNSW` | 建索引参数 `rag.milvus_index_m=16`、`rag.milvus_index_ef_construction=200` |
+| 检索召回面 | `rag.milvus_search_ef=64` | HNSW 的 `ef` 经**简单形态的 `params`** 下发（不能显式传 `search_params`，见 2.2.1.1）；须 ≥ 召回条数 |
+| 距离度量 | `rag.milvus_metric_type=COSINE` | 与归一化嵌入一致；换 IP/L2 需同步一致 |
+| 百万级写入 | `rag.milvus_batch_size=128`、`rag.milvus_flush_every_batches=4` | 逐批 `flushSync` 在百万级下代价过高：每 N 批刷一次，收尾必刷 |
+| 召回上限 | `rag.embed_top_k`（默认 40，上限 500） | milvus 后端下即 ANN 的 `topk` |
+| 分布式部署 / 读写分离 | 服务端拓扑，**不是客户端参数** | 客户端只需把 `rag.milvus_address` 指向 LB / proxy 入口（多 querynode、WAL 由服务端负责）；本适配器的 create/load/insert/delete 均幂等，可直连分布式集群 |
+| 延迟 20–50ms | —— | 主要由服务端规模与 HNSW 参数决定。**同机小 collection 对照实测**（1024 维 / HNSW M16·efC200 / ef64 / topk 40 / Strong 一致性 / 200 条）：p50 **5ms**、p90 6ms、max 7ms（含一次 gRPC 往返，30 轮）；200 条 insert+flush 212ms。百万级下延迟由服务端规模主导，客户端侧只叠加这一趟往返 |
+
+一致性取舍（2.2.1.1 第 4 条）：`strong` 保证「刚改完文件立即可见」，在分布式集群上会带来额外的
+同步等待；若生产更看重延迟，可切 `rag.milvus_consistency=bounded`（代价：按文件删除的旧块在数秒内仍可能被召回）。
+
 ### 2.3 自动路由（名字/具体数据 → 标量库；代码/语义 → 向量库）
 
 `retrieve_context.mode`：
@@ -161,6 +179,15 @@ rag.milvus_token=
 rag.milvus_username=
 rag.milvus_password=
 rag.milvus_consistency=strong     # strong（默认）| bounded | eventually | session | default
+rag.milvus_index_type=HNSW        # HNSW（默认生产档）| AUTOINDEX | IVF_FLAT ...
+rag.milvus_metric_type=COSINE
+rag.milvus_index_m=16             # HNSW 建索引 M
+rag.milvus_index_ef_construction=200
+rag.milvus_search_ef=64           # HNSW 检索 ef（须 ≥ 召回条数）
+rag.milvus_batch_size=128         # 单批嵌入+写入条数
+rag.milvus_flush_every_batches=4  # 每 N 批 flush 一次，收尾必刷
+# 向量层降维（OpenAI v3 模型）
+rag.embed_dimensions=
 # 标量层
 scalars.enabled=true
 # 工具结果子代理压缩（减少上下文占用，不压缩 RAG/标量/交互类工具）

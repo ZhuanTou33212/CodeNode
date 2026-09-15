@@ -33,6 +33,16 @@
   （刚改完文件就提问会遇到旧内容），Strong 稳定即时可见；配置项 `rag.milvus_consistency`
   （strong|bounded|eventually|session|default），服务端不支持时自动退回服务端默认并在
   `stats.vector.store.consistencyFallback` 记录原因。
+- **Milvus 生产参数档（对齐「百万级 / 1024 维 / HNSW」口径）**：索引类型、度量、HNSW 参数与写入批量全部可配，
+  默认值即生产档：`rag.milvus_index_type=HNSW`（原为写死的 AUTOINDEX）、`metric_type=COSINE`、
+  `index_m=16`、`index_ef_construction=200`、`search_ef=64`（HNSW 的 `ef` 经简单形态 `params` 下发）、
+  `batch_size=128`（原 32）、`flush_every_batches=4`（原逐批 `flushSync`，百万级下代价过高，收尾必刷）。
+  既有 collection 不重建索引，但会把「实际索引 ≠ 配置」写入 `stats.vector.store.indexNote` 以便诊断。
+  嵌入侧新增 `rag.embed_dimensions`（OpenAI v3 模型降维到 1024；本地路线可用 ollama + bge-m3 原生 1024）。
+  真机复验：Milvus v2.6.5 上以 **1024 维 + HNSW(M16/efC200/ef64) + COSINE + Strong** 跑通
+  （`MILVUS_DIM=1024 MILVUS_ADDR=… node scripts/vector-store-test.cjs` → realMilvus=pass）；
+  同机小 collection 单次 ANN 检索 p50 5ms / p90 6ms（200 条 × 1024 维，含 gRPC 往返，30 轮），
+  分布式部署与读写分离属服务端拓扑（客户端只需指向 LB/proxy 入口）。见 docs 2.2.1.2。
 - 文档同步：`docs/agentic-rag-scalar-vector.md` 增 2.2.1 节（含「Windows 无可用 Milvus Lite，只有外部服务形态」
   的边界说明）、README 与配置示例。
 

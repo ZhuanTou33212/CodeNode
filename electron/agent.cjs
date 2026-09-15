@@ -106,6 +106,8 @@ function parseRagConfig(cfg) {
     embedModel: cfg['rag.embed_model'] || '',
     embedBase: cfg['rag.embed_base'] || '',
     embedKey: cfg['rag.embed_key'] || '',
+    // OpenAI v3 嵌入降维（如 1536 → 1024）；留空则用模型原生维度
+    embedDimensions: cfg['rag.embed_dimensions'] || '',
     embedTopK: configInteger(cfg, 'rag.embed_top_k', 40, 5, 500),
     vectorWeight: configNumber(cfg, 'rag.vector_weight', 0.4, 0, 1),
     // 向量后端：memory（默认，零外部服务）| milvus（外部 ANN，需 npm i @zilliz/milvus2-sdk-node）
@@ -117,6 +119,14 @@ function parseRagConfig(cfg) {
     milvusCollection: cfg['rag.milvus_collection'] || '',
     // 检索一致性：strong（默认，刚写入/删除立即可见）| bounded | eventually | session | default
     milvusConsistency: cfg['rag.milvus_consistency'] || 'strong',
+    // Milvus 索引/检索/写入参数（生产档默认值：HNSW + M16/efConstruction200 + 检索 ef64 + 批量 128）
+    milvusIndexType: cfg['rag.milvus_index_type'] || 'HNSW',
+    milvusMetricType: cfg['rag.milvus_metric_type'] || 'COSINE',
+    milvusIndexM: configInteger(cfg, 'rag.milvus_index_m', 16, 4, 2048),
+    milvusIndexEfConstruction: configInteger(cfg, 'rag.milvus_index_ef_construction', 200, 8, 4096),
+    milvusSearchEf: configInteger(cfg, 'rag.milvus_search_ef', 64, 8, 16384),
+    milvusBatchSize: configInteger(cfg, 'rag.milvus_batch_size', 128, 1, 1024),
+    milvusFlushEvery: configInteger(cfg, 'rag.milvus_flush_every_batches', 4, 1, 1000),
   };
 }
 
@@ -744,6 +754,25 @@ function parseToolArgs(raw) {
   }
 }
 
+/**
+ * 为一次模型回复里的每个 tool call 分配稳定 id：assistant 消息的 tool_calls[].id、
+ * 随后 role:"tool" 消息的 tool_call_id、以及检查点/幂等账本里的 callId 必须完全相同。
+ * 此前三处各自生成（assistant 用 tc.id || 随机、检查点用 tc.id || 'call_iter_n'、tool 消息用 tc.id || ''），
+ * 供应商不返回 id 时会写出 tool_call_id:'' 的 tool 消息，与 assistant 声明的 id 对不上 → 下一轮请求 400。
+ * @param {Array<any>} toolCalls
+ * @param {number} iter
+ * @returns {Array<any>}
+ */
+function assignCallIds(toolCalls, iter) {
+  const list = Array.isArray(toolCalls) ? toolCalls : [];
+  list.forEach((tc, index) => {
+    if (!tc || typeof tc !== 'object') return;
+    const provided = tc.id == null ? '' : String(tc.id).trim();
+    tc.callId = provided || 'call_' + iter + '_' + (index + 1);
+  });
+  return list;
+}
+
 
 /** 归一化引用里的路径：统一正斜杠、去掉 ./ 前缀；Windows 下大小写不敏感。 */
 function normalizeCitePath(raw) {
@@ -987,11 +1016,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const toolCalls = res.toolCalls || [];
       if (tools && tools.registry && toolCalls.length) {
         // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
+        assignCallIds(toolCalls, iter);
         messages.push({
           role: 'assistant',
           content: res.content || '',
           tool_calls: toolCalls.map((tc) => ({
-            id: tc.id || ('call_' + iter + '_' + Math.random().toString(36).slice(2, 8)),
+            id: tc.callId,
             type: 'function',
             function: { name: tc.name, arguments: tc.args || '{}' },
           })),
@@ -1011,7 +1041,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const t0 = Date.now();
           const args = parseToolArgs(tc.args);
           const rawArgs = (tc.args || '').trim();
-          const callId = tc.id || 'call_' + iter + '_' + totalToolCalls;
+          // callId 统一取自 assignCallIds：assistant 声明的 id 与这条 tool 消息的 tool_call_id 必须一致
+          const callId = tc.callId || tc.id || ('call_' + iter + '_' + totalToolCalls);
           // 副作用幂等 + 检查点：写操作先登记意图，中断后续跑时凭账本跳过已提交的写操作
           let sideEffectToken = null;
           let deduped = false;
@@ -1124,7 +1155,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           if (!toolContent) toolContent = result.text || '';
           messages.push({
             role: 'tool',
-            tool_call_id: tc.id || '',
+            tool_call_id: callId,
             content: toolContent,
           });
           onDelta && onDelta({ kind: 'tool_result', toolCalls: [record] });
@@ -1231,6 +1262,7 @@ module.exports = {
   parseRagConfig,
   parseLimitsConfig,
   mergeUsage,
+  assignCallIds,
   redactSecrets,
   parseReliabilityConfig,
   shouldCompress,

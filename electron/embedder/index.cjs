@@ -94,6 +94,8 @@ class Embedder {
     this.provider = String(o.embedProvider || DEFAULTS.provider).toLowerCase().trim();
     this.dim = Number.isFinite(o.embedDim) && o.embedDim > 0 ? Math.floor(o.embedDim) : DEFAULTS.dim;
     this.model = String(o.embedModel || '').trim();
+    // OpenAI v3 嵌入模型支持 dimensions 参数降维（如 text-embedding-3-small 原生 1536 → 1024）
+    this.dimensions = Number.isFinite(Number(o.embedDimensions)) && Number(o.embedDimensions) > 0 ? Math.floor(Number(o.embedDimensions)) : 0;
     this.apiKey = String(o.embedKey || '').trim();
     const defaultBase = this.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1';
     this.base = String(o.embedBase || defaultBase).trim().replace(/\/+$/, '');
@@ -145,10 +147,13 @@ class Embedder {
   }
 
   async embedOpenAiInner(texts, startedAt, settle) {
+    const body = { model: this.model || 'text-embedding-3-small', input: texts };
+    // 仅在显式配置时下发 dimensions（部分 OpenAI 兼容服务端不认识该字段）
+    if (this.dimensions > 0) body.dimensions = this.dimensions;
     const res = await fetch(this.base + '/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
-      body: JSON.stringify({ model: this.model || 'text-embedding-3-small', input: texts }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');

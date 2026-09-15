@@ -52,6 +52,10 @@ soul_file=config/soul.md
 # rag.embed_model=              # openai 用 text-embedding-3-small；ollama 用 nomic-embed-text
 # rag.embed_base=               # openai 默认 https://api.openai.com/v1；ollama 默认 http://localhost:11434
 # rag.embed_key=                # openai 需要
+# rag.embed_dimensions=         # OpenAI v3 模型降维（如 1536 → 1024）；ollama 走模型原生维度，留空
+# 生产档（百万级 / 每条 1024 维）：二选一
+#   openai：embed_provider=openai + embed_model=text-embedding-3-small + embed_dim=1024 + embed_dimensions=1024
+#   ollama：embed_provider=ollama + embed_model=bge-m3 + embed_dim=1024（bge-m3 原生 1024 维，中文友好）
 # rag.embed_top_k=40            # 向量层只对 BM25 预筛的 Top-K 做语义余弦，保证效率
 # rag.vector_weight=0.35        # 向量分融合权重（0~1）
 # retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
@@ -70,6 +74,17 @@ soul_file=config/soul.md
 # rag.milvus_password=
 # rag.milvus_consistency=strong   # strong（默认，刚写入/删除立即可见）| bounded | eventually | session | default
 #   服务端不支持该级别时（部分云托管只支持 bounded）自动退回服务端默认，并在 stats.vector.store.consistencyFallback 记录原因
+# 索引与检索参数（默认即「百万级 / 1024 维 / HNSW」生产档）
+# rag.milvus_index_type=HNSW      # HNSW（默认）| AUTOINDEX | IVF_FLAT | DISKANN ...（既有 collection 不会重建索引）
+# rag.milvus_metric_type=COSINE   # COSINE（默认）| IP | L2
+# rag.milvus_index_m=16           # HNSW 建索引 M（每层邻居数，越大越准也越吃内存）
+# rag.milvus_index_ef_construction=200   # HNSW 建图深度，越大越准、建索引越慢
+# rag.milvus_search_ef=64         # HNSW 检索候选面宽 ef（须 ≥ 召回条数；越大越准越慢）
+# rag.milvus_batch_size=128       # 单次嵌入+写入批大小（百万级写入靠它控内存与请求数）
+# rag.milvus_flush_every_batches=4   # 每 N 批 flush 一次（逐批 flushSync 在百万级下代价过高），收尾必刷
+# 分布式 / 读写分离：属服务端拓扑（多个 querynode/proxy、WAL），客户端只需把 milvus_address 指向
+#   负载均衡/proxy 入口；一致性级别是延迟与新鲜度的取舍——分布式生产更常用于 bounded，
+#   本地单机建议保持 strong（见 docs/agentic-rag-scalar-vector.md 2.2.1.1）
 # 说明：milvus 后端下 rag.embed_top_k 作为全库召回上限；embed_provider=local 的哈希向量
 # 语义能力有限，接 Milvus 建议同时切 openai/ollama 真嵌入。写入失败/服务不可用会降级为
 # 纯 BM25 并在检索结果中标注「向量后端降级」，不会中断检索。
