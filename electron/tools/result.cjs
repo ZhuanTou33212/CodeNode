@@ -1,17 +1,40 @@
 /**
- * AgentToolResult：工具执行结果 = 确定性文本 + 结构化数据（复刻原版 AgentToolResult）
+ * AgentToolResult：工具执行结果 = 确定性文本 + 结构化数据 + （S5）失败分类
+ *
+ * 兼容性承诺：`ok` / `text` / `data` 三个字段**保持不变**——24 个既有工具里 60+ 处
+ * `AgentToolResult.ok/error(text, data)` 零改动继续工作；需要分类的新代码改用
+ * `AgentToolResult.failure(code, message, data)`（写 `data.code` 并附 `failure` 对象）
+ * 或 `AgentToolResult.partial(text, data, failed)`。
+ *
+ * 失败分类的判据与文案在 `tools/failures.cjs`（FailureCode 的唯一来源）：
+ * 主循环据此决定「提示什么、能不能原样重试、要不要用户介入」，不再对全部失败回灌同一句话。
  */
 'use strict';
 
+const { describeFailure } = require('./failures.cjs');
+
 class AgentToolResult {
-  constructor(ok, text, data) {
+  /**
+   * @param {boolean} ok
+   * @param {string} text
+   * @param {any} [data]
+   * @param {{kind?: 'success'|'partial'|'failure', failure?: any, failed?: any[]}} [options]
+   */
+  constructor(ok, text, data, options) {
+    const o = options || {};
     this.ok = !!ok;
     this.text = text || '';
     this.data = data || {};
+    /** @type {'success'|'partial'|'failure'} 判别联合的 kind（S5） */
+    this.kind = o.kind || (this.ok ? 'success' : 'failure');
+    /** @type {any} 失败分类（code/category/retryable/userActionRequired/hint…）；非失败时为 null */
+    this.failure = o.failure || null;
+    /** @type {Array<any>|null} partial 时逐单元失败明细 [{unit, failure}] */
+    this.failed = Array.isArray(o.failed) ? o.failed : null;
   }
 
   toJSON() {
-    return { ok: this.ok, text: this.text, data: this.data };
+    return { ok: this.ok, text: this.text, data: this.data, kind: this.kind, failure: this.failure, failed: this.failed };
   }
 
   static ok(text, data) {
@@ -20,6 +43,33 @@ class AgentToolResult {
 
   static error(text, data) {
     return new AgentToolResult(false, text, data);
+  }
+
+  /**
+   * 显式声明失败码（推荐新代码使用）。会同时把 code 写进 `data.code`，与既有的
+   * `data.code` 读取方（UI / 测试 / 主循环）保持兼容。
+   * @param {string} code FailureCode 或已登记的 legacy code
+   * @param {string} message
+   * @param {any} [data]
+   * @param {{retryable?: boolean, userActionRequired?: boolean, tool?: string, detail?: any}} [extra]
+   */
+  static failure(code, message, data, extra) {
+    const failure = describeFailure(code, message, extra);
+    const payload = Object.assign({}, data || {}, { code: failure.code, failureCode: failure.code });
+    return new AgentToolResult(false, message || failure.hint || '', payload, { kind: 'failure', failure });
+  }
+
+  /**
+   * 部分成功：主体结果可用，但其中若干单元失败（例如批量编辑里部分文件写失败）。
+   * `ok` 为 true（主结果可用），失败明细在 `failed` 与 `data.partialFailures` 里。
+   * @param {string} text
+   * @param {any} [data]
+   * @param {Array<{unit: string, failure: any}>} [failed]
+   */
+  static partial(text, data, failed) {
+    const list = Array.isArray(failed) ? failed : [];
+    const payload = Object.assign({}, data || {}, { partialFailures: list.map((item) => ({ unit: item && item.unit, code: item && item.failure && item.failure.code })) });
+    return new AgentToolResult(true, text, payload, { kind: 'partial', failed: list });
   }
 }
 

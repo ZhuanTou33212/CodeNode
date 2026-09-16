@@ -15,6 +15,8 @@ const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cj
 // 工具的只读/缓存/变更语义只有一份来源（electron/tools/descriptor.cjs），不再各文件各留一份名单
 const TOOL_SEMANTICS = require('./tools/descriptor.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
+// S5：工具失败分类契约（FailureCode 唯一来源）—— 主循环据此分派提示与重试策略
+const failures = require('./tools/failures.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
 function loadProperties(file) {
@@ -1183,6 +1185,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let totalTokens = 0;
   const allToolCalls = [];
   const toolResultCache = new Map();
+  /** @type {Record<string, number>} 每个 toolCallId 已发出的失败提示次数（S5：同一调用最多 NUDGE_MAX_PER_CALL 次） */
+  const nudgeCounts = {};
   let totalToolCalls = 0;
   let loopIterations = 0;
   let compressCalls = 0;
@@ -1388,8 +1392,16 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             ok: result.ok,
             result: result.text,
             data: result.data,
+            callId,
           };
           if (repeated) record.repeated = true;
+          // S5：失败立即归类（工具显式声明的 failure > data.code 归一表 > timedOut/cancelled 这类结构化信号
+          // > 认不出来就按最保守的 FATAL_FAILURE 并标 known:false —— 不做文本猜测）
+          if (!result.ok) {
+            record.failure = failures.classifyFailure(result, { tool: tc.name, toolCallId: callId, attemptId: callId + '#1' });
+          } else if (result.kind === 'partial') {
+            record.partial = true;
+          }
           if (!result.ok) failedAny = true;
           allToolCalls.push(record);
           // 组装回传上下文的内容：repeated 直接复用缓存内容（含压缩结果）
@@ -1483,16 +1495,32 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             elapsedMs: Date.now() - startedAt,
           });
         }
-        // 工具调用失败时，提示模型重新思考解决方案而不是直接结束
+        // 失败按**类别**分派提示（S5）：参数错 → 改参数重试；权限/用户拒绝 → 别原样重试、要人介入；
+        // 超时 → 缩小范围；副作用未知 → 先只读核对；认不出来的码按最保守处理。
+        // 同一个 toolCallId 最多提示 NUDGE_MAX_PER_CALL 次，超过的只落 trace（由迭代上限兜底），
+        // 避免「一句话反复灌」既占上下文又诱导模型重复同一次失败调用。
         if (failedAny && !capped) {
-          const failedTools = [...new Set(allToolCalls.slice(-toolCalls.length).filter((t) => t.ok === false).map((t) => t.name))];
-          messages.push({
-            role: 'user',
-            content:
-              '【系统提示】上述工具调用失败：' + (failedTools.join('、') || '未知') + '。' +
-              '任务尚未完成，请先分析失败原因（参数错误/节点或文件不存在/路径越界/重复操作/超时等），' +
-              '修正参数后重新调用，或改用更合适的方式继续推进；除非确认任务确实无法完成，否则不要直接结束对话。',
-          });
+          const roundFailures = allToolCalls
+            .slice(-toolCalls.length)
+            .filter((record) => record.ok === false)
+            .map((record) =>
+              record.failure ||
+              failures.classifyFailure(
+                { ok: false, text: record.result, data: record.data },
+                { tool: record.name, toolCallId: record.callId },
+              ),
+            );
+          const plan = failures.planNudges(roundFailures, nudgeCounts, failures.NUDGE_MAX_PER_CALL);
+          const nudgeText = failures.buildFailureNudge(plan.emitted);
+          if (nudgeText) messages.push({ role: 'user', content: nudgeText });
+          if (plan.emitted.length || plan.skipped.length) {
+            logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+              kind: 'failure_taxonomy',
+              iter,
+              nudged: plan.emitted.map((item) => ({ tool: item.tool, code: item.code, category: item.category, retryable: item.retryable })),
+              suppressed: plan.skipped.map((item) => ({ tool: item.tool, code: item.code, nudges: item.nudges })),
+            });
+          }
         }
         logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
           kind: 'round_end',

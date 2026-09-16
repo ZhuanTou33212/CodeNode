@@ -157,10 +157,11 @@ class AgentToolRegistry {
    */
   async execute(name, arguments_, context, callInfo) {
     if (this.allowedTools && !this.allowedTools.has(name)) {
-      return AgentToolResult.error('当前子代理角色无权使用工具：' + name);
+      // S5：显式失败码 —— 分类化提示才能告诉模型「这是权限问题，别原样重试」
+      return AgentToolResult.failure('PERMISSION_DENIED', '当前子代理角色无权使用工具：' + name, { tool: name });
     }
     const tool = this.tools.get(name);
-    if (!tool) return AgentToolResult.error('未知工具：' + name);
+    if (!tool) return AgentToolResult.failure('FATAL_FAILURE', '未知工具：' + name, { tool: name });
     const descriptor = tool.descriptor;
     const args = arguments_ == null ? {} : arguments_;
     // 按该工具的契约现场组装最小能力面（工具只看到自己需要的那几个面 + deprecated 旧方法转发）
