@@ -4,6 +4,30 @@
 
 ## [未发布]
 
+### 修复（流式参数累加器：裸标量分片把真实参数整段替换掉，2026-09-16）
+
+- **现象（真实模型跑出来的，离线评测看不见）**：用 `deepseek-v4-flash` 真实跑一轮画布任务，12 轮里 **9 次工具调用
+  被拒为 `MALFORMED ARGS`**（`read_file` / `workbench_edit` 都有），模型反复重试直到迭代上限，终态
+  `LIMIT_REACHED`，`prompt_tokens` 花了 15 万。同一套 harness 的离线评测（脚本化传输）当时 11/11 全绿——
+  因为脚本化的分片形态是「工整的」。
+- **根因**：`electron/streamAccumulator.cjs` 的 `mergeArgs` 用 `isJsonComplete()` 判断「本分片自身已是完整参数，
+  说明供应商在重发/累积下发，应当替换而不是拼接」。但 `JSON.parse('40')` **也是合法的**：真实 DeepSeek 流会把
+  args 切得很碎（实测 24 帧拼一个 `read_file` 参数），其中 `"maxLines": ` 之后**单独来一帧 `40`** →
+  累积值被整段替换成 `40`，下一帧拼上 `}` 得到 `40}`，`argsValid=false`，工具被拒。
+  抓到的真实异常尾巴正好是 `40}` / `92}` / `100}` / `201}` / `400}`（数字型参数越多越容易中招，所以画布编辑
+  ——带 x/y 坐标——几乎必挂）。
+- **修法**：新增 `isCompositeJsonComplete()`（必须 `JSON.parse` 出对象/数组；工具参数只可能是对象/数组），
+  两条替换分支（`cumulative-args-chunk` / `args-resend-detected`）改用它；`isJsonComplete` 保留原语义
+  （仍用于 `argsValid` 与「空串 = 无参数」判定）。
+- **证据（可复跑）**：抓真实 SSE 60 行落盘后按不同到达边界重放累加器——修复前四种切分（整段一次到达 /
+  每字节一块 / 每行对半切 / 9:1 分两块）**全部**得到 `args="40}"`、`valid=false`、异常
+  `cumulative-args-chunk`；修复后四种切分全部得到 `{"path": "electron/streamAccumulator.cjs", "maxLines": 40}`、
+  `valid=true`、零异常。`scripts/stream-accumulator-test.cjs` 加 8 条断言（真实分片形态 + `true`/`null`/字符串
+  标量 + 「完整对象重发仍要替换」反向保护 + 判据本身），变异测试回退替换分支 → **6 条当场红**
+  （`40}` / `true}` / `null}` / `"x"}`），还原即绿。
+- **端到端复验**：修复后同一 prompt 真实跑通——`read_file` → `get_workbench_model` → `workbench_edit` 全部
+  ok，画布 11 → 12 节点、5 → 6 连线，回答 303 字符且带引用校验通过（grounding=true）。
+
 ### 修复（CI 门禁：可选依赖把 check:js 打成三平台全红，2026-09-16）
 
 - `scripts/vector-store-semantic-probe.cjs` 用**字面量** `require('@zilliz/milvus2-sdk-node')` 拿 SDK 清理临时
@@ -20,7 +44,7 @@
   把探针改回字面量 require 后门禁当场红在 `scripts/vector-store-semantic-probe.cjs:114`，还原即绿。
 - 验证：本机把 `node_modules/@zilliz` 改名模拟 CI 条件，修复前复现同一行同一列
   （`vector-store-semantic-probe.cjs(111,27)`），修复后该条件下 `npx tsc -p tsconfig.checkjs.json` 为 0 错；
-  `npm run build` + `npm run check:js` + `npm test`（41/41，190.0s）全绿；探针无 `MILVUS_ADDR` 时仍明确
+  `npm run build` + `npm run check:js` + `npm test`（43/43，194.1s，含本轮新增门禁）全绿；探针无 `MILVUS_ADDR` 时仍明确
   SKIP（不静默通过）。
 
 ### 新增（S9：子代理收口 + 压缩成本可测，2026-09-16）

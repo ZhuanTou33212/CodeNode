@@ -16,5 +16,11 @@ docs/eval-reports/
 # 运行时流水日志：跑一次测试就会追加，入库只会污染每次提交
 .codenode/tools_trace.jsonl
 
+# 运行时工程状态：真跑一次 Agent / 打开一次工程就会生成（跑 README 截图脚本也会）
+.codenode/conversation.jsonl
+.codenode/scalars.json
+.codenode/runs/
+.codenode/metrics/
+
 # 生成物：右侧侧栏 UI 校验截图（scripts/side-panel-check.cjs 输出）
 /out/
