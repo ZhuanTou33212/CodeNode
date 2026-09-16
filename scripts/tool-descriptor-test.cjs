@@ -251,7 +251,7 @@ const REGISTRY_KEYS = [
       return AgentToolResult.ok('wrote');
     });
     const legacyWrite = await legacyRegistry.execute('legacy_writer', { path: 'legacy-ok.txt' }, { projectRoot: () => root });
-    check('F6 旧 register() 的写工具不会被注册表级确认拦下（本阶段唯一行为变化就是 save_project）',
+    check('F6 旧 register() 合成的契约（requiresConfirmation=false）不触发注册表级确认（S7 起画布类写工具改用 declareContract 显式声明）',
       legacyWrite.ok === true && fs.readFileSync(path.join(root, 'legacy-ok.txt'), 'utf8') === 'L\n',
       JSON.stringify({ ok: legacyWrite.ok, text: String(legacyWrite.text).slice(0, 40) }));
   }

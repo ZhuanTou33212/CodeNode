@@ -14,6 +14,7 @@ const { GraphModel } = require('../electron/tools/GraphModel.cjs');
 
 const model = new GraphModel({ root: { nodes: [], edges: [] } });
 const ctx = new AgentToolContext({
+  confirm: async () => true, // S7：画布写工具现在需要用户批准 —— 测试里模拟「用户已批准」
   projectRoot: null,
   model,
   mutateWorkbench: async (fn) => { fn(model); return true; },

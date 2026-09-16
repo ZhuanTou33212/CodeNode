@@ -16,6 +16,20 @@
 
 const { AgentToolResult } = require('./result.cjs');
 const descriptorLib = require('./descriptor.cjs');
+
+/**
+ * S7：模型自填的「审批字段」—— 审批只能由服务端（ApprovalService）签发令牌，参数里塞这些
+ * 一律在校验前剥离（既不生效、也不制造参数错误），避免留下「模型自己批准自己」的后门。
+ */
+const CONFIRMATION_SELF_FIELDS = Object.freeze(['confirmed', 'approved', 'approvalToken', 'approval_token', 'approvalId', 'approval_id', 'userApproved']);
+
+/** S7：审批 scope —— 能力 + 本次目标（路径/节点类参数优先），供令牌的覆盖校验使用 */
+function approvalScopeFor(descriptor, name, args) {
+  const capability = descriptor.requiredCapability || descriptor.name || name;
+  const a = args || {};
+  const target = a.relativePath || a.path || a.filePath || a.nodeId || '';
+  return [capability + ':' + String(target || name)];
+}
 const { createExecutionContext } = require('./executionContext.cjs');
 
 /** 超时哨兵：工具返回值不可能等于它 */
@@ -84,6 +98,12 @@ class AgentToolRegistry {
     this.roleCapabilities = null;
     // 注册表兜底超时：工具未声明 timeoutMs 时用它（0 = 不加限制）
     this.defaultTimeoutMs = descriptorLib.DEFAULT_TIMEOUT_MS;
+    /**
+     * S7：确认策略三态。undefined = 沿用 descriptor 自带的 confirmationEnforced（兼容既有行为）；
+     * true = 所有声明了 requiresConfirmation 的工具都强制走令牌审批；false = 全部关闭。
+     * @type {boolean|undefined}
+     */
+    this.confirmWrites = options ? options.confirmWrites : undefined;
   }
 
   /** 旧接口：按名单合成保守契约（未声明只读 = 可写） */
@@ -121,6 +141,20 @@ class AgentToolRegistry {
   }
 
   /** 单个工具的契约；未注册返回 null */
+  /**
+   * S7：在不重写整份 descriptor 的前提下补/改契约字段（渐进迁移用，S3 计划里「24 个工具逐个迁移」
+   * 的落地方式）。会把 explicit 置真并**重算 confirmationEnforced** —— 声明了 requiresConfirmation
+   * 就真的强制，而不是只写在文档里。
+   * @param {string} name
+   * @param {any} patch
+   */
+  declareContract(name, patch) {
+    const tool = this.tools.get(name);
+    if (!tool) return false;
+    tool.descriptor = descriptorLib.normalizeDescriptor({ ...tool.descriptor, ...(patch || {}), explicit: true });
+    return true;
+  }
+
   descriptorOf(name) {
     const tool = this.tools.get(String(name || ''));
     return tool ? tool.descriptor : null;
@@ -206,30 +240,65 @@ class AgentToolRegistry {
       }
     }
 
+    // S7：剥离模型自填的审批字段（在校验之前 —— 自填不生效，也不因严格 schema 报错）
+    if (descriptor.requiresConfirmation) {
+      /** @type {string[]} */
+      const stripped = [];
+      for (const key of CONFIRMATION_SELF_FIELDS) {
+        if (args && Object.prototype.hasOwnProperty.call(args, key)) {
+          delete args[key];
+          stripped.push(key);
+        }
+      }
+      const traceFn = /** @type {any} */ (execContext).trace;
+      if (stripped.length && typeof traceFn === 'function') {
+        traceFn('approval_self_fields_stripped', { tool: name, fields: stripped });
+      }
+    }
+
     const schemaError = validateInput(args, tool.spec.inputSchema, '$');
     if (schemaError) return AgentToolResult.error('工具参数校验失败：' + schemaError, { code: 'INVALID_TOOL_ARGUMENTS', path: schemaError });
 
-    // 门 3：显式声明需要确认的工具，用户不批准就不执行（旧 register() 合成的契约不触发，保持既有行为）
-    if (descriptor.confirmationEnforced && descriptor.requiresConfirmation) {
-      if (typeof execContext.confirm !== 'function') {
-        return AgentToolResult.error('工具 ' + name + ' 需要用户确认，但当前上下文无法询问用户，已拒绝执行。', {
-          code: 'APPROVAL_REQUIRED',
+    // 门 3（S7）：确认类工具必须拿到**服务端签发的令牌**才执行。令牌绑定
+    // capability / scope / toolCallId，且有有效期、单次有效 —— 批准一次只够一次调用。
+    // 旧 register() 合成的契约（requiresConfirmation=false）不触发，保持既有行为。
+    const requiresApproval =
+      !!descriptor.requiresConfirmation &&
+      (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true);
+    if (requiresApproval) {
+      const approval = /** @type {any} */ (execContext.approval);
+      // 「没有审批通道」与「用户拒绝」必须分开报（前者是配置/接线问题，后者要劝退重试）
+      const channelReady =
+        !!approval &&
+        typeof approval.request === 'function' &&
+        (typeof approval.available !== 'function' || approval.available() === true);
+      if (!channelReady) {
+        return AgentToolResult.failure('APPROVAL_REQUIRED', '工具 ' + name + ' 需要用户确认，但当前上下文没有审批通道，已拒绝执行。', {
           tool: name,
           userActionRequired: true,
         });
       }
-      let approved = false;
-      try {
-        approved = await execContext.confirm(descriptor.requiresConfirmation, name, descriptor.description);
-      } catch {
-        approved = false;
+      const scope = approvalScopeFor(descriptor, name, args);
+      const toolCallId = (callInfo && callInfo.toolCallId) || null;
+      const token = await approval.request({
+        capability: descriptor.requiredCapability || null,
+        level: descriptor.requiresConfirmation,
+        what: name,
+        detail: descriptor.description || '',
+        scope,
+        toolCallId,
+        attemptId: (callInfo && callInfo.attemptId) || null,
+      });
+      if (!token) {
+        return AgentToolResult.failure('APPROVAL_DENIED', '用户未批准，已跳过 ' + name + '（未执行任何操作）。', { tool: name, userActionRequired: true });
       }
-      if (approved !== true) {
-        return AgentToolResult.error('用户未批准，已跳过 ' + name + '（未执行任何操作）。', {
-          code: 'APPROVAL_DENIED',
-          tool: name,
-          userActionRequired: true,
-        });
+      const verdict = approval.verify(token, { capability: descriptor.requiredCapability || null, scope, toolCallId });
+      if (!verdict || verdict.valid !== true) {
+        return AgentToolResult.failure(
+          'APPROVAL_DENIED',
+          '审批令牌校验失败（' + ((verdict && verdict.reason) || 'UNKNOWN') + '），已跳过 ' + name + '（未执行任何操作）。',
+          { tool: name, userActionRequired: true },
+        );
       }
     }
 

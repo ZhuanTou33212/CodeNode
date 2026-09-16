@@ -122,6 +122,9 @@ function register(registry) {
       return AgentToolResult.ok('已创建 ' + ids.length + ' 个节点：' + ids.join(', '), { nodeIds: ids, count: ids.length });
     }
   );
+
+  // S7：create_nodes 直接改画布 —— 声明为需要用户批准（令牌由 ApprovalService 签发，模型无法自填）
+  registry.declareContract('create_nodes', { requiresConfirmation: 'WRITE' });
 }
 
 module.exports = { register };

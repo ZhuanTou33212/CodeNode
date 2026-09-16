@@ -40,6 +40,10 @@ function register(registry) {
       return AgentToolResult.ok('已执行界面操控：' + action, data);
     }
   );
+
+  // S7：ui_control 会创建节点 / 改动界面状态 —— 声明为需要用户批准（令牌由 ApprovalService 签发，
+  // 模型在参数里自填 confirmed 之类字段会被注册表剥离，不可能自己批准自己）。
+  registry.declareContract('ui_control', { requiresConfirmation: 'WRITE' });
 }
 
 module.exports = { register };

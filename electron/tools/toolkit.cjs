@@ -80,6 +80,11 @@ function filterByConfig(registry, config) {
 function buildDefaultRegistryWithConfig(config) {
   const cfg = config || {};
   const registry = buildDefaultRegistry();
+  // S7：确认策略三态随配置下发（true = 声明了 requiresConfirmation 的工具全部强制审批；
+  // false = 全部关闭；未配置 = 沿用各工具 descriptor 自带的判定，兼容既有行为）
+  if (cfg.toolsConfirmWrites !== undefined) {
+    registry.confirmWrites = cfg.toolsConfirmWrites === true ? true : cfg.toolsConfirmWrites === false ? false : undefined;
+  }
   if (cfg.projectRoot) registerProjectExtensions(registry, cfg.projectRoot);
   if (cfg.role) filterByRole(registry, cfg.role);
   return filterByConfig(registry, cfg);

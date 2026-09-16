@@ -175,6 +175,13 @@ function createExecutionContext(source, descriptor, callInfo) {
   ctx.approval = {
     confirm: (level, what, detail) => base.confirm(level, what, detail),
     askUser: (question, options) => (allow('ui.interact') ? base.askUser(question, options) : Promise.resolve(deny('askUser') || '')),
+    // S7：令牌化审批 —— 令牌由 ApprovalService 服务端签发（绑定 capability/scope/toolCallId/有效期，
+    // 单次有效）；工具参数里的自填审批字段一律不被采信（注册表在校验前剥离）。
+    request: (req) => (typeof base.approval === 'function' ? base.approval().request(req) : Promise.resolve(null)),
+    verify: (token, req) => (typeof base.approval === 'function' ? base.approval().verify(token, req) : { valid: false, reason: 'NO_APPROVAL_CHANNEL' }),
+    available: () => (typeof base.approval === 'function' ? base.approval().available() : false),
+    revoke: (id) => (typeof base.approval === 'function' ? base.approval().revoke(id) : false),
+    service: () => (typeof base.approval === 'function' ? base.approval() : null),
   };
 
   // ---- 面 4/6/5：审计 / 检查点 / 界面（与旧方法同名 → 可调用对象，两套同时可用） ----

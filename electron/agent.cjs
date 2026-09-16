@@ -73,6 +73,9 @@ function parseToolsConfig(cfg) {
     toolsEnabled: cfg['tools.enabled'] == null ? true : String(cfg['tools.enabled']).toLowerCase() !== 'false',
     toolsAllowed: split(cfg['tools.allowed']),
     toolsDeny: split(cfg['tools.deny']),
+    // S7：确认类工具的令牌审批（默认开：save_project / workbench_edit / create_nodes / ui_control
+    // 执行前需用户批准；置 tools.confirm_writes=false 可整体关闭）
+    toolsConfirmWrites: cfg['tools.confirm_writes'] == null ? true : String(cfg['tools.confirm_writes']).toLowerCase() !== 'false',
     // S6：只读并行（默认关闭 → 行为与串行一致）；并发上限 1–8
     toolsParallel: cfg['tools.parallel'] == null ? false : String(cfg['tools.parallel']).toLowerCase() === 'true',
     toolsParallelConcurrency: configInteger(cfg, 'tools.parallel_concurrency', 3, 1, 8),

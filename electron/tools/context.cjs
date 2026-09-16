@@ -17,6 +17,9 @@
  */
 'use strict';
 
+// S7：审批服务（令牌化）—— 令牌只活在内存里，模型无法自填
+const approvalLib = require('./approval.cjs');
+
 const ConfirmationLevel = { LOW: 'LOW', WRITE: 'WRITE', HIGH: 'HIGH' };
 
 class AgentToolContext {
@@ -25,6 +28,9 @@ class AgentToolContext {
     this.projectRootValue = o.projectRoot || '.';
     this.modelValue = o.model || null;
     this.confirmHandler = o.confirm || null;
+    // S7：审批服务（懒创建）。显式注入时优先用注入实例（便于同一 run 内共享令牌表）
+    this.approvalServiceValue = o.approvalService || null;
+    this.approvalTtlMsValue = o.approvalTtlMs || null;
     this.auditLogger = o.audit || null;
     this.workbenchMutator = o.mutateWorkbench || null;
     this.saveAction = o.saveProject || null;
@@ -67,6 +73,24 @@ class AgentToolContext {
   readOnly() { return this.readOnlyValue; }
   signal() { return this.signalValue; }
   cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
+
+  /**
+   * S7：审批服务 —— 服务端签发/校验令牌（绑定 capability / scope / toolCallId / 有效期，单次有效）。
+   * 懒创建；令牌表挂在 run 级上下文上，失败原因落审计（approval_rejected 带 reason）。
+   */
+  approval() {
+    if (!this.approvalServiceValue) {
+      this.approvalServiceValue = approvalLib.createApprovalService({
+        confirm: this.confirmHandler,
+        ttlMs: this.approvalTtlMsValue,
+        runId: this.runIdValue,
+        taskId: this.taskIdValue,
+        role: this.roleValue,
+        trace: (event) => this.audit(JSON.stringify(event)),
+      });
+    }
+    return this.approvalServiceValue;
+  }
 
   async confirm(level, what, detail) {
     if (this.cancelled()) return false;

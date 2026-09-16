@@ -81,6 +81,8 @@ async function main() {
     model,
     scalarStore: getScalarStore(root),
     ragConfig: { enabled: true },
+    // S7：workbench_edit 现在要用户批准（令牌审批）—— 测试里模拟「用户已批准」
+    confirm: async () => true,
     mutateWorkbench: async (fn) => {
       fn(model);
       return true;

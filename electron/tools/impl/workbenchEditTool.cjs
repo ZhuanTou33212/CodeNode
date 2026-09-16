@@ -451,6 +451,10 @@ function register(registry) {
       return AgentToolResult.ok(summary, { created, affected, applied });
     }
   );
+
+  // S7：workbench_edit 是画布的主要写入口 —— 声明为需要用户批准（令牌由 ApprovalService 签发，
+  // 模型在参数里自填 confirmed 之类字段会被注册表剥离，不可能自己批准自己）。
+  registry.declareContract('workbench_edit', { requiresConfirmation: 'WRITE' });
 }
 
 /** 把 created/affected 中的真实节点 id 对应的完整属性写入本地标量。 */
