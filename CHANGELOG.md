@@ -34,6 +34,30 @@
   `scripts/event-replay.cjs` 支持 `--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1（可直接
   用于门禁）。
 
+### 变更（project_info / analyze_project 也搬进 worker，并修掉语言统计的 `undefined` bug；2026-09-16）
+
+- **问题①（同类重活）**：`detectProjectInfo` 与 `scan_project` 干的是同一件事 —— 扫全项目、每个源文件读一遍算行数。
+  它仍留在主线程同步跑，于是 `project_info` / `analyze_project` 一样会冻住界面、一样不可中断。
+- **问题②（顺手查出的老 bug）**：`project_info` / `analyze_project` 返回的 `languages` / `languageSummary`
+  **一直是 `{"undefined": <文件数>}`**。成因：`detectProjectInfo` 把 `scan().files`（只有 `relPath`/`absPath`/`size`）
+  传给了 `languageSummary`，后者读 `f.language` / `f.binary` 全是 `undefined`。已修，并用回归锁盯住。
+- **修法**：
+  - `fsCore` 新增 `buildProjectInfo`（**纯函数**，接收 scan 的完整结果、语言统计用 `sourceFiles`）、
+    `readTextFileSafe`（原 `impl/shared.cjs` 的 `readTextFile`）、`summarizeFile`（原 `analyzeProjectTool` 的私有函数），
+    以及任务 `detectProjectInfo` / `analyzeProject`（`FS_TASKS` 3 → 5）。
+  - `project_info` / `analyze_project` 改走 `fsRunner`（可 terminate、不阻塞主线程、降级时 audit + `workerMode` 留痕）。
+  - `projectScan.detectProjectInfo` 退化成同步 thin wrapper（`buildProjectInfo(root, scan(root))`），
+    降级路径与其他既有调用点不受影响。
+  - `analyze_project` 改为**一次扫描**产出全部结果 —— 旧实现是 `detectProjectInfo(root)` + `scan(root)` 各扫一遍
+    （等于把全项目读两轮）再逐文件摘要。
+- **证据**：`scripts/fs-worker-test.cjs` 新增 H 段 —— 语言统计回归锁（断言 `languages` 无 `undefined` 键且含
+  `typescript`）、**遍历次数判据**（新实现 `once=5` vs 旧路径 `twice=10`，直接证明少扫一遍）、两个新任务
+  worker 与同步结果逐字节一致、`terminate` 取消生效；`scripts/sync-tool-cancel-test.cjs` 新增 5 段
+  （`project_info` 期间主线程心跳、`workerMode`、`analyze_project` 取消返回 `CANCELLED`）。
+  变异 2/2 有判别力：把 `languageSummary(sourceFiles)` 改回 `files` → 立刻复现 `{"undefined": 6}` 且 H1/H3 红；
+  关掉 `onAbort` → H7 红。
+- **仍未做**：`read_file` / `edit_file` / `code_review` 仍是主线程同步读（单文件读取，通常远小于一次全项目扫描）。
+
 ### 变更（文件遍历工具搬到 worker 线程：真可中断 + 不阻塞主进程；2026-09-16）
 
 - **问题**：`scan_project` / `find_files` / `search_files` 是同步 fs 遍历。上一轮只加了「循环之间的

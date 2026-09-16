@@ -666,6 +666,29 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **仍未做**：`project_info` 工具内部的 `detectProjectInfo` 仍是同步执行，未搬进 worker。
 
+### P7 收口（续）：project_info / analyze_project 也进 worker，并修掉语言统计的老 bug（2026-09-16）
+
+**动因**：`detectProjectInfo` 与 `scan_project` 是同一类活（扫全项目 + 每个源文件读一遍算行数），它留在主线程 → `project_info` / `analyze_project` 一样冻界面、一样不可中断。
+
+**顺手查出的老 bug（不是搬动引入的）**：两个工具返回的 `languages` / `languageSummary` **一直是 `{"undefined": <文件数>}`**。证据（HEAD 版静态 + 动态）：
+
+```
+git show HEAD:electron/tools/projectScan.cjs | grep -A3 'languageSummary(files)'
+  const languages = languageSummary(files);        # files 来自 scan(root).files
+node -e "... languageSummary(s.files)  -> {\"undefined\":1510}"
+node -e "... languageSummary(s.sourceFiles) -> {\"json\":164,\"unknown\":116,...}"   # 正确
+```
+
+成因：`scan().files` 的元素只有 `relPath` / `absPath` / `size`（`language` / `binary` 在 `sourceFiles` / `assetFiles` 里），`languageSummary` 读到的全是 `undefined`。修法：`buildProjectInfo` 改为接收 scan 的完整结果，语言统计用 `sourceFiles`。
+
+**顺带修掉的重复劳动**：`analyze_project` 旧实现是 `detectProjectInfo(root)` + `scan(root)` 各扫一遍（= 把全项目读两轮）。现在一次 `analyzeProject` 任务产出全部结果 —— 判据用 `fs.readdirSync` 计数：新实现 `once=5`、旧路径 `twice=10`。
+
+**任务面**：`FS_TASKS` 3 → 5（新增 `detectProjectInfo`、`analyzeProject`）；`fsCore` 收进 `buildProjectInfo`（纯函数）/ `readTextFileSafe`（原 `impl/shared.cjs` 的 `readTextFile`）/ `summarizeFile`（原 `analyzeProjectTool` 私有）。`projectScan.detectProjectInfo` 退化为同步 thin wrapper，降级路径与既有调用点不受影响。
+
+**证据**：`fs-worker-test` H 段（语言统计回归锁 + 遍历次数 + 双任务 worker/同步逐字节一致 + terminate 取消）、`sync-tool-cancel-test` 5 段（心跳 / workerMode / 取消）；变异 2/2 有判别力 —— 把 `sourceFiles` 改回 `files` 会**立刻复现老 bug**（`{"undefined": 6}`）并让 H1/H3 红，关掉 `onAbort` 让 H7 红。
+
+**仍未做**：`read_file` / `edit_file` / `code_review` 仍是主线程同步读（单文件读取，通常远小于一次全项目扫描）。
+
 ---
 
 ## 附：本轮机械扫描证据
