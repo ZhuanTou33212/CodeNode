@@ -136,6 +136,18 @@
   变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
   子代理结果不截断，均当场变红）。
 
+### 新增（运行回放接进界面 + 第 8 节逐条验证，2026-09-16）
+
+- **运行回放 UI**：`eventBus.replayPayload()`（时间线 + 摘要 + 文件位置，与 CLI 同源）、IPC `agent:events`、
+  preload `replayEvents`、`src/store/replayStore.ts`、`src/components/RunReplayPanel.tsx` ——
+  在「工作流运行」标签里直接看到「这一轮发生了什么」（工具调用 / 失败码 / 审批 / 成本 / token 的时间线）。
+  用例：`test:event-replay` 扩到 26 段，新增 `test:event-replay-ui`（offscreen Electron 真实渲染，12 段，进 DISPLAY 组）。
+- **第 8 节 10 条推理项逐条验证**（见文档）：7 条闭环（含 S12 已修的 #9/#10）、1 条静态结论（#6）、
+  1 条仍未取得可靠结论（#8 压缩上限后的体积曲线，需专门用例）。
+- **修掉 #3 挖出的真问题**：缓存命中的 tool 消息此前退化成**裸 `result.text`** ——
+  丢了「请勿重复调用」提示（模型继续空转重试）与首次那条的 `[data]` 段（信息缩水）。
+  现在命中路径统一补提示前缀 + 正文取自缓存（没有则重建），并加两条断言 + 变异锁住。
+
 ### 新增（S8 补齐：六套日志全部并入统一事件流 + 回放摘要，2026-09-16）
 
 - `runStore`（run 状态）/ `runCheckpoint` / `SideEffectLedger` / `CostLedger` / `AlertDispatcher` /

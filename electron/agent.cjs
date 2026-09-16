@@ -933,6 +933,14 @@ async function compressToolContent(cfg, toolName, text, signal, options) {
 }
 
 /**
+ * 相同参数重复调用时给模型的提示。**首次构建与缓存命中两条路径共用同一份文案** ——
+ * 此前命中路径直接复用缓存的 content，而这个字段写进去时是空串（只有压缩成功才会回填），
+ * 于是命中时退化成一行的裸 `result.text`：「请勿重复调用」提示与 `[data]` 段一起消失，
+ * 模型看不到提示就会继续空转重试（第 8 节 #3 的探针就是在这里挖出真问题的）。
+ */
+const REPEAT_NOTICE = '（相同参数已重复调用，直接复用上次结果，请勿再次重复）';
+
+/**
  * 组装发送给主模型（上下文）的工具结果消息内容。
  * SCALAR_BACKED_TOOLS 的结果不追加 [data]（已本地化）；其余按 cap 截断。
  */
@@ -944,9 +952,7 @@ function buildToolContent(result, toolName, malformed, repeated, cap) {
   const text = rawText.length > cap
     ? rawText.slice(0, cap) + '\n…（结果过长已截断，共 ' + rawText.length + ' 字符。请缩小范围参数重试，或分页读取剩余内容）'
     : rawText;
-  let content = repeated
-    ? '（相同参数已重复调用，直接复用上次结果，请勿再次重复）' + text
-    : text;
+  let content = repeated ? REPEAT_NOTICE + text : text;
   if (malformed) {
     content =
       '【参数格式错误】传给 ' + toolName + ' 的 arguments 不是合法 JSON（引号未转义等），解析后为空。请修正转义后重新调用，不要重复相同调用。\n' +
@@ -1523,10 +1529,20 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           let toolContent;
           if (cacheKey && repeated) {
             const cached = toolResultCache.get(cacheKey);
-            toolContent = cached ? cached.content : buildToolContent(result, tc.name, malformed, repeated, dataTruncateCap);
+            // 缓存里存的是**正文**（首次构建后回填；若被压缩过则是压缩摘要）——
+            // 命中时统一补上「请勿重复调用」提示，否则模型会把它当新结果继续空转。
+            const body = cached && cached.content
+              ? cached.content
+              : buildToolContent(result, tc.name, malformed, false, dataTruncateCap);
+            toolContent = body ? REPEAT_NOTICE + body : body;
             if (cached && cached.compressed) record.compressed = true;
           } else {
             toolContent = buildToolContent(result, tc.name, malformed, repeated, dataTruncateCap);
+            // 回填缓存正文（此前只 set 了空串，命中路径因此丢 [data] 段）
+            if (cacheKey && result.ok) {
+              const entry = toolResultCache.get(cacheKey);
+              if (entry && !entry.content) entry.content = toolContent;
+            }
             // 子代理压缩（S10）：这里只**登记**待压缩项，等本轮所有工具执行完再合并成一次请求。
             // 当场逐个压缩时，N 份结果要付 N 遍 system 前缀 + N 次请求固定开销（而 system 是常量）。
             // max_calls 的额度按「已用调用数 + 本条占用的调用数」预判，避免一轮内无上限地登记。

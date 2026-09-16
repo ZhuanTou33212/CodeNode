@@ -282,6 +282,32 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 9 | **`execute_shell` 白名单实际接近"任意命令"**：`ALLOWED` 含 `cmd`/`powershell`/`npx`/`node`，只剩沙箱 writeRoots 兜底 | ✅ **已复现（2026-09-15）**：`cmd /c echo PWNED > <项目外路径>` 与 `node -e "writeFileSync(<项目外路径>)"` 均在 `best-effort` 下**写成功**；策略自述为「后端=windows-job，已隔离:lifetime/processCount/memory/cpu，**未隔离:filesystem/network**，可写根=2 个」——即 writeRoots 在 Windows 后端根本不被执行（它只对 Linux bwrap / macOS sandbox-exec 生效）。两条命令都触发了 HIGH 确认，但确认文案只说「执行命令」，用户无法从文案判断它会越界写盘 → 需要在能力模型里给 `shell.execute` 加路径/网络约束，而不是靠用户点确认 |
 | 10 | `CODENODE_TEST` 是否在 CI / 打包环境被设置（设置即审批被整体绕过） | `grep -rn CODENODE_TEST .github scripts electron`（本轮未逐处核对打包脚本） |
 
+### §8 逐条验证结论（2026-09-16）
+
+10 条推理项里：**7 条已闭环（含 2 条在 S12 阶段已修）、1 条挖出真问题并已修（#3）、1 条仍是静态结论（#6）、1 条仍未取得可靠结论（#8）**。
+
+| # | 假设 | 验证结论（2026-09-16） |
+|---|---|---|
+| 1 | `tc.id` 缺失是否真发生 | ✅ **已复现并有防护**：`tool-call-id-test` 用 `omitId` 造出「供应商完全不给 id」，`assignCallIds` 按下标补齐后才发请求；`context-capability-test` 也用同一手法覆盖 |
+| 2 | 供应商是否真会重复发 `function.name` 分片 | ✅ **已复现并已处理**：`stream-accumulator-test` 的 `duplicate-name-chunk` / 前缀累积分支证明分片会累加，累加器**取更完整的那一份**并记 anomaly，不会把名字拼成 `read_fileread_file` |
+| 3 | 缓存命中时 `cached.content` 初值 `''` 是否导致 repeated 文案重复拼接 | ⚠️ **挖出真问题，已修**：命中文案本身没有"重复拼接"，但命中路径拿到的 `content` 是空串，于是退化成**裸 `result.text`** —— 既丢了「请勿重复调用」提示（模型会继续空转重试），也丢了首次那条的 `[data]` 段（信息缩水）。已修：命中路径统一补提示前缀 + 正文取自缓存（没有则重建），两条断言 + 变异锁住 |
+| 4 | 续跑是否产生孤立 `tool` 消息 | ❌ **未复现**：探针构造 12 组「assistant.tool_calls + tool」历史再裁剪，发出的 27 条消息里孤立 tool 消息 = **0**（每条 tool 都能对上声明） |
+| 5 | 子代理 `builder` 写文件是否弹确认到用户 | ✅ **会弹，且走父 bridge**：探针让 builder 调 `workbench_edit`，父 `confirm` 收到 `{level:'WRITE', what:'workbench_edit'}`；批准后子代理**真的改到了画布**（节点 0 → 1）。不需审批的工具（`read_file`/`write_file`）照旧不弹 |
+| 6 | `save_project` 的 `projectFile` 在渲染层是否有校验 | 📄 **静态结论：渲染层没有，也不需要**：`projectFile` 只用于显示文件名（`ProjectPanel`）与传参（`WorkbenchDock`/`chatStore`/`projectActions`）；越界保护在主进程（`save_project` 的 `resolveInRoot`，由 `save-project-boundary-test` 锁定） |
+| 7 | 幂等/检查点账本同步重写的开销（n=100） | ✅ **实测可接受**：100 次 `begin`+`commit` = **252.5ms**（2.52ms/次，账本 38KB）。每次是**整份 JSON 同步重写**（O(n)），n=100 无感；线性增长，日级 n=1000 时约 25ms/次，将来可改增量 append |
+| 8 | 压缩 8 次上限之后的上下文体积曲线 | ⚠️ **仍未取得可靠结论**：探针里压缩请求与主循环共用同一份脚本化模型队列，无法干净隔离（曲线被工具结果本身撑大）。`test:compression-batch` 已覆盖压缩正确性，但「上限之后体积是否失控」需要专门用例（把压缩请求单独打桩） |
+| 9 | `execute_shell` 白名单接近「任意命令」 | ✅ 已复现并已修（S12：越界写/网络约束；测试模式不再放行破坏性确认） |
+| 10 | `CODENODE_TEST` 是否在 CI/打包被设置 | ✅ 已覆盖：`test-mode-capability-test` D 段静态守卫（仓库里没有任何脚本/CI 赋值 `CODENODE_TEST`）+ 测试模式下能力门照旧拒绝 |
+
+**#3 的修复细节**（唯一因本轮验证而改的产品代码）：
+
+- 新增 `REPEAT_NOTICE` 常量：首次构建与缓存命中两条路径**共用同一份提示文案**（此前只有首次路径会加，命中路径直接复用空 content）。
+- 命中路径：正文从缓存取（被压缩过则是压缩摘要），缓存里没有正文就用 `buildToolContent` 重建 —— 保证「命中时的 tool 消息」与首次**信息量一致**。
+- 首次构建后把正文回填进缓存条目（性能路径：命中时不必重复拼接大文本）。
+- 回归断言（`agent-cache-invalidation-test` 场景 1）：命中那条 tool 消息必须①带「请勿重复调用」提示 ②与首次一样带 `[data]` 段。变异：只破坏提示路径 → 1 条 FAIL；提示 + 正文两条路径**同时**破坏 → `[data]` 断言 FAIL（单条破坏时不红，因为回填与重建互为冗余、行为等价 —— 这是有意的双保险，不是判据缺失）。
+
+---
+
 ---
 
 ## 9. S0 实施记录（2026-09-15）
@@ -579,6 +605,29 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 - 用例扩展到 18 段：C4/C5（CLI 摘要）、D×6 + D7/D8（六套来源都进流、成本事件带 runId/token、审批事件带 toolCallId）、E1–E4（摘要统计正确 + 空数据不编造）。变异 **5/5 有判别力**：bridge 整体变 no-op → 8 条 FAIL；run 状态 / 副作用账本 / 审批事件分别断桥 → 各 1–2 条 FAIL；摘要 token 统计失效 → 1 条 FAIL。
 
 **仍未做**：UI 侧没有消费 `events.jsonl`（回放目前仍是 CLI）；`events.jsonl` 自身没有独立的轮转策略（复用 runStore 的字节上限）。
+
+### S8-UI 实施记录（运行回放接进界面，2026-09-16）
+
+**动因**：S8 的记录里写着「UI 侧没有消费 `events.jsonl`（回放目前是 CLI）」—— 用户看得到 Agent 在跑，却看不到「这一轮到底发生了什么」；排查问题时只能去命令行敲 `scripts/event-replay.cjs`。
+
+| 内容 | 文件 |
+|---|---|
+| `eventBus.replayPayload(projectRoot, {runId, kinds, limit})`：UI/IPC 一次成形的载荷（时间线截断到**最近** limit 条 + 摘要 + 事件文件位置），与 CLI `--json --summary` **同一份数据** | `electron/eventBus.cjs` |
+| IPC 通道 `agent:events` + preload `replayEvents` + `global.d.ts` 类型 | `electron/ipc/agent.cjs`、`electron/preload.cjs`、`src/global.d.ts` |
+| `src/store/replayStore.ts`：zustand store（loading / error / file / total / runs / events / summary + `load()`） | （新） |
+| `src/components/RunReplayPanel.tsx`：挂在「工作流运行」标签内的**摘要条 + 类型芯片 + 时间线**（工具名/ok/耗时、审批相位中文、成本与 token、run 下拉、事件文件路径） | （新） |
+| 样式沿用既有 token（三层亮度 + 单一 accent，时间线 hover 用 `--bg-panel-3`） | `src/styles.css` |
+| 用例：`test:event-replay` 扩到 **26 段**（新增 F1–F4 载荷契约）；新增 `test:event-replay-ui`（**offscreen Electron 真实渲染** 12 段，进 DISPLAY 组） | `scripts/event-replay-test.cjs`、`scripts/event-replay-ui-test.cjs`（新）、`scripts/run-all-tests.cjs` |
+
+**设计取舍**：
+
+- **不做实时推送**：界面读的是文件里的既成事实（并带「刷新」按钮），不订阅运行中的事件流 —— 避免「界面上显示的事件」与「落盘的内容」两套真相。
+- **摘要不编造**：只统计事件里真实存在的字段（与 S5 的分类哲学一致）—— 没配单价的成本事件不会显示成 `$0.0000`。
+- **时间线截断、摘要全量**：时间线只回最近 `limit`（默认 200）条，摘要按全量统计并在底部提示「共 N 条」。
+- **新 IPC 通道必须显式登记**：`agent:events` 同步进了 `ipc-registry-test` 的通道白名单 —— 该用例的存在就是为了防「模块注册漏接线」。
+- 面板复用 `dock-metrics` / `dock-run-toolbar` / `dock-empty` 等既有 class，新增样式只有时间线本身，视觉上与「工作流运行」其它区块同层。
+
+**仍未做**：① 没有「按 kind 过滤」的交互（store 已支持 `kinds`，UI 未暴露）；② 没有「跳到某个事件的调用详情」；③ 面板只读，不能从事件流反向触发续跑。
 
 ### P4/P5 实施记录（工具契约闭合与显式化、循环上限可配置，2026-09-16）
 

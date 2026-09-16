@@ -47,6 +47,8 @@ const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userD
 sandbox.setDefaultPolicy(policy);
 
 let fetchStub = null;
+/** 最近一次 runTurn 实际发出的请求快照（runTurn 结束会 restore stub，所以要先存下来）。 */
+let lastSeen = [];
 
 function makeRegistry() {
   return toolkit.buildDefaultRegistryWithConfig({
@@ -69,7 +71,7 @@ async function runTurn(script) {
   });
   fetchStub = installScriptedModel(script, { loopLast: false });
   try {
-    return await agent.runAgentChat({
+    const result = await agent.runAgentChat({
       cfg: {
         apiBase: 'http://scripted.local/v1',
         apiKey: 'scripted',
@@ -90,6 +92,8 @@ async function runTurn(script) {
       signal: controller.signal,
       timeoutMs: 20000,
     });
+    lastSeen = fetchStub.seen || [];
+    return result;
   } finally {
     fetchStub.restore();
     fetchStub = null;
@@ -117,6 +121,18 @@ function callsOf(result, name) {
   check('只读之间：经过 list_directory 后第 3 次仍命中缓存（只读工具不互相失效）', reads[2] && reads[2].repeated === true,
     JSON.stringify(reads[2] && reads[2].result));
   check('只读之间：内容仍是 OLD-CONTENT', String(reads[2] && reads[2].result).includes('OLD-CONTENT'));
+
+  // 第 8 节 #3 探针挖出的真问题：命中缓存的 tool 消息此前退化成裸 result.text ——
+  // 既没有「请勿重复调用」提示（模型会继续空转重复调），也没有首次那条的 [data] 段（信息缩水）。
+  // 第 3 轮请求里能同时看到「首次」与「命中」两条 tool 消息，正好用来对比。
+  const turnMessages = (lastSeen || []).map((s) => (s.messages || []).filter((m) => String(m.role) === 'tool'));
+  const firstToolText = turnMessages[2] && turnMessages[2][0] ? String(turnMessages[2][0].content) : '';
+  const repeatedToolText = turnMessages[2] && turnMessages[2][1] ? String(turnMessages[2][1].content) : '';
+  check('缓存命中：第二条 tool 消息带「请勿重复调用」提示（劝退空转）',
+    /请勿再次重复/.test(repeatedToolText), repeatedToolText.slice(0, 120));
+  check('缓存命中：第二条 tool 消息与首次一样带 [data] 段（信息不缩水）',
+    /\[data\]/.test(firstToolText) && /\[data\]/.test(repeatedToolText),
+    JSON.stringify({ first: /\[data\]/.test(firstToolText), repeated: /\[data\]/.test(repeatedToolText) }));
 
   // ---------------------------------------------------------------- 场景 2：回归主场景（shell 改文件后必须失效）
   resetWorkspace();
