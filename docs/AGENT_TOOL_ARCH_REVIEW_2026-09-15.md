@@ -421,10 +421,12 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 变异测试 **4/4 有判别力**（临时改回旧行为 → 新用例变红在预期行 → 自动还原并核对 sha256，基线绿）：只读门退回白名单豁免 → 红在 B 段（行 77）；`scan_project` 不检查是否真写入 → 红在 C 段（行 85）；`context` 不传 actor → 红在 H2（行 239）；子代理结果不截断 → 红在 F 段（行 178）。
 
-**仍未处理（S9 之后）**：① 压缩请求的**批量合并** —— **S10 已完成，见下节**；② `costLedger` 只新增了缓存命中字段的**记录能力**（`promptCachedTokens`），费用单价未按命中/未命中区分——没配价格就不编造；③ 子代理 UI（`src/` 仍无子代理呈现，只落到 run 事件与 stage 节点摘要）；④ 单子代理取消（当前只能随父 signal 整体停）；⑤ S4 起就挂着的 `execute_shell` 越界写（需 S7 能力模型）。下一步建议仍是 S5：结构化 `ToolResult` + `FailureCode` 分类。
+**仍未处理（S9 之后）**：① 压缩请求的**批量合并** —— **S11 已完成，见下节**（原记作 S10，与表格 S10 撞号已更正）；② `costLedger` 只新增了缓存命中字段的**记录能力**（`promptCachedTokens`），费用单价未按命中/未命中区分——没配价格就不编造；③ 子代理 UI（`src/` 仍无子代理呈现，只落到 run 事件与 stage 节点摘要）；④ 单子代理取消（当前只能随父 signal 整体停）；⑤ S4 起就挂着的 `execute_shell` 越界写（需 S7 能力模型）。下一步建议仍是 S5：结构化 `ToolResult` + `FailureCode` 分类。
 
 
-### S10 实施记录（压缩请求批量合并，2026-09-16）
+### S11 实施记录（压缩请求批量合并，2026-09-16）
+
+> 编号说明：本节在实施提交里曾记作「S10」，与第 6 节迁移表中的 **S10（Grounding 门）** 撞号 —— 此处更正为 **S11**，避免与尚未实施的 Grounding 门混淆。
 
 **动因**：S9 结尾留下「压缩命中率的根因未解决」——压缩请求的形状是「固定 system + 变化的原文」，服务端前缀缓存只能命中前缀，所以单次压缩几乎必然全量 miss（用户反馈的正是这一点）。本轮把**同一轮工具循环里的多份大结果合并成一次压缩请求**：system 前缀与请求固定开销（连接、重试、输出模板）只付一次，N 次小请求变成一次大请求；再加上 S9 的内容级缓存，同内容直接 0 请求。
 
@@ -473,6 +475,32 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 **验证证据**：`npm run verify` = **42/42 PASS，198.2s**（CORE 41 → 42）。用例分两层 —— 纯契约层（A 码表与契约一一对应防漂移、B legacy 归一、C `classifyFailure` 含结构化信号与未登记保守、D 提示配额、E 分类化文案、F 结构化结果与向后兼容）与**主循环层**（G 权限失败劝退重试、H 参数类指向「修正参数」、I 未登记码如实标注、J 同一 toolCallId 提示上限）；主循环层用脚本化模型跑真实工具循环、断言实际请求体（含「messages 累积 → 按每轮新增统计注入次数」这个坑）。变异测试 **3/3 有判别力**：主循环退回统一文案 → 红在 G 段（行 186）；提示上限失效 → 红在 D 段（行 79）；未登记码假装认识 → 红在 C 段（行 67）。
 
 **仍未处理**：① UI 未消费 `kind`/`failure`（徽标仍是成功/失败两态，未区分「权限拒绝」与「参数错」）；② 多数工具的错误路径仍是自由文本（靠归一表与结构化信号兜底，未逐个补 `code`）；③ 审批令牌与审批细分类留待 S7 的能力模型。
+
+
+### S6 实施记录（ToolScheduler：只读并行 + withTimeout + 取消贯穿，2026-09-16）
+
+**范围（第 6 节 S6）**：只读并行（默认并发 2–4，可配）+ `withTimeout` + 取消贯穿；事件带 `turnId`/`toolCallId`/`attemptId`；**兼容策略：默认并行关闭，行为等价**。
+
+| 内容 | 文件 |
+|---|---|
+| `ToolScheduler.prime()`：只**启动**本轮可并行的只读调用（本轮含写操作/需确认 → 整轮串行；malformed → 跳过；受并发上限与调用额度约束），返回 `callId → Promise` 映射；落事件 `scheduler_parallel`（带三个 id） | `electron/tools/scheduler.cjs`（新） |
+| `withTimeout(run, ms, { onTimeout })`：到点返回 `code=TIMEOUT`（接 S5 码表）并触发 `onTimeout`（用于 abort 底层执行）；定时器**不能 unref** | 同上 |
+| `linkAbort(parent, controller)`：父 signal → 子 controller 的取消贯穿链（含「订阅前父已 abort」的补发） | 同上 |
+| 主循环接入：轮开始前 `prime()`，执行处优先 `await` 预启动的 promise（未预启动的按原顺序走 registry） | `electron/agent.cjs` |
+| 配置 `agent.tools.parallel`（默认 **false**）/ `agent.tools.parallel_concurrency`（默认 3，钳制 1–8） | `electron/agent.cjs`、`config/agent.properties` |
+| 用例（进 CORE，门禁 42 → 43） | `scripts/scheduler-parallel-test.cjs`（9 段） |
+
+**关键设计取舍**：
+
+- **只启动、不等待**：主循环随后仍按原顺序 `await`，因此 record / messages / 幂等账本 / 检查点的顺序与串行执行时**逐字节相同**。这也是不采用「先并行跑完再统一回填」的原因 —— 那会打乱副作用结算时序。
+- **写操作独占用「整轮串行」保证**：只要本轮出现任何 `mutatesWorkspace` 或 `requiresConfirmation` 调用，整轮不预启动。逐项判定会漏掉「只读与写并发 → 读到写了一半的状态」，宁可保守。
+- **超时值取 descriptor 契约**（与注册表同一值），不在 scheduler 里另设一套；超时同时 abort 底层执行。
+- **预启动受调用额度约束**（`MAX_TOTAL_TOOL_CALLS - totalToolCalls`），避免「已执行但被 `capped` 丢弃」的动作。
+- **默认关闭**：`enabled=false` 时 `prime()` 直接返回空计划，主循环代码路径与之前完全一致（零风险上线）。
+
+**验证证据**：`npm run verify` = **43/43 PASS，198.6s**（CORE 42 → 43）。用例 9 段：纯函数层（并发归一、`withTimeout` 四种情形、取消贯穿含补发）、计划层（只读轮并行 / 写操作整轮独占 / 需确认不预启动 / 并发上限 / 额度 / malformed）、事件三个 id、主循环层（**挂钟断言**：串行 328ms → 并行 169ms 且并发峰值 2；含写操作时峰值 1；顺序不变 —— tool 消息与 assistant 声明逐一对齐；取消贯穿 —— 父 abort 后传给执行体的 signal 已 `aborted` 且立即返回）。变异测试 **3/3 有判别力**：写独占规则失效 → 红在行 94；并发上限失效 → 红在行 101；取消贯穿断链 → 红在行 65。
+
+**仍未处理**：① mutexKey 级细粒度并行（当前是「只读轮整体并行」，同一文件的两个只读工具仍会并发读 —— 只读无害但可能重复 IO）；② 并行下的流式排序（UI 仍按声明顺序收 delta）；③ 长跑只读工具（`poll_job`）在并行轮里与短只读工具同权，未做优先级区分。
 
 ---
 

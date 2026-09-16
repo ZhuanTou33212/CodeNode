@@ -58,6 +58,19 @@
   变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
   子代理结果不截断，均当场变红）。
 
+### 新增（S6：ToolScheduler 只读并行 + withTimeout + 取消贯穿，2026-09-16）
+
+- **新增 `electron/tools/scheduler.cjs`**：`ToolScheduler.prime()` 只**启动**本轮里可并行的**只读**调用
+  （本轮含写操作/需确认 → 整轮串行；参数不完整 → 不预启动；受并发上限与调用额度约束），
+  返回 `callId → Promise`；`withTimeout()` 到点返回 `code=TIMEOUT` 并 abort 底层执行；
+  `linkAbort()` 把父 signal 的取消贯穿到子 controller。事件 `scheduler_parallel` 带
+  `turnId`/`toolCallId`/`attemptId`。
+- **主循环接入**：轮开始前预启动、执行处优先 `await` 预启动的 promise —— 只启动不等待，
+  所以 record / messages / 幂等账本 / 检查点的顺序与串行执行逐字节相同。
+- 配置 `agent.tools.parallel`（**默认 false**，行为等价）/ `agent.tools.parallel_concurrency`（默认 3，1–8）。
+- 用例 `scripts/scheduler-parallel-test.cjs`（9 段，含挂钟断言：串行 328ms → 并行 169ms、写操作整轮独占、
+  取消贯穿、顺序不变）进 CORE 门禁（**42 → 43**）；变异测试 3/3 有判别力。
+
 ### 新增（S5：结构化 ToolResult + FailureCode 分类，2026-09-16）
 
 - **新增 `electron/tools/failures.cjs`**（FailureCode 唯一来源）：码表 + 每码的类别 / 是否可重试 /
@@ -74,7 +87,7 @@
 - 用例 `scripts/tool-failure-taxonomy-test.cjs`（10 段，含真实工具循环与请求体断言）进 CORE
   门禁（**41 → 42**），变异测试 3/3 有判别力。
 
-### 新增（S10：压缩请求批量合并，2026-09-16）
+### 新增（S11：压缩请求批量合并，2026-09-16；原编号 S10 与迁移表的 Grounding 门撞号，已更正）
 
 - **同一轮工具循环里的多份大结果合并成一次压缩请求**（`agent.compression.batch`，默认开；
   `agent.compression.batch_max_items` 默认 4）：逐个压缩时 N 份结果要付 N 遍 system 前缀与 N 次请求
