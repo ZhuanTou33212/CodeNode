@@ -7,11 +7,11 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { shouldSkipDir, isBinaryFileName } = require('../toolFiles.cjs');
-const { globToRegExp, isSensitivePath, resolveInRoot } = require('./shared.cjs');
+const { globToRegExp, isSensitivePath, resolveInRoot, isCancelled } = require('./shared.cjs');
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
-function walkFiles(root, dir, fileRegex, onFile) {
+function walkFiles(root, dir, fileRegex, onFile, shouldStop) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -19,10 +19,12 @@ function walkFiles(root, dir, fileRegex, onFile) {
     return;
   }
   for (const it of entries) {
+    // P7：同步遍历的取消检查点
+    if (shouldStop && shouldStop()) return;
     const abs = path.join(dir, it.name);
     if (it.isDirectory()) {
       if (it.name !== path.basename(root) && shouldSkipDir(it.name)) continue;
-      walkFiles(root, abs, fileRegex, onFile);
+      walkFiles(root, abs, fileRegex, onFile, shouldStop);
     } else if (it.isFile()) {
       const relative = path.relative(root, abs).replace(/\\/g, '/');
       if (fileRegex && !fileRegex.test(relative)) continue;
@@ -77,6 +79,7 @@ function register(registry) {
       }
       const matches = [];
       const maxCollect = offset + max;
+      let cancelled = false;
       walkFiles(start, start, fileRegex, (abs, relative) => {
         if (matches.length >= maxCollect) return;
         if (isSensitivePath(relative)) return;
@@ -102,7 +105,20 @@ function register(registry) {
             matches.push(relative + ':' + (i + 1) + ': ' + lines[i].trim());
           }
         }
+      }, () => {
+        if (cancelled) return true;
+        if (isCancelled(context)) {
+          cancelled = true;
+          return true;
+        }
+        return false;
       });
+      if (cancelled) {
+        return AgentToolResult.failure('CANCELLED', '搜索已取消（用户停止），结果不完整（已找到 ' + matches.length + ' 处匹配）。', {
+          cancelled: true,
+          partial: matches.length,
+        });
+      }
       const total = matches.length;
       if (total === 0) return AgentToolResult.ok('未找到匹配内容', { count: 0, offset: 0 });
       const page = matches.slice(offset, offset + max);

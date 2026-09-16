@@ -11,7 +11,7 @@ const { detectLanguage } = require('./impl/shared.cjs');
 
 const MAX_FILES = 20000;
 
-function walk(root, dir, rel, out) {
+function walk(root, dir, rel, out, shouldStop) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -20,11 +20,16 @@ function walk(root, dir, rel, out) {
   }
   for (const it of entries) {
     if (out.files.length >= MAX_FILES) return;
+    // P7：同步遍历的取消检查点（否则「停止」要等整个项目走完才生效）
+    if (shouldStop && shouldStop()) {
+      out.stopped = true;
+      return;
+    }
     const abs = path.join(dir, it.name);
     const childRel = rel ? rel + '/' + it.name : it.name;
     if (it.isDirectory()) {
       if (shouldSkipDir(it.name)) continue;
-      walk(root, abs, childRel, out);
+      walk(root, abs, childRel, out, shouldStop);
     } else if (it.isFile()) {
       let size = 0;
       try {
@@ -37,21 +42,31 @@ function walk(root, dir, rel, out) {
 
 /**
  * 扫描项目。
- * @returns {{ files: Array, sourceFiles: Array, assetFiles: Array }}
+ * @param {string} root
+ * @param {{ shouldStop?: () => boolean }} [options] shouldStop 返回 true 时**提前结束**并把
+ *   `stopped` 置真（P7：同步遍历的取消检查点）——调用方据此如实回报「结果不完整」。
+ * @returns {{ files: Array, sourceFiles: Array, assetFiles: Array, stopped: boolean }}
  *  sourceFiles: 文本/源码（非二进制）；assetFiles: 二进制资产。
  */
-function scan(root) {
-  const out = { files: [] };
-  walk(root, root, '', out);
+function scan(root, options) {
+  const opts = options || {};
+  const shouldStop = typeof opts.shouldStop === 'function' ? opts.shouldStop : null;
+  const out = { files: [], stopped: false };
+  walk(root, root, '', out, shouldStop);
   out.files.sort((a, b) => a.relPath.localeCompare(b.relPath));
   const sourceFiles = [];
   const assetFiles = [];
   for (const f of out.files) {
+    // P7：逐文件分类阶段同样可取消（大项目里这一步比遍历本身还慢）
+    if (shouldStop && shouldStop()) {
+      out.stopped = true;
+      break;
+    }
     const meta = fileMeta(root, f);
     if (meta.binary) assetFiles.push(meta);
     else sourceFiles.push(meta);
   }
-  return { files: out.files, sourceFiles, assetFiles };
+  return { files: out.files, sourceFiles, assetFiles, stopped: out.stopped };
 }
 
 function fileMeta(root, f) {

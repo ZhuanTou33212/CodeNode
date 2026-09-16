@@ -7,9 +7,9 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { shouldSkipDir } = require('../toolFiles.cjs');
-const { globToRegExp } = require('./shared.cjs');
+const { globToRegExp, isCancelled } = require('./shared.cjs');
 
-function walkFiles(root, dir, regex, max, found) {
+function walkFiles(root, dir, regex, max, found, shouldStop) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -18,10 +18,12 @@ function walkFiles(root, dir, regex, max, found) {
   }
   for (const it of entries) {
     if (found.length >= max) return;
+    // P7：同步遍历的取消检查点 —— 不检查的话「停止」要等整个项目走完才生效
+    if (shouldStop && shouldStop()) return;
     const abs = path.join(dir, it.name);
     if (it.isDirectory()) {
       if (it.name !== path.basename(root) && shouldSkipDir(it.name)) continue;
-      walkFiles(root, abs, regex, max, found);
+      walkFiles(root, abs, regex, max, found, shouldStop);
     } else if (it.isFile()) {
       const relative = path.relative(root, abs).replace(/\\/g, '/');
       if (regex.test(relative)) found.push(relative);
@@ -57,7 +59,21 @@ function register(registry) {
         return AgentToolResult.error('无效的 glob 模式：' + pattern);
       }
       const found = [];
-      walkFiles(root, root, regex, offset + max, found);
+      let cancelled = false;
+      walkFiles(root, root, regex, offset + max, found, () => {
+        if (cancelled) return true;
+        if (isCancelled(context)) {
+          cancelled = true;
+          return true;
+        }
+        return false;
+      });
+      if (cancelled) {
+        return AgentToolResult.failure('CANCELLED', '查找已取消（用户停止），结果不完整（已找到 ' + found.length + ' 个文件）。', {
+          cancelled: true,
+          partial: found.length,
+        });
+      }
       const total = found.length;
       if (total === 0) return AgentToolResult.ok('未找到匹配文件', { count: 0, offset: 0, files: [] });
       const page = found.slice(offset, offset + max);

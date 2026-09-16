@@ -39,6 +39,8 @@
     "test:event-replay": "node scripts/event-replay-test.cjs",
     "test:agent-limits": "node scripts/agent-limits-test.cjs",
     "test:tool-contract": "node scripts/tool-contract-closure-test.cjs",
+    "test:grounding-gate": "node scripts/grounding-gate-test.cjs",
+    "test:sync-cancel": "node scripts/sync-tool-cancel-test.cjs",
     "test:agent-cache": "node scripts/agent-cache-invalidation-test.cjs",
     "test:tool-call-id": "node scripts/tool-call-id-test.cjs",
     "test:stream-accumulator": "node scripts/stream-accumulator-test.cjs",

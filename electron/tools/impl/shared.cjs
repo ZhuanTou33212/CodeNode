@@ -212,6 +212,36 @@ function accentForType(type) {
   return NODE_TYPE_ACCENT[String(type || '')] || '#3b82f6';
 }
 
+/**
+ * 同步工具的取消检查点（P7）。
+ *
+ * 限制要说清楚：JS 单线程挡不住**单次**同步 fs 调用（一次 readFileSync 大文件、一次
+ * `JSON.parse` 巨型字符串），真正的可中断需要把这些工具挪到 worker/子进程 —— 那部分仍未做。
+ * 但对**遍历很多文件**这类循环有效：在每条目录项之间检查一次，用户点「停止」就能在
+ * 扫描/查找/检索中途真的停下来，而不是等它把整个项目走完。
+ *
+ * 用法（不抛异常，让工具自己决定如何如实返回）：
+ *   if (isCancelled(context)) return AgentToolResult.failure('CANCELLED', '扫描已取消（用户停止）');
+ *
+ * @param {any} context 底层 AgentToolContext 或 ExecutionContext（新面 cancel.isCancelled）
+ * @returns {boolean}
+ */
+function isCancelled(context) {
+  if (!context) return false;
+  try {
+    if (typeof context.cancelled === 'function' && context.cancelled() === true) return true;
+    const cancel = context.cancel;
+    if (cancel && typeof cancel.isCancelled === 'function' && cancel.isCancelled() === true) return true;
+    if (typeof context.signal === 'function') {
+      const signal = context.signal();
+      if (signal && signal.aborted === true) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 module.exports = {
   resolveInRoot,
   resolveFileFuzzy,
@@ -220,6 +250,7 @@ module.exports = {
   readTextFile,
   globToRegExp,
   isSensitivePath,
+  isCancelled,
   NODE_TYPE_ACCENT,
   accentForType,
 };

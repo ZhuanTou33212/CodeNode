@@ -46,6 +46,8 @@ const CORE = [
   'test:event-replay',
   'test:agent-limits',
   'test:tool-contract',
+  'test:grounding-gate',
+  'test:sync-cancel',
   'test:agent-cache',
   'test:tool-call-id',
   'test:stream-accumulator',

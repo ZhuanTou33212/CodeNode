@@ -52,6 +52,7 @@ function loadConfig(projectRoot) {
     soulFile: cfg.soul_file || 'config/soul.md',
     tools: parseToolsConfig(cfg),
     rag: parseRagConfig(cfg),
+    grounding: parseGroundingConfig(cfg),
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
     subagent: parseSubagentConfig(cfg),
@@ -144,6 +145,24 @@ function parseRagConfig(cfg) {
     milvusSearchEf: configInteger(cfg, 'rag.milvus_search_ef', 64, 8, 16384),
     milvusBatchSize: configInteger(cfg, 'rag.milvus_batch_size', 128, 1, 1024),
     milvusFlushEvery: configInteger(cfg, 'rag.milvus_flush_every_batches', 4, 1, 1000),
+  };
+}
+
+/**
+ * 来源校验（grounding）门配置（S10/P6）。
+ *
+ *   agent.grounding.mode        warn（默认）= 只上报（delta + 界面徽标），不拦交付；
+ *                               enforce   = 引用不可信的答案不允许直接交付
+ *   agent.grounding.max_retries enforce 下最多让模型订正几次（默认 1）
+ *
+ * 为什么默认 warn：引用校验本身会有误判（检索块级引用 vs 实读切片引用），把它变成硬门禁
+ * 会让正确的回答被拦下。enforce 是给「有据可依才准交付」这类场景用的显式选择。
+ */
+function parseGroundingConfig(cfg) {
+  const mode = String(cfg['agent.grounding.mode'] || 'warn').trim().toLowerCase();
+  return {
+    mode: mode === 'enforce' ? 'enforce' : 'warn',
+    maxRetries: configInteger(cfg, 'agent.grounding.max_retries', 1, 0, 3),
   };
 }
 
@@ -1148,6 +1167,24 @@ function groundingWarning(grounding) {
   }
   return '';
 }
+
+/**
+ * enforce 模式下要求模型订正的提示（区分「引用伪造」与「有来源却没引用」两种不合格）。
+ * 与 groundingWarning 一样，这段文字是**给模型的**，不会拼进交付给用户的内容。
+ */
+function groundingRetryPrompt(grounding) {
+  if (grounding && grounding.status === 'invalid') {
+    return (
+      '【系统提示】你上一条回答里的引用在本轮没有来源（路径未读到或行号越界）：' +
+      (grounding.invalid || []).join(', ') +
+      '。请**只**依据本轮实际检索/读到的内容重写回答，不要编造引用；拿不到来源就如实说明。'
+    );
+  }
+  return (
+    '【系统提示】本轮已经检索到可用来源，但你的回答没有引用真实的 [path#Lx-Ly]。' +
+    '请重写回答，并在关键结论处给出真实来源引用；不要凭空作答。'
+  );
+}
 /**
  * 追踪一次运行里的事件：**双写**
  *   1. `.codenode/tools_trace.jsonl`（旧文件，保留一个版本周期的兼容读取路径）；
@@ -1194,7 +1231,7 @@ function mergeUsage(previous, next) {
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
  *   timeoutMs     单轮超时（默认 180s）
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, steps?: number, toolCount?: number}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, steps?: number, toolCount?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
   onDelta && onDelta({ kind: 'start' });
@@ -1228,6 +1265,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const maxToolIterations = limits.maxToolIterations > 0 ? limits.maxToolIterations : MAX_TOOL_ITERATIONS;
   const maxTotalToolCalls = limits.maxTotalToolCalls > 0 ? limits.maxTotalToolCalls : MAX_TOTAL_TOOL_CALLS;
   const dataTruncateCap = limits.dataTruncateCap > 0 ? limits.dataTruncateCap : DATA_TRUNCATE_CAP;
+  // P6：来源校验门（默认 warn = 只上报，行为与之前完全一致；enforce 才拦交付）
+  const groundingCfg = (cfg && cfg.grounding) || {};
+  const groundingEnforce = groundingCfg.mode === 'enforce';
+  const maxGroundingRetries = Number.isFinite(groundingCfg.maxRetries) ? groundingCfg.maxRetries : 0;
+  let groundingRetries = 0;
   /** S8：统一事件流 —— 每条事件都带本轮身份（runId/turnId[/toolCallId]），可按 run 回放 */
   const traceProjectRoot = () =>
     tools && tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null;
@@ -1619,6 +1661,20 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         machine.go(STATES.RUNNING, 'tools_settled');
         continue;
       }
+      // P6：enforce 模式下，引用不可信的答案不允许直接交付 —— 先给一次订正机会
+      // （enforce 之外一律不进入这个分支，warn 行为与之前逐字一致）。
+      if (groundingEnforce && groundingRetries < maxGroundingRetries) {
+        const pending = validateRagGrounding(content, allToolCalls);
+        if (pending.status === 'invalid' || pending.status === 'missing') {
+          groundingRetries += 1;
+          messages.push({ role: 'assistant', content: content });
+          messages.push({ role: 'user', content: groundingRetryPrompt(pending) });
+          emitTrace({ kind: 'grounding_retry', turnId: iter, status: pending.status, invalid: pending.invalid || [] });
+          if (onDelta) onDelta({ kind: 'grounding', grounding: pending, warning: groundingWarning(pending) });
+          content = '';
+          continue;
+        }
+      }
       content = content || res.content || '';
       endedNaturally = true;
       // 回答本身被截断（且补问次数已用尽）：如实标记，别让调用方以为这是完整的最终答案
@@ -1637,9 +1693,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
+    // enforce 模式下仍未通过 = 交付门槛不达标：如实上报（既不静默放过，也不把提示写进正文）
+    const groundingBlocked = groundingEnforce && (grounding.status === 'invalid' || grounding.status === 'missing');
     // 校验结果只作为独立事件上报（界面另有来源徽标），不拼进交付内容：
     // 引用校验本身可能误判，把提示写进回答正文会污染交付文本。
     if (warning) onDelta && onDelta({ kind: 'grounding', grounding, warning });
+    if (groundingBlocked) onDelta && onDelta({ kind: 'grounding_blocked', grounding, warning, retries: groundingRetries });
     onDelta && onDelta({ kind: 'done', grounding });
     emitTrace({
       kind: 'turn_end', totalToolCalls, executedUnique: allToolCalls.filter((t) => !t.repeated).length,
@@ -1657,6 +1716,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       state: machine.state,
       stateHistory: machine.history.slice(),
       ...(endedNaturally && stopReason === 'length_truncated' ? { stopReason: 'length_truncated' } : {}),
+      ...(groundingBlocked ? { groundingBlocked: true, groundingRetries } : {}),
     };
   } catch (e) {
     if (signal && signal.aborted) {
@@ -1689,6 +1749,7 @@ module.exports = {
   runAgentChat,
   logToolTrace,
   parseRagConfig,
+  parseGroundingConfig,
   parseLimitsConfig,
   mergeUsage,
   assignCallIds,

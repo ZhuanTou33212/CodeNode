@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
-const { resolveInRoot } = require('./shared.cjs');
+const { resolveInRoot, isCancelled } = require('./shared.cjs');
 const { scan } = require('../projectScan.cjs');
 
 const MAX_WORKBENCH_NODES = 200;
@@ -56,7 +56,15 @@ function register(registry) {
       if (!root) return AgentToolResult.error('路径越过项目边界');
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('目录不存在：' + root);
       try {
-        const result = scan(root);
+        const result = scan(root, { shouldStop: () => isCancelled(context) });
+        // P7：取消时如实报告「结果不完整」，不要拿半份扫描当完整结果交付
+        if (result.stopped) {
+          return AgentToolResult.failure('CANCELLED', '扫描已取消（用户停止），结果不完整（已扫描 ' + result.files.length + ' 个文件）。', {
+            cancelled: true,
+            partial: result.files.length,
+            root,
+          });
+        }
         const data = {
           root,
           sourceFiles: result.sourceFiles.length,
