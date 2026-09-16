@@ -10,6 +10,8 @@
 const fs = require('fs');
 const path = require('path');
 const runStore = require('./runStore.cjs');
+// S8：统一运行事件流（.codenode/events.jsonl，带 runId/turnId/toolCallId/attemptId，可按 run 回放）
+const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
 const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
 // 工具的只读/缓存/变更语义只有一份来源（electron/tools/descriptor.cjs），不再各文件各留一份名单
@@ -241,6 +243,10 @@ function parseLimitsConfig(cfg) {
     // 单次运行的累计 token 上限。带图对话的输入会明显变大，默认给到 60 万；
     // 真正防止"算错"的是 requestBudget 的估算口径（图片按 token 规则折算，不按 base64 字节）。
     maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 600000, 10000, 4000000),
+    // 循环硬上限（此前是 agent.cjs 里的源码常量，无法按项目调整）——默认值与旧常量一致。
+    maxToolIterations: configInteger(cfg, 'agent.max_tool_iterations', 12, 1, 200),
+    maxTotalToolCalls: configInteger(cfg, 'agent.max_total_tool_calls', 100, 1, 2000),
+    dataTruncateCap: configInteger(cfg, 'agent.data_truncate_cap', 120000, 2000, 2000000),
   };
 }
 
@@ -912,9 +918,16 @@ async function compressToolContent(cfg, toolName, text, signal, options) {
  * SCALAR_BACKED_TOOLS 的结果不追加 [data]（已本地化）；其余按 cap 截断。
  */
 function buildToolContent(result, toolName, malformed, repeated, cap) {
+  const rawText = result.text || (result.ok ? '（空）' : '（失败）');
+  // 截断**正文本身**：cap（agent.data_truncate_cap）此前只作用于下面的 [data] 附加段，
+  // result.text 没有任何上限 —— 一次大目录扫描 / 大文件读取就能把上下文撑爆（审查 §3 P1）。
+  // 截断必须带明确标记和「怎么拿剩余内容」的指引，否则模型会以为这就是全部内容。
+  const text = rawText.length > cap
+    ? rawText.slice(0, cap) + '\n…（结果过长已截断，共 ' + rawText.length + ' 字符。请缩小范围参数重试，或分页读取剩余内容）'
+    : rawText;
   let content = repeated
-    ? '（相同参数已重复调用，直接复用上次结果，请勿再次重复）' + (result.text || '')
-    : result.text || (result.ok ? '（空）' : '（失败）');
+    ? '（相同参数已重复调用，直接复用上次结果，请勿再次重复）' + text
+    : text;
   if (malformed) {
     content =
       '【参数格式错误】传给 ' + toolName + ' 的 arguments 不是合法 JSON（引号未转义等），解析后为空。请修正转义后重新调用，不要重复相同调用。\n' +
@@ -1135,13 +1148,22 @@ function groundingWarning(grounding) {
   }
   return '';
 }
-/** 追踪工具调用（时间/命中缓存/耗时/是否重复），追加到项目 .codenode/tools_trace.jsonl */
+/**
+ * 追踪一次运行里的事件：**双写**
+ *   1. `.codenode/tools_trace.jsonl`（旧文件，保留一个版本周期的兼容读取路径）；
+ *   2. `.codenode/events.jsonl`（S8 统一事件流，带 runId/turnId/toolCallId/attemptId，
+ *      可按 run / turn / 单次调用回放 —— 见 scripts/event-replay.cjs）。
+ * 事件流是旁路：写入失败只丢事件，绝不影响工具循环。
+ */
 function logToolTrace(projectRoot, entry) {
   if (!projectRoot) return;
   try {
     const dir = path.join(projectRoot, '.codenode');
     fs.mkdirSync(dir, { recursive: true });
     runStore.appendJsonl(path.join(dir, 'tools_trace.jsonl'), redactSecrets({ ts: new Date().toISOString(), ...entry }));
+  } catch {}
+  try {
+    eventBus.emit(projectRoot, entry);
   } catch {}
 }
 
@@ -1200,6 +1222,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     enabled: !!(cfg.tools && cfg.tools.toolsParallel === true),
     concurrency: (cfg.tools && cfg.tools.toolsParallelConcurrency) || schedulerLib.DEFAULT_CONCURRENCY,
   });
+  // P5：循环硬上限从源码常量改为可配置（agent.max_tool_iterations / agent.max_total_tool_calls /
+  // agent.data_truncate_cap），默认值与旧常量逐字一致 → 不配就完全等价。
+  const limits = (cfg && cfg.limits) || {};
+  const maxToolIterations = limits.maxToolIterations > 0 ? limits.maxToolIterations : MAX_TOOL_ITERATIONS;
+  const maxTotalToolCalls = limits.maxTotalToolCalls > 0 ? limits.maxTotalToolCalls : MAX_TOTAL_TOOL_CALLS;
+  const dataTruncateCap = limits.dataTruncateCap > 0 ? limits.dataTruncateCap : DATA_TRUNCATE_CAP;
+  /** S8：统一事件流 —— 每条事件都带本轮身份（runId/turnId[/toolCallId]），可按 run 回放 */
+  const traceProjectRoot = () =>
+    tools && tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null;
+  const emitTrace = (event, rootOverride) =>
+    logToolTrace(rootOverride || traceProjectRoot(), Object.assign({ runId: (cfg && cfg.costRunId) || null }, event));
   let totalToolCalls = 0;
   let loopIterations = 0;
   let compressCalls = 0;
@@ -1208,7 +1241,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let lastFinishReason = null;
   let truncationNudges = 0;
   try {
-    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+    for (let iter = 0; iter < maxToolIterations; iter++) {
       loopIterations = iter + 1;
       if (signal && signal.aborted) {
         machine.go(STATES.CANCELLED, 'aborted');
@@ -1270,9 +1303,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           role: 'user',
           content: '【系统提示】上一轮输出被长度上限截断（finish_reason=length）。请把回复拆短：只给结论，或直接继续调用工具，不要重复已经输出过的内容。',
         });
-        logToolTrace(tools && tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
-          kind: 'truncation_nudge', iter, finishReason, count: truncationNudges,
-        });
+        emitTrace({ kind: 'truncation_nudge', turnId: iter, finishReason, count: truncationNudges });
         continue;
       }
       if (tools && tools.registry && toolCalls.length) {
@@ -1306,7 +1337,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               {
                 signal,
                 turnId: iter,
-                budget: Math.max(0, MAX_TOTAL_TOOL_CALLS - totalToolCalls),
+                budget: Math.max(0, maxTotalToolCalls - totalToolCalls),
                 descriptorOf: (name) => (tools.registry && typeof tools.registry.descriptorOf === 'function' ? tools.registry.descriptorOf(name) : null),
                 isMalformed: (item) => {
                   const parsedArgs = parseToolArgs(item.argsText);
@@ -1314,11 +1345,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                   return item.argsValid === false || (rawText !== '' && rawText !== '{}' && Object.keys(parsedArgs).length === 0);
                 },
                 execute: (item, execOptions) => tools.registry.execute(item.name, parseToolArgs(item.argsText), tools.context, execOptions),
-                trace: (event) =>
-                  logToolTrace(
-                    tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null,
-                    Object.assign({ iter }, event),
-                  ),
+                trace: (event) => emitTrace(Object.assign({ turnId: iter }, event)),
               },
             )
           : null;
@@ -1328,7 +1355,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             onDelta && onDelta({ kind: 'stopped' });
             return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
           }
-          if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
+          if (totalToolCalls >= maxTotalToolCalls) {
             capped = true;
             break;
           }
@@ -1454,10 +1481,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           let toolContent;
           if (cacheKey && repeated) {
             const cached = toolResultCache.get(cacheKey);
-            toolContent = cached ? cached.content : buildToolContent(result, tc.name, malformed, repeated, DATA_TRUNCATE_CAP);
+            toolContent = cached ? cached.content : buildToolContent(result, tc.name, malformed, repeated, dataTruncateCap);
             if (cached && cached.compressed) record.compressed = true;
           } else {
-            toolContent = buildToolContent(result, tc.name, malformed, repeated, DATA_TRUNCATE_CAP);
+            toolContent = buildToolContent(result, tc.name, malformed, repeated, dataTruncateCap);
             // 子代理压缩（S10）：这里只**登记**待压缩项，等本轮所有工具执行完再合并成一次请求。
             // 当场逐个压缩时，N 份结果要付 N 遍 system 前缀 + N 次请求固定开销（而 system 是常量）。
             // max_calls 的额度按「已用调用数 + 本条占用的调用数」预判，避免一轮内无上限地登记。
@@ -1478,9 +1505,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             content: toolContent,
           });
           onDelta && onDelta({ kind: 'tool_result', toolCalls: [record] });
-          logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+          emitTrace({
             kind: 'tool',
-            iter,
+            turnId: iter,
+            toolCallId: callId,
+            attemptId: callId + '#1',
             name: tc.name,
             repeated,
             malformed,
@@ -1531,15 +1560,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               }
             }
           });
-          logToolTrace(compressionProjectRoot, {
-            kind: 'compression',
-            iter,
-            items: pendingCompression.length,
-            batchSize: Math.min(maxPerBatch, pendingCompression.length),
-            tools: pendingCompression.map((entry) => entry.toolName),
-            cacheHits: outs.filter((out) => out && out.cacheHit).length,
-            elapsedMs: Date.now() - startedAt,
-          });
+          emitTrace(
+            {
+              kind: 'compression',
+              turnId: iter,
+              items: pendingCompression.length,
+              batchSize: Math.min(maxPerBatch, pendingCompression.length),
+              tools: pendingCompression.map((entry) => entry.toolName),
+              cacheHits: outs.filter((out) => out && out.cacheHit).length,
+              elapsedMs: Date.now() - startedAt,
+            },
+            compressionProjectRoot,
+          );
         }
         // 失败按**类别**分派提示（S5）：参数错 → 改参数重试；权限/用户拒绝 → 别原样重试、要人介入；
         // 超时 → 缩小范围；副作用未知 → 先只读核对；认不出来的码按最保守处理。
@@ -1560,17 +1592,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const nudgeText = failures.buildFailureNudge(plan.emitted);
           if (nudgeText) messages.push({ role: 'user', content: nudgeText });
           if (plan.emitted.length || plan.skipped.length) {
-            logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+            emitTrace({
               kind: 'failure_taxonomy',
-              iter,
+              turnId: iter,
               nudged: plan.emitted.map((item) => ({ tool: item.tool, code: item.code, category: item.category, retryable: item.retryable })),
               suppressed: plan.skipped.map((item) => ({ tool: item.tool, code: item.code, nudges: item.nudges })),
             });
           }
         }
-        logToolTrace(tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+        emitTrace({
           kind: 'round_end',
-          iter,
+          turnId: iter,
           finishReason: finishReason || null,
           toolCount: toolCalls.length,
           executed: totalToolCalls,
@@ -1609,7 +1641,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     // 引用校验本身可能误判，把提示写进回答正文会污染交付文本。
     if (warning) onDelta && onDelta({ kind: 'grounding', grounding, warning });
     onDelta && onDelta({ kind: 'done', grounding });
-    logToolTrace(tools && tools.context && tools.context.projectRoot ? tools.context.projectRoot() : null, {
+    emitTrace({
       kind: 'turn_end', totalToolCalls, executedUnique: allToolCalls.filter((t) => !t.repeated).length,
       repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations,
       resultLen: content.length, finishReason: lastFinishReason, grounding,

@@ -49,6 +49,30 @@ function buildDefaultRegistry() {
   for (const mod of BUILTINS) {
     mod.register(registry);
   }
+  return declareSemantics(registry);
+}
+
+/**
+ * 把每个工具的语义**显式**写进契约（S3「24 个工具逐个迁移」的收口）。
+ *
+ * descriptor.cjs 的名单是唯一来源，legacy 合成契约的字段值同样来自它 —— 这里只是把结果
+ * 固化成 `explicit: true` 的声明（source 从 'legacy' 变 'explicit'，字段值逐字不变）。
+ * 特别注意 `requiresConfirmation` **原样传递**：补声明不能顺手给写工具加一道审批，
+ * 行为变化只允许来自显式配置（tools.confirm_writes）。
+ */
+function declareSemantics(registry) {
+  for (const descriptor of registry.listDescriptors()) {
+    registry.declareContract(descriptor.name, {
+      readOnly: descriptor.readOnly,
+      idempotent: descriptor.idempotent,
+      mutatesWorkspace: descriptor.mutatesWorkspace,
+      requiresConfirmation: descriptor.requiresConfirmation,
+      requiredCapability: descriptor.requiredCapability,
+      timeoutMs: descriptor.timeoutMs,
+      cachePolicy: descriptor.cachePolicy,
+      concurrencyPolicy: descriptor.concurrencyPolicy,
+    });
+  }
   return registry;
 }
 
@@ -117,4 +141,4 @@ function filterByRole(registry, role) {
   return registry;
 }
 
-module.exports = { buildDefaultRegistry, filterByConfig, filterByRole, buildDefaultRegistryWithConfig, BUILTINS, ROLE_TOOLS };
+module.exports = { buildDefaultRegistry, filterByConfig, filterByRole, buildDefaultRegistryWithConfig, declareSemantics, BUILTINS, ROLE_TOOLS };

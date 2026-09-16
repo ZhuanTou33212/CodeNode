@@ -76,6 +76,14 @@ function validateInput(value, schema, path = '$') {
         return `${path}.${required} 为必填参数`;
       }
     }
+    // 闭合 schema（additionalProperties=false）：未声明的字段直接拒绝。
+    // 宽松校验会让「参数名拼错」表现为「参数被静默忽略、走默认值」—— 判据消失而不报错。
+    if (schema.additionalProperties === false && schema.properties) {
+      const declared = new Set(Object.keys(schema.properties));
+      for (const key of Object.keys(value)) {
+        if (!declared.has(key)) return `${path}.${key} 不是该工具已声明的参数（参数名拼写错误？）`;
+      }
+    }
     for (const [key, childSchema] of Object.entries(schema.properties || {})) {
       if (Object.prototype.hasOwnProperty.call(value, key) && value[key] !== undefined) {
         const error = validateInput(value[key], childSchema, `${path}.${key}`);
@@ -84,6 +92,21 @@ function validateInput(value, schema, path = '$') {
     }
   }
   return null;
+}
+
+/**
+ * 闭合工具参数 schema：有 `properties` 且未显式声明 `additionalProperties` 时补 `false`。
+ *
+ * 为什么必须闭合：`validateInput` 只校验**已声明**字段，模型把 `maxLines` 拼成 `maxLine`
+ * 会静默走默认值 —— 判据消失而不报错（审查 §2 实测 0/24 声明 additionalProperties）。
+ * 闭合后错误当场暴露给模型，它才有机会改参数重试；同时 `toOpenAiTools()` 会把闭合的
+ * schema 下发给模型，减少乱传字段本身。
+ */
+function closeInputSchema(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (!schema.properties) return schema;
+  if (schema.additionalProperties !== undefined) return schema;
+  return { ...schema, additionalProperties: false };
 }
 
 class AgentToolRegistry {
@@ -108,7 +131,7 @@ class AgentToolRegistry {
 
   /** 旧接口：按名单合成保守契约（未声明只读 = 可写） */
   register(name, description, inputSchema, executor) {
-    const spec = { name, description, inputSchema: inputSchema || null };
+    const spec = { name, description, inputSchema: closeInputSchema(inputSchema || null) };
     this.tools.set(name, {
       spec,
       descriptor: descriptorLib.descriptorForLegacy(name, description, spec.inputSchema),
@@ -124,6 +147,7 @@ class AgentToolRegistry {
    */
   registerDescriptor(input, executor) {
     const descriptor = descriptorLib.normalizeDescriptor({ ...(input || {}), explicit: true });
+    descriptor.inputSchema = closeInputSchema(descriptor.inputSchema);
     this.tools.set(descriptor.name, {
       spec: { name: descriptor.name, description: descriptor.description, inputSchema: descriptor.inputSchema },
       descriptor,
@@ -240,8 +264,12 @@ class AgentToolRegistry {
       }
     }
 
-    // S7：剥离模型自填的审批字段（在校验之前 —— 自填不生效，也不因严格 schema 报错）
-    if (descriptor.requiresConfirmation) {
+    // S7：剥离模型自填的审批字段 —— **所有工具**、且在校验之前。
+    // 不能只在声明了 requiresConfirmation 的工具上剥离：schema 闭合（additionalProperties=false）
+    // 之后，任何一个自填字段都会变成「未知参数」错误，把本来能正常执行的调用直接打回
+    // （实测：write_file 带 confirmed=true → INVALID_TOOL_ARGUMENTS）。自填字段必须始终无效，
+    // 而不是有时报错、有时被忽略。
+    {
       /** @type {string[]} */
       const stripped = [];
       for (const key of CONFIRMATION_SELF_FIELDS) {
@@ -250,9 +278,11 @@ class AgentToolRegistry {
           stripped.push(key);
         }
       }
-      const traceFn = /** @type {any} */ (execContext).trace;
-      if (stripped.length && typeof traceFn === 'function') {
-        traceFn('approval_self_fields_stripped', { tool: name, fields: stripped });
+      // 审计走 trace 的**方法**（execContext.trace 是新面的冻结对象，不是可调用函数 —— 早前这里
+      // 把对象当函数调，判定恒假，自填字段被剥离这件事从来没留下痕迹）。
+      const traceNote = /** @type {any} */ (execContext).trace;
+      if (stripped.length && traceNote && typeof traceNote.note === 'function') {
+        traceNote.note('approval_self_fields_stripped', { tool: name, fields: stripped });
       }
     }
 
@@ -359,4 +389,4 @@ class AgentToolRegistry {
   }
 }
 
-module.exports = { AgentToolRegistry, validateInput };
+module.exports = { AgentToolRegistry, validateInput, closeInputSchema };

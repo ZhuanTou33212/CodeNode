@@ -125,8 +125,9 @@ function policyFor(extra) {
       toolsAllowed: ['save_project'],
     });
     // 刻意不注入 confirm：模拟「审批通道没接上」。TEST_MODE 也不该把它变成「已批准」。
+    // 注意 save_project 的 schema 是空 properties + 闭合 —— 传任何字段都会被参数校验先拒掉。
     const ctx = new AgentToolContext({ projectRoot: root, audit: () => {}, sandbox: policy, saveProject: async () => true });
-    const res = await registry.execute('save_project', { projectFile: path.join(root, 'workflow.cnode') }, ctx);
+    const res = await registry.execute('save_project', {}, ctx);
     check('C1 没有审批通道时 save_project 报 APPROVAL_REQUIRED', res.ok === false && res.data.code === 'APPROVAL_REQUIRED', JSON.stringify({ ok: res.ok, code: res.data && res.data.code }));
   }
 
