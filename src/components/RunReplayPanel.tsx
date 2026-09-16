@@ -26,7 +26,7 @@ function approvalPhase(event: unknown): string {
 /**
  * 事件 → 一行人类可读描述。只展示事件里**真实存在**的字段，缺就不显示（不补、不猜）。
  */
-export function describeEvent(event: ReplayEvent): string {
+function describeEvent(event: ReplayEvent): string {
   const e = event as Record<string, any>;
   const parts: string[] = [];
   const push = (text: unknown) => {

@@ -37,11 +37,9 @@ type ReplayState = {
   events: ReplayEvent[];
   summary: ReplaySummary | null;
   runId: string | null;
-  kinds: string[] | null;
   limit: number;
   setRunId: (runId: string | null) => void;
-  setKinds: (kinds: string[] | null) => void;
-  load: (projectRoot: string | null, options?: { runId?: string | null; kinds?: string[] | null; limit?: number }) => Promise<void>;
+  load: (projectRoot: string | null, options?: { runId?: string | null; limit?: number }) => Promise<void>;
 };
 
 export const useReplayStore = create<ReplayState>((set, get) => ({
@@ -53,22 +51,19 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   events: [],
   summary: null,
   runId: null,
-  kinds: null,
   limit: 200,
   setRunId: (runId) => set({ runId }),
-  setKinds: (kinds) => set({ kinds }),
   load: async (projectRoot, options) => {
     const current = get();
     const runId = options?.runId !== undefined ? options.runId : current.runId;
-    const kinds = options?.kinds !== undefined ? options.kinds : current.kinds;
     const limit = options?.limit ?? current.limit;
     if (!projectRoot || !window.codenode?.replayEvents) {
       set({ loading: false, error: '未选择项目', events: [], runs: [], summary: null, total: 0, file: null });
       return;
     }
-    set({ loading: true, error: null, runId, kinds });
+    set({ loading: true, error: null, runId });
     try {
-      const payload = await window.codenode.replayEvents(projectRoot, { runId, kinds, limit });
+      const payload = await window.codenode.replayEvents(projectRoot, { runId, limit });
       if (!payload || payload.ok !== true) {
         set({ loading: false, error: payload?.error || '回放失败', events: [], runs: [], summary: null, total: 0, file: null });
         return;
