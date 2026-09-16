@@ -34,6 +34,8 @@
     "test:tool-failure-taxonomy": "node scripts/tool-failure-taxonomy-test.cjs",
     "test:scheduler-parallel": "node scripts/scheduler-parallel-test.cjs",
     "test:approval-token": "node scripts/approval-token-test.cjs",
+    "test:shell-guard": "node scripts/shell-guard-test.cjs",
+    "test:test-mode": "node scripts/test-mode-capability-test.cjs",
     "test:agent-cache": "node scripts/agent-cache-invalidation-test.cjs",
     "test:tool-call-id": "node scripts/tool-call-id-test.cjs",
     "test:stream-accumulator": "node scripts/stream-accumulator-test.cjs",

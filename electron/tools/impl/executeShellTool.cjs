@@ -8,6 +8,7 @@ const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { safeEnvironment } = require('../../envPolicy.cjs');
 const sandbox = require('../../sandbox.cjs');
+const shellGuard = require('../shellGuard.cjs');
 
 const ALLOWED = new Set([
   'mvn', 'mvnw', 'mvnw.cmd', 'git', 'java', 'javac', 'gradle', 'gradlew', 'gradlew.bat',
@@ -274,16 +275,46 @@ function register(registry) {
       if (!ALLOWED.has(normalized)) return AgentToolResult.error('命令不在白名单：' + tokens[0]);
       const timeoutSeconds = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? Math.max(1, Math.floor(args.timeoutSeconds)) : 30;
 
+      const root = context.projectRoot();
+      const policy = sandbox.currentPolicy(context);
+      // 命令静态审计：Windows 后端（windows-job）**不隔离文件系统**，writeRoots 只对
+      // Linux bwrap / macOS sandbox-exec 生效。越界写必须在能力层拒绝 —— 不能指望用户
+      // 从「执行命令」这句确认文案里看出它要写到工作区外面（2026-09-15 实测复现）。
+      const guard = shellGuard.analyzeShellCommand(command, {
+        projectRoot: root,
+        writeRoots: policy && Array.isArray(policy.writeRoots) && policy.writeRoots.length ? policy.writeRoots : undefined,
+      });
+      if (guard.outsideWrites.length) {
+        const backend = (policy && policy.capabilities && policy.capabilities.backend) || 'none';
+        return AgentToolResult.error(
+          '拒绝执行：命令要写入工作区之外的路径 ' + guard.outsideWrites.join(', ') +
+            '（当前隔离后端 ' + backend + ' 不隔离文件系统，越界写没有内核兜底）。' +
+            '请把产物写到项目目录内；确需写外部目录时用 sandbox.allow_write 显式放开。',
+          { code: 'PATH_OUT_OF_ROOT', tool: 'execute_shell', command, paths: guard.outsideWrites },
+        );
+      }
+      if (guard.unresolvedWrites.length && policy && policy.mode === 'strict') {
+        return AgentToolResult.error(
+          '拒绝执行（strict 隔离模式）：写目标含变量或通配，无法静态判定是否越界：' + guard.unresolvedWrites.join(', '),
+          { code: 'PATH_OUT_OF_ROOT', tool: 'execute_shell', command, paths: guard.unresolvedWrites },
+        );
+      }
+      if (policy && policy.network === 'deny' && guard.network.length) {
+        return AgentToolResult.error(
+          '拒绝执行：当前隔离策略已切断网络（sandbox.network=deny），而这条命令疑似需要联网（' + guard.network.join('、') + '）。',
+          { code: 'PERMISSION_DENIED', tool: 'execute_shell', command, network: guard.network, userActionRequired: false },
+        );
+      }
+
       const sensitive = isSensitiveCommand(tokens);
       if (sensitive) {
         const what = '在项目目录执行命令：' + command;
-        const detail = '这是一条' + (isDestructiveCommand(tokens) ? '具有破坏性' : '可能影响系统/仓库状态') + '的命令，执行后可能不可撤销。超时 ' + timeoutSeconds + ' 秒。';
+        const detail = '这是一条' + (isDestructiveCommand(tokens) ? '具有破坏性' : '可能影响系统/仓库状态') + '的命令，执行后可能不可撤销。超时 ' + timeoutSeconds + ' 秒。' +
+          (guard.reasons.length ? '静态审计提示：' + guard.reasons.join('；') + '。' : '');
         const ok = await context.confirm(ConfirmationLevel.HIGH, what, detail);
         if (!ok) return AgentToolResult.error('已取消执行');
       }
       // 普通构建/查询命令属于低敏感操作，直接执行，不需要询问用户
-
-      const root = context.projectRoot();
 
       // 后台执行：长任务立即返回 jobId，用 poll_job 轮询
       if (args.async === true) {

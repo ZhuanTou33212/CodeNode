@@ -41,6 +41,8 @@ const CORE = [
   'test:tool-failure-taxonomy',
   'test:scheduler-parallel',
   'test:approval-token',
+  'test:shell-guard',
+  'test:test-mode',
   'test:agent-cache',
   'test:tool-call-id',
   'test:stream-accumulator',
