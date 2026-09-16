@@ -150,6 +150,95 @@ function formatEvent(event) {
   return parts.filter(Boolean).join(' ');
 }
 
+/**
+ * S8 双写桥：把「旧日志的一条记录」同时投递到统一事件流。**永不抛** ——
+ * 事件流是旁路，任何失败都必须吞掉，不能拖垮工具循环 / 检查点 / 账本。
+ * @param {string} projectRoot
+ * @param {string} kind
+ * @param {any} payload
+ */
+function bridge(projectRoot, kind, payload) {
+  try {
+    return emit(projectRoot, Object.assign({ kind }, payload || {}));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 回放摘要：把一串事件压成「这次运行到底发生了什么」的事实清单（只统计实际写进事件的字段，
+ * 不补、不猜）。CLI 的 `--summary` 与 UI 都可用。
+ * @param {any[]} events
+ */
+function summarize(events) {
+  const list = Array.isArray(events) ? events : [];
+  /** @type {Record<string, number>} */
+  const kinds = {};
+  /** @type {Record<string, {calls: number, failures: number}>} */
+  const tools = {};
+  /** @type {Record<string, number>} */
+  const failureCodes = {};
+  const approvals = { issued: 0, denied: 0, rejected: 0, consumed: 0 };
+  const runs = new Set();
+  let costUsd = 0;
+  let tokens = 0;
+  let toolCalls = 0;
+  let toolFailures = 0;
+  let first = null;
+  let last = null;
+  for (const event of list) {
+    if (!event) continue;
+    const kind = String(event.kind || '?');
+    kinds[kind] = (kinds[kind] || 0) + 1;
+    if (event.runId) runs.add(String(event.runId));
+    if (event.ts) {
+      if (!first || event.ts < first) first = event.ts;
+      if (!last || event.ts > last) last = event.ts;
+    }
+    if (kind === 'tool') {
+      const name = String(event.name || event.tool || '?');
+      const slot = tools[name] || { calls: 0, failures: 0 };
+      slot.calls += 1;
+      toolCalls += 1;
+      if (event.ok === false) {
+        slot.failures += 1;
+        toolFailures += 1;
+      }
+      tools[name] = slot;
+    } else if (kind === 'failure_taxonomy') {
+      for (const item of Array.isArray(event.nudged) ? event.nudged : []) {
+        const code = String((item && item.code) || 'UNKNOWN');
+        failureCodes[code] = (failureCodes[code] || 0) + 1;
+      }
+    } else if (kind === 'approval') {
+      const phase = String(event.event || '');
+      if (phase === 'approval_issued') approvals.issued += 1;
+      else if (phase === 'approval_denied') approvals.denied += 1;
+      else if (phase === 'approval_rejected') approvals.rejected += 1;
+      else if (phase === 'approval_consumed') approvals.consumed += 1;
+    } else if (kind === 'cost') {
+      const usd = Number(event.costUsd);
+      if (Number.isFinite(usd)) costUsd += usd;
+      const usage = event.tokens || {};
+      const total = Number(usage.total != null ? usage.total : usage.total_tokens);
+      if (Number.isFinite(total)) tokens += total;
+    }
+  }
+  return {
+    total: list.length,
+    runs: [...runs],
+    span: { first, last },
+    kinds,
+    tools,
+    toolCalls,
+    toolFailures,
+    failureCodes,
+    approvals,
+    costUsd: Number(costUsd.toFixed(6)),
+    tokens,
+  };
+}
+
 module.exports = {
   SCHEMA_VERSION,
   EVENTS_FILE,
@@ -158,5 +247,7 @@ module.exports = {
   emit,
   readEvents,
   replay,
+  summarize,
+  bridge,
   formatEvent,
 };

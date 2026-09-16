@@ -147,6 +147,68 @@ function makeCfg() {
     check('C2 没有匹配事件时退出码为 1（可直接用于门禁）', miss.status === 1, String(miss.status));
     const kinds = spawnSync(process.execPath, [cli, projectRoot, '--kinds', 'tool'], { encoding: 'utf8' });
     check('C3 --kinds 过滤生效且文本输出含工具名', kinds.status === 0 && /read_file/.test(kinds.stdout), kinds.stdout.slice(0, 200));
+    // S8 补齐：回放摘要（一眼看清这次运行发生了什么）
+    const summaryText = spawnSync(process.execPath, [cli, projectRoot, '--run', RUN_ID, '--summary'], { encoding: 'utf8' });
+    check('C4 CLI --summary 打印回放摘要（工具调用/事件类型）',
+      summaryText.status === 0 && /工具调用/.test(summaryText.stdout) && /事件类型/.test(summaryText.stdout),
+      summaryText.stdout.slice(0, 200));
+    const summaryJson = spawnSync(process.execPath, [cli, projectRoot, '--run', RUN_ID, '--json', '--summary'], { encoding: 'utf8' });
+    let parsedSummary = null;
+    try {
+      parsedSummary = JSON.parse(summaryJson.stdout);
+    } catch {}
+    check('C5 --json --summary 同时给出结构化摘要',
+      !!parsedSummary && !!parsedSummary.summary && parsedSummary.summary.toolCalls > 0,
+      JSON.stringify(parsedSummary && parsedSummary.summary && { toolCalls: parsedSummary.summary.toolCalls }));
+  }
+
+  // ======================= D. 其余日志也进统一流（S8 补齐） =======================
+  {
+    const projectRoot = path.join(root, 'bridge');
+    fs.mkdirSync(projectRoot, { recursive: true });
+    const bridgeRun = 'run-bridge';
+
+    require('../electron/runStore.cjs').startRun(projectRoot, bridgeRun, { goal: 'bridge-test' });
+    require('../electron/runCheckpoint.cjs').recordIntent(projectRoot, bridgeRun, { callId: 'call-cp', tool: 'write_file', argsDigest: 'digest-cp', effect: 'write', idemKey: 'idem-cp' });
+    const { SideEffectLedger } = require('../electron/sideEffects.cjs');
+    const ledger = new SideEffectLedger({ projectRoot, scopeRunId: bridgeRun });
+    const guard = await ledger.begin('write_file', { path: 'a.txt' });
+    if (guard && guard.token) await ledger.commit(guard.token, { ok: true, result: 'written' });
+    const { CostLedger } = require('../electron/costLedger.cjs');
+    new CostLedger({ projectRoot, runId: bridgeRun }).record({ kind: 'chat', model: 'bridge-model', usage: { total: 12, cached: 5 }, costUsd: 0.002 });
+    const approvalCtx = new AgentToolContext({ projectRoot, confirm: async () => true, runId: bridgeRun });
+    await approvalCtx.approval().request({ capability: 'workspace.write', what: 'write_file', detail: '桥接用例', scope: ['workspace.write:a.txt'], toolCallId: 'call-apv' });
+    eventBus.bridge(projectRoot, 'audit', { entry: '审计桥接用例（ipc 层的 auditLog 走的就是这条桥）' });
+
+    const bridgeEvents = eventBus.readEvents(projectRoot);
+    const bridgeKinds = new Set(bridgeEvents.map((e) => e.kind));
+    for (const kind of ['run_state', 'checkpoint', 'side_effect', 'cost', 'approval', 'audit']) {
+      check('D ' + kind + ' 已进入统一事件流', bridgeKinds.has(kind), JSON.stringify([...bridgeKinds]));
+    }
+    const costEvent = bridgeEvents.find((e) => e.kind === 'cost');
+    check('D7 成本事件带 runId 与 token 用量（回放能看到花了多少）',
+      !!costEvent && costEvent.runId === bridgeRun && !!costEvent.tokens,
+      JSON.stringify(costEvent && { runId: costEvent.runId, tokens: costEvent.tokens }));
+    const approvalEvent = bridgeEvents.find((e) => e.kind === 'approval');
+    check('D8 审批事件带 toolCallId（能对上具体调用）',
+      !!approvalEvent && approvalEvent.toolCallId === 'call-apv',
+      JSON.stringify(approvalEvent && { event: approvalEvent.event, toolCallId: approvalEvent.toolCallId }));
+  }
+
+  // ======================= E. 回放摘要（纯函数） =======================
+  {
+    const s = eventBus.summarize([
+      { kind: 'tool', name: 'read_file', ok: true },
+      { kind: 'tool', name: 'read_file', ok: false },
+      { kind: 'failure_taxonomy', nudged: [{ code: 'ARG_SCHEMA', tool: 'read_file' }] },
+      { kind: 'approval', event: 'approval_issued' },
+      { kind: 'approval', event: 'approval_consumed' },
+      { kind: 'cost', costUsd: 0.003, tokens: { total: 100 } },
+    ]);
+    check('E1 摘要统计工具调用与失败', s.toolCalls === 2 && s.toolFailures === 1 && s.tools.read_file.calls === 2, JSON.stringify(s.tools));
+    check('E2 摘要统计失败码与审批', s.failureCodes.ARG_SCHEMA === 1 && s.approvals.issued === 1 && s.approvals.consumed === 1, JSON.stringify(s.approvals));
+    check('E3 摘要统计成本与 token', s.costUsd === 0.003 && s.tokens === 100, JSON.stringify({ costUsd: s.costUsd, tokens: s.tokens }));
+    check('E4 空事件的摘要不编造数据', eventBus.summarize([]).total === 0 && eventBus.summarize([]).costUsd === 0);
   }
 
   fs.rmSync(root, { recursive: true, force: true });

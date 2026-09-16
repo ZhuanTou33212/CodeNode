@@ -143,6 +143,13 @@ class AlertDispatcher {
     if (!this.file) return;
     try {
       runStore.appendJsonl(this.file, { type: 'alert', ...record });
+      // S8：告警也进统一流
+      require('./eventBus.cjs').bridge(this.projectRoot, 'alert', {
+        runId: record.runId || null,
+        level: record.level || null,
+        code: record.code || null,
+        message: record.message || null,
+      });
     } catch {}
   }
 

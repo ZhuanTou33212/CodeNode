@@ -112,7 +112,10 @@ function auditLog(projectRoot, entry) {
     if (!projectRoot) return;
     const dir = path.join(projectRoot, '.codenode');
     require('fs').mkdirSync(dir, { recursive: true });
-    runStore.appendJsonl(path.join(dir, 'audit.jsonl'), { ts: new Date().toISOString(), entry: agent.redactSecrets(String(entry || '')) });
+    const redacted = agent.redactSecrets(String(entry || ''));
+    runStore.appendJsonl(path.join(dir, 'audit.jsonl'), { ts: new Date().toISOString(), entry: redacted });
+    // S8：审计也进统一流（同一条内容，不再要求回放时去翻第五个文件）
+    require('../eventBus.cjs').bridge(projectRoot, 'audit', { entry: redacted });
   } catch {}
 }
 

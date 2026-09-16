@@ -141,6 +141,14 @@ class CostLedger {
     if (this.file) {
       try {
         runStore.appendJsonl(this.file, { type: 'cost', ...record }, this.maxBytes);
+        // S8：成本事件也进统一流（按 run 回放时能看到这轮花了多少、缓存命中多少）
+        require('./eventBus.cjs').bridge(this.projectRoot, 'cost', {
+          runId: record.runId || null,
+          call: record.kind || null,
+          model: record.model || null,
+          costUsd: record.costUsd,
+          tokens: record.usage || null,
+        });
       } catch {}
     }
     return record;

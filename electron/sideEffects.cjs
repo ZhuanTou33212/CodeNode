@@ -143,7 +143,17 @@ class SideEffectLedger {
     if (!this.file) return;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      atomicWriteFile(this.file, JSON.stringify({ scopeRunId: this.scopeRunId, updatedAt: this.clock(), records: [...this.records.values()] }, null, 2));
+      const records = [...this.records.values()];
+      atomicWriteFile(this.file, JSON.stringify({ scopeRunId: this.scopeRunId, updatedAt: this.clock(), records }, null, 2));
+      // S8：账本变化也投递一条事件 —— 只报事实（条数 + 最新一条的相位），不搬整份账本进事件流
+      const latest = records.length ? records[records.length - 1] : null;
+      if (this.projectRoot) {
+        require('./eventBus.cjs').bridge(this.projectRoot, 'side_effect', {
+          runId: this.scopeRunId,
+          records: records.length,
+          latest: latest ? { tool: latest.tool || null, phase: latest.phase || latest.status || null } : null,
+        });
+      }
     } catch (error) {
       this.persistError = String((error && error.message) || error);
     }

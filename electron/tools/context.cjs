@@ -86,7 +86,11 @@ class AgentToolContext {
         runId: this.runIdValue,
         taskId: this.taskIdValue,
         role: this.roleValue,
-        trace: (event) => this.audit(JSON.stringify(event)),
+        trace: (event) => {
+          this.audit(JSON.stringify(event));
+          // S8：审批事件也进统一事件流（回放时能看到谁在什么时候批了什么）
+          require('../eventBus.cjs').bridge(this.projectRootValue, 'approval', event);
+        },
       });
     }
     return this.approvalServiceValue;

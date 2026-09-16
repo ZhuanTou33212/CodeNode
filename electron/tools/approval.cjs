@@ -64,7 +64,7 @@ class ApprovalService {
 
   /** 内部：落一条审批事件（trace + 内存事件流，供测试与审计读取） */
   _emit(event, data) {
-    const payload = Object.assign({ kind: 'approval', event, runId: this.runId, taskId: this.taskId, role: this.role, at: new Date(this.now()).toISOString() }, data || {});
+    const payload = Object.assign({ kind: 'approval', event, runId: this.runId, taskId: this.taskId, role: this.role, toolCallId: (data && data.toolCallId) || null, at: new Date(this.now()).toISOString() }, data || {});
     if (!this.events) this.events = [];
     this.events.push(payload);
     if (this.trace) {

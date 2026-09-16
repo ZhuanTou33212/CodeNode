@@ -37,7 +37,20 @@ function appendCheckpoint(projectRoot, runId, record) {
   if (!projectRoot) return null;
   const entry = { ts: new Date().toISOString(), runId: runStore.normalizeRunId(runId), ...(record || {}) };
   try {
-    return runStore.appendJsonl(checkpointFile(projectRoot, runId), entry) ? entry : null;
+    const written = runStore.appendJsonl(checkpointFile(projectRoot, runId), entry) ? entry : null;
+    // S8：检查点也进统一事件流（回放时能看到「哪一步登记了意图、哪一步提交了」）
+    if (written) {
+      require('./eventBus.cjs').bridge(projectRoot, 'checkpoint', {
+        runId: entry.runId || null,
+        turnId: entry.turnId == null ? null : entry.turnId,
+        toolCallId: entry.callId || null,
+        type: entry.type || null,
+        tool: entry.tool || null,
+        ok: entry.ok === undefined ? null : entry.ok === true,
+        effect: entry.effect || null,
+      });
+    }
+    return written;
   } catch {
     return null;
   }

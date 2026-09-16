@@ -23,6 +23,7 @@ let kinds = null;
 let limit = 0;
 let asJson = false;
 let quiet = false;
+let showSummary = false;
 
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i];
@@ -33,9 +34,10 @@ for (let i = 0; i < argv.length; i++) {
   else if (arg === '--limit') limit = Math.max(0, Number(argv[++i]) || 0);
   else if (arg.startsWith('--limit=')) limit = Math.max(0, Number(arg.slice(8)) || 0);
   else if (arg === '--json') asJson = true;
+  else if (arg === '--summary' || arg === '-s') showSummary = true;
   else if (arg === '--quiet') quiet = true;
   else if (arg === '--help' || arg === '-h') {
-    console.log('用法: node scripts/event-replay.cjs [projectRoot] [--run <runId>] [--kinds a,b] [--limit N] [--json]');
+    console.log('用法: node scripts/event-replay.cjs [projectRoot] [--run <runId>] [--kinds a,b] [--limit N] [--json] [--summary]');
     process.exit(0);
   } else if (!arg.startsWith('-')) positional.push(arg);
 }
@@ -43,8 +45,40 @@ for (let i = 0; i < argv.length; i++) {
 const projectRoot = path.resolve(positional[0] || process.cwd());
 const report = eventBus.replay(projectRoot, { runId, kinds: kinds || undefined });
 
+const allEvents = report.runs.flatMap((run) => run.events);
+
 if (asJson) {
-  console.log(JSON.stringify({ projectRoot, file: eventBus.eventsPath(projectRoot), ...report }, null, 2));
+  console.log(
+    JSON.stringify(
+      Object.assign(
+        { projectRoot, file: eventBus.eventsPath(projectRoot) },
+        report,
+        showSummary ? { summary: eventBus.summarize(allEvents) } : {},
+      ),
+      null,
+      2,
+    ),
+  );
+  process.exit(report.total > 0 ? 0 : 1);
+}
+
+if (showSummary) {
+  // 回放摘要（S8 补齐）：一眼看清「这次运行到底发生了什么」——工具序列/失败码/审批/成本
+  const s = eventBus.summarize(allEvents);
+  console.log('# 回放摘要 ' + eventBus.eventsPath(projectRoot));
+  console.log('事件 ' + s.total + ' 条 | run ' + s.runs.length + ' 个 | 工具调用 ' + s.toolCalls +
+    '（失败 ' + s.toolFailures + '）' + (s.span.first ? ' | ' + s.span.first + ' → ' + s.span.last : ''));
+  for (const [name, slot] of Object.entries(s.tools).sort((a, b) => b[1].calls - a[1].calls)) {
+    console.log('  工具 ' + name + ': ' + slot.calls + ' 次' + (slot.failures ? '（失败 ' + slot.failures + '）' : ''));
+  }
+  const codes = Object.entries(s.failureCodes);
+  if (codes.length) console.log('  失败码: ' + codes.map(([code, n]) => code + '×' + n).join(', '));
+  const a = s.approvals;
+  if (a.issued || a.denied || a.rejected || a.consumed) {
+    console.log('  审批: 签发 ' + a.issued + ' / 用户拒绝 ' + a.denied + ' / 令牌被拒 ' + a.rejected + ' / 消费 ' + a.consumed);
+  }
+  if (s.costUsd || s.tokens) console.log('  成本: $' + s.costUsd + ' / ' + s.tokens + ' tokens');
+  console.log('  事件类型: ' + Object.entries(s.kinds).map(([kind, n]) => kind + '×' + n).join(', '));
   process.exit(report.total > 0 ? 0 : 1);
 }
 

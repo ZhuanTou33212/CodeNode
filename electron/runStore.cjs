@@ -65,7 +65,20 @@ function appendEvent(projectRoot, runId, type, data) {
   const normalized = normalizeRunId(runId);
   const record = { ts: new Date().toISOString(), runId: normalized, type: String(type || 'event'), ...(data || {}) };
   try {
-    return appendJsonl(runFile(projectRoot, normalized), record) ? record : null;
+    const written = appendJsonl(runFile(projectRoot, normalized), record) ? record : null;
+    // S8：run 级状态也投递到统一事件流（延迟 require 打破 runStore ↔ eventBus 的循环依赖）
+    if (written) {
+      require('./eventBus.cjs').bridge(projectRoot, 'run_state', {
+        runId: normalized,
+        turnId: record.turnId == null ? null : record.turnId,
+        toolCallId: record.toolCallId == null ? null : record.toolCallId,
+        type: record.type,
+        state: record.state || null,
+        status: record.status || null,
+        reason: record.reason || null,
+      });
+    }
+    return written;
   } catch {
     return null;
   }
