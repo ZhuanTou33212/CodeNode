@@ -21,6 +21,7 @@ const agent = require('../agent.cjs');
 const toolkit = require('../tools/toolkit.cjs');
 const modelStore = require('../modelStore.cjs');
 const runStore = require('../runStore.cjs');
+const eventBus = require('../eventBus.cjs');
 const runCheckpoint = require('../runCheckpoint.cjs');
 const { SideEffectLedger, createGuard } = require('../sideEffects.cjs');
 const agentState = require('../agentState.cjs');
@@ -120,6 +121,26 @@ function register(ctx) {
     if (!projectRoot) return [];
     runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
     return runStore.listRuns(projectRoot, 50);
+  });
+
+  // S8：按 run 回放统一事件流（UI 的「运行回放」区块直接用这个载荷）
+  ipcMain.handle('agent:events', async (_event, projectRoot, options) => {
+    if (!projectRoot) {
+      return { ok: false, error: '未选择项目', file: null, total: 0, runs: [], events: [], summary: null };
+    }
+    try {
+      return eventBus.replayPayload(projectRoot, options || {});
+    } catch (error) {
+      return {
+        ok: false,
+        error: String((error && error.message) || error),
+        file: null,
+        total: 0,
+        runs: [],
+        events: [],
+        summary: null,
+      };
+    }
   });
 
   ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {

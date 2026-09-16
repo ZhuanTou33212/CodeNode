@@ -37,6 +37,7 @@
     "test:shell-guard": "node scripts/shell-guard-test.cjs",
     "test:test-mode": "node scripts/test-mode-capability-test.cjs",
     "test:event-replay": "node scripts/event-replay-test.cjs",
+    "test:event-replay-ui": "node scripts/run-electron.cjs scripts/event-replay-ui-test.cjs",
     "test:agent-limits": "node scripts/agent-limits-test.cjs",
     "test:tool-contract": "node scripts/tool-contract-closure-test.cjs",
     "test:grounding-gate": "node scripts/grounding-gate-test.cjs",

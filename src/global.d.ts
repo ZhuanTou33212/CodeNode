@@ -204,6 +204,40 @@ interface CodenodeApi {
     };
     runs?: unknown[];
   }>;
+  /** S8：按 run 回放统一事件流（时间线 + 摘要）。 */
+  replayEvents: (
+    root: string | null,
+    options?: { runId?: string | null; kinds?: string[] | null; limit?: number },
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    file: string | null;
+    total: number;
+    runs: { runId: string; count: number; first: string | null; last: string | null; kinds: string[] }[];
+    events: {
+      v?: number;
+      ts?: string;
+      kind: string;
+      runId?: string | null;
+      turnId?: string | null;
+      toolCallId?: string | null;
+      attemptId?: string | null;
+      [key: string]: unknown;
+    }[];
+    summary: {
+      total: number;
+      runs: string[];
+      span: { first: string | null; last: string | null };
+      kinds: Record<string, number>;
+      tools: Record<string, { calls: number; failures: number }>;
+      toolCalls: number;
+      toolFailures: number;
+      failureCodes: Record<string, number>;
+      approvals: { issued: number; denied: number; rejected: number; consumed: number };
+      costUsd: number;
+      tokens: number;
+    } | null;
+  }>;
   onAgentAlert: (cb: (alert: AlertDto) => void) => () => void;
   agentResumeStart: (root: string | null, runId: string, replacementRunId: string) => Promise<{
     ok: boolean;

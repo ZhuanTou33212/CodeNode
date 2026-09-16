@@ -239,6 +239,34 @@ function summarize(events) {
   };
 }
 
+/**
+ * UI / IPC 一次成形的回放载荷：时间线（截断到 limit）+ 摘要 + 事件文件位置。
+ * 时间线只回**最近** limit 条（界面里看的是「刚刚发生了什么」）。
+ * @param {string} projectRoot
+ * @param {{ runId?: string|null, kinds?: string[]|null, limit?: number }} [options]
+ */
+function replayPayload(projectRoot, options) {
+  const opts = options || {};
+  const rawLimit = Number(opts.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 0;
+  const report = replay(projectRoot, { runId: opts.runId || null, kinds: opts.kinds || undefined });
+  const all = report.runs.flatMap((run) => run.events);
+  return {
+    ok: true,
+    file: eventsPath(projectRoot),
+    total: report.total,
+    runs: report.runs.map((run) => ({
+      runId: run.runId,
+      count: run.count,
+      first: run.first,
+      last: run.last,
+      kinds: run.kinds,
+    })),
+    events: limit > 0 ? all.slice(-limit) : all,
+    summary: summarize(all),
+  };
+}
+
 module.exports = {
   SCHEMA_VERSION,
   EVENTS_FILE,
@@ -247,6 +275,7 @@ module.exports = {
   emit,
   readEvents,
   replay,
+  replayPayload,
   summarize,
   bridge,
   formatEvent,

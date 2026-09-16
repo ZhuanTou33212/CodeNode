@@ -6,6 +6,7 @@ import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
 import { saveProject } from '../lib/projectActions';
 import { useChatStore } from '../store/chatStore';
+import RunReplayPanel from './RunReplayPanel';
 import type { Node } from '@xyflow/react';
 
 type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
@@ -458,6 +459,7 @@ function RunsPanel() {
         {metrics.alerts?.length ? <span className="dock-metrics-alert">{metrics.alerts[metrics.alerts.length - 1].message}</span> : null}
       </div>}
       <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span></div>{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
+      <RunReplayPanel />
     </div>
   );
 }

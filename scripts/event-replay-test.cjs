@@ -211,6 +211,30 @@ function makeCfg() {
     check('E4 空事件的摘要不编造数据', eventBus.summarize([]).total === 0 && eventBus.summarize([]).costUsd === 0);
   }
 
+  // ======================= F. UI / IPC 载荷（replayPayload） =======================
+  {
+    const payloadRoot = path.join(root, 'payload');
+    fs.mkdirSync(payloadRoot, { recursive: true });
+    for (let i = 1; i <= 5; i++) {
+      eventBus.emit(payloadRoot, { kind: 'tool', runId: 'run-payload', turnId: '0', toolCallId: 'call_' + i, name: 'read_file', ok: i !== 5 });
+    }
+    const full = eventBus.replayPayload(payloadRoot, {});
+    check('F1 载荷结构完整（ok / file / total / runs / events / summary）',
+      full.ok === true && typeof full.file === 'string' && full.total === 5 && Array.isArray(full.runs) && full.events.length === 5 && !!full.summary,
+      JSON.stringify({ ok: full.ok, total: full.total, events: full.events.length }));
+    const limited = eventBus.replayPayload(payloadRoot, { limit: 2 });
+    check('F2 limit 只截断时间线，摘要仍按全量统计（界面看「最近」，摘要看「全部」）',
+      limited.events.length === 2 && limited.summary.total === 5 && limited.summary.toolFailures === 1,
+      JSON.stringify({ events: limited.events.length, summaryTotal: limited.summary.total, failures: limited.summary.toolFailures }));
+    const byRun = eventBus.replayPayload(payloadRoot, { runId: 'run-payload' });
+    const other = eventBus.replayPayload(payloadRoot, { runId: 'no-such-run' });
+    check('F3 runId 过滤生效（不存在的 run 返回空载荷且不抛）',
+      byRun.total === 5 && other.ok === true && other.total === 0 && other.events.length === 0 && other.summary.total === 0,
+      JSON.stringify({ byRun: byRun.total, other: other.total }));
+    const empty = eventBus.replayPayload(path.join(root, 'nothing-here'), {});
+    check('F4 没有事件文件时不抛异常、返回空载荷', empty.ok === true && empty.total === 0 && empty.summary.total === 0);
+  }
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log('EVENT REPLAY TEST: ' + (failures ? 'FAIL' : 'PASS'));
   process.exit(failures ? 1 : 0);

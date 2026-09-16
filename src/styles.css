@@ -3540,3 +3540,98 @@ textarea:focus-visible {
   background: var(--accent-soft, rgba(120, 167, 255, 0.14));
   border-color: rgba(120, 167, 255, 0.5);
 }
+
+/* ── 运行回放（S8）：统一事件流的时间线 ──────────────────────────────
+   亮度分三层：区块底 = --bg-panel-2，行 hover = --bg-panel-3，时间戳/类型走 --text-dim。
+   只用一个强调色（--accent-2）标出成本类的正向信息，失败/告警用既有的 danger/warning。 */
+.dock-replay {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.dock-replay-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dock-replay-chip {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.dock-replay-timeline {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+}
+
+.dock-replay-row {
+  display: grid;
+  grid-template-columns: 64px 92px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.dock-replay-row:last-child {
+  border-bottom: none;
+}
+
+.dock-replay-row:hover {
+  background: var(--bg-panel-3, rgba(166, 187, 211, 0.06));
+}
+
+.dock-replay-ts {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.dock-replay-kind {
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+
+.dock-replay-main {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-replay-row.danger .dock-replay-kind {
+  color: var(--danger);
+}
+
+.dock-replay-row.warn .dock-replay-kind {
+  color: var(--warning);
+}
+
+.dock-replay-row.accent2 .dock-replay-kind {
+  color: var(--accent-2);
+}
+
+.dock-replay-more,
+.dock-replay-file {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.dock-replay-more {
+  padding: 6px 9px;
+}
+
+.dock-replay-file {
+  word-break: break-all;
+}

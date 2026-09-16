@@ -26,6 +26,7 @@ const EXPECTED = {
   'agent.cjs': [
     'agent:config', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:resume-plan', 'agent:resume-start', 'agent:chat', 'agent:stop',
+    'agent:events',
   ],
 };
 
