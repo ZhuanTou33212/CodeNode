@@ -82,6 +82,9 @@ function parseToolsConfig(cfg) {
     // S6：只读并行（默认关闭 → 行为与串行一致）；并发上限 1–8
     toolsParallel: cfg['tools.parallel'] == null ? false : String(cfg['tools.parallel']).toLowerCase() === 'true',
     toolsParallelConcurrency: configInteger(cfg, 'tools.parallel_concurrency', 3, 1, 8),
+    // P7 收口：文件遍历类工具（scan_project / find_files / search_files）在 worker 线程里跑（默认开）。
+    // 关掉 = 退回主线程同步执行（会阻塞界面、且单次同步 fs 调用不可中断），仅供排障与老平台兜底。
+    toolsFsWorker: cfg['tools.fs_worker'] == null ? true : String(cfg['tools.fs_worker']).toLowerCase() !== 'false',
   };
 }
 

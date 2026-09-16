@@ -1,37 +1,18 @@
 /**
- * ToolFiles：文件搜索类工具共用的目录忽略与二进制检测（复刻原版 ToolFiles）
+ * ToolFiles：文件搜索类工具共用的目录忽略与二进制检测。
+ *
+ * 实现已迁到 `electron/tools/fsCore.cjs`（唯一来源）—— 同一份逻辑要同时跑在主线程与
+ * **worker 线程**里，两份代码必然漂移。本文件只做 re-export，保持既有 import 路径不变。
  */
 'use strict';
 
-const IGNORED_DIRS = new Set([
-  'target', 'build', '.git', '.idea', 'node_modules', 'dist', 'out', '.gradle', 'cache',
-  '.vscode', '.next', '.nuxt', '__pycache__', '.venv', 'venv', 'coverage', 'logs',
-]);
+const fsCore = require('./fsCore.cjs');
 
-const BINARY_EXTS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp', 'tga', 'dds', 'psd', 'ico', 'icns',
-  'jar', 'class', 'war', 'zip', 'gz', '7z', 'rar', 'exe', 'dll', 'so', 'dylib', 'a', 'o', 'obj', 'lib',
-  'mp3', 'wav', 'ogg', 'flac', 'm4a', 'mp4', 'avi', 'mkv', 'mov', 'webm', 'ttf', 'otf', 'woff', 'woff2', 'eot',
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'db', 'sqlite', 'bin', 'dat',
-]);
-
-function shouldSkipDir(dirName) {
-  return IGNORED_DIRS.has(dirName);
-}
-
-function isBinaryFileName(name) {
-  const dot = name.lastIndexOf('.');
-  if (dot < 0) return false;
-  return BINARY_EXTS.has(name.slice(dot + 1).toLowerCase());
-}
-
-function isBinaryPath(filePath) {
-  return isBinaryFileName(require('path').basename(filePath));
-}
-
-/** 路径字符串 → 若包含忽略目录返回 true */
-function hasIgnoredDir(relative) {
-  return relative.split(/[\\/]/).some((seg) => IGNORED_DIRS.has(seg));
-}
-
-module.exports = { IGNORED_DIRS, BINARY_EXTS, shouldSkipDir, isBinaryFileName, isBinaryPath, hasIgnoredDir };
+module.exports = {
+  IGNORED_DIRS: fsCore.IGNORED_DIRS,
+  BINARY_EXTS: fsCore.BINARY_EXTS,
+  shouldSkipDir: fsCore.shouldSkipDir,
+  isBinaryFileName: fsCore.isBinaryFileName,
+  isBinaryPath: fsCore.isBinaryPath,
+  hasIgnoredDir: fsCore.hasIgnoredDir,
+};

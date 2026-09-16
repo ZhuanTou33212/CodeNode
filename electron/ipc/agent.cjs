@@ -337,6 +337,9 @@ function register(ctx) {
           role: 'supervisor',
           signal: controller.signal,
           scalarStore,
+          // 文件遍历类工具（scan_project / find_files / search_files）走 worker 线程：
+          // 同步遍历会把主进程卡住，且单次同步 fs 调用不可中断（tools.fs_worker 可关）
+          fsWorker: cfg.tools ? cfg.tools.toolsFsWorker !== false : true,
           // 注意：这里必须传策略对象本身。曾写成 `sandbox: () => sandboxPolicy`，而 context.sandbox()
           // 会把注入值原样返回 → currentPolicy() 拿到函数、mode/capabilities 全为 undefined →
           // 隔离静默降级（Windows 的 Job Object 限额不生效；macOS/Linux 退化成无隔离 spawn；strict 不再 fail-closed）。

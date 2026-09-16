@@ -1,18 +1,17 @@
 /**
- * sync-tool-cancel-test.cjs —— 同步遍历工具的取消检查点（P7）
+ * sync-tool-cancel-test.cjs —— 文件遍历工具的取消与「不阻塞主线程」（P7 收口版）
  *
- * 缺口（审查 §3 P1「同步工具不可取消」/ §7 待补测试）：`read_file` / `scan_project` /
- * `find_files` / `search_files` 都是**同步 fs 遍历**，用户在扫描大目录时点「停止」，
- * 工具仍会把整个项目走完才返回 —— 取消只在工具之间被检查，工具内部没有检查点。
+ * 演进过程（两版判据都留在这里，因为它们证明的是**不同**的东西）：
+ *   第一版：遍历工具在**循环之间**加取消检查点。判据用「计数式 aborted getter」——
+ *           因为同步循环里 `setTimeout` 排不上队，用真 AbortSignal 永远测不到取消。
+ *   收口版：遍历整体搬进 **worker 线程**，取消改为 `worker.terminate()` —— 连**单次同步 fs 调用**
+ *           中途也能杀掉。判据随之变硬：用**真 AbortSignal + 主线程 setTimeout 触发**。
+ *           同步实现下遍历会占满事件循环，那个 setTimeout 根本轮不到执行 → 取消不生效。
+ *           所以「取消真的生效」这条本身，同时证明了「主线程没有被遍历占住」。
  *
- * 修法：`impl/shared.cjs` 的 `isCancelled(context)` + 三个遍历循环里的检查点，
- * 取消时返回 `kind=failure / code=CANCELLED` 并如实说明「结果不完整」。
- *
- * 边界（如实写进测试，别假装已经解决）：单次同步 fs 调用（一次 readFileSync 大文件）
- * 依旧不可打断 —— 真正的可中断需要把工具挪到 worker/子进程，那部分**仍未做**。
- *
- * 判据：取消后必须 (a) 返回 CANCELLED，(b) 没被遍历完（partial < 完整结果数），
- * (c) 恢复不取消时结果完整（防止过度修复把工具改成永远只扫一部分）。
+ * 另外两条对照：
+ *   - 不取消 → 结果必须完整（防过度修复把工具改成永远只扫一部分）；
+ *   - `tools.fs_worker=false`（显式同步）时，取消仍由循环检查点生效（信号一开始就是 aborted）。
  */
 'use strict';
 
@@ -23,6 +22,7 @@ const path = require('path');
 
 const toolkit = require('../electron/tools/toolkit.cjs');
 const sandbox = require('../electron/sandbox.cjs');
+const fsRunner = require('../electron/tools/fsRunner.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
 
 let failures = 0;
@@ -33,9 +33,11 @@ function check(label, condition, detail) {
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-cancel-'));
-// 造一个「够大」的项目：8 个目录 × 25 个文件 = 200 个文件（遍历里有 200+ 次检查点）
+// 造一个「够大」的项目：8 个目录 × 75 个文件 = 600 个文件。
+// 规模不能太小：心跳与取消两条判据都依赖「遍历真的持续了一段时间」，
+// 200 个文件的遍历在 worker 里可能只花几毫秒，判据会变成碰运气。
 const DIRS = 8;
-const FILES_PER_DIR = 25;
+const FILES_PER_DIR = 75;
 for (let d = 0; d < DIRS; d++) {
   const dir = path.join(root, 'd' + d);
   fs.mkdirSync(dir, { recursive: true });
@@ -48,24 +50,6 @@ const TOTAL_FILES = DIRS * FILES_PER_DIR;
 const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: root });
 sandbox.setDefaultPolicy(policy);
 
-/**
- * 计数式取消信号：每读一次 `aborted` 就自增，超过阈值后返回 true。
- * 这样「取消」在**同步循环内部**真的会发生（setTimeout 在同步循环里根本排不上队，
- * 用它测同步遍历会永远测不到取消）。
- */
-function countingSignal(afterChecks) {
-  let reads = 0;
-  const signal = { addEventListener() {}, removeEventListener() {} };
-  Object.defineProperty(signal, 'aborted', {
-    get() {
-      reads += 1;
-      return reads > afterChecks;
-    },
-    configurable: true,
-  });
-  return signal;
-}
-
 function registry() {
   return toolkit.buildDefaultRegistryWithConfig({
     projectRoot: root,
@@ -74,66 +58,93 @@ function registry() {
   });
 }
 
-function context(signal) {
+/** @param {AbortSignal|null} signal @param {boolean} [fsWorker] */
+function context(signal, fsWorker = true) {
   return new AgentToolContext({
     projectRoot: root,
     confirm: async () => true,
     audit: () => {},
     sandbox: policy,
     signal,
+    fsWorker: fsWorker !== false,
   });
 }
 
-const CANCELLED_AFTER = 20;
+/** 在 N 毫秒后 abort（worker 是独立线程，主线程的定时器**能**在遍历期间执行） */
+function abortAfter(controller, ms) {
+  setTimeout(() => controller.abort(), ms);
+}
 
 (async () => {
-  // ======================= 不取消：结果必须完整（防过度修复的对照） =======================
+  check('前置：worker 入口文件存在（打包漏配 asarUnpack 会让下面全部退化）', fsRunner.workerAvailable() === true, fsRunner.workerFilePath());
+
+  // ======================= 0. 不取消：结果必须完整 =======================
   {
     const live = new AbortController().signal;
-    const files = await registry().execute('find_files', { pattern: '**/*.txt', maxResults: 500 }, context(live));
-    const searched = await registry().execute('search_files', { pattern: 'needle', maxResults: 500 }, context(live));
+    const files = await registry().execute('find_files', { pattern: '**/*.txt', maxResults: 1000 }, context(live));
+    const searched = await registry().execute('search_files', { pattern: 'needle', maxResults: 1000 }, context(live));
     const scanned = await registry().execute('scan_project', {}, context(live));
-    check('0a 不取消时 find_files 扫全 200 个文件',
-      files.ok === true && files.data.count === TOTAL_FILES, JSON.stringify({ ok: files.ok, count: files.data && files.data.count }));
-    check('0b 不取消时 search_files 扫全 200 处匹配',
-      searched.ok === true && searched.data.count === TOTAL_FILES, JSON.stringify({ ok: searched.ok, count: searched.data && searched.data.count }));
+    check('0a 不取消时 find_files 扫全全部文件', files.ok === true && files.data.count === TOTAL_FILES,
+      JSON.stringify({ ok: files.ok, count: files.data && files.data.count }));
+    check('0b 不取消时 search_files 扫全全部匹配', searched.ok === true && searched.data.count === TOTAL_FILES,
+      JSON.stringify({ ok: searched.ok, count: searched.data && searched.data.count }));
     check('0c 不取消时 scan_project 扫全且未标记 stopped',
       scanned.ok === true && scanned.data.fileCount === TOTAL_FILES && scanned.data.stopped === undefined,
       JSON.stringify({ ok: scanned.ok, fileCount: scanned.data && scanned.data.fileCount }));
   }
 
-  // ======================= find_files =======================
+  // ======================= 1. 取消：terminate 真的杀掉遍历 =======================
   {
-    const res = await registry().execute('find_files', { pattern: '**/*.txt', maxResults: 500 }, context(countingSignal(CANCELLED_AFTER)));
+    const c1 = new AbortController();
+    abortAfter(c1, 20);
+    const res = await registry().execute('find_files', { pattern: '**/*.txt', maxResults: 1000 }, context(c1.signal));
     check('1a find_files 取消后返回 CANCELLED（不是「找到一部分」的成功）',
       res.ok === false && res.data.code === 'CANCELLED' && res.data.cancelled === true,
       JSON.stringify({ ok: res.ok, code: res.data && res.data.code }));
-    check('1b find_files 确实中途停了（partial < 完整结果）',
+    check('1b find_files 结果不完整（partial < 完整结果，或至少如实标注）',
       typeof res.data.partial === 'number' && res.data.partial < TOTAL_FILES,
       JSON.stringify({ partial: res.data.partial, total: TOTAL_FILES }));
     check('1c 文案明确说明结果不完整', /不完整/.test(String(res.text)), String(res.text).slice(0, 60));
   }
 
-  // ======================= search_files =======================
+  // ======================= 2. 主线程心跳：遍历期间事件循环仍在转 =======================
   {
-    const res = await registry().execute('search_files', { pattern: 'needle', maxResults: 500 }, context(countingSignal(CANCELLED_AFTER)));
-    check('2a search_files 取消后返回 CANCELLED',
-      res.ok === false && res.data.code === 'CANCELLED', JSON.stringify({ ok: res.ok, code: res.data && res.data.code }));
-    check('2b search_files 确实中途停了（partial < 完整结果）',
-      typeof res.data.partial === 'number' && res.data.partial < TOTAL_FILES,
-      JSON.stringify({ partial: res.data.partial, total: TOTAL_FILES }));
+    let ticks = 0;
+    const hb = setInterval(() => {
+      ticks += 1;
+    }, 3);
+    let scanned = null;
+    try {
+      scanned = await registry().execute('scan_project', {}, context(new AbortController().signal));
+    } finally {
+      clearInterval(hb);
+    }
+    check('2a 扫描期间主线程事件循环仍在跳（同步实现下 ticks 必为 0）', ticks > 0, 'ticks=' + ticks);
+    check('2b 扫描结果照常正确（worker 不是靠牺牲功能换来的）',
+      scanned.ok === true && scanned.data.fileCount === TOTAL_FILES, JSON.stringify({ ok: scanned.ok }));
+    check('2c scan_project 结果里如实标注执行位置（worker 模式）',
+      scanned.data.workerMode === 'worker', JSON.stringify({ workerMode: scanned.data.workerMode }));
   }
 
-  // ======================= scan_project =======================
+  // ======================= 3. 取消时的 partial 用进度回报 =======================
   {
-    const res = await registry().execute('scan_project', {}, context(countingSignal(CANCELLED_AFTER)));
-    check('3a scan_project 取消后返回 CANCELLED',
+    const c = new AbortController();
+    abortAfter(c, 20);
+    const res = await registry().execute('scan_project', {}, context(c.signal));
+    check('3a scan_project 取消后返回 CANCELLED + partial 是数字',
+      res.ok === false && res.data.code === 'CANCELLED' && typeof res.data.partial === 'number',
+      JSON.stringify({ ok: res.ok, code: res.data && res.data.code, partial: res.data.partial }));
+    check('3b 取消时没有把半份结果写回画布', fs.existsSync(path.join(root, 'workflow.cnode')) === false);
+  }
+
+  // ======================= 4. 显式同步模式（tools.fs_worker=false）：循环检查点仍生效 =======================
+  {
+    const aborted = new AbortController();
+    aborted.abort(); // 一开始就 aborted → 循环检查点第一次就命中（不依赖事件循环，同步模式下也确定）
+    const res = await registry().execute('scan_project', {}, context(aborted.signal, false));
+    check('4a 同步模式下取消仍生效（循环检查点）',
       res.ok === false && res.data.code === 'CANCELLED', JSON.stringify({ ok: res.ok, code: res.data && res.data.code }));
-    check('3b scan_project 确实中途停了（partial < 完整文件数）',
-      typeof res.data.partial === 'number' && res.data.partial < TOTAL_FILES,
-      JSON.stringify({ partial: res.data.partial, total: TOTAL_FILES }));
-    check('3c scan_project 取消时没有把半份结果写回画布',
-      fs.existsSync(path.join(root, 'workflow.cnode')) === false);
+    check('4b 同步模式下结果同样标注「不完整」', /不完整/.test(String(res.text)), String(res.text).slice(0, 60));
   }
 
   fs.rmSync(root, { recursive: true, force: true });

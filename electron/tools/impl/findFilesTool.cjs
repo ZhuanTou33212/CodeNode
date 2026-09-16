@@ -8,28 +8,7 @@ const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { shouldSkipDir } = require('../toolFiles.cjs');
 const { globToRegExp, isCancelled } = require('./shared.cjs');
-
-function walkFiles(root, dir, regex, max, found, shouldStop) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const it of entries) {
-    if (found.length >= max) return;
-    // P7：同步遍历的取消检查点 —— 不检查的话「停止」要等整个项目走完才生效
-    if (shouldStop && shouldStop()) return;
-    const abs = path.join(dir, it.name);
-    if (it.isDirectory()) {
-      if (it.name !== path.basename(root) && shouldSkipDir(it.name)) continue;
-      walkFiles(root, abs, regex, max, found, shouldStop);
-    } else if (it.isFile()) {
-      const relative = path.relative(root, abs).replace(/\\/g, '/');
-      if (regex.test(relative)) found.push(relative);
-    }
-  }
-}
+const fsRunner = require('../fsRunner.cjs');
 
 function register(registry) {
   registry.register(
@@ -52,28 +31,30 @@ function register(registry) {
       const offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
       const root = path.resolve(context.projectRoot());
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('项目目录不存在：' + root);
-      let regex;
       try {
-        regex = globToRegExp(pattern);
+        // 主线程先校验一次模式：worker 内抛错只会变成「任务失败」，提示不如这里清楚
+        globToRegExp(pattern);
       } catch (e) {
         return AgentToolResult.error('无效的 glob 模式：' + pattern);
       }
-      const found = [];
-      let cancelled = false;
-      walkFiles(root, root, regex, offset + max, found, () => {
-        if (cancelled) return true;
-        if (isCancelled(context)) {
-          cancelled = true;
-          return true;
-        }
-        return false;
-      });
-      if (cancelled) {
-        return AgentToolResult.failure('CANCELLED', '查找已取消（用户停止），结果不完整（已找到 ' + found.length + ' 个文件）。', {
+      // P7 收口：遍历放进 worker 线程 —— 同步遍历会冻住 Electron 主进程，且单次同步 fs
+      // 调用（statSync 撞上挂住的网络盘）不可中断；terminate 才能真正杀掉它。
+      // worker 不可用时 fsRunner 显式降级到主线程同步执行，下面是 audit 留痕。
+      const outcome = await fsRunner.runFsTask(
+        'findFiles',
+        { root, pattern, limit: offset + max, shouldStop: () => isCancelled(context) },
+        { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+      );
+      if (outcome.cancelled || outcome.timedOut) {
+        return AgentToolResult.failure('CANCELLED', '查找已取消（用户停止），结果不完整（已找到 ' + outcome.progress + ' 个文件）。', {
           cancelled: true,
-          partial: found.length,
+          partial: outcome.progress,
         });
       }
+      if (outcome.mode === 'sync-fallback') {
+        context.audit('find_files worker 不可用，已退回主线程同步执行：' + outcome.fallbackReason);
+      }
+      const found = outcome.result.files;
       const total = found.length;
       if (total === 0) return AgentToolResult.ok('未找到匹配文件', { count: 0, offset: 0, files: [] });
       const page = found.slice(offset, offset + max);

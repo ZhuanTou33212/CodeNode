@@ -8,30 +8,9 @@ const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { shouldSkipDir, isBinaryFileName } = require('../toolFiles.cjs');
 const { globToRegExp, isSensitivePath, resolveInRoot, isCancelled } = require('./shared.cjs');
+const fsRunner = require('../fsRunner.cjs');
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-
-function walkFiles(root, dir, fileRegex, onFile, shouldStop) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const it of entries) {
-    // P7：同步遍历的取消检查点
-    if (shouldStop && shouldStop()) return;
-    const abs = path.join(dir, it.name);
-    if (it.isDirectory()) {
-      if (it.name !== path.basename(root) && shouldSkipDir(it.name)) continue;
-      walkFiles(root, abs, fileRegex, onFile, shouldStop);
-    } else if (it.isFile()) {
-      const relative = path.relative(root, abs).replace(/\\/g, '/');
-      if (fileRegex && !fileRegex.test(relative)) continue;
-      onFile(abs, relative);
-    }
-  }
-}
 
 function register(registry) {
   registry.register(
@@ -77,48 +56,32 @@ function register(registry) {
           return AgentToolResult.error('无效 filePattern：' + filePattern);
         }
       }
-      const matches = [];
-      const maxCollect = offset + max;
-      let cancelled = false;
-      walkFiles(start, start, fileRegex, (abs, relative) => {
-        if (matches.length >= maxCollect) return;
-        if (isSensitivePath(relative)) return;
-        if (isBinaryFileName(path.basename(abs))) return;
-        let size;
-        try {
-          size = fs.statSync(abs).size;
-        } catch {
-          return;
-        }
-        if (size > MAX_FILE_BYTES) return;
-        let lines;
-        try {
-          const buf = fs.readFileSync(abs);
-          if (buf.includes(0)) return;
-          lines = buf.toString('utf-8').split('\n');
-        } catch {
-          return;
-        }
-        for (let i = 0; i < lines.length; i++) {
-          if (matches.length >= maxCollect) return;
-          if (regex.test(lines[i])) {
-            matches.push(relative + ':' + (i + 1) + ': ' + lines[i].trim());
-          }
-        }
-      }, () => {
-        if (cancelled) return true;
-        if (isCancelled(context)) {
-          cancelled = true;
-          return true;
-        }
-        return false;
-      });
-      if (cancelled) {
-        return AgentToolResult.failure('CANCELLED', '搜索已取消（用户停止），结果不完整（已找到 ' + matches.length + ' 处匹配）。', {
+      // P7 收口：内容搜索（遍历 + 逐文件读取 + 匹配）整体放进 worker 线程，
+      // 理由同 find_files：同步遍历会冻住主进程，且单次 readFileSync 不可中断。
+      const outcome = await fsRunner.runFsTask(
+        'searchFiles',
+        {
+          root,
+          start,
+          pattern: patternText,
+          caseSensitive,
+          filePattern,
+          maxCollect: offset + max,
+          maxFileBytes: MAX_FILE_BYTES,
+          shouldStop: () => isCancelled(context),
+        },
+        { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+      );
+      if (outcome.cancelled || outcome.timedOut) {
+        return AgentToolResult.failure('CANCELLED', '搜索已取消（用户停止），结果不完整（已找到 ' + outcome.progress + ' 处匹配）。', {
           cancelled: true,
-          partial: matches.length,
+          partial: outcome.progress,
         });
       }
+      if (outcome.mode === 'sync-fallback') {
+        context.audit('search_files worker 不可用，已退回主线程同步执行：' + outcome.fallbackReason);
+      }
+      const matches = outcome.result.matches;
       const total = matches.length;
       if (total === 0) return AgentToolResult.ok('未找到匹配内容', { count: 0, offset: 0 });
       const page = matches.slice(offset, offset + max);

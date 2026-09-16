@@ -49,6 +49,10 @@ class AgentToolContext {
     this.roleValue = o.role || 'supervisor';
     this.readOnlyValue = o.readOnly === true;
     this.signalValue = o.signal || null;
+    // 文件遍历类工具（scan_project / find_files / search_files）是否走 worker 线程。
+    // 默认 true：同步遍历会把 Electron 主进程卡住，且单次同步 fs 调用不可中断。
+    // 置 false 退回主线程同步执行（排障 / 老平台兜底），行为与旧版一致但会阻塞界面。
+    this.fsWorkerValue = o.fsWorker !== false;
     // 执行隔离策略（sandbox.cjs 解析结果）；未注入时由 sandbox.cjs 的默认策略兜底
     this.sandboxPolicyValue = o.sandbox || null;
     // 副作用幂等守卫（sideEffects.cjs）；未注入时为无操作
@@ -73,6 +77,9 @@ class AgentToolContext {
   readOnly() { return this.readOnlyValue; }
   signal() { return this.signalValue; }
   cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
+
+  /** 文件遍历类工具是否走 worker 线程（tools.fs_worker，默认 true） */
+  fsWorkerEnabled() { return this.fsWorkerValue !== false; }
 
   /**
    * S7：审批服务 —— 服务端签发/校验令牌（绑定 capability / scope / toolCallId / 有效期，单次有效）。

@@ -4,100 +4,12 @@
  */
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
-const { shouldSkipDir, isBinaryFileName, IGNORED_DIRS } = require('./toolFiles.cjs');
-const { detectLanguage } = require('./impl/shared.cjs');
-
-const MAX_FILES = 20000;
-
-function walk(root, dir, rel, out, shouldStop) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const it of entries) {
-    if (out.files.length >= MAX_FILES) return;
-    // P7：同步遍历的取消检查点（否则「停止」要等整个项目走完才生效）
-    if (shouldStop && shouldStop()) {
-      out.stopped = true;
-      return;
-    }
-    const abs = path.join(dir, it.name);
-    const childRel = rel ? rel + '/' + it.name : it.name;
-    if (it.isDirectory()) {
-      if (shouldSkipDir(it.name)) continue;
-      walk(root, abs, childRel, out, shouldStop);
-    } else if (it.isFile()) {
-      let size = 0;
-      try {
-        size = fs.statSync(abs).size;
-      } catch {}
-      out.files.push({ relPath: childRel, absPath: abs, size });
-    }
-  }
-}
-
-/**
- * 扫描项目。
- * @param {string} root
- * @param {{ shouldStop?: () => boolean }} [options] shouldStop 返回 true 时**提前结束**并把
- *   `stopped` 置真（P7：同步遍历的取消检查点）——调用方据此如实回报「结果不完整」。
- * @returns {{ files: Array, sourceFiles: Array, assetFiles: Array, stopped: boolean }}
- *  sourceFiles: 文本/源码（非二进制）；assetFiles: 二进制资产。
- */
-function scan(root, options) {
-  const opts = options || {};
-  const shouldStop = typeof opts.shouldStop === 'function' ? opts.shouldStop : null;
-  const out = { files: [], stopped: false };
-  walk(root, root, '', out, shouldStop);
-  out.files.sort((a, b) => a.relPath.localeCompare(b.relPath));
-  const sourceFiles = [];
-  const assetFiles = [];
-  for (const f of out.files) {
-    // P7：逐文件分类阶段同样可取消（大项目里这一步比遍历本身还慢）
-    if (shouldStop && shouldStop()) {
-      out.stopped = true;
-      break;
-    }
-    const meta = fileMeta(root, f);
-    if (meta.binary) assetFiles.push(meta);
-    else sourceFiles.push(meta);
-  }
-  return { files: out.files, sourceFiles, assetFiles, stopped: out.stopped };
-}
-
-function fileMeta(root, f) {
-  const name = path.basename(f.relPath);
-  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
-  const binary = isBinaryFileName(name);
-  let lineCount = 0;
-  if (!binary) {
-    try {
-      const buf = fs.readFileSync(f.absPath);
-      if (buf.includes(0)) {
-        // 仍算二进制（NUL）
-        return { relativePath: f.relPath, name, language: 'binary', ext, binary: true, size: f.size, lineCount: 0 };
-      }
-      const text = buf.toString('utf-8');
-      lineCount = text.split('\n').length - 1;
-      if (text.includes('\uFFFD')) {
-        return { relativePath: f.relPath, name, language: 'unknown', ext, binary: false, size: f.size, lineCount: 0 };
-      }
-    } catch {}
-  }
-  return {
-    relativePath: f.relPath,
-    name,
-    language: binary ? 'binary' : detectLanguage(name),
-    ext,
-    binary,
-    size: f.size,
-    lineCount,
-  };
-}
+// 遍历 / 扫描的唯一实现在 fsCore —— 同一份逻辑要同时跑在主线程与 worker 线程里，
+// 两份实现必然漂移；这里只做 re-export，保持既有 import 路径与导出名不变。
+const fsCore = require('./fsCore.cjs');
+const { scan, fileMeta } = fsCore;
+const { IGNORED_DIRS } = require('./toolFiles.cjs');
 
 /** 语言统计：{ lang: count } */
 function languageSummary(files) {

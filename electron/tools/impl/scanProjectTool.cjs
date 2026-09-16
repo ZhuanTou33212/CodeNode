@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { resolveInRoot, isCancelled } = require('./shared.cjs');
-const { scan } = require('../projectScan.cjs');
+const fsRunner = require('../fsRunner.cjs');
 
 const MAX_WORKBENCH_NODES = 200;
 
@@ -56,17 +56,32 @@ function register(registry) {
       if (!root) return AgentToolResult.error('路径越过项目边界');
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('目录不存在：' + root);
       try {
-        const result = scan(root, { shouldStop: () => isCancelled(context) });
-        // P7：取消时如实报告「结果不完整」，不要拿半份扫描当完整结果交付
-        if (result.stopped) {
-          return AgentToolResult.failure('CANCELLED', '扫描已取消（用户停止），结果不完整（已扫描 ' + result.files.length + ' 个文件）。', {
+        // P7 收口：整个遍历（含逐个读文件算行数）放到 **worker 线程**里跑 ——
+        //   ① `worker.terminate()` 能真的杀掉一次同步 fs 调用（旧实现只能等它自己跑完）；
+        //   ② Electron 主进程的事件循环不再被遍历冻住（界面保持可响应）。
+        // worker 不可用时 fsRunner 会显式降级到主线程同步执行并把原因带回来（下面 audit + 留痕）。
+        const outcome = await fsRunner.runFsTask(
+          'scanProject',
+          { root, shouldStop: () => isCancelled(context) },
+          { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+        );
+        // 取消/超时：如实报告「结果不完整」，不要拿半份扫描当完整结果交付
+        if (outcome.cancelled || outcome.timedOut) {
+          return AgentToolResult.failure('CANCELLED', '扫描已取消（用户停止），结果不完整（已扫描 ' + outcome.progress + ' 个文件）。', {
             cancelled: true,
-            partial: result.files.length,
+            partial: outcome.progress,
             root,
           });
         }
+        const result = outcome.result;
+        if (outcome.mode === 'sync-fallback') {
+          context.audit('scan_project worker 不可用，已退回主线程同步执行：' + outcome.fallbackReason);
+        }
+        /** @type {Record<string, any>} */
         const data = {
           root,
+          workerMode: outcome.mode,
+          ...(outcome.mode === 'sync-fallback' ? { workerFallback: outcome.fallbackReason } : {}),
           sourceFiles: result.sourceFiles.length,
           assetFiles: result.assetFiles.length,
           fileCount: result.files.length,

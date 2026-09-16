@@ -30,7 +30,7 @@
 
 /** 所有能力都可用的方法（跨切面） */
 const COMMON_METHODS = Object.freeze([
-  'projectRoot', 'model', 'runId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled',
+  'projectRoot', 'model', 'runId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
   'confirm', 'notifyState', 'setStateNotifier', 'conversationHistory', 'ragConfig',
   'checkpointMessages', 'beginSideEffect', 'commitSideEffect', 'failSideEffect',
 ]);

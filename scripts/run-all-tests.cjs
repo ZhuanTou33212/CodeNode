@@ -48,6 +48,7 @@ const CORE = [
   'test:tool-contract',
   'test:grounding-gate',
   'test:sync-cancel',
+  'test:fs-worker',
   'test:agent-cache',
   'test:tool-call-id',
   'test:stream-accumulator',

@@ -6,25 +6,11 @@
 const path = require('path');
 const fs = require('fs');
 const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
+// 敏感文件判定 / 语言检测 / glob 解析的唯一实现在 fsCore —— 同一份逻辑要跑在 worker 线程里，
+// 这里只做 re-export，保持既有 import 路径不变。
+const fsCore = require('../fsCore.cjs');
+const { isSensitivePath, detectLanguage, globToRegExp } = fsCore;
 
-const SENSITIVE_FILE_NAMES = new Set([
-  '.env', '.npmrc', '.pypirc', '.netrc', 'agent.properties',
-  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
-]);
-const SENSITIVE_FILE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.der']);
-
-/** 防止 read_file/search_files 把凭据原文发送给模型；RAG 索引也使用同等规则。 */
-function isSensitivePath(relative) {
-  const normalized = String(relative || '').replace(/\\/g, '/').toLowerCase();
-  const name = path.posix.basename(normalized);
-  const ext = path.posix.extname(name);
-  return (
-    SENSITIVE_FILE_NAMES.has(name) ||
-    name.startsWith('.env.') ||
-    SENSITIVE_FILE_EXTENSIONS.has(ext) ||
-    /(^|[._-])(credentials?|secrets?|private[-_]?key)([._-]|$)/i.test(name)
-  );
-}
 
 /** 解析项目内相对路径；越界返回 null。 */
 function resolveInRoot(root, relative) {
@@ -105,27 +91,6 @@ function resolveFileFuzzy(root, relative) {
   return null;
 }
 
-/** 常见编程语言检测（按扩展名 + 文件名）。 */
-function detectLanguage(filename) {
-  const name = path.basename(filename);
-  const dot = name.lastIndexOf('.');
-  const ext = dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
-  const map = {
-    js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', mjs: 'javascript', cjs: 'javascript',
-    py: 'python', java: 'java', kt: 'kotlin', rs: 'rust', go: 'go', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp',
-    hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php', swift: 'swift', scala: 'scala', dart: 'dart',
-    html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less', vue: 'vue', svelte: 'svelte',
-    json: 'json', jsonc: 'json', yml: 'yaml', yaml: 'yaml', xml: 'xml', md: 'markdown', markdown: 'markdown',
-    txt: 'text', sh: 'shell', bash: 'shell', bat: 'batch', cmd: 'batch', ps1: 'powershell',
-    sql: 'sql', toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', gradle: 'groovy', dockerfile: 'dockerfile',
-  };
-  if (map[ext]) return map[ext];
-  const lower = name.toLowerCase();
-  if (lower === 'dockerfile') return 'dockerfile';
-  if (lower === 'makefile') return 'makefile';
-  if (lower === 'package.json' || lower === 'package-lock.json') return 'json';
-  return 'unknown';
-}
 
 /** 读取文本文件（UTF-8），最多 maxBytes；二进制返回 null。 */
 function readTextFile(filePath, maxBytes) {
@@ -152,47 +117,6 @@ function readTextFile(filePath, maxBytes) {
   return { ok: true, text };
 }
 
-/** glob 模式 → RegExp（支持 ** / * / ? / {...}，路径统一 / 分隔）。 */
-function globToRegExp(glob) {
-  let re = '';
-  let i = 0;
-  const pattern = glob;
-  while (i < pattern.length) {
-    const c = pattern[i];
-    if (c === '*') {
-      if (pattern[i + 1] === '*') {
-        // ** 匹配跨目录
-        if (pattern[i + 2] === '/') {
-          re += '(?:[^/]+/)*';
-          i += 3;
-        } else {
-          re += '.*';
-          i += 2;
-        }
-      } else {
-        re += '[^/]*';
-        i++;
-      }
-    } else if (c === '?') {
-      re += '[^/]';
-      i++;
-    } else if (c === '{') {
-      const end = pattern.indexOf('}', i);
-      if (end > i) {
-        const options = pattern.slice(i + 1, end).split(',').map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-        re += '(?:' + options.join('|') + ')';
-        i = end + 1;
-      } else {
-        re += '\\{';
-        i++;
-      }
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-      i++;
-    }
-  }
-  return new RegExp('^' + re + '$');
-}
 
 /** 节点类型 → 主色（与前端 NODE_TEMPLATES / WorkflowNode 保持一致，按类型判定而非外观） */
 const NODE_TYPE_ACCENT = {
