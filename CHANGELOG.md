@@ -52,7 +52,11 @@
     不静默退回旧的阻塞行为，否则「已搬到 worker」就成了纸面结论。
   - **打包**：`build.asarUnpack` 加入这两个文件（`worker_threads` 需要真实文件系统上的入口；
     `app.asar` 路径会被重写到 `app.asar.unpacked`）。漏配只有**打包版**才炸、CI 看不出来，
-    所以用例直接断言打包配置本身。
+    所以用例直接断言打包配置本身；并且**真跑了一次打包验证**：`electron-builder --dir` 产物里
+    `app.asar.unpacked/electron/tools/{fsCore,fsWorker}.cjs` 都在，再用**打包后的 Electron**
+    （`ELECTRON_RUN_AS_NODE=1 <CodeNode.exe> <script>`，带 asar 支持）从 asar 里 require 并真实启动
+    worker —— 扫了 46 个文件、链路全通（这台机器签名环节不可用，用 `-c.win.signAndEditExecutable=false`
+    绕过，与本次改动无关）。
   - 配置 `tools.fs_worker`（默认 **true**）；关掉 = 退回主线程同步执行（排障 / 老平台兜底）。
 - **证据**：`scripts/sync-tool-cancel-test.cjs` 判据升级为**真 AbortSignal + 主线程 `setTimeout` 触发**
   —— 同步实现下遍历会占满事件循环，那个定时器根本轮不到执行，所以「取消真的生效」自身就证明了

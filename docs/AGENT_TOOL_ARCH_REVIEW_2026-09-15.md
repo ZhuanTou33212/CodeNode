@@ -662,7 +662,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 2. **worker 与同步实现结果逐字节一致**（单一实现来源的意义）：三个任务在混合结构（源码 / 资产 / 忽略目录 / 敏感文件 / 大文件）上比对。
 3. **降级显式留痕**：worker 入口缺失时仍返回正确结果，但必须 `audit` + `data.workerMode='sync-fallback'` + `workerFallback`（原因）。用例把 worker 文件临时改名再还原，并断言「还原后重新走 worker」（降级不是粘住的状态）。
 
-**打包坑（开发模式与 CI 都看不出来）**：`worker_threads` 需要真实文件系统上的入口 → `build.asarUnpack` 必须列出 `fsWorker.cjs` + `fsCore.cjs`，且 `workerFilePath()` 要把路径里的 `app.asar` 重写到 `app.asar.unpacked`（且**不能**把已经是 `.unpacked` 的再替换一次）。用例 F/E 直接断言打包配置与路径重写，把「只有打包版才炸」的坑挪到 CI。
+**打包坑（开发模式与 CI 都看不出来）**：`worker_threads` 需要真实文件系统上的入口 → `build.asarUnpack` 必须列出 `fsWorker.cjs` + `fsCore.cjs`，且 `workerFilePath()` 要把路径里的 `app.asar` 重写到 `app.asar.unpacked`（且**不能**把已经是 `.unpacked` 的再替换一次）。用例 F/E 直接断言打包配置与路径重写，把「只有打包版才炸」的坑挪到 CI。**并且真跑了一次打包验证**：`electron-builder --dir` 产物里 `app.asar.unpacked/electron/tools/{fsCore,fsWorker}.cjs` 都在，再用**打包后的 Electron**（`ELECTRON_RUN_AS_NODE=1 <CodeNode.exe> <script>`）从 asar 里 require 并真实启动 worker —— 扫了 46 个文件、链路全通（本机签名环节不可用，`-c.win.signAndEditExecutable=false` 绕过，与本次改动无关）。
 
 **仍未做**：`project_info` 工具内部的 `detectProjectInfo` 仍是同步执行，未搬进 worker。
 
