@@ -20,7 +20,7 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 const {
   shouldCompress,
   buildToolContent,
-  compressorSystemPrompt,
+  COMPRESSOR_SYSTEM_PROMPT,
   compressToolContent,
   SCALAR_BACKED_TOOLS,
   loadConfig,
@@ -168,8 +168,12 @@ async function main() {
   const fileBacked = buildToolContent(result, 'read_file', false, false, 100000);
   assert.ok(fileBacked.includes('[data]'), '普通工具应追加 data');
 
-  // ---- 10. 子代理压缩：失败时降级为截断（用不可达端口快速失败） ----
-  assert.ok(compressorSystemPrompt(300).includes('300'), '压缩提示应带预算');
+  // ---- 10. 子代理压缩：提示是常量（前缀稳定）+ 失败时降级为截断（用不可达端口快速失败） ----
+  assert.ok(COMPRESSOR_SYSTEM_PROMPT.includes('压缩'), '压缩系统提示应是常量文本');
+  assert.ok(
+    !/300/.test(COMPRESSOR_SYSTEM_PROMPT),
+    '压缩预算不再拼进 system —— system 恒定才能让服务端前缀缓存稳定命中（S9）',
+  );
   const raw = 'line1\n'.repeat(400) + 'KEY_DETAIL=' + 'x'.repeat(600);
   const failedCfg = { apiBase: 'http://127.0.0.1:9', apiKey: '', model: 'test', maxTokens: 256, reasoningEffort: '', compression: { budgetChars: 300 } };
   const compressed = await compressToolContent(failedCfg, 'read_file', raw);

@@ -150,8 +150,11 @@ const REGISTRY_KEYS = [
       legacyUnknown.ok === false && legacyUnknown.data.code === 'PERMISSION_DENIED', JSON.stringify({ ok: legacyUnknown.ok, code: legacyUnknown.data.code }));
 
     // 角色白名单明确授予的写工具不能被只读守卫误伤（verifier 要能跑 execute_shell 才有验证能力）
+    // S9：判据从「白名单里有这个名字」升级为「角色契约（tools/roles.cjs）显式授予的能力」——
+    // 「只有白名单、没有角色能力」时必须被拒，那条负向用例在 subagent-isolation-test 的 B 段。
     const roleRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false });
     roleRegistry.allowedTools = new Set(['execute_shell']);
+    roleRegistry.roleCapabilities = new Set(require('../electron/tools/roles.cjs').roleCapabilities('verifier'));
     // verifier 是只读角色，但它的角色白名单里有 execute_shell（跑测试/验证的核心能力），
     // 且 node 命令属于 HIGH 敏感 → 这里显式批准确认，验证「角色授予的写工具不被只读守卫误伤」
     const verifierContext = makeContext({ readOnly: true, confirm: async () => true });

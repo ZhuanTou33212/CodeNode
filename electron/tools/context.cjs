@@ -215,11 +215,12 @@ class AgentToolContext {
   /**
    * 副作用幂等守卫：写操作执行前登记意图，执行后提交结果。
    * 返回 { skip:true } 表示该副作用在中断前已经提交过（续跑时不得重复执行）。
+   * S9：带上行为者（runId/taskId/role），让「谁提交的、谁又想重复」在账本里可归因。
    */
   async beginSideEffect(toolName, args) {
     if (!this.sideEffectGuardValue || typeof this.sideEffectGuardValue.begin !== 'function') return { skip: false, token: null };
     try {
-      return await this.sideEffectGuardValue.begin(toolName, args);
+      return await this.sideEffectGuardValue.begin(toolName, args, { taskId: this.taskIdValue, role: this.roleValue });
     } catch {
       return { skip: false, token: null };
     }

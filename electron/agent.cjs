@@ -48,6 +48,7 @@ function loadConfig(projectRoot) {
     rag: parseRagConfig(cfg),
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
+    subagent: parseSubagentConfig(cfg),
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
     sandbox: parseSandboxConfig(cfg),
@@ -151,7 +152,32 @@ function parseCompressionConfig(cfg) {
     budgetChars: configInteger(cfg, 'agent.compression.budget_chars', 1500, 200, 20000),
     maxCalls: configInteger(cfg, 'agent.compression.max_calls', 8, 0, 50),
     maxInputChars: configInteger(cfg, 'agent.compression.max_input_chars', 300000, 2000, 1000000),
+    // S9 成本控制：压缩用哪个模型（空 = 跟随主模型）、是否开思考链（默认关）、
+    // 内容级缓存（默认开，同一份原文只压一次）、输出/超时上限。
+    model: String(cfg['agent.compression.model'] || '').trim(),
+    reasoning: /^(1|true|yes|on)$/i.test(String(cfg['agent.compression.reasoning'] || '')),
+    cache: cfg['agent.compression.cache'] == null ? true : String(cfg['agent.compression.cache']).toLowerCase() !== 'false',
+    maxOutputTokens: configInteger(cfg, 'agent.compression.max_output_tokens', 4096, 256, 65536),
+    timeoutMs: configInteger(cfg, 'agent.compression.timeout_ms', 60000, 5000, 600000),
     exclude: defaults.concat(exclude.filter((item) => !defaults.includes(item))),
+  };
+}
+
+/**
+ * 子代理（delegate_task）配置（S9）。
+ *
+ *   agent.subagent.max_total_tokens  单个子代理的独立配额（0 = 不设独立配额，直接共享父预算；
+ *                                    两者都受 agent.max_total_tokens 约束，子代理永远不绕过 run 总量）
+ *   agent.subagent.total_timeout_seconds  单个子代理任务的**总时长**（runAgentChat 的 timeoutMs 是单轮超时）
+ *   agent.subagent.result_max_chars  回灌主上下文的子代理结果上限（超出截断并提示 get_subagent_task）
+ */
+function parseSubagentConfig(cfg) {
+  return {
+    maxTotalTokens: configInteger(cfg, 'agent.subagent.max_total_tokens', 0, 0, 4000000),
+    totalTimeoutSeconds: configInteger(cfg, 'agent.subagent.total_timeout_seconds', 600, 10, 3600),
+    resultMaxChars: configInteger(cfg, 'agent.subagent.result_max_chars', 8000, 500, 200000),
+    maxTasksPerRun: configInteger(cfg, 'agent.subagent.max_tasks_per_run', 12, 1, 100),
+    maxBatchTasks: configInteger(cfg, 'agent.subagent.max_batch_tasks', 8, 1, 32),
   };
 }
 
@@ -590,20 +616,23 @@ const MAX_TRUNCATION_NUDGES = 2;
  */
 const SCALAR_BACKED_TOOLS = TOOL_SEMANTICS.SCALAR_BACKED_TOOLS;
 
-/** 子代理压缩的系统提示：独立上下文，只接收单份工具结果，不共享主对话。 */
-function compressorSystemPrompt(budgetChars) {
-  return (
-    '你是一个「工具结果压缩代理」。你的输入是一份工具调用返回的原始结果（可能很大），\n' +
-    '你的唯一任务是把它压缩成一份简洁、准确、可被主 Agent 直接使用的「关键信息摘要」。\n' +
-    '硬性要求：\n' +
-    '1. 必须保留所有继续推进任务所必需的事实：文件路径、行号引用、符号名/函数名/类名、关键字段值、错误信息、状态、数量统计、节点 id 与 label。\n' +
-    '2. 所有 [path#Lx-Ly] 与 [source: ...] 引用必须原文保留，不得改写或省略，因为主 Agent 需要引用真实来源。\n' +
-    '3. JSON/数据结果压缩为要点列表，删除重复冗余；不要逐行照抄。\n' +
-    '4. 用中文、结构清晰（- 列表/小标题），总长度控制在约 ' + budgetChars + ' 字符内。\n' +
-    '5. 只输出摘要本身，不要输出任何解释、前言或 `<tool_result>` 包裹。\n' +
-    '6. 不得添加原始结果中不存在的信息，不得编造。'
-  );
-}
+/**
+ * 子代理压缩的系统提示：**常量**，独立上下文，只接收单份工具结果，不共享主对话。
+ *
+ * 为什么必须是常量：压缩请求由「固定前缀 + 变动的原文」组成，而服务端前缀缓存只能命中
+ * 请求开头那一段 —— 把预算数字拼进 system 会让 system 随配置漂移、也让同一份原文的请求
+ * 前缀不一致。现在长度预算作为 user 段末尾的一句提示，system 恒定（前缀可稳定命中）。
+ */
+const COMPRESSOR_SYSTEM_PROMPT =
+  '你是一个「工具结果压缩代理」。你的输入是一份工具调用返回的原始结果（可能很大），\n' +
+  '你的唯一任务是把它压缩成一份简洁、准确、可被主 Agent 直接使用的「关键信息摘要」。\n' +
+  '硬性要求：\n' +
+  '1. 必须保留所有继续推进任务所必需的事实：文件路径、行号引用、符号名/函数名/类名、关键字段值、错误信息、状态、数量统计、节点 id 与 label。\n' +
+  '2. 所有 [path#Lx-Ly] 与 [source: ...] 引用必须原文保留，不得改写或省略，因为主 Agent 需要引用真实来源。\n' +
+  '3. JSON/数据结果压缩为要点列表，删除重复冗余；不要逐行照抄。\n' +
+  '4. 用中文、结构清晰（- 列表/小标题）；长度按调用方给出的字符上限控制，不要超过。\n' +
+  '5. 只输出摘要本身，不要输出任何解释、前言或 `<tool_result>` 包裹。\n' +
+  '6. 不得添加原始结果中不存在的信息，不得编造。';
 
 /** 是否应对该工具结果做子代理压缩。 */
 function shouldCompress(compression, toolName, contentLength, usedCalls) {
@@ -613,26 +642,62 @@ function shouldCompress(compression, toolName, contentLength, usedCalls) {
   return contentLength > compression.thresholdChars;
 }
 
+/** 压缩结果的内容级缓存（同一份原文 + 同一预算只压一次，命中即零 token） */
+const compressionLib = require('./compressionCache.cjs');
+
 /**
  * 子代理压缩：用一次独立的 LLM 调用把超大的工具结果压缩成关键信息摘要。
  * 子代理只看到原始结果本身（不共享主对话上下文）；失败时降级为截断，保证主 Agent 仍能拿到部分信息。
+ *
+ * 成本上做了三件事（用户反馈「这次压缩的缓存命中率极低」）：
+ *   1. 内容级缓存：key = sha256(工具名 + 预算 + 原文)，同一份内容只付一次 prefill（可跨 run 复用，落盘）；
+ *   2. system 恒定（COMPRESSOR_SYSTEM_PROMPT），预算搬到 user 段末尾 → 服务端前缀缓存能稳定命中前缀；
+ *   3. 可用独立模型并默认关掉思考链（agent.compression.model / reasoning）——摘要任务不需要 reasoning tokens。
+ *
+ * @param {any} cfg
+ * @param {string} toolName
+ * @param {string} text
+ * @param {AbortSignal|null} [signal]
+ * @param {{projectRoot?: string|null, onCacheHit?: (value: string) => void}} [options]
+ * @returns {Promise<string>}
  */
-async function compressToolContent(cfg, toolName, text, signal) {
+async function compressToolContent(cfg, toolName, text, signal, options) {
+  const o = options || {};
   const comp = (cfg && cfg.compression) || {};
   const budget = comp.budgetChars || 1500;
   const maxInput = comp.maxInputChars || 300000;
   const input = String(text || '');
   const clipped = input.length > maxInput ? input.slice(0, maxInput) + '\n…（输入过长，已截断）' : input;
+  const cache = comp.cache === false ? null : compressionLib.getCompressionCache(o.projectRoot || null);
+  const key = cache ? compressionLib.compressionKey(toolName, budget, clipped) : '';
+  if (cache) {
+    const hit = cache.get(key);
+    if (hit) {
+      if (typeof o.onCacheHit === 'function') o.onCacheHit(hit);
+      return hit;
+    }
+  }
   const messages = [
-    { role: 'system', content: compressorSystemPrompt(budget) },
-    { role: 'user', content: '<tool_result name="' + toolName + '">\n' + clipped + '\n</tool_result>\n请压缩上述工具结果为关键信息摘要。' },
+    { role: 'system', content: COMPRESSOR_SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content:
+        '<tool_result name="' + toolName + '">\n' + clipped + '\n</tool_result>\n' +
+        '请把上述工具结果压缩成关键信息摘要，总长度控制在约 ' + budget + ' 字符内。',
+    },
   ];
+  const model = String(comp.model || '').trim() || cfg.model;
   try {
     const startedAt = Date.now();
-    const res = await chatCompletion({ ...cfg, maxTokens: Math.min(cfg.maxTokens || 8192, 4096) }, messages, { timeoutMs: 60000, signal });
-    recordCost(cfg, { kind: 'compression', model: cfg.model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName } });
+    /** @type {any} */
+    const body = { ...cfg, model, maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
+    // 摘要/搬运类任务不需要思考链：默认关掉 reasoning（agent.compression.reasoning=true 可打开）
+    if (comp.reasoning !== true) body.reasoningEffort = false;
+    const res = await chatCompletion(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
+    recordCost(cfg, { kind: 'compression', model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName } });
     const out = String(res.content || '').trim();
     if (!out) return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
+    if (cache) cache.set(key, out, toolName);
     return out;
   } catch {
     return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
@@ -940,6 +1005,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         onDelta && onDelta({ kind: 'stopped' });
         return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
       }
+      const turnActor = {
+        taskId: tools && tools.context && typeof tools.context.taskId === 'function' ? tools.context.taskId() : '',
+        role: tools && tools.context && typeof tools.context.role === 'function' ? tools.context.role() : 'supervisor',
+      };
       const payload = {
         model: cfg.model,
         messages,
@@ -1030,20 +1099,24 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           // 副作用幂等 + 检查点：写操作先登记意图，中断后续跑时凭账本跳过已提交的写操作
           let sideEffectToken = null;
           let deduped = false;
+          let dedupReason = '';
           if (tools.context && typeof tools.context.beginSideEffect === 'function') {
             try {
               const guard = await tools.context.beginSideEffect(tc.name, args);
               if (guard && guard.skip) {
                 deduped = true;
                 sideEffectToken = null;
+                // 账本给出的是「谁提交的 / 谁在重复」的可归因文案（S9），不再由主循环编一句
+                // 「上一次中断前已提交」——那条文案在父子代理共用幂等域时会与事实不符。
+                dedupReason = String(guard.reason || '');
                 if (typeof tools.context.checkpoint === 'function') {
-                  tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey });
-                  tools.context.checkpoint('tool_commit', { callId, tool: tc.name, ok: true, idemKey: guard.idemKey, effect: guard.effect, resultDigest: 'skipped-by-ledger' });
+                  tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey, actor: turnActor });
+                  tools.context.checkpoint('tool_commit', { callId, tool: tc.name, ok: true, idemKey: guard.idemKey, effect: guard.effect, resultDigest: 'skipped-by-ledger', actor: turnActor });
                 }
               } else if (guard) {
                 sideEffectToken = { ...guard, tool: tc.name, callId };
                 if (typeof tools.context.checkpoint === 'function') {
-                  tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: guard.argsDigest || require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey });
+                  tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: guard.argsDigest || require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey, actor: turnActor });
                 }
               }
             } catch {}
@@ -1054,9 +1127,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           let result;
           let repeated = false;
           if (deduped) {
-            // 幂等去重：该写操作在中断前已提交，直接复用结论，绝不重复产生副作用
+            // 幂等去重：该写操作已提交过，直接复用结论，绝不重复产生副作用。
+            // 文案来自账本（含行为者归因），失败时退回中性描述，不编造「上次中断前」这类事实。
             result = require('./tools/result.cjs').AgentToolResult.ok(
-              '（幂等去重）该写操作在上一次中断前已成功提交，本次跳过执行。',
+              '（幂等去重）' + (dedupReason || '该写操作已在本次运行中提交过，本次跳过执行。'),
               { skipped: true, dedupedBy: 'side-effect-ledger' }
             );
             repeated = true;
@@ -1108,6 +1182,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                 effect: sideEffectToken.effect,
                 resultDigest: require('./sideEffects.cjs').digest(String(result.text || '').slice(0, 4000)),
                 elapsedMs: Date.now() - t0,
+                actor: turnActor,
               });
             }
           }
@@ -1130,12 +1205,21 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             if (cached && cached.compressed) record.compressed = true;
           } else {
             toolContent = buildToolContent(result, tc.name, malformed, repeated, DATA_TRUNCATE_CAP);
-            // 子代理压缩：超阈值且未到调用上限的原始结果，压缩成关键信息再进上下文
+            // 子代理压缩：超阈值且未到调用上限的原始结果，压缩成关键信息再进上下文。
+            // S9：走内容级缓存（同一份原文只付一次 prefill），并把「命中/未命中」记进工具记录，
+            // 让缓存命中率变成可测量的事实，而不是只能凭感觉说「很低」。
             if (shouldCompress(cfg && cfg.compression, tc.name, toolContent.length, compressCalls)) {
               compressCalls++;
               const before = toolContent.length;
-              toolContent = await compressToolContent(cfg, tc.name, toolContent, signal);
+              let compressionHit = false;
+              toolContent = await compressToolContent(cfg, tc.name, toolContent, signal, {
+                projectRoot: tools && tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null,
+                onCacheHit: () => {
+                  compressionHit = true;
+                },
+              });
               record.compressed = true;
+              record.compressionCache = compressionHit ? 'hit' : 'miss';
               record.compressedChars = { from: before, to: toolContent.length };
               if (cacheKey && result.ok) {
                 const entry = toolResultCache.get(cacheKey);
@@ -1280,8 +1364,10 @@ module.exports = {
   parseReliabilityConfig,
   shouldCompress,
   buildToolContent,
-  compressorSystemPrompt,
+  COMPRESSOR_SYSTEM_PROMPT,
   compressToolContent,
+  parseCompressionConfig,
+  parseSubagentConfig,
   SCALAR_BACKED_TOOLS,
   CACHEABLE_TOOLS,
   MUTATION_TOOLS,

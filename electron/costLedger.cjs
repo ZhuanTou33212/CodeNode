@@ -43,7 +43,24 @@ function tokenParts(usage) {
   const prompt = Number(u.prompt_tokens ?? u.input_tokens ?? 0) || 0;
   const completion = Number(u.completion_tokens ?? u.output_tokens ?? 0) || 0;
   const total = Number(u.total_tokens ?? prompt + completion) || 0;
-  return { prompt, completion, total };
+  // 服务端「前缀缓存」的命中/未命中（S9）：这两项以前被直接丢掉，于是「缓存命中率」根本无法测量
+  // （用户反馈的正是「那一次工具结果压缩的缓存命中率非常低」）。口径：
+  //   DeepSeek → prompt_cache_hit_tokens / prompt_cache_miss_tokens
+  //   OpenAI   → prompt_tokens_details.cached_tokens（miss 用 prompt - cached 推）
+  const details = u.prompt_tokens_details || u.prompt_cache || {};
+  const hitRaw = u.prompt_cache_hit_tokens ?? details.cached_tokens ?? details.hit_tokens;
+  const cached = Number.isFinite(Number(hitRaw)) ? Math.max(0, Number(hitRaw)) : 0;
+  const missRaw = u.prompt_cache_miss_tokens ?? details.miss_tokens;
+  const miss = Number.isFinite(Number(missRaw)) ? Math.max(0, Number(missRaw)) : Math.max(0, prompt - cached);
+  return { prompt, completion, total, cached, miss };
+}
+
+/** 缓存命中率：命中 /（命中 + 未命中）；没有数据时为 null —— 不编造。 */
+function withCacheRate(counters) {
+  const hit = Number(counters.promptCachedTokens) || 0;
+  const miss = Number(counters.promptMissTokens) || 0;
+  const denom = hit + miss;
+  return { ...counters, promptCacheHitRate: denom > 0 ? Number((hit / denom).toFixed(4)) : null };
 }
 
 function costOf(model, usage, prices) {
@@ -54,7 +71,7 @@ function costOf(model, usage, prices) {
 }
 
 function emptyCounters() {
-  return { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costKnown: true, estimated: 0, latencyMs: 0 };
+  return { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, promptCachedTokens: 0, promptMissTokens: 0, totalTokens: 0, costUsd: 0, costKnown: true, estimated: 0, latencyMs: 0 };
 }
 
 function addCounters(target, entry, cost) {
@@ -63,6 +80,8 @@ function addCounters(target, entry, cost) {
   if (Number(entry.attempt) > 1) target.retries += Number(entry.attempt) - 1;
   target.promptTokens += entry.tokens.prompt;
   target.completionTokens += entry.tokens.completion;
+  target.promptCachedTokens += Number(entry.tokens.cached) || 0;
+  target.promptMissTokens += Number(entry.tokens.miss) || 0;
   target.totalTokens += entry.tokens.total;
   if (cost == null) target.costKnown = false;
   else target.costUsd += cost;
@@ -129,7 +148,7 @@ class CostLedger {
 
   summary(runId) {
     const key = runId ? runStore.normalizeRunId(runId) : this.runId;
-    return this.byRun.get(key) || emptyCounters();
+    return withCacheRate(this.byRun.get(key) || emptyCounters());
   }
 
   /** 当日（本地时区）聚合：内存账本 + 文件中的历史行（只读，不写）。 */
@@ -162,7 +181,7 @@ class CostLedger {
         }
       } catch {}
     }
-    return counters;
+    return withCacheRate(counters);
   }
 
   snapshot(queueInfo) {
@@ -179,4 +198,4 @@ class CostLedger {
   }
 }
 
-module.exports = { CostLedger, parsePrices, costOf, tokenParts, emptyCounters };
+module.exports = { CostLedger, parsePrices, costOf, tokenParts, emptyCounters, withCacheRate };

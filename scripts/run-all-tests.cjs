@@ -35,6 +35,7 @@ const CORE = [
   'test:run-store',
   'test:atomic-file',
   'test:subagent',
+  'test:subagent-isolation',
   'test:agent-cache',
   'test:tool-call-id',
   'test:stream-accumulator',

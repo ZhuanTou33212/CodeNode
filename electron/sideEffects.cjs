@@ -98,6 +98,22 @@ function ledgerPath(projectRoot, scopeRunId) {
   return path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs', safe + '.side-effects.json');
 }
 
+/**
+ * 行为者标签（S9）：`supervisor`（主代理）或 `task-xxx(role)`（子代理）。
+ * 只做归因展示，**不参与幂等键** —— 幂等域仍然是 run，续跑的「已提交就跳过」语义必须保持。
+ * 之前父子代理与多个子代理共用同一命名空间却没有任何归因，去重时会互相背锅（文案还说成
+ * 「上一次中断前已提交」，与实际不符）。
+ * @param {{taskId?: string, role?: string}} [actor]
+ * @returns {string}
+ */
+function actorLabel(actor) {
+  const a = actor || {};
+  const taskId = String(a.taskId || '').trim();
+  const role = String(a.role || '').trim();
+  if (!taskId) return role && role !== 'supervisor' ? '(role:' + role + ')' : 'supervisor';
+  return taskId + (role ? '(' + role + ')' : '');
+}
+
 class SideEffectLedger {
   /**
    * @param {object} options { projectRoot, scopeRunId, file, clock }
@@ -139,28 +155,50 @@ class SideEffectLedger {
       : null;
   }
 
-  /** 执行前登记意图；若同一幂等键已提交，返回 skip（续跑时不重复副作用）。 */
-  begin(toolName, args) {
+  /**
+   * 执行前登记意图；若同一幂等键已提交，返回 skip（续跑时不重复副作用）。
+   * @param {string} toolName
+   * @param {any} args
+   * @param {{taskId?: string, role?: string}} [actor] 行为者（S9）：主代理或子代理任务。
+   *   只影响归因记录与文案，幂等作用域不变。
+   */
+  begin(toolName, args, actor) {
     const effect = classify(toolName);
     const key = idempotencyKey(this.scopeRunId, toolName, args);
     const existing = this.records.get(key);
+    const who = actorLabel(actor);
     if (existing && existing.phase === 'committed' && effect === 'write') {
       // 保持 committed 语义不变（只累计意图次数）：一旦降级回 pending，review()/planResume
       // 就看不到「这条写已完成」，续跑只能整轮人工复核。去重路径不会再调用 commit()，
       // 所以这里必须自己保住状态。
       existing.intents = (existing.intents || 0) + 1;
       existing.lastIntentAt = this.clock();
+      existing.lastActor = who;
       this.records.set(key, existing);
       this._persist();
-      return { skip: true, effect, idemKey: key, prior: existing, reason: '该写操作在中断前已提交（幂等去重），本次不再重复执行' };
+      const prior = existing.actor || 'unknown';
+      return {
+        skip: true,
+        effect,
+        idemKey: key,
+        actor: who,
+        prior,
+        priorRecord: existing,
+        reason:
+          '该写操作在本次运行中已提交（幂等去重）—— 提交者 ' + prior + '，本次不再重复执行（请求方：' + who + '）',
+      };
     }
     const record = existing || { idemKey: key, tool: String(toolName), effect, argsDigest: digest(args), phase: 'pending', intents: 0 };
     record.phase = 'pending';
     record.intents = (record.intents || 0) + 1;
     record.lastIntentAt = this.clock();
+    record.actor = record.actor || who;
+    record.lastActor = who;
+    if (!Array.isArray(record.actors)) record.actors = [];
+    if (!record.actors.includes(who) && record.actors.length < 5) record.actors.push(who);
     this.records.set(key, record);
     this._persist();
-    return { skip: false, effect, idemKey: key, tool: String(toolName), record };
+    return { skip: false, effect, idemKey: key, tool: String(toolName), actor: who, record };
   }
 
   commit(token, info = {}) {
@@ -170,6 +208,7 @@ class SideEffectLedger {
     record.committedAt = this.clock();
     record.ok = info.ok !== false;
     record.digest = digest(info.resultDigest != null ? info.resultDigest : info.result || '');
+    if (token.actor) record.committedBy = token.actor;
     if (info.reversible === true) record.reversible = true;
     this.records.set(token.idemKey, record);
     this._persist();
@@ -181,19 +220,28 @@ class SideEffectLedger {
     const record = this.records.get(token.idemKey) || { idemKey: token.idemKey, tool: token.tool, effect: token.effect };
     record.phase = 'failed';
     record.failedAt = this.clock();
+    if (token.actor) record.failedBy = token.actor;
     record.error = String((error && error.message) || error || '').slice(0, 500);
     this.records.set(token.idemKey, record);
     this._persist();
     return record;
   }
 
-  /** 续跑时的核对视图：哪些副作用已提交 / 哪些做了但结果未知。 */
+  /** 续跑时的核对视图：哪些副作用已提交 / 哪些做了但结果未知（含行为者归因）。 */
   review() {
     const committed = [];
     const pending = [];
     const unknown = [];
     for (const record of this.records.values()) {
-      const item = { tool: record.tool, effect: record.effect, idemKey: record.idemKey, phase: record.phase, at: record.committedAt || record.lastIntentAt || null };
+      const item = {
+        tool: record.tool,
+        effect: record.effect,
+        idemKey: record.idemKey,
+        phase: record.phase,
+        at: record.committedAt || record.lastIntentAt || null,
+        actor: record.actor || null,
+        lastActor: record.lastActor || null,
+      };
       if (record.phase === 'committed') committed.push(item);
       else if (record.effect === 'unknown') unknown.push(item);
       else pending.push(item);
@@ -209,7 +257,7 @@ class SideEffectLedger {
 /** 供 AgentToolContext.sideEffectGuard 使用的守卫对象 */
 function createGuard(ledger) {
   return {
-    begin: (toolName, args) => ledger.begin(toolName, args),
+    begin: (toolName, args, actor) => ledger.begin(toolName, args, actor),
     commit: (token, info) => ledger.commit(token, info),
     fail: (token, error) => ledger.fail(token, error),
     ledger,

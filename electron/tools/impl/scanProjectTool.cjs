@@ -71,48 +71,57 @@ function register(registry) {
 
         let applied = false;
         if (args.applyToWorkbench === true) {
-          applied = await context.mutateWorkbench((model) => {
-            const parts = [];
-            for (const f of result.files.slice(0, MAX_WORKBENCH_NODES)) {
-              const segs = f.relPath.split('/');
-              for (let i = 0; i < segs.length; i++) {
-                parts.push(segs.slice(0, i + 1).join('/'));
+          applied =
+            (await context.mutateWorkbench((model) => {
+              const parts = [];
+              for (const f of result.files.slice(0, MAX_WORKBENCH_NODES)) {
+                const segs = f.relPath.split('/');
+                for (let i = 0; i < segs.length; i++) {
+                  parts.push(segs.slice(0, i + 1).join('/'));
+                }
               }
-            }
-            const unique = [...new Set(parts)];
-            const byPath = new Map();
-            let count = 0;
-            const baseX = 40;
-            const baseY = 40;
-            for (const p of unique.sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
-              if (count >= MAX_WORKBENCH_NODES) break;
-              const isFile = result.files.some((f) => f.relPath === p);
-              const name = p.split('/').pop();
-              const parent = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : null;
-              const node = model.addNode(
-                isFile ? 'task' : 'scope',
-                isFile
-                  ? { label: name, status: 'pending', filePath: p, prompt: fPrompt(result, p) }
-                  : { label: name, status: 'pending', width: 200, height: 60, fill: '#3b2f6b', opacity: 0.16, accent: '#8b5cf6' },
-                baseX,
-                baseY + count * 40
-              );
-              byPath.set(p, node.id);
-              count++;
-              if (parent && byPath.has(parent)) {
-                model.addEdge(byPath.get(parent), node.id);
+              const unique = [...new Set(parts)];
+              const byPath = new Map();
+              let count = 0;
+              const baseX = 40;
+              const baseY = 40;
+              for (const p of unique.sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
+                if (count >= MAX_WORKBENCH_NODES) break;
+                const isFile = result.files.some((f) => f.relPath === p);
+                const name = p.split('/').pop();
+                const parent = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : null;
+                const node = model.addNode(
+                  isFile ? 'task' : 'scope',
+                  isFile
+                    ? { label: name, status: 'pending', filePath: p, prompt: fPrompt(result, p) }
+                    : { label: name, status: 'pending', width: 200, height: 60, fill: '#3b2f6b', opacity: 0.16, accent: '#8b5cf6' },
+                  baseX,
+                  baseY + count * 40
+                );
+                byPath.set(p, node.id);
+                count++;
+                if (parent && byPath.has(parent)) {
+                  model.addEdge(byPath.get(parent), node.id);
+                }
               }
-            }
-          });
-          context.audit('scan_project applyToWorkbench root=' + root);
-          data.appliedToWorkbench = true;
+            })) === true;
+          context.audit('scan_project applyToWorkbench root=' + root + ' applied=' + applied);
+          // 如实记录是否真的写进画布：只读上下文（如 explorer 子代理）里 mutateWorkbench 返回 false，
+          // 此前这里仍然写 appliedToWorkbench=true 并回报「已写入工作台」—— 模型据此认为目录树已建好，
+          // 是典型的谎报（S9 实测）。现在按真实结果记录，并在下面显式失败。
+          data.appliedToWorkbench = applied;
         }
-        void applied;
-        return AgentToolResult.ok(
-          '扫描完成：源码=' + data.sourceFiles + ' 资产=' + data.assetFiles + ' 文件总数=' + data.fileCount +
-            (data.appliedToWorkbench ? '（已写入工作台）' : ''),
-          data
-        );
+        const summary =
+          '扫描完成：源码=' + data.sourceFiles + ' 资产=' + data.assetFiles + ' 文件总数=' + data.fileCount;
+        if (args.applyToWorkbench === true && applied !== true) {
+          return AgentToolResult.error(
+            summary + '。画布未写入：当前上下文不允许修改工作台（只读子代理或无画布 mutator）。' +
+              '目录树已在上方结果中返回；请勿用相同参数重试，若确需把目录树落到画布，由主代理（非只读角色）执行。',
+            // 走到这里说明 applied !== true：画布确实没被写入，如实报 false（不谎报）
+            { code: 'WORKBENCH_WRITE_DENIED', tool: 'scan_project', userActionRequired: false, appliedToWorkbench: false, tree: data.tree }
+          );
+        }
+        return AgentToolResult.ok(summary + (data.appliedToWorkbench ? '（已写入工作台）' : ''), data);
       } catch (e) {
         return AgentToolResult.error('扫描失败：' + ((e && e.message) || e));
       }

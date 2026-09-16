@@ -10,28 +10,14 @@
 
 const { AgentToolRegistry } = require('./registry.cjs');
 const { registerProjectExtensions } = require('./extensions.cjs');
+// 角色契约（白名单 / 是否只读 / 授予的能力 / 角色提示）的唯一来源 —— 见 tools/roles.cjs。
+// 本文件只做「按角色裁剪注册表」这件事，不再自己维护一份角色语义。
+const roles = require('./roles.cjs');
 
-const ROLE_TOOLS = Object.freeze({
-  explorer: [
-    'get_workbench_model', 'project_info', 'scan_project', 'read_file',
-    'find_files', 'search_files', 'list_directory', 'retrieve_context', 'query_scalars',
-  ],
-  builder: [
-    'get_workbench_model', 'project_info', 'read_file', 'find_files', 'search_files',
-    'list_directory', 'retrieve_context', 'query_scalars', 'write_file', 'edit_file', 'workbench_edit',
-  ],
-  verifier: [
-    'project_info', 'read_file', 'find_files', 'search_files', 'list_directory',
-    'retrieve_context', 'query_scalars', 'execute_shell', 'poll_job', 'code_review',
-  ],
-  reviewer: [
-    'get_workbench_model', 'project_info', 'read_file', 'find_files', 'search_files',
-    'retrieve_context', 'query_scalars', 'code_review',
-  ],
-  canvas: [
-    'get_workbench_model', 'workbench_edit', 'write_analysis_md', 'save_project', 'ui_control',
-  ],
-});
+/** @type {Record<string, readonly string[]>} 兼容旧导入：角色 → 工具白名单（从 roles.cjs 派生） */
+const ROLE_TOOLS = Object.freeze(
+  Object.fromEntries(roles.ROLE_NAMES.map((name) => [name, roles.roleTools(name) || []])),
+);
 
 const BUILTINS = [
   require('./impl/getWorkbenchModelTool.cjs'),
@@ -99,12 +85,22 @@ function buildDefaultRegistryWithConfig(config) {
   return filterByConfig(registry, cfg);
 }
 
+/**
+ * 按角色裁剪注册表：白名单与能力集都来自 tools/roles.cjs（唯一来源）。
+ * `registry.roleCapabilities` 是注册表只读门的判据 —— 角色契约里显式授予的能力，
+ * 允许越过「只读上下文不得执行写工具」这道门（verifier 的 execute_shell 就是这种情况）。
+ */
 function filterByRole(registry, role) {
-  if (!role || role === 'supervisor') return registry;
+  if (!role || role === 'supervisor') {
+    registry.allowedTools = null;
+    registry.roleCapabilities = null;
+    return registry;
+  }
   const allowed = ROLE_TOOLS[role];
   if (!allowed) {
     for (const spec of registry.listTools()) registry.unregister(spec.name);
     registry.allowedTools = new Set();
+    registry.roleCapabilities = new Set();
     return registry;
   }
   const allowedSet = new Set(allowed);
@@ -112,6 +108,7 @@ function filterByRole(registry, role) {
     if (!allowedSet.has(spec.name)) registry.unregister(spec.name);
   }
   registry.allowedTools = allowedSet;
+  registry.roleCapabilities = new Set(roles.roleCapabilities(role));
   return registry;
 }
 

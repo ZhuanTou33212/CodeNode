@@ -240,6 +240,14 @@ function register(ctx) {
             previous: delta.previous || null,
             reason: delta.reason || null,
           });
+        } else if (delta.kind === 'subagent_state') {
+          // S9：子代理的起止/状态也落 run 事件 —— 此前 run 记录里完全看不到子代理发生过什么，
+          // 应用关掉后只剩画布 stage 节点上的那段摘要。
+          runStore.appendEvent(projectRoot, runId, 'subagent_state', {
+            taskId: delta.taskId || null,
+            role: delta.role || null,
+            status: delta.status || null,
+          });
         } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
           runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null, state: delta.state || null });
         }

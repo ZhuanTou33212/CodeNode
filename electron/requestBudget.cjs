@@ -63,23 +63,50 @@ function estimateInputTokens(messages, tools) {
 }
 
 class RequestBudget {
-  constructor(limit) {
+  /**
+   * @param {number} limit
+   * @param {{parent?: RequestBudget|null, scope?: string}} [options]
+   *   parent：父预算（S9 父子链）。子代理的独立配额仍受父总量约束，不绕过 run 上限。
+   */
+  constructor(limit, options) {
+    const o = options || {};
     this.limit = limit;
+    /** @type {RequestBudget|null} */
+    this.parent = o.parent || null;
+    /** 'run' | 'subagent'：仅用于错误提示与审计口径 */
+    this.scope = o.scope || 'run';
     this.used = 0;
     this.reserved = 0;
   }
+
+  /** 本层配额是否不够（只看自己，不碰父） */
+  wouldExceed(amount) {
+    return !Number.isFinite(amount) || amount < 0 || this.used + this.reserved + amount > this.limit;
+  }
+
   reserve(amount) {
-    if (!Number.isFinite(amount) || amount < 0 || this.used + this.reserved + amount > this.limit) {
-      const fmt = (n) => Math.round(n).toLocaleString('en-US');
+    const fmt = (n) => Math.round(n).toLocaleString('en-US');
+    if (this.wouldExceed(amount)) {
       throw Object.assign(
         new Error(
           `请求前预算检查失败：额度不足（本次需要约 ${fmt(amount)} tokens，` +
             `已用 ${fmt(this.used)}、预留 ${fmt(this.reserved)}，上限 ${fmt(this.limit)}；` +
-            `可在 config/agent.properties 调大 agent.max_total_tokens 后重启）`,
+            (this.scope === 'subagent'
+              ? '可在 config/agent.properties 调大 agent.subagent.max_total_tokens 后重启）'
+              : '可在 config/agent.properties 调大 agent.max_total_tokens 后重启）'),
         ),
-        { code: 'BUDGET_EXCEEDED', need: amount, used: this.used, reserved: this.reserved, limit: this.limit },
+        {
+          code: 'BUDGET_EXCEEDED',
+          scope: this.scope,
+          need: amount,
+          used: this.used,
+          reserved: this.reserved,
+          limit: this.limit,
+        },
       );
     }
+    // 父预算先预留（可能因 run 总量不足而抛；此时本层还没预留，回滚是干净的）
+    const parentSettle = this.parent ? this.parent.reserve(amount) : null;
     this.reserved += amount;
     let settled = false;
     return (usage) => {
@@ -88,9 +115,33 @@ class RequestBudget {
       this.reserved -= amount;
       // Missing usage or an uncertain failed request retains its full reservation.
       const actual = usage && Number(usage.total_tokens);
-      this.used += Number.isFinite(actual) && actual >= 0 ? actual : amount;
+      const usedAmount = Number.isFinite(actual) && actual >= 0 ? actual : amount;
+      this.used += usedAmount;
+      // 父按**实际**用量结算（不是按预留额）：两个维度都反映真实消耗，父总量依然守恒
+      if (parentSettle) parentSettle({ total_tokens: usedAmount });
     };
   }
+}
+
+/**
+ * 子代理的独立配额（S9）。
+ *
+ * 之前子代理直接用父 cfg，于是共用同一个 `RequestBudget`：一个子代理把额度刷穿，
+ * 父 run 与其他子代理会被同一个 `BUDGET_EXCEEDED` 一起挡死，而且看不到是谁花的。
+ * 现在每个子代理拿到自己的配额（`agent.subagent.max_total_tokens`），通过 parent 链
+ * 把真实用量记进父 run 的总账：
+ *   - 子代理超额 → 只有它自己失败，父与其他子代理继续；
+ *   - 父 run 总量不足 → 仍然拦住（不绕过总预算）。
+ * `limit <= 0` 或没有父预算时返回父预算本身（不设独立配额 = S9 之前的行为，保持兼容）。
+ *
+ * @param {RequestBudget|null} parent
+ * @param {number} limit
+ * @returns {RequestBudget|null}
+ */
+function createSubagentBudget(parent, limit) {
+  const n = Number(limit);
+  if (!parent || !Number.isFinite(n) || n <= 0) return parent;
+  return new RequestBudget(n, { parent, scope: 'subagent' });
 }
 
 async function withBudget(cfg, messages, tools, operation, attemptsRef) {
@@ -121,4 +172,4 @@ async function withBudget(cfg, messages, tools, operation, attemptsRef) {
   }
 }
 
-module.exports = { RequestBudget, withBudget, estimateInputTokens, collectImageUrls };
+module.exports = { RequestBudget, createSubagentBudget, withBudget, estimateInputTokens, collectImageUrls };

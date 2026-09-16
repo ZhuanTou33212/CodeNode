@@ -76,6 +76,12 @@ class AgentToolRegistry {
   constructor(options) {
     this.tools = new Map(); // name -> { spec, descriptor, executor }
     this.allowedTools = options && options.allowedTools ? new Set(options.allowedTools) : null;
+    /**
+     * 角色契约显式授予的能力（roles.cjs）。null = 不受角色限制（主代理 supervisor）。
+     * 只读门的判据 —— 见 execute() 门 1。
+     * @type {Set<string>|null}
+     */
+    this.roleCapabilities = null;
     // 注册表兜底超时：工具未声明 timeoutMs 时用它（0 = 不加限制）
     this.defaultTimeoutMs = descriptorLib.DEFAULT_TIMEOUT_MS;
   }
@@ -160,10 +166,21 @@ class AgentToolRegistry {
     // 按该工具的契约现场组装最小能力面（工具只看到自己需要的那几个面 + deprecated 旧方法转发）
     const execContext = createExecutionContext(context, descriptor, callInfo);
 
-    // 门 1：只读上下文不允许执行会改工作区的工具——但角色白名单**明确授予**的除外
-    // （verifier 要能跑 execute_shell 才有验证能力；拦的是「白名单没授予却混进来的写工具」这类越权）
-    const grantedByRole = this.allowedTools ? this.allowedTools.has(name) : false;
-    if (descriptor.mutatesWorkspace && !grantedByRole && typeof execContext.readOnly === 'function' && execContext.readOnly() === true) {
+    // 门 1：只读上下文不允许执行「纯写」工具。判据是**角色契约显式授予的能力**（tools/roles.cjs），
+    // 而不是「白名单里有这个名字」—— 白名单会把「条件写」工具（scan_project 带 applyToWorkbench）
+    // 一并放行，导致只读角色以为写入成功（S9 实测的谎报面）。
+    // verifier 的 execute_shell 由 shell.execute 能力显式授予（跑测试是它的核心能力），不受此门影响。
+    const roleCaps = this.roleCapabilities;
+    const capabilityGrantedByRole = !!(
+      roleCaps && descriptor.requiredCapability && roleCaps.has(descriptor.requiredCapability)
+    );
+    if (
+      descriptor.mutatesWorkspace &&
+      descriptor.readOnly !== true &&
+      !capabilityGrantedByRole &&
+      typeof execContext.readOnly === 'function' &&
+      execContext.readOnly() === true
+    ) {
       return AgentToolResult.error('只读上下文不允许执行会修改工作区的工具：' + name, {
         code: 'PERMISSION_DENIED',
         tool: name,
