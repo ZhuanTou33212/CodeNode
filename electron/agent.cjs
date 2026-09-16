@@ -1440,47 +1440,48 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             );
           } catch {}
         }
-        // 压缩结算（S10）：把本轮登记的待压缩项合并成尽量少的请求，再按段把摘要写回对应的 tool 消息。
-        // 某一段拿不到摘要 → 该条退回单条压缩；整体失败 → 降级为截断（信息不丢，只是没压缩）。
+        // 压缩结算（S10）：整轮登记的待压缩项交给 compressToolBatch —— 它内部按
+        // agent.compression.batch_max_items 与 max_input_chars 分批，并按段把摘要写回 tool 消息。
+        // 某一段拿不到摘要 → 该条退回单条压缩；整批失败 → 降级为截断（信息不丢，只是没压缩）。
         if (pendingCompression.length) {
           const compressionProjectRoot = tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null;
           const compCfg = (cfg && cfg.compression) || {};
-          const batches = chunkCompressionItems(pendingCompression, compCfg.batchMaxItems || 4, compCfg.maxInputChars || 300000);
-          for (const batch of batches) {
-            compressCalls += 1; // 一批 = 一次压缩调用（max_calls 仍按调用次数计）
-            const startedAt = Date.now();
-            const outs = await compressToolBatch(
-              cfg,
-              batch.map((entry) => ({ toolName: entry.toolName, content: entry.content })),
-              signal,
-              { projectRoot: compressionProjectRoot },
-            );
-            batch.forEach((entry, i) => {
-              const out = outs[i];
-              if (!out) return;
-              const msg = messages[entry.messageIndex];
-              if (msg && msg.role === 'tool') msg.content = out.text;
-              entry.record.compressed = true;
-              entry.record.compressionCache = out.cacheHit ? 'hit' : 'miss';
-              entry.record.compressionMode = out.batched ? 'batch' : out.degraded ? 'degraded' : 'single';
-              entry.record.compressedChars = { from: entry.content.length, to: out.text.length };
-              if (entry.cacheKey) {
-                const cachedEntry = toolResultCache.get(entry.cacheKey);
-                if (cachedEntry) {
-                  cachedEntry.content = out.text;
-                  cachedEntry.compressed = true;
-                }
+          const maxPerBatch = Math.max(1, compCfg.batchMaxItems || 4);
+          const startedAt = Date.now();
+          const outs = await compressToolBatch(
+            cfg,
+            pendingCompression.map((entry) => ({ toolName: entry.toolName, content: entry.content })),
+            signal,
+            { projectRoot: compressionProjectRoot },
+          );
+          // max_calls 仍按「压缩调用次数」计：一批算一次
+          compressCalls += Math.max(1, Math.ceil(pendingCompression.length / maxPerBatch));
+          pendingCompression.forEach((entry, i) => {
+            const out = outs[i];
+            if (!out) return;
+            const msg = messages[entry.messageIndex];
+            if (msg && msg.role === 'tool') msg.content = out.text;
+            entry.record.compressed = true;
+            entry.record.compressionCache = out.cacheHit ? 'hit' : 'miss';
+            entry.record.compressionMode = out.batched ? 'batch' : out.degraded ? 'degraded' : 'single';
+            entry.record.compressedChars = { from: entry.content.length, to: out.text.length };
+            if (entry.cacheKey) {
+              const cachedEntry = toolResultCache.get(entry.cacheKey);
+              if (cachedEntry) {
+                cachedEntry.content = out.text;
+                cachedEntry.compressed = true;
               }
-            });
-            logToolTrace(compressionProjectRoot, {
-              kind: 'compression',
-              iter,
-              batchSize: batch.length,
-              tools: batch.map((entry) => entry.toolName),
-              cacheHits: batch.filter((_entry, i) => outs[i] && outs[i].cacheHit).length,
-              elapsedMs: Date.now() - startedAt,
-            });
-          }
+            }
+          });
+          logToolTrace(compressionProjectRoot, {
+            kind: 'compression',
+            iter,
+            items: pendingCompression.length,
+            batchSize: Math.min(maxPerBatch, pendingCompression.length),
+            tools: pendingCompression.map((entry) => entry.toolName),
+            cacheHits: outs.filter((out) => out && out.cacheHit).length,
+            elapsedMs: Date.now() - startedAt,
+          });
         }
         // 工具调用失败时，提示模型重新思考解决方案而不是直接结束
         if (failedAny && !capped) {
