@@ -174,6 +174,8 @@ const PAYLOADS = {
       joined.includes('fsWorker.cjs'), joined);
     check('F2 build.asarUnpack 包含 fsCore.cjs（worker 只能 require 同样被 unpack 的兄弟文件）',
       joined.includes('fsCore.cjs'), joined);
+    check('F2b build.asarUnpack 包含 impl/pdfText.cjs（fsCore 现在 require 它，漏了打包版 MODULE_NOT_FOUND）',
+      joined.includes('pdfText.cjs'), joined);
     check('F3 build.files 仍包含 electron/**（unpack 只是额外解包，不影响打包清单）',
       JSON.stringify(pkg.build.files || []).includes('electron/**'), JSON.stringify(pkg.build.files));
   }
@@ -267,6 +269,96 @@ const PAYLOADS = {
     } finally {
       fs.rmSync(bigForCancel, { recursive: true, force: true });
     }
+  }
+
+  // ======================= I. read_file 的 PDF 分支（唯一搬进 worker 的单文件读）=======================
+  {
+    const zlib = require('zlib');
+
+    /** 造一个「最小可解析」的文本型 PDF：content stream 里用 Tj 写字面文本 */
+    const makePdf = (bodyText, { withBT = true } = {}) => {
+      const content = withBT ? 'BT /F1 12 Tf 50 700 Td (' + bodyText + ') Tj ET' : '<< /Type /Page >>';
+      const deflated = zlib.deflateSync(Buffer.from(content, 'latin1'));
+      const head = '%PDF-1.4\n1 0 obj\n<< /Length ' + deflated.length + ' /Filter /FlateDecode >>\nstream\n';
+      const tail = '\nendstream\nendobj\n';
+      return Buffer.concat([Buffer.from(head, 'latin1'), deflated, Buffer.from(tail, 'latin1')]);
+    };
+
+    const pdfDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-pdf-'));
+    fs.writeFileSync(path.join(pdfDir, 'ok.pdf'), makePdf('Hello CodeNode PDF text layer. '.repeat(6)));
+    fs.writeFileSync(path.join(pdfDir, 'scanned.pdf'), makePdf('', { withBT: false }));
+    fs.writeFileSync(path.join(pdfDir, 'huge.pdf'), Buffer.alloc(20 * 1024 * 1024 + 16, 0x20));
+    // 「小文件但解析慢」：原始文本流很大（deflate 后仍很小），解析需要上百毫秒 —— 心跳与取消才稳
+    // 规模是量出来的：5.15MB 文本流解析成功且耗时 ~144ms（够慢，心跳稳）；
+    // 再往上（实测 >~8MB）extractPdfText 会返回 null —— 那是它既有的规模限制，不是本次搬动引入的，
+    // 所以这里刻意停在能成功的量级，避免把「已有限制」误当成 worker 的问题。
+    fs.writeFileSync(path.join(pdfDir, 'slow.pdf'), makePdf('the quick brown fox jumps over the lazy dog. '.repeat(120000)));
+
+    const pdfRegistry = toolkit.buildDefaultRegistryWithConfig({
+      projectRoot: pdfDir,
+      ragEnabled: false,
+      toolsAllowed: ['read_file'],
+    });
+    const pdfCtx = () =>
+      new AgentToolContext({
+        projectRoot: pdfDir,
+        confirm: async () => true,
+        audit: () => {},
+        sandbox: policy,
+        signal: new AbortController().signal,
+      });
+
+    const okRes = await pdfRegistry.execute('read_file', { path: 'ok.pdf' }, pdfCtx());
+    check('I1 PDF 文本层照常提取（走 worker）',
+      okRes.ok === true && /Hello CodeNode PDF text layer/.test(String(okRes.text)),
+      JSON.stringify(okRes.data).slice(0, 100));
+
+    const scannedRes = await pdfRegistry.execute('read_file', { path: 'scanned.pdf' }, pdfCtx());
+    check('I2 扫描版 PDF 仍给出「文字层不可用」的原有提示（文案未变）',
+      scannedRes.ok === false && /文字层不可用/.test(String(scannedRes.text)),
+      String(scannedRes.text).slice(0, 60));
+
+    const hugeRes = await pdfRegistry.execute('read_file', { path: 'huge.pdf' }, pdfCtx());
+    check('I3 超过 20MB 的 PDF 仍被拒（阈值与文案未变）',
+      hugeRes.ok === false && /PDF 过大（>20MB）/.test(String(hugeRes.text)),
+      String(hugeRes.text).slice(0, 60));
+
+    // I4：任务层 worker 与同步结果逐字节一致
+    const syncPdf = fsCore.runTaskSync('readPdfText', { path: path.join(pdfDir, 'ok.pdf') });
+    const workerPdf = await fsRunner.runFsTask('readPdfText', { path: path.join(pdfDir, 'ok.pdf') }, {});
+    check('I4 readPdfText worker 与同步结果逐字节一致',
+      workerPdf.mode === 'worker' && JSON.stringify(workerPdf.result) === JSON.stringify(syncPdf),
+      JSON.stringify({ mode: workerPdf.mode, same: JSON.stringify(workerPdf.result) === JSON.stringify(syncPdf) }));
+
+    // I5：解析期间主线程事件循环仍在跳（慢 PDF：解析 ~百毫秒）
+    let ticks = 0;
+    const hb = setInterval(() => {
+      ticks += 1;
+    }, 3);
+    let slowRes = null;
+    try {
+      slowRes = await pdfRegistry.execute('read_file', { path: 'slow.pdf' }, pdfCtx());
+    } finally {
+      clearInterval(hb);
+    }
+    check('I5 PDF 解析期间主线程事件循环仍在跳（同步实现下 ticks 必为 0）', ticks > 0, 'ticks=' + ticks);
+    check('I6 慢 PDF 也照常解析成功（不是靠牺牲功能换的）', slowRes.ok === true, String(slowRes.text).slice(0, 40));
+
+    // I7：可取消（确定性触发：一开始就 aborted，不依赖"解析比定时器慢"的竞争）
+    const preAborted = new AbortController();
+    preAborted.abort();
+    const cancelRes = await pdfRegistry.execute('read_file', { path: 'slow.pdf' }, new AgentToolContext({
+      projectRoot: pdfDir,
+      confirm: async () => true,
+      audit: () => {},
+      sandbox: policy,
+      signal: preAborted.signal,
+    }));
+    check('I7 取消后返回 CANCELLED（不再等解析跑完）',
+      cancelRes.ok === false && cancelRes.data.code === 'CANCELLED',
+      JSON.stringify({ ok: cancelRes.ok, code: cancelRes.data && cancelRes.data.code }));
+
+    fs.rmSync(pdfDir, { recursive: true, force: true });
   }
 
   fs.rmSync(root, { recursive: true, force: true });

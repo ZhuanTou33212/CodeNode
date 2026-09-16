@@ -9,7 +9,8 @@
  *   - 主线程的**降级路径**与既有调用点也 require 它 —— `toolFiles.cjs` / `impl/shared.cjs` /
  *     `projectScan.cjs` 都改成从这里 re-export（对外 API 不变，调用方零改动）。
  *
- * ⚠️ 本文件必须保持**自包含**：只 require 内置模块（fs / path）。worker 相关文件在打包时被
+ * ⚠️ 本文件必须保持**自包含**：只 require 内置模块（fs / path / zlib）或**同样被 asarUnpack 的兄弟文件**
+ * （目前只有 `impl/pdfText.cjs`）。worker 相关文件在打包时被
  * `asarUnpack` 到真实文件系统，相对 require 只能解析 unpacked 目录里的兄弟文件 —— 多引一个
  * asar 内的模块就会在**打包版**里 `MODULE_NOT_FOUND`，而开发模式与 CI 都不会报错。
  */
@@ -17,6 +18,8 @@
 
 const fs = require('fs');
 const path = require('path');
+// 同目录下的兄弟模块（同样在 build.asarUnpack 里）；worker 自包含约束见文件头。
+const { extractPdfText } = require('./impl/pdfText.cjs');
 
 /** 扫描文件数硬上限（防止超大目录把结果撑爆） */
 const MAX_SCAN_FILES = 20000;
@@ -643,8 +646,40 @@ function analyzeProjectTask(payload) {
   };
 }
 
+/**
+ * 任务 6：读取 PDF 并提取文字层。
+ *
+ * 为什么只有它搬：`read_file` 的 PDF 分支是整个工具里唯一的重活 —— 主线程同步 `readFileSync`
+ * （≤20MB，实测 ~6.6ms）之后还要跑自研解析（inflate + CMap + 文本重建；实测一个 60MB 文本流
+ * 光 inflate 就 ~82ms，真实 PDF 在 100–300ms 量级）。而 worker 的固定往返只有 ~24ms，所以是正收益。
+ * 对照：文本分支（≤2MB，实测同步读 1.3ms）**不搬** —— 那点读取比 worker 开销小一个数量级
+ * （实测 18×），搬过去是净变慢。
+ * @param {any} payload
+ */
+function readPdfTextTask(payload) {
+  const p = payload || {};
+  const file = String(p.path || '');
+  const maxBytes = Number(p.maxBytes) > 0 ? Number(p.maxBytes) : 20 * 1024 * 1024;
+  let buf;
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size > maxBytes) {
+      return { ok: false, cancelled: false, errorKind: 'too-large', limitMb: Math.round(maxBytes / 1048576) };
+    }
+    buf = fs.readFileSync(file);
+  } catch (e) {
+    return { ok: false, cancelled: false, errorKind: 'read-failed', error: '读取失败：' + ((e && e.message) || e) };
+  }
+  const parsed = extractPdfText(buf);
+  if (!parsed) return { ok: false, cancelled: false, errorKind: 'unreadable' };
+  return { ok: true, cancelled: false, text: parsed.text, printable: parsed.printable };
+}
+
+// 任务结果契约：每个任务的返回值都必须带 `cancelled`（布尔）。
+// runner 的同步/降级分支靠它把「半份结果」提升成 outcome.cancelled —— 缺字段会让调用方
+// 把不完整结果当完整结果交付（本轮就因新任务漏了它被 tsc 拦下）。
 /** worker 支持的任务名（runner 用它做白名单校验） */
-const FS_TASKS = Object.freeze(['scanProject', 'findFiles', 'searchFiles', 'detectProjectInfo', 'analyzeProject']);
+const FS_TASKS = Object.freeze(['scanProject', 'findFiles', 'searchFiles', 'detectProjectInfo', 'analyzeProject', 'readPdfText']);
 
 /**
  * 同步执行一个任务（降级路径：worker 不可用时由主线程直接跑，会阻塞事件循环）。
@@ -657,6 +692,7 @@ function runTaskSync(task, payload) {
   if (task === 'searchFiles') return searchFilesTask(payload);
   if (task === 'detectProjectInfo') return detectProjectInfoTask(payload);
   if (task === 'analyzeProject') return analyzeProjectTask(payload);
+  if (task === 'readPdfText') return readPdfTextTask(payload);
   throw new Error('未知文件任务：' + task);
 }
 
@@ -681,6 +717,7 @@ module.exports = {
   searchFilesTask,
   detectProjectInfoTask,
   analyzeProjectTask,
+  readPdfTextTask,
   readTextFileSafe,
   summarizeFile,
   buildProjectInfo,

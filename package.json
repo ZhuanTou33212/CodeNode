@@ -109,7 +109,8 @@
     ],
     "asarUnpack": [
       "electron/tools/fsWorker.cjs",
-      "electron/tools/fsCore.cjs"
+      "electron/tools/fsCore.cjs",
+      "electron/tools/impl/pdfText.cjs"
     ],
     "win": {
       "target": [

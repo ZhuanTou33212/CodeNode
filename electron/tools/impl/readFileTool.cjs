@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { resolveInRoot, resolveFileFuzzy, detectLanguage, readTextFile, isSensitivePath } = require('./shared.cjs');
-const { extractPdfText } = require('./pdfText.cjs');
+const fsRunner = require('../fsRunner.cjs');
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
@@ -119,18 +119,32 @@ function register(registry) {
       const isPdf = path.extname(relative).toLowerCase() === '.pdf';
       if (isPdf) {
         meta.language = 'pdf';
-        let buf;
-        try {
-          if (fs.statSync(file).size > MAX_PDF_BYTES) {
-            return AgentToolResult.error(relative + ' PDF 过大（>20MB），无法读取', meta);
-          }
-          buf = fs.readFileSync(file);
-        } catch (e) {
-          return AgentToolResult.error('读取失败：' + ((e && e.message) || e), meta);
+        // P7 收口：PDF 分支是 read_file 里**唯一**的重活 —— 读（≤20MB，实测同步 ~6.6ms）之后还要
+        // 跑自研解析（inflate + CMap + 文本重建；实测一个 60MB 文本流光 inflate 就 ~82ms，
+        // 真实 PDF 100–300ms 量级）。worker 固定往返只有 ~24ms，所以这是正收益：主线程不再被冻住，
+        // 取消也能真的 terminate。
+        // 对照：文本分支（≤2MB，实测同步读 1.3ms）**刻意不搬** —— 那点读取比 worker 开销小一个
+        // 数量级（实测 18×），搬过去是净变慢。别为了「统一」把它也搬走。
+        const outcome = await fsRunner.runFsTask(
+          'readPdfText',
+          { path: file, maxBytes: MAX_PDF_BYTES },
+          { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+        );
+        if (outcome.cancelled || outcome.timedOut) {
+          return AgentToolResult.failure('CANCELLED', 'PDF 解析已取消（用户停止）。', { cancelled: true, path: relative });
         }
-        const pdfResult = extractPdfText(buf);
-        if (!pdfResult) {
+        if (outcome.mode === 'sync-fallback') {
+          context.audit('read_file(PDF) worker 不可用，已退回主线程同步解析：' + outcome.fallbackReason);
+        }
+        const pdfResult = outcome.result;
+        if (!pdfResult || pdfResult.ok !== true) {
           meta.binary = true;
+          if (pdfResult && pdfResult.errorKind === 'too-large') {
+            return AgentToolResult.error(relative + ' PDF 过大（>' + pdfResult.limitMb + 'MB），无法读取', meta);
+          }
+          if (pdfResult && pdfResult.errorKind === 'read-failed') {
+            return AgentToolResult.error(pdfResult.error, meta);
+          }
           return AgentToolResult.error(
             relative + ' 是扫描版或文字层不可用的 PDF，read_file 无法提取正文。' +
               '不要尝试用 execute_shell 安装 Python 库（PyPDF2/pypdf/pymupdf）或手工解析 PDF——这类 PDF 无法用它们读取。' +
