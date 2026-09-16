@@ -48,6 +48,26 @@ fs.writeFileSync(path.join(root, 'big.txt'), 'needle\n' + 'x'.repeat(5000) + '\n
 const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: root });
 sandbox.setDefaultPolicy(policy);
 
+/**
+ * 造一个「够大」的目录树。取消 / 进度类判据都依赖「任务真的持续了一段时间」：
+ * 小 fixture（几个文件）上任务可能在 abort 之前就跑完，判据退化成「谁快」的时序竞争
+ * —— macOS 上实测因此红过一次（Windows 本地反而稳定通过）。所以这里统一用大目录。
+ */
+const BIG_DIRS = 12;
+const BIG_FILES_PER_DIR = 50;
+const BIG_TOTAL = BIG_DIRS * BIG_FILES_PER_DIR;
+function makeBigTree() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-fsworker-big-'));
+  for (let d = 0; d < BIG_DIRS; d++) {
+    const sub = path.join(dir, 'd' + d);
+    fs.mkdirSync(sub, { recursive: true });
+    for (let f = 0; f < BIG_FILES_PER_DIR; f++) {
+      fs.writeFileSync(path.join(sub, 'f' + f + '.txt'), 'needle ' + d + '-' + f + '\n', 'utf8');
+    }
+  }
+  return dir;
+}
+
 /** 三个任务的 payload（不含函数，供一致性比对用） */
 const PAYLOADS = {
   scanProject: { root },
@@ -80,21 +100,14 @@ const PAYLOADS = {
 
   // ======================= B. 取消：terminate 真的杀掉任务 =======================
   {
-    const big = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-fsworker-big-'));
-    for (let d = 0; d < 10; d++) {
-      const dir = path.join(big, 'd' + d);
-      fs.mkdirSync(dir, { recursive: true });
-      for (let f = 0; f < 40; f++) {
-        fs.writeFileSync(path.join(dir, 'f' + f + '.txt'), 'needle ' + d + '-' + f + '\n', 'utf8');
-      }
-    }
+    const big = makeBigTree();
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 20);
     const outcome = await fsRunner.runFsTask('scanProject', { root: big }, { signal: controller.signal });
     check('B1 取消后 outcome.cancelled=true（不重放已取消的任务）',
       outcome.cancelled === true && outcome.ok === false, JSON.stringify({ ok: outcome.ok, cancelled: outcome.cancelled }));
     check('B2 取消时如实回报进度（partial 是数字，且小于完整数量）',
-      typeof outcome.progress === 'number' && outcome.progress < 400, JSON.stringify({ progress: outcome.progress }));
+      typeof outcome.progress === 'number' && outcome.progress < BIG_TOTAL, JSON.stringify({ progress: outcome.progress }));
     check('B3 取消路径没有被误判成「worker 故障」而降级重跑',
       outcome.mode === 'worker' && !outcome.fallbackReason, JSON.stringify({ mode: outcome.mode, fallbackReason: outcome.fallbackReason }));
     fs.rmSync(big, { recursive: true, force: true });
@@ -241,12 +254,19 @@ const PAYLOADS = {
         JSON.stringify(viaWorker.result).slice(0, 100));
     }
 
-    // H7：可取消（terminate）
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 20);
-    const cancelledOutcome = await fsRunner.runFsTask('detectProjectInfo', { root }, { signal: controller.signal });
-    check('H7 detectProjectInfo 能被 terminate 取消（不是只能等它跑完）',
-      cancelledOutcome.cancelled === true, JSON.stringify({ cancelled: cancelledOutcome.cancelled }));
+    // H7：可取消（terminate）—— 必须用**大目录**：小 fixture 上任务可能在 abort 之前就跑完，
+    // 判据会退化成「谁快」的时序竞争（macOS 上实测因此红过一次，Windows 本地反而稳定）。
+    const bigForCancel = makeBigTree();
+    try {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 20);
+      const cancelledOutcome = await fsRunner.runFsTask('detectProjectInfo', { root: bigForCancel }, { signal: controller.signal });
+      check('H7 detectProjectInfo 能被 terminate 取消（不是只能等它跑完）',
+        cancelledOutcome.cancelled === true,
+        JSON.stringify({ cancelled: cancelledOutcome.cancelled, progress: cancelledOutcome.progress }));
+    } finally {
+      fs.rmSync(bigForCancel, { recursive: true, force: true });
+    }
   }
 
   fs.rmSync(root, { recursive: true, force: true });
