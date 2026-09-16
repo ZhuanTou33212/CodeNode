@@ -82,6 +82,19 @@
   变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
   子代理结果不截断，均当场变红）。
 
+### 新增（S7：ApprovalService 令牌审批 + 画布写工具补审批，2026-09-16）
+
+- **新增 `electron/tools/approval.cjs`**：审批令牌由**服务端签发**（绑定 `capability` / `scope` /
+  `toolCallId` / `attemptId` 与有效期，**单次有效**），`verify()` 逐项校验后立即消费；令牌只存内存、重启失效。
+- **注册表剥离模型自填的审批字段**（`confirmed` / `approved` / `approvalToken` …，在校验前剥离并落 trace）——
+  审批只能走令牌，「模型自己批准自己」这条路被堵死；「没有审批通道」（`APPROVAL_REQUIRED`）与
+  「用户拒绝」（`APPROVAL_DENIED`）分开报，提示按 S5 的失败分类给出不同指引。
+- `workbench_edit` / `ui_control` / `create_nodes` 补审批声明（`declareContract`，
+  `requiresConfirmation='WRITE'`）；`save_project` 原有声明不变。
+- 配置 `tools.confirm_writes`（默认开，可整体关闭）/ `agent.approval.ttl_ms`（默认 5 分钟）。
+- 用例 `scripts/approval-token-test.cjs`（12 段）进 CORE 门禁（**43 → 44**）；变异测试 4/4 有判别力。
+- **行为变化**：画布类写操作执行前需用户批准一次（可用 `tools.confirm_writes=false` 关闭）。
+
 ### 新增（S6：ToolScheduler 只读并行 + withTimeout + 取消贯穿，2026-09-16）
 
 - **新增 `electron/tools/scheduler.cjs`**：`ToolScheduler.prime()` 只**启动**本轮里可并行的**只读**调用

@@ -502,6 +502,36 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **仍未处理**：① mutexKey 级细粒度并行（当前是「只读轮整体并行」，同一文件的两个只读工具仍会并发读 —— 只读无害但可能重复 IO）；② 并行下的流式排序（UI 仍按声明顺序收 delta）；③ 长跑只读工具（`poll_job`）在并行轮里与短只读工具同权，未做优先级区分。
 
+
+### S7 实施记录（capability 审批：ApprovalService 令牌 + 写工具补审批，2026-09-16）
+
+**动因（审查 P0-3 / 迁移表 S7）**：确认类工具此前只有一句 `context.confirm()` 布尔问答 —— 没有**凭据**概念：「谁批的、批了什么范围、什么时候过期、能不能复用」都无处安放。更要命的是，只要工具参数里塞一个 `confirmed: true`，模型就有机会**自己把审批批了**（`save_project` 的 `requiresConfirmation` 在宽松 schema 下形同虚设）。
+
+| 内容 | 文件 |
+|---|---|
+| `ApprovalService`：**服务端签发令牌**（`capability` / `scope` / `issuedAt` / `expiresAt` / `toolCallId` / `attemptId`），`verify()` 逐项校验后**立即消费**（单次有效）；`revoke` / `revokeAll` / `pending` / `available` | `electron/tools/approval.cjs`（新） |
+| `AgentToolContext.approval()` 懒创建（挂 run 级上下文）；没有 confirm 通道时 `available()===false` | `electron/tools/context.cjs` |
+| `ExecutionContext.approval` 面新增 `request / verify / available / revoke / service`（旧 `confirm` / `askUser` 保留，变薄封装） | `electron/tools/executionContext.cjs` |
+| 注册表：**剥离模型自填的审批字段**（`confirmed`/`approved`/`approvalToken`…，在参数校验之前剥离并落 trace）；门 3 改为「申请令牌 → 校验令牌」；新增 `declareContract()` 支持渐进补契约；`confirmWrites` 三态开关 | `electron/tools/registry.cjs` |
+| 画布写工具补审批：`workbench_edit` / `ui_control` / `create_nodes` 经 `declareContract` 声明 `requiresConfirmation='WRITE'`（`save_project` 早已声明） | `electron/tools/impl/*.cjs` |
+| 配置 `tools.confirm_writes`（默认 **true**）/ `agent.approval.ttl_ms`（默认 5 分钟） | `electron/agent.cjs`、`config/agent.properties` |
+| 用例（进 CORE，门禁 43 → 44） | `scripts/approval-token-test.cjs`（12 段） |
+
+**关键设计取舍**：
+
+- **令牌只能由服务端签发**：审批字段在参数校验前被剥离（既不生效、也不制造参数错误），trace 里留 `approval_self_fields_stripped` —— 模型自填永远换不来执行。
+- **「没有审批通道」≠「用户拒绝」**：前者 `APPROVAL_REQUIRED`（接线/配置问题），后者 `APPROVAL_DENIED`（劝退重试、要人介入）。S5 的分类化提示据此给出不同指引。
+- **单次有效 + 绑定 toolCallId/attemptId**：一次批准只够一次调用；重试/续跑不会复用旧批准。
+- **令牌不落盘**：重启即失效 —— 宁可让用户再确认一次，也不留长期有效的批准凭据。
+- **用 `declareContract()` 而不是重写 descriptor**：三个工具的 schema / executor 结构不动，只在注册末尾补一行声明 —— 与 S3「24 个工具逐个迁移」的路线一致，改动面最小。
+- **行为变化（必须知道）**：画布类写操作（`workbench_edit` / `ui_control`）现在执行前需用户批准一次；`tools.confirm_writes=false` 可整体关闭（声明仍在，强制可关）。
+
+**验证证据**：`npm run verify` = **44/44 PASS，191.5s**（CORE 43 → 44）。用例 12 段：服务层（签发/绑定/单次消费、过期、能力与 scope 与调用绑定逐项校验、伪造令牌、无通道、用户拒绝、通道异常、撤销与批量撤销）+ 集成层（声明与真实强制、**模型自填无效**、批准才执行、拒绝不执行、令牌校验失败不执行、每次执行各自获批、配置可关）+ 主循环层（脚本化模型：批准执行；拒绝回灌「未批准」并归到权限类提示）。变异测试 **4/4 有判别力**：不剥离自填字段 → 红在行 144；令牌校验被跳过 → 红在行 182；审批通道判定整块失效 → 红在行 136；令牌不过期 → 红在行 49。
+
+**仍未处理**：① UI 只消费 `confirm`（`ToolDialog`），还没把令牌的 `scope` / 有效期展示给用户（用户看不到自己批了什么范围）；② `scope` 目前是「能力 + 目标」一项，路径级白名单 / 符号链接仍由既有 `resolveInRoot` + sandbox 承担；③ 令牌撤销尚未挂到 run abort 上（`WAITING_USER` 状态机事件已有）。
+
+**顺带修的兼容**：`confirm` 语义从布尔问答升级为令牌后，四个既有用例（`tool-descriptor` / `scalar` / `model` / `cache`）需要显式模拟「用户已批准」（注入 `confirm: async () => true`）；`tool-descriptor` 的 F6 描述也同步更正。
+
 ---
 
 ## 附：本轮机械扫描证据
