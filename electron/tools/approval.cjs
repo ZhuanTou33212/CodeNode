@@ -177,11 +177,6 @@ class ApprovalService {
     const nowMs = this.now();
     return [...this.tokens.values()].filter((token) => !token.consumed && nowMs <= Date.parse(token.expiresAt));
   }
-
-  /** 统计（诊断/测试用） */
-  stats() {
-    return { issued: this.tokens.size + (this.events || []).filter((e) => e.event === 'approval_consumed').length, pending: this.pending().length, events: (this.events || []).length };
-  }
 }
 
 /** 工厂：与其它模块保持同一种「create*」风格 */
