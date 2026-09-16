@@ -707,7 +707,29 @@ node -e "... languageSummary(s.sourceFiles) -> {\"json\":164,\"unknown\":116,...
 
 **判据怎么建的**：合成 PDF fixture（`BT … Tj ET` + FlateDecode stream，152 字节即可解析）；慢 fixture 用 5.15MB 文本流（实测解析 ~144ms，够心跳稳定，且不越过 `extractPdfText` 的规模上限）；取消用**确定性触发**（一开始就 aborted）而不是"比谁快"。实测心跳 `ticks=12~14`（同步实现下必为 0）。
 
-**顺带发现（未修）**：`extractPdfText` 对超大文本流（实测 >~8MB 原始文本）返回 null → 可解析的大 PDF 被报成「扫描版或文字层不可用」（误导性提示）。属既有规模限制，不在本轮范围，已如实登记。
+**顺带发现（当时未修）**：`extractPdfText` 对超大文本流（实测 >~8MB 原始文本）返回 null → 可解析的大 PDF 被报成「扫描版或文字层不可用」（误导性提示）。已在下一节修掉。
+
+### 修掉 `extractPdfText` 的爆栈缺陷（2026-09-16，接上节的「顺带发现」）
+
+**根因是正则爆栈，不是「文本太大」**：
+
+```
+RangeError: Maximum call stack size exceeded
+    at RegExp.exec (<anonymous>)
+    at extractContent (pdfText.cjs:129)
+```
+
+`extractContent` 用一条含多个交替分支的巨型正则反复 `exec` 内容流，在超长输入上回溯深度超限 → 抛错 → 被 `extractPdfText` 最外层 `catch` 吞成 `null` → `read_file` 误报「扫描版或文字层不可用」。实测边界：5.15MB / 6.44MB 正常，**8.58MB 起必现**。
+
+**修法**：`extractContent` 从「巨型正则 + 反复 exec」改为**单次字符扫描**（O(n)、无回溯 → 无规模上限），逐一手写分派 `Tm` / `Td` / `TD` / `T*` / `BT` / `ET` / `<hex>Tj` / `(lit)Tj` / `[...]TJ` / `(lit)'` / `(lit)"`；字面量读取改为「扫一遍定边界 + 一次 `slice`」；`isOpChar` 从每字符一次正则调用改为 charCode 判断。性能：同一 5MB 内容流 **412ms → 104ms**（旧实现 133ms）。
+
+**怎么保证没改坏 —— 对拍（parity）**：先用 `git show HEAD:electron/tools/impl/pdfText.cjs` 留一份旧实现，14 例（最小 PDF / 多 BT-ET 块 / TJ 数组 / 十六进制 Tj / T*-Td 换行 / `'` 操作符 / Tm 定位 / 转义与嵌套括号 / CMap+CID / 注释混排 / 三类 null）逐一比对 `JSON.stringify` 输出。**第一次跑就抓到一处真差异**：旧实现的 `'` / `"` 分支是 `out += '\n' + unescapeLit(...)`（先补一个换行），扫描器最初漏了 → 修完 **14/14 逐字节一致**。
+
+**一处有意改进（非等价重构）**：真嵌套括号 `(outer(inner)…` —— 旧正则不处理嵌套、对整个字符串匹配失败并返回 null；新扫描器按深度正确处理。用例 G12b 明确标注这是有意差异。
+
+**变异测试暴露的判据缺陷（值得记住）**：第 3 条变异（把 `readLiteral` 的转义跳过从 `j += 2` 改成 `j += 1`）**最初失效** —— 因为 fixture 用的是 `\(` / `\)` 这种**深度恰好抵消**的转义括号，改坏跳过逻辑输出照样一致。换成「转义反斜杠紧跟真括号」（内容 `a\)b`）后才真正有判别力 → 最终 3/3。**判据要挑对变异敏感的输入，不能只挑"看起来复杂"的**。
+
+**证据**：新增 `scripts/pdf-text-test.cjs`（19 条，进 CORE 门禁）：各操作符 golden + null 语义 + 大内容流 **8.58MB / 17.17MB 能提取且可打印字符数与理论值精确吻合**（7200000 / 14400000）。`fs-worker-test` 的慢 PDF fixture 提到 8.58MB（正是旧实现爆栈的规模），一并成为回归锁。
 
 ---
 
