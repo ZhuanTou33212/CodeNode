@@ -449,6 +449,31 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **仍未处理**：① 每段摘要的**尺寸二次校验**（模型可能超出单段预算，目前只在主上下文侧按 `DATA_TRUNCATE_CAP` 兜底）；② `costLedger` 按命中/未命中区分单价（需价格口径，未配就不编造）；③ 子代理 UI、单子代理取消（同 S9）。
 
+
+### S5 实施记录（结构化 ToolResult + FailureCode 分类，2026-09-16）
+
+**动因（审查 P1-4）**：`AgentToolResult(ok, text, data)` 只有布尔结果，失败语义靠各工具自己在 `data.code` 里临时塞；主循环拿到失败只能回灌同一句「上述工具调用失败…请修正参数后重试」——于是「参数写错了」「用户拒绝了」「超时了」「副作用结果未知」被同一句话打发：该重试的不敢重试、不该重试的反复重试（子代理重复委派、被拒写的重试都是这么来的）。
+
+| 内容 | 文件 |
+|---|---|
+| **FailureCode 唯一来源**：码表 + 契约（category / retryable / userActionRequired / hint）+ legacy code 显式归一表 + `classifyFailure`（显式 failure > `data.failureCode` > `data.code` > `timedOut`/`cancelled` 结构化信号 > 保守 `FATAL_FAILURE` 且标 `known:false`）+ `planNudges`（同一 toolCallId ≤ 2）+ `buildFailureNudge`（按类别给不同指引） | `electron/tools/failures.cjs`（新） |
+| **结构化结果**：`kind`（`success`/`partial`/`failure`）+ `failure` + `failed[]`；新增 `AgentToolResult.failure(code, msg, data)` / `partial(text, data, failed)` | `electron/tools/result.cjs` |
+| 注册表门失败显式化：角色无权 → `PERMISSION_DENIED`、未知工具 → `FATAL_FAILURE`（此前只有中文文案，主循环无法分类） | `electron/tools/registry.cjs` |
+| 主循环：工具记录带 `callId` + 失败即刻归类；nudge 改为**分类化**并按 toolCallId 限次，被抑制的落 `failure_taxonomy` trace | `electron/agent.cjs` |
+| 用例（进 CORE，门禁 41 → 42） | `scripts/tool-failure-taxonomy-test.cjs`（10 段断言） |
+
+**关键设计取舍**：
+
+- **不靠文本猜错误类别**：认不出来的码归 `FATAL_FAILURE` 且标 `known:false`，提示里如实写出 legacy code 并按「不可原样重试」处理 —— 宁可保守，也不假装认识。
+- **legacy 归一表只登记真实存在的码**：`WORKBENCH_WRITE_DENIED → PERMISSION_DENIED`、`PATH_OUT_OF_ROOT → ARG_SEMANTIC`、`BUDGET_EXCEEDED → FATAL_FAILURE`（并置 `userActionRequired`）、`SANDBOX_UNAVAILABLE → FATAL_FAILURE`、`INVALID_TOOL_ARGUMENTS → ARG_SCHEMA`；表驱动、可审计，改一处即可影响全局。
+- **提示上限抑制的是提示、不是任务**：同一 `toolCallId` 最多灌 2 次，超限只落 trace——循环继续（由 `MAX_TOOL_ITERATIONS` 兜底），但事后能从 trace 看出「模型在原地打转」。
+- **兼容优先**：60+ 处既有 `AgentToolResult.error(text, data)` 零改动继续工作；`ok`/`text`/`data` 的字段语义不变（UI、测试、主循环的读取方都不用改）。
+- **partial 只报事实**：`ok=true` + `failed[]` + `data.partialFailures`，不把「部分成功」写成「完全成功」。
+
+**验证证据**：`npm run verify` = **42/42 PASS，198.2s**（CORE 41 → 42）。用例分两层 —— 纯契约层（A 码表与契约一一对应防漂移、B legacy 归一、C `classifyFailure` 含结构化信号与未登记保守、D 提示配额、E 分类化文案、F 结构化结果与向后兼容）与**主循环层**（G 权限失败劝退重试、H 参数类指向「修正参数」、I 未登记码如实标注、J 同一 toolCallId 提示上限）；主循环层用脚本化模型跑真实工具循环、断言实际请求体（含「messages 累积 → 按每轮新增统计注入次数」这个坑）。变异测试 **3/3 有判别力**：主循环退回统一文案 → 红在 G 段（行 186）；提示上限失效 → 红在 D 段（行 79）；未登记码假装认识 → 红在 C 段（行 67）。
+
+**仍未处理**：① UI 未消费 `kind`/`failure`（徽标仍是成功/失败两态，未区分「权限拒绝」与「参数错」）；② 多数工具的错误路径仍是自由文本（靠归一表与结构化信号兜底，未逐个补 `code`）；③ 审批令牌与审批细分类留待 S7 的能力模型。
+
 ---
 
 ## 附：本轮机械扫描证据

@@ -58,6 +58,22 @@
   变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
   子代理结果不截断，均当场变红）。
 
+### 新增（S5：结构化 ToolResult + FailureCode 分类，2026-09-16）
+
+- **新增 `electron/tools/failures.cjs`**（FailureCode 唯一来源）：码表 + 每码的类别 / 是否可重试 /
+  是否需要用户介入 / 给模型的指引，外加 legacy `data.code` → FailureCode 的**显式**归一表
+  （`WORKBENCH_WRITE_DENIED`→`PERMISSION_DENIED`、`PATH_OUT_OF_ROOT`→`ARG_SEMANTIC`、
+  `BUDGET_EXCEEDED`→`FATAL_FAILURE` 等）；认不出来的码一律 `FATAL_FAILURE` + `known:false`，不猜。
+- **`AgentToolResult` 结构化**：`kind`（success/partial/failure）、`failure`、`failed[]`，
+  新增 `failure(code, msg, data)` 与 `partial(text, data, failed)`；`ok`/`text`/`data` 保持兼容
+  （60+ 处既有 `error(text, data)` 零改动）。
+- **主循环提示改为分类化 + 限次**：参数类 → 修正参数；权限/用户拒绝 → 不要原样重试、要人介入；
+  超时 → 缩小范围或改后台；副作用未知 → 先只读核对；未登记码 → 保守并如实标注。
+  同一 `toolCallId` 最多提示 2 次（超限只落 `failure_taxonomy` trace，循环继续）。
+- 注册表门失败显式化（角色无权 → `PERMISSION_DENIED`；未知工具 → `FATAL_FAILURE`）。
+- 用例 `scripts/tool-failure-taxonomy-test.cjs`（10 段，含真实工具循环与请求体断言）进 CORE
+  门禁（**41 → 42**），变异测试 3/3 有判别力。
+
 ### 新增（S10：压缩请求批量合并，2026-09-16）
 
 - **同一轮工具循环里的多份大结果合并成一次压缩请求**（`agent.compression.batch`，默认开；
