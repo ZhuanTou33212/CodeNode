@@ -12,6 +12,7 @@ const {
   createAccumulator,
   applySseText,
   finalize,
+  isCompositeJsonComplete,
   isJsonComplete,
 } = require('../electron/streamAccumulator.cjs');
 
@@ -218,6 +219,49 @@ function run(frames) {
 {
   const { result } = run([{ error: { message: 'rate limited', type: 'server_error' } }]);
   check('流内联 error：记为 anomaly（供调用方决定重试）', result.anomalies.some((a) => a.type === 'in-stream-error'), JSON.stringify(result.anomalies));
+}
+
+// ---- (15) 真实 DeepSeek 分片形态：裸标量分片不得替换累积参数（2026-09-16 实测故障的最小复现）----
+// 真机会把 args 切得非常碎（每个小片段一帧），其中「数字」会单独成一帧：
+//   {"path": "…", "maxLines":   ← 累积到这儿，下一帧只有 "40"
+// 修复前：isJsonComplete('40') === true → 判定为「供应商重发的完整参数」→ args 被替换成 '40'，
+// 再拼上 '}' 得到 '40}'，argsValid=false，工具调用被拒（MALFORMED ARGS）→ 反复重试直到迭代上限。
+{
+  const fragments = ['{', '"', 'path', '"', ': ', '"', 'a.txt', '"', ', ', '"', 'maxLines', '"', ': ', '40', '}'];
+  const frames = fragments.map((frag, i) =>
+    deltaFrame([callChunk(0, i === 0 ? 'call_num' : undefined, i === 0 ? 'read_file' : undefined, frag)])
+  );
+  const { result } = run(frames);
+  const call = result.toolCalls[0];
+  check('真实分片：数字片段单独到达时 args 仍拼成完整对象', call && call.args === '{"path": "a.txt", "maxLines": 40}', call && JSON.stringify(call.args));
+  check('真实分片：argsValid=true（不会被当成残缺参数拒掉）', call && call.argsValid === true, call && String(call.argsValid));
+  check('真实分片：不产生「累积替换」误判异常', !result.anomalies.some((a) => a.type === 'cumulative-args-chunk' || a.type === 'args-resend-detected'), JSON.stringify(result.anomalies));
+}
+// 其它裸标量分片（true / null / 字符串）同样不得替换累积参数。
+{
+  const cases = [
+    { value: 'true', expected: '{"flag": true}' },
+    { value: 'null', expected: '{"flag": null}' },
+    { value: '"x"', expected: '{"flag": "x"}' },
+  ];
+  for (const c of cases) {
+    const frames = ['{"flag": ', c.value, '}'].map((frag, i) => deltaFrame([callChunk(0, i === 0 ? 'c' + i : undefined, i === 0 ? 't' : undefined, frag)]));
+    const { result } = run(frames);
+    const call = result.toolCalls[0];
+    check('标量分片 ' + c.value + '：不作替换、正常拼接', call && call.args === c.expected && call.argsValid === true, call && JSON.stringify(call.args));
+  }
+}
+// (16) 反向保护：供应商真的重发「完整对象」时仍要替换（修复不得把既有语义改坏）。
+{
+  const frames = ['{"a": ', '{"a":1}'].map((frag, i) => deltaFrame([callChunk(0, i === 0 ? 'r1' : undefined, i === 0 ? 't' : undefined, frag)]));
+  const { result } = run(frames);
+  const call = result.toolCalls[0];
+  check('完整对象重发：仍按替换处理（不拼成 {"a": {"a":1}）', call && call.args === '{"a":1}', call && JSON.stringify(call.args));
+}
+// (17) 判据本身：完整对象/数组 vs 裸标量。
+{
+  check('isCompositeJsonComplete：对象/数组为真、裸标量/残缺为假', isCompositeJsonComplete('{"a":1}') === true && isCompositeJsonComplete('[1,2]') === true && isCompositeJsonComplete('40') === false && isCompositeJsonComplete('true') === false && isCompositeJsonComplete('null') === false && isCompositeJsonComplete('"x"') === false && isCompositeJsonComplete('{"a":') === false && isCompositeJsonComplete('') === false);
+  check('isJsonComplete 保持原语义（标量也算完整 JSON，空串合法）', isJsonComplete('40') === true && isJsonComplete('') === true && isJsonComplete('{"a":') === false);
 }
 
 console.log(failures === 0 ? 'STREAM ACCUMULATOR TEST: PASS' : 'STREAM ACCUMULATOR TEST: FAIL (' + failures + ')');

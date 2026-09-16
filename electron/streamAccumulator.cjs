@@ -36,6 +36,29 @@ function isJsonComplete(text) {
   }
 }
 
+/**
+ * 参数是否为「完整的 JSON 对象 / 数组」。
+ *
+ * 为什么不能直接用 `isJsonComplete` 判「分片自身已完整」（2026-09-16 实测缺陷）：
+ * `JSON.parse('40')` 也是合法的——工具参数的**流式分片**里出现裸标量（`40` / `true` / `null` /
+ * `"abc"`）是**正常的续接片段**，尤其参数里带数字时（`"maxLines": 40`、坐标 `"x": 201`）。
+ * 用 `isJsonComplete` 判会把它当成「供应商重发的完整参数」，于是把累积中的真参数**整段替换成这个标量**：
+ * 实测真实 DeepSeek 流下 `{"path": "…", "maxLines": ` + `40` → args 变成 `40}`，argsValid=false，
+ * 工具被拒（`MALFORMED ARGS`）；12 轮里 9 次调用如此，最终跑成 `LIMIT_REACHED`。
+ *
+ * 工具参数只会是对象 / 数组（OpenAI 兼容协议），因此替换分支只认对象 / 数组。
+ */
+function isCompositeJsonComplete(text) {
+  const raw = String(text == null ? '' : text);
+  if (raw.trim() === '') return false;
+  try {
+    const value = JSON.parse(raw);
+    return value !== null && typeof value === 'object';
+  } catch {
+    return false;
+  }
+}
+
 function createAccumulator() {
   return {
     content: '',
@@ -108,15 +131,17 @@ function mergeArgs(state, slot, incoming) {
     slot.args = text;
     return;
   }
-  // 当前是残缺 JSON、而本分片自身完整 → 供应商在「补完」这段参数（累积语义），直接取更完整的那份
-  if (isJsonComplete(text) && !isJsonComplete(slot.args)) {
+  // 当前是残缺 JSON、而本分片自身是**完整对象/数组** → 供应商在「补完」这段参数（累积语义），取更完整的那份。
+  // 注意这里必须用 isCompositeJsonComplete 而不是 isJsonComplete：后者会把 `40` 这种标量分片也算「完整」，
+  // 从而用标量替换掉真正的累积参数（2026-09-16 实测的真实故障）。
+  if (isCompositeJsonComplete(text) && !isJsonComplete(slot.args)) {
     noteAnomaly(state, 'cumulative-args-chunk', text.length);
     slot.args = text;
     return;
   }
-  // 关键判据：拼接后不是合法 JSON，而本分片自身是合法 JSON → 供应商在重发「完整参数」，
+  // 关键判据：拼接后不是合法 JSON，而本分片自身是完整的对象/数组 → 供应商在重发「完整参数」，
   // 用它替换而不是拼接（否则会得到 `{"a":1}{"a":1}` 这种永不闭合的坏 JSON）。
-  if (!isJsonComplete(slot.args + text) && isJsonComplete(text)) {
+  if (!isJsonComplete(slot.args + text) && isCompositeJsonComplete(text)) {
     noteAnomaly(state, 'args-resend-detected', text.length);
     slot.args = text;
     return;
@@ -286,6 +311,7 @@ module.exports = {
   applySseText,
   consumeLine,
   finalize,
+  isCompositeJsonComplete,
   isJsonComplete,
   toolSnapshot,
 };
