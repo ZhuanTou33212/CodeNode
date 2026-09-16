@@ -4,6 +4,41 @@
 
 ## [未发布]
 
+### 新增（S9：子代理收口 + 压缩成本可测，2026-09-16）
+
+- **角色契约收敛为单一来源** `electron/tools/roles.cjs`：工具白名单 / 是否只读 / 授予的能力 / 角色提示
+  只声明一次，`toolkit.filterByRole` 与 `subagents.cjs` 都从它取。此前三处各写一份，实测已经漂移
+  （`ROLE_TOOLS` 5 个角色含 `canvas`、`READ_ONLY_ROLES` 3 个、`ROLE_PROMPTS` 4 个 —— `canvas`
+  被子代理 enum 暴露给模型却没有角色提示，还能动画布/UI）。
+- **只读门判据升级为「角色契约显式授予的能力」**（`registry.roleCapabilities`）：白名单只说「能用」，
+  能力才说「允许产生这类副作用」。`verifier` 的 `execute_shell` 由 `shell.execute` 显式授予不受影响；
+  `explorer` 的 `scan_project` 不再因白名单豁免而被放行 —— 并且 `scan_project` 在只读上下文里改为
+  **如实失败**（`code=WORKBENCH_WRITE_DENIED`），修掉「画布没写却回报已写入工作台」的谎报。
+- **子代理独立预算（父子链）** `electron/requestBudget.cjs`：`RequestBudget` 支持 parent 链 +
+  `createSubagentBudget`，每个子代理有自己的配额（`agent.subagent.max_total_tokens`，默认 0 = 沿用旧行为），
+  用量按实际值记回父账 —— 一个子代理刷爆额度只让它自己失败，父 run 与其他子代理继续，且不绕过
+  `agent.max_total_tokens`。
+- **子代理任务总时长**：`timeoutSeconds` 语义从「单轮超时」（实际可跑约 36 分钟）修正为**任务总时长**
+  （默认 600s，钳制 [10s, 1h]）—— 组合信号（父 signal + 定时器）+ 单轮上限 180s，超时/取消分别落 `blocked`。
+- **子代理结果合并契约**：回灌主上下文的结果带固定字段头（taskId/role/status/工具调用数/变更文件）+
+  结构化 `contract`（toolCalls / changedFiles / usage / stageWarning / 判定留人工）+ 按
+  `agent.subagent.result_max_chars` 截断并指向 `get_subagent_task`；失败文案显式劝退「原样重试」，
+  避免主循环的失败提示诱发重复委派。
+- **幂等账本可归因** `electron/sideEffects.cjs`：父子代理/多个子代理仍共用同一幂等域（续跑语义不变），
+  但每次登记带 actor，去重文案改为「提交者 X，请求方 Y」并由账本给出；检查点 `tool_intent`/`tool_commit`
+  也带 actor。
+- **压缩（工具结果子代理压缩）成本可测且可控**：新增内容级缓存 `electron/compressionCache.cjs`
+  （`sha256(工具名+预算+原文)`，LRU 200 条/2MB，落 `.codenode/metrics/compression-cache.json`，跨 run 复用）；
+  压缩 system 提示改为**常量**、长度预算移到 user 段（前缀稳定，服务端前缀缓存可命中）；
+  可配压缩专用模型并**默认关思考链**；`costLedger.tokenParts` 现在记录服务端的缓存命中 token
+  （DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`），
+  汇总里给出 `promptCacheHitRate`（无数据时为 `null`，不编造）。
+- **画布痕迹不再静默丢**：stage 回写前校验节点存在与 `type==='stage'`，失败写 `task.stageWarning` 与审计事件；
+  子代理状态落 run 事件 `subagent_state`（此前 run 记录里完全没有子代理痕迹）。
+- 用例 `scripts/subagent-isolation-test.cjs`（A–J 共 11 段断言）进 CORE 门禁（**38 → 39**），
+  变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
+  子代理结果不截断，均当场变红）。
+
 ### 新增（向量后端可插拔：memory / Milvus）
 
 - **RAG 向量层从内联实现改为可插拔后端契约**（`electron/vectorStore/{index,memory,milvus}.cjs`）：

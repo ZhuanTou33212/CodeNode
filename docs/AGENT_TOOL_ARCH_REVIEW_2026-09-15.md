@@ -392,6 +392,39 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 ---
 
+### S9 实施记录（子代理收口：角色契约 / 独立预算 / 总时长 / 结果契约；附压缩成本，2026-09-16）
+
+**起因**：第 6 节把子代理排在 S9（独立预算 / 深度上限 / 结果合并契约 / 只读范围显式化），但 S0–S4 之后它仍是唯一**没有隔离用例**的子系统。动手前读 `subagents.cjs` / `toolkit.cjs` / `registry.cjs` / `sideEffects.cjs` / `requestBudget.cjs`，并在仓库外跑了一次探针（打印角色目录、子注册表、白名单豁免面），确认 10 处问题；同时用户反馈「工具调用里那一次子代理压缩**缓存命中率非常低**」，一并处理。
+
+| # | 修复前（代码级实测） | 修复 | 文件 |
+|---|---|---|---|
+| 1 | **只读角色会谎报**：`explorer` 白名单含 `scan_project`（契约 `mutatesWorkspace=true`），只读门被「白名单里有这个名字」豁免；`scanProjectTool` 里 `mutateWorkbench` 在只读上下文返回 `false`，仍写 `data.appliedToWorkbench=true` 并回报「已写入工作台」（`void applied`） | 只读门判据改为**角色契约显式授予的能力**；`scan_project` 按真实结果记录，未写入时返回 `ok=false` + `code=WORKBENCH_WRITE_DENIED` + 说明「勿原样重试」 | `tools/registry.cjs`、`tools/roles.cjs`、`tools/impl/scanProjectTool.cjs` |
+| 2 | **角色语义三处漂移**：`ROLE_TOOLS` 5 个角色（含 `canvas`）、`READ_ONLY_ROLES` 3 个、`ROLE_PROMPTS` 4 个；`delegate_task` 的 enum 把 `canvas` 暴露给模型，而 canvas 子代理**没有角色提示**（`filter(Boolean)` 静默丢掉 undefined）却能 `save_project` / `ui_control` | 新增 `electron/tools/roles.cjs` 作为**唯一来源**（工具白名单 / 是否只读 / 授予的能力 / 角色提示），`toolkit.filterByRole` 与 `subagents.cjs` 都从它取；canvas 补齐提示 | `tools/roles.cjs`（新）、`tools/toolkit.cjs`、`subagents.cjs` |
+| 3 | **子代理共用父预算**：`cfg: this.cfg` → 同一 `RequestBudget`。一个子代理把额度刷穿，父 run 与其他子代理被同一个 `BUDGET_EXCEEDED` 一起挡死，且看不到是谁花的 | `RequestBudget` 支持**父子链** + `createSubagentBudget`：每个子代理独立配额（`agent.subagent.max_total_tokens`，`0` = 沿用旧行为），真实用量按实际值记回父账（父总量依然守恒，不绕过） | `requestBudget.cjs`、`subagents.cjs` |
+| 4 | **幂等账本没有归因**：父子代理与多个子代理共用同一幂等域（`sha256(scopeRunId+tool+args)`）却没有任何 actor，去重时回灌「该写操作在上一次中断前已成功提交」——与实际不符 | `begin(tool,args,actor)` 记录 `actor`/`actors`/`committedBy`；去重文案改为「提交者 X，请求方 Y」并由**账本**给出（主循环不再自己编）；检查点 `tool_intent`/`tool_commit` 带 actor；`review()` 输出归因字段 | `sideEffects.cjs`、`tools/context.cjs`、`agent.cjs` |
+| 5 | **`timeoutSeconds` 被当成「单轮超时」**：它直接进 `runAgentChat` 的 `timeoutMs`（单轮，默认 180s），最多 12 轮 → 子代理可跑约 36 分钟；没有任务总时长概念 | 语义修正为**任务总时长**（默认 600s，钳制 [10s, 1h]）：组合信号（父 signal + 定时器）+ 单轮上限 180s；超时/取消分别落 `blocked` 并写明原因 | `subagents.cjs` |
+| 6 | **结果无合并契约**：`'子代理任务 X 已完成：' + summary` 原样进主上下文（2 万字符也全灌）；失败一律 `AgentToolResult.error` → 主循环注入「失败请重试」→ 主代理**重复委派**同一任务（12 次上限里失败也计数） | 固定字段头（`[子代理结果] taskId/role/status/工具调用/变更文件`）+ 结构化 `contract`（`toolCalls` / `changedFiles` / `usage` / `stageWarning` / `acceptanceJudgement=manual`）+ 按 `agent.subagent.result_max_chars` 截断并指向 `get_subagent_task`；失败文案显式劝退原样重试 | `subagents.cjs` |
+| 7 | **stage 回写静默失败**：不校验节点存在/类型，也不看 `workbench_edit` 返回值 → 画布上子代理痕迹可静默消失 | 回写前校验节点存在与 `type==='stage'`，失败写 `task.stageWarning` + 审计事件（`subagent_stage_missing` / `_type_mismatch` / `_update_failed`） | `subagents.cjs` |
+| 8 | **深度限制是隐式的**、run 记录里看不到子代理 | 子注册表不含 `delegate_*` 由角色契约保证（白名单里没有）并有用例钉住；子代理状态落 run 事件 `subagent_state`（此前 run 记录里完全没有子代理痕迹） | `tools/roles.cjs`、`ipc/agent.cjs` |
+| 9 | **压缩调用成本不可测、命中率天然极低**（用户反馈）：请求形状是「固定 system + 变化的原文」，前缀缓存只能命中前几百 token；`costLedger.tokenParts` 还丢掉了服务端返回的缓存命中字段，命中率**无法测量** | ① 内容级缓存 `compressionCache.cjs`（`key=sha256(工具名+预算+原文)`，LRU 200 条/2MB，落 `.codenode/metrics/compression-cache.json`，**跨 run 复用**）；② system 提示改为常量、预算移到 user 段（前缀稳定）；③ 可配压缩专用模型 + **默认关思考链**；④ 工具记录标注 `compressionCache=hit/miss` | `compressionCache.cjs`（新）、`agent.cjs` |
+| 10 | 角色能力与预算、压缩模型等新旋钮没有配置入口 | `agent.subagent.*`（配额 / 总时长 / 结果上限 / 批次上限）与 `agent.compression.model|reasoning|cache|max_output_tokens|timeout_ms` 全部可配，`config/agent.properties` 附说明 | `agent.cjs`、`config/agent.properties` |
+
+**关键设计取舍**：
+
+- **只读门从「白名单豁免」改为「角色能力授予」**：白名单只说「这个角色能用这个工具」，能力集才说「这个角色被允许产生这类副作用」。`verifier` 的 `execute_shell` 由 `shell.execute` 显式授予（跑测试是它的核心能力，不能误伤）；`explorer` 的白名单里虽有 `scan_project`，但契约没授予写能力 → 它只能以只读方式用，写那一步由 `context.mutateWorkbench` 在只读上下文返回 `false` 兜底，并且**工具必须如实上报**。
+- **幂等域刻意保持「共享」**：子代理与父代理仍写同一本账（续跑时「已提交就跳过」的语义必须跨角色成立，否则子代理的写会重复执行）。修的是**归因**而不是隔离：每次登记带 actor，去重文案说清谁提交、谁在重复。
+- **独立预算用父子链而不是另起一本账**：子代理超额只拒绝它自己；父 run 的 `agent.max_total_tokens` 依然是硬上限（子预算是它的子集，不能绕过）。
+- **结果契约只报事实**：`changedFiles` 从工具调用参数里解析（解析不出就跳过），`acceptanceJudgement` 固定为 `manual` —— 验收是否达成不自动判定，避免「编造结论」。
+- **压缩那块**：`system` 恒定 + 内容级缓存解决「同一份内容重复付 prefill」，但**没有**假装解决前缀命中率本身 —— 真正能把命中率拉上去的是「把同一轮多个超大结果合并成一次压缩请求」，本轮未做（见下）。
+
+**验证证据**：`npm run verify` = **39/39 PASS，196.8s**（CORE 38 → 39）。新增 `scripts/subagent-isolation-test.cjs` 进 CORE，A–J 共 11 段断言：角色契约一致性（含 canvas 提示与 enum 对齐、白名单/能力集与契约逐项相等）、只读门双向（白名单+无能力 → 拒；能力授予 → 放行）、`scan_project` 只读不谎报 + 有权限时确实写入、预算父子链（子超额只拒自己、父总量守恒）、总时长钳制、结果契约（字段头/截断/变更文件/`acceptanceJudgement`）、stage 警告、失败劝退、幂等归因（含 `context → guard` 传递）、压缩缓存（键稳定/命中统计/LRU/落盘复用）、配置默认值。
+
+变异测试 **4/4 有判别力**（临时改回旧行为 → 新用例变红在预期行 → 自动还原并核对 sha256，基线绿）：只读门退回白名单豁免 → 红在 B 段（行 77）；`scan_project` 不检查是否真写入 → 红在 C 段（行 85）；`context` 不传 actor → 红在 H2（行 239）；子代理结果不截断 → 红在 F 段（行 178）。
+
+**仍未处理（S9 之后）**：① 压缩请求的**批量合并**（同一轮多个超大结果合成一次调用，进一步提升前缀命中率与总 token 效率）；② `costLedger` 只新增了缓存命中字段的**记录能力**（`promptCachedTokens`），费用单价未按命中/未命中区分——没配价格就不编造；③ 子代理 UI（`src/` 仍无子代理呈现，只落到 run 事件与 stage 节点摘要）；④ 单子代理取消（当前只能随父 signal 整体停）；⑤ S4 起就挂着的 `execute_shell` 越界写（需 S7 能力模型）。下一步建议仍是 S5：结构化 `ToolResult` + `FailureCode` 分类。
+
+---
+
 ## 附：本轮机械扫描证据
 
 ```
