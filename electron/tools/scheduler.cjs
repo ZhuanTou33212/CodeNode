@@ -73,7 +73,7 @@ function resultFromError(error, info) {
  * （S9 的总时长预算踩过同一个坑）。`timeoutMs<=0` 表示不加限制。
  * @param {() => Promise<any>} run
  * @param {number} timeoutMs
- * @param {{tool?: string, toolCallId?: string, signal?: any, onTimeout?: Function, rethrow?: boolean}} [options]
+ * @param {{tool?: string, toolCallId?: string, signal?: any, onTimeout?: Function}} [options]
  */
 async function withTimeout(run, timeoutMs, options) {
   const o = options || {};
@@ -82,7 +82,6 @@ async function withTimeout(run, timeoutMs, options) {
     try {
       return await run();
     } catch (error) {
-      if (o.rethrow) throw error;
       return resultFromError(error, o);
     }
   }
@@ -102,7 +101,6 @@ async function withTimeout(run, timeoutMs, options) {
   try {
     return await Promise.race([Promise.resolve().then(run), guard]);
   } catch (error) {
-    if (o.rethrow) throw error;
     return resultFromError(error, o);
   } finally {
     if (timer) clearTimeout(timer);
@@ -206,7 +204,6 @@ module.exports = {
   ToolScheduler,
   withTimeout,
   linkAbort,
-  resultFromError,
   clampConcurrency,
   DEFAULT_CONCURRENCY,
   MAX_CONCURRENCY,
