@@ -4,6 +4,25 @@
 
 ## [未发布]
 
+### 修复（CI 门禁：可选依赖把 check:js 打成三平台全红，2026-09-16）
+
+- `scripts/vector-store-semantic-probe.cjs` 用**字面量** `require('@zilliz/milvus2-sdk-node')` 拿 SDK 清理临时
+  collection。该 SDK 是刻意**不写进 `package.json`** 的可选依赖（保持默认零依赖/体积不变，见
+  `electron/vectorStore/milvus.cjs` 头部注释）——于是本机（手动装过 SDK）`npm run check:js` 绿，CI（`npm ci`
+  后没有它）在 **Windows / macOS / Linux 三平台**全部 `error TS2307: Cannot find module
+  '@zilliz/milvus2-sdk-node'`。门禁自 2026-09-15 起连续 8 次运行全红在同一个点上，`npm test` 与打包步骤
+  **从未被执行到**——门禁在纸面上存在、实际形同虚设。
+- 改为走生产同款惰性入口 `loadSdk()`（模块名非常量 require ⇒ tsc 不做模块解析），同时保留「缺失时给出
+  可执行修复指令而不是 MODULE_NOT_FOUND 栈」的语义。
+- 新增门禁 `scripts/dep-declaration-test.cjs`（`npm run test:dep-declaration`，进 CORE：40 → 41）：扫描
+  `electron/**` 与 `scripts/**` 的 .cjs，**未在 package.json 声明**的裸模块**字面量** require 一律失败
+  （先剥注释再扫描，避免文档示例误报；带扫描范围自检，防止「逻辑失效 = 假绿」）。变异测试 1/1 有判别力：
+  把探针改回字面量 require 后门禁当场红在 `scripts/vector-store-semantic-probe.cjs:114`，还原即绿。
+- 验证：本机把 `node_modules/@zilliz` 改名模拟 CI 条件，修复前复现同一行同一列
+  （`vector-store-semantic-probe.cjs(111,27)`），修复后该条件下 `npx tsc -p tsconfig.checkjs.json` 为 0 错；
+  `npm run build` + `npm run check:js` + `npm test`（41/41，190.0s）全绿；探针无 `MILVUS_ADDR` 时仍明确
+  SKIP（不静默通过）。
+
 ### 新增（S9：子代理收口 + 压缩成本可测，2026-09-16）
 
 - **角色契约收敛为单一来源** `electron/tools/roles.cjs`：工具白名单 / 是否只读 / 授予的能力 / 角色提示

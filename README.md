@@ -6,6 +6,42 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 > 保留节点画布操作逻辑（Blender 风格），并将节点语义改为「Agent 工作流可视化」。
 > 完整重构方案见 `REFACTOR_PLAN_DSH.md`（在仓库 `codenodeNew` 分支历史/工作区）。
 
+[![CodeNode CI](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml/badge.svg?branch=0_2)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml)
+[![production-gate](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/production-gate.yml/badge.svg?branch=0_2)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/production-gate.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](docs/release-process.md)
+[![Gates](https://img.shields.io/badge/gates-41%20core%20%2B%203%20display-brightgreen.svg)](scripts/run-all-tests.cjs)
+
+![CodeNode 工作台：Agent 面板 + 节点画布](docs/screenshots/codenode-canvas.png)
+
+## 亮点速览
+
+| 维度 | 现状 |
+| --- | --- |
+| 代码规模 | TypeScript / Node 约 39k 行（渲染层 12.6k、Electron 主进程 15.3k、门禁与工具脚本 11k） |
+| 门禁 | `npm run verify` = 构建 + `check:js`（主进程/脚本 checkJs）+ **41 项核心套件 + 3 项显示环境套件**；清单唯一来源 `scripts/run-all-tests.cjs` |
+| CI | Windows / macOS / Linux 三平台矩阵：构建 → 静态检查 → 全量门禁 → 打包 → 评测；Agent 评测报告按 commit 归档为 artifact |
+| Agent 评测 | 11 个多步任务离线确定性评测（多步读写、改完跑测试、引用、长上下文压缩、提示注入、取消、崩溃恢复、预算上限），最近一次 **11/11 通过 / 127 次工具调用** |
+| 分发 | electron-builder 打包 portable exe / dmg / AppImage，附 sha256/sha512 清单、签名与升级回滚判据（`docs/release-process.md`） |
+| 文档 | `CHANGELOG.md` 按 Keep a Changelog 记录每次行为变化与验证证据；`docs/` 含架构审查、整改进度、评测报告 |
+
+Agent 侧不是「套一层 API」，实现要点：
+
+- **工具循环**：流式 `tool_call` 累加器（重复下发整段、参数重发、`index` 漂移、id 分片、坏行全部记为 anomaly 而非静默拼错）+ `finish_reason=length` 截断安全（参数不完整一律拒绝执行）
+- **运行状态机**：7 个状态 + 显式迁移表，`WAITING_USER` 由 `confirm()`/`askUser()` 上报，续跑与崩溃恢复读同一份状态
+- **工具契约与最小能力面**：`ToolDescriptor` 声明只读/可缓存/写/超时/所需能力，注册表按契约 fail-closed 执行；每次执行现场组装最小能力面，越权方法返回安全默认值并写审计
+- **子代理**：角色契约（白名单/只读/能力/提示）单一来源，父子链独立 token 预算，任务总时长钳制，结构化结果契约回灌
+- **可靠性**：幂等账本（规范化参数键 + actor 归因）、请求预算与队列、成本账本（含服务端前缀缓存命中率）、断点续跑
+- **隔离与安全**：Windows Job 对象 / Linux bwrap / macOS sandbox-exec 三平台后端，网络与路径边界、SSRF 阻断、凭据脱敏、渲染层权限默认拒绝
+- **Agentic RAG**：BM25 + 本地标量精确查询 + 可插拔向量层（默认 `memory`，可切 Milvus 全库 ANN，bge-m3 1024 维 / HNSW 生产档），引用校验按「本轮真实读过的来源」判定
+
+## 界面预览
+
+| 矢量画布 · 设计模式 | 矢量画布 · 逻辑模式 |
+| --- | --- |
+| ![设计模式](docs/vector-preview/v2-design-mode.png) | ![逻辑模式](docs/vector-preview/v2-logic-mode.png) |
+
 ## 技术栈
 
 ```
@@ -178,14 +214,21 @@ npm run dist:linux  # Linux AppImage + deb
 
 ```
 electron/           Electron 主进程 / 预加载 / .cnode 编解码
+  agent.cjs         Agent 工具循环（流式解析、截断安全、压缩、引用校验）
+  agentState.cjs    运行状态机（7 状态 + 显式迁移表）
+  tools/            工具注册表 / 契约（ToolDescriptor）/ 能力面 / 子代理
+  ipc/              按域拆分的 IPC 通道（models / project / metrics / agent）
+  rag/ vectorStore/ Agentic RAG 与可插拔向量后端（memory 默认 / Milvus）
+  sandbox/          跨平台执行隔离（Windows Job / bwrap / sandbox-exec）
 src/
   components/       画布、项目管理器、检查器、工具栏、状态栏、添加菜单
   lib/              项目生命周期（新建/打开/保存）
   nodes/            画布节点类型与模板
+  vector/           矢量画布节点（设计 / 逻辑两种模式）
   resources/schemas/.cnode 格式 JSON Schema
   store/            zustand：图模型 / 项目 / UI 状态
   types.ts          节点数据类型
-scripts/            冒烟测试
+scripts/            门禁与测试套件（41 项核心 + 3 项显示）/ 打包 / 发布 / 评测
 ```
 
 ## 测试
@@ -193,7 +236,7 @@ scripts/            冒烟测试
 统一入口（推荐；CI 也走这里，门禁清单只在 `scripts/run-all-tests.cjs` 维护一处）：
 
 ```powershell
-npm run verify         # 提交前必跑：build + check:js + core 套件（25 项）
+npm run verify         # 提交前必跑：build + check:js + core 套件（41 项）
 npm test               # core 套件：无显示环境 / 无网络 / 确定性
 npm run test:display   # 需要窗口或本机浏览器的用例（smoke / RAG UI / 矢量画布）
 npm run test:list      # 打印套件清单
