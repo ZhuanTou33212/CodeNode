@@ -4,6 +4,60 @@
 
 ## [未发布]
 
+### 安全（execute_shell 越界写/网络约束，测试模式不再放行破坏性确认；2026-09-16）
+
+- **越界写没有内核兜底**：`execute_shell` 的白名单含 `cmd` / `powershell` / `node` / `npm` / `npx`，而 Windows
+  后端（windows-job）**不隔离文件系统**（`writeRoots` 只对 Linux bwrap / macOS sandbox-exec 生效）——
+  `cmd /c echo X > <项目外路径>` 与 `node -e "writeFileSync(<项目外>)"` 实测都能写成功。唯一兜底是用户点确认，
+  而确认文案只说「执行命令」，用户无法从中看出它会越界写盘。
+  新增 `electron/tools/shellGuard.cjs`：命令文本级静态审计（重定向 / 写选项 / 写动词 / 脚本 API 字面量 /
+  引号内子命令），越界写**在能力层直接拒绝**（`PATH_OUT_OF_ROOT`，不靠用户点确认）；写目标含变量时
+  strict 模式拒绝、其余模式写进确认文案；只读引用项目外路径不受影响（不误伤）。
+- **网络约束从「只有 fetch_url 过门」扩到 shell**：`sandbox.network=deny` 时，疑似联网的命令（URL /
+  `git push|clone|fetch|pull` / `npm install` / `npx` / PowerShell 下载型 cmdlet / 脚本网络调用）直接拒绝，
+  不试连。
+- **`CODENODE_TEST` 的后门面收窄**：`bridge.confirm` 曾在该环境下无条件返回 `true` —— 确认通道是审批令牌的
+  唯一来源，HIGH 级（删除 / 强推 / 清理这类不可撤销操作）被静默放行等于把「测试环境」变成后门。现在只自动
+  批准可回滚的写入，**HIGH 默认拒绝**（需显式 `CODENODE_TEST_ALLOW_HIGH=1`），并提示一次。用例同时锁住
+  「测试模式下越界写 / 只读上下文 / network=deny 三门照旧拒绝」，以及「仓库与 CI 里没有任何地方赋值
+  `process.env.CODENODE_TEST`」。
+
+### 新增（统一运行事件流 + 按 run 回放 CLI；2026-09-16）
+
+- 事件此前散在五套并行文件里，其中 `tools_trace.jsonl` 每条只有 `{ts, iter, name…}`，**没有
+  runId / turnId / toolCallId / attemptId** —— 多轮、多 run、父子代理的记录混在一条流里，「按 run 回放这一轮
+  到底发生了什么」做不到。
+  `electron/eventBus.cjs` 定义统一形状 `{v, ts, kind, runId, turnId, toolCallId, attemptId, …payload}` 并写入
+  `.codenode/events.jsonl`（复用 runStore 的原子替换 / 坏行容忍 / 字节上限）；`logToolTrace` 双写，旧文件保留
+  一个版本周期的兼容读取；主循环所有事件（tool / round_end / turn_end / compression / failure_taxonomy /
+  truncation_nudge / scheduler / grounding_retry）都带上身份。
+  `scripts/event-replay.cjs` 支持 `--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1（可直接
+  用于门禁）。
+
+### 变更（工具契约闭合与显式化、循环上限可配置、grounding 门、同步工具可取消；2026-09-16）
+
+- **参数 schema 闭合**：`validateInput` 只校验**已声明**字段 → 模型把 `maxLines` 拼成 `maxLine` 会静默走默认值
+  （判据消失而不报错，实测 0/24 声明 `additionalProperties`）。现在注册时统一补
+  `additionalProperties: false`（22/22 闭合，模型侧下发的 schema 与校验侧一致），未声明的字段**当场被拒**并
+  指出字段名。
+- **契约显式化**：22 个工具里此前只有 1 个显式声明契约。`toolkit.declareSemantics()` 在构建注册表后把语义
+  固化成显式声明（`source: 'explicit'`，字段值逐字不变）；`requiresConfirmation` 原样传递，补声明**不会**
+  给写工具凭空加一道审批。
+- **顺带修掉一个真 bug**：模型自填审批字段（`confirmed` / `approvalToken`…）的剥离此前只在
+  `requiresConfirmation` 为真的工具上执行，且审计判定把 `trace` 冻结对象当函数调用（恒假）。schema 闭合后
+  这些残留字段会变成「未知参数」把正常调用打回（实测 `write_file` 带 `confirmed=true` →
+  `INVALID_TOOL_ARGUMENTS`）。现在**所有工具、校验前**一律剥离，审计走 `trace.note`。
+- **循环上限可配置**：`MAX_TOOL_ITERATIONS` / `MAX_TOTAL_TOOL_CALLS` / `DATA_TRUNCATE_CAP` 此前是源码常量，
+  项目无法调整。改为 `agent.max_tool_iterations` / `agent.max_total_tool_calls` / `agent.data_truncate_cap`，
+  默认值与旧常量逐字一致（不配就完全等价）。同时修掉「截断只作用于 `[data]` 附加段」：`buildToolContent`
+  现在对**正文本身**也按上限截断，并带明确的截断标记与续读指引。
+- **来源校验门 `agent.grounding.mode`**：`warn`（默认，只上报 —— 行为与之前逐字一致）/ `enforce`（引用不可信
+  不允许直接交付：先让模型订正 `agent.grounding.max_retries` 次，仍不达标则回 `groundingBlocked=true` +
+  独立事件，且**不把校验提示拼进交付正文**）。
+- **同步遍历工具可取消**：`scan_project` / `find_files` / `search_files` 在遍历循环里加了取消检查点，用户点
+  「停止」能在中途真的停下并如实回报「结果不完整」（`kind=failure` / `code=CANCELLED`）。**边界**：单次同步 fs
+  调用（一次 `readFileSync` 大文件）依旧不可打断 —— 真正的可中断需要把工具挪到 worker/子进程，那部分**仍未做**。
+
 ### 修复（流式参数累加器：裸标量分片把真实参数整段替换掉，2026-09-16）
 
 - **现象（真实模型跑出来的，离线评测看不见）**：用 `deepseek-v4-flash` 真实跑一轮画布任务，12 轮里 **9 次工具调用

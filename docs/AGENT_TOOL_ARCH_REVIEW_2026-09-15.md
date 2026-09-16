@@ -532,6 +532,50 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **顺带修的兼容**：`confirm` 语义从布尔问答升级为令牌后，四个既有用例（`tool-descriptor` / `scalar` / `model` / `cache`）需要显式模拟「用户已批准」（注入 `confirm: async () => true`）；`tool-descriptor` 的 F6 描述也同步更正。
 
+### S12 实施记录（shell 权限边界 + 测试模式边界，2026-09-16）
+
+**动因（§8 第 9 项，已复现未修 + §7 安全清单点名）**：两处「靠用户点确认兜底」的缺口。
+
+| 缺口 | 真实形态 | 修法 |
+|---|---|---|
+| 越界写无内核兜底 | `ALLOWED` 含 `cmd`/`powershell`/`node`/`npm`/`npx`，Windows 后端不隔离文件系统（`writeRoots` 只对 bwrap / sandbox-exec 生效）→ `cmd /c echo PWNED > <项目外>`、`node -e "writeFileSync(<项目外>)"` 实测写成功；确认文案只说「执行命令」 | 新增 `electron/tools/shellGuard.cjs`：命令文本级静态审计（重定向 / 写选项 / 写动词 / 脚本 API 字面量 / **引号内子命令**），越界写直接 `PATH_OUT_OF_ROOT` 拒绝；只读引用项目外路径不误伤；`cp` 这类「源→目标」动词取最后一个位置参数 |
+| 网络只在工具层把关 | 只有 `fetch_url` 过 `network.request` 门，`execute_shell` 里 `git push` / `npm install` / `node -e "fetch(…)"` 不受策略约束 | `sandbox.network=deny` 时，疑似联网的命令（URL / git 子命令 / npm 子命令 / PowerShell 下载型 cmdlet / 脚本网络调用）直接拒绝，不试连 |
+| 测试模式是一条后门 | `bridge.confirm` 在 `CODENODE_TEST` 下**无条件** `return true` —— 确认通道是审批令牌的唯一来源，HIGH 级静默放行等于「测试环境 = 后门」 | 只自动批准可回滚的写入；HIGH 默认拒绝（需显式 `CODENODE_TEST_ALLOW_HIGH=1`）并提示一次 |
+
+**关键设计取舍**：越界判定用**策略的 `writeRoots`**（含 projectRoot + `sandbox.allow_write` + tmpdir + userData）而不是「项目根」，这样临时目录里的写不会被误伤（测试与真实脚本都常写 tmp）。静态审计**只认显式写出口**（不模拟命令语义），宁可漏判不误伤。
+
+**验证证据**：`npm run verify` 49/49 PASS。用例 `scripts/shell-guard-test.cjs`（10 段：越界写拒绝 + **磁盘上确实没有那个文件**、相对逃逸、脚本 API 字面量、项目内写仍放行、只读引用不误伤、`network=deny` 三条、`cp` 源在外部不误判、确认文案带审计提示、strict 模式拒绝无法判定的写目标）与 `scripts/test-mode-capability-test.cjs`（A 层 bridge 语义 / B 层越界写·只读上下文·network=deny 三门在 `CODENODE_TEST` 下照旧拒绝 / C 层无审批通道报 `APPROVAL_REQUIRED` / D 层静态守卫：仓库与 CI 里没有任何地方赋值 `process.env.CODENODE_TEST`）。
+
+**未做**：`shellGuard` 是启发式，`bash -c "$(curl …)"` 这类动态构造仍可绕过；真正的根治是 Windows 文件系统级隔离（AppContainer / 管理员 Job Object），本平台暂不可行。
+
+### S8 实施记录（统一事件流与按 run 回放，2026-09-16）
+
+**动因（§3 P2「事件模型不统一」）**：事件散在 `runs/*.jsonl`、`tools_trace.jsonl`、`checkpoints.jsonl`、`side-effects.json`、`audit.jsonl` 五套文件里，`tools_trace.jsonl` 每条只有 `{ts, iter, name…}` —— **没有 runId / turnId / toolCallId**，多轮、多 run、父子代理的记录混在一条流里，无法按 run 回放。
+
+| 内容 | 文件 |
+|---|---|
+| 统一形状 `{v, ts, kind, runId, turnId, toolCallId, attemptId, …payload}` + `emit / readEvents / replay / formatEvent`；写失败返回 null（旁路，不拖垮工具循环） | `electron/eventBus.cjs`（新） |
+| `logToolTrace` **双写**（旧 `tools_trace.jsonl` 保留一个版本周期的兼容读取）；主循环所有事件带身份 | `electron/agent.cjs` |
+| `scripts/event-replay.cjs`：`--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1 | （新） |
+| 用例（进 CORE） | `scripts/event-replay-test.cjs`（A 纯函数归一/坏行容忍/过滤、B 真实循环断言 tool 事件带四个 id 且 `toolCallId` 与 assistant 声明一致、C CLI 退出码） |
+
+**未做**：旧四套文件**没有合并**（双写一个版本周期是有意为之）；`checkpoints.jsonl` / `audit.jsonl` / `side-effects.json` 尚未挂到事件流上；UI 侧没有消费 `events.jsonl`（回放目前是 CLI）。
+
+### P4/P5 实施记录（工具契约闭合与显式化、循环上限可配置，2026-09-16）
+
+- **schema 闭合**：`registry.closeInputSchema()` 在注册时统一补 `additionalProperties: false`（**22/22**，模型侧 `toOpenAiTools()` 与校验侧同一份 schema）；`validateInput` 对闭合 schema 上的未声明字段**当场拒绝**并指出字段名（此前 `maxLines` 拼成 `maxLine` 会静默走默认值 —— 判据消失而不报错）。
+- **契约显式化**：`toolkit.declareSemantics()` 构建后把语义固化成 `source: 'explicit'`（字段值逐字不变），`requiresConfirmation` **原样传递** —— 补声明不给写工具凭空加审批（用例 C3/C4 锁住）。
+- **顺带修掉的真 bug**：模型自填审批字段的剥离此前只在 `requiresConfirmation` 为真的工具上执行，且 `const traceFn = execContext.trace; typeof traceFn === 'function'` 对**冻结对象**恒假（审计从未落盘）。schema 闭合把这些残留字段变成「未知参数」后，`write_file` 带 `confirmed=true` 直接 `INVALID_TOOL_ARGUMENTS`。现在所有工具、校验前一律剥离，审计走 `trace.note`。
+- **上限可配置**：`agent.max_tool_iterations`（12）/ `agent.max_total_tool_calls`（100）/ `agent.data_truncate_cap`（120000），默认值与旧常量逐字一致；`buildToolContent` 现在对**正文本身**也截断（此前只截 `[data]` 附加段，`result.text` 无上限）。
+- **新增门禁**：`scripts/tool-contract-closure-test.cjs`（22/22 闭合、拼错字段被拒、自填字段仍被剥离、`source` 全为 explicit、语义与名单一致、审批级别未被改变、**impl 目录里没有「文件在却没注册」的静默漂移**——`createNodesTool.cjs` / `workbenchConnectTool.cjs` 作为显式白名单列出）与 `scripts/agent-limits-test.cjs`（默认值不变 + 配小后真实循环按新上限停下且 `stopReason` 为 `iteration_limit`/`tool_limit` 而非 `FAILED` + 正文截断生效）。
+
+### P6/P7 实施记录（grounding 门、同步遍历工具可取消，2026-09-16）
+
+- **来源校验门（原计划 S10）**：`agent.grounding.mode` = `warn`（默认，只上报 —— 行为与之前逐字一致）/ `enforce`（引用不可信不允许直接交付：先让模型按 `groundingRetryPrompt` 订正，最多 `agent.grounding.max_retries`（默认 1）次；仍不达标 → 返回值 `groundingBlocked=true` + 独立 `grounding_blocked` 事件，**不把校验提示拼进交付正文**）。用例 `scripts/grounding-gate-test.cjs`（14 段：配置默认/回落、warn 不拦、enforce 拦下→订正→合格交付、订正用尽→如实标记、`max_retries=0` 直接标记）——其中 `retrieve_context` 用**测试替身**覆盖（离线环境没有嵌入服务，替换成固定返回一份文件型来源，让「检索到了可用来源」这个前提成立）。
+- **同步遍历工具可取消**：`impl/shared.cjs` 新增 `isCancelled(context)`；`scan_project`（含 `projectScan` 的遍历与逐文件分类两个循环）、`find_files`、`search_files` 在循环里加检查点，取消时返回 `kind=failure / code=CANCELLED` 并如实说明「结果不完整」（`partial` 计数）。
+  **边界（别当成已解决）**：单次同步 fs 调用（一次 `readFileSync` 大文件、一次巨型 `JSON.parse`）**依旧不可打断**，真正的可中断需要把这些工具挪到 worker/子进程 —— 未做。
+  用例 `scripts/sync-tool-cancel-test.cjs`：用**计数式 `aborted` getter** 造出「同步循环内部真的发生取消」（`setTimeout` 在同步遍历里排不上队，用它永远测不到），判据是「取消 → `CANCELLED` + `partial < 完整结果`」与「不取消 → 结果完整」（防过度修复）。
+
 ---
 
 ## 附：本轮机械扫描证据
