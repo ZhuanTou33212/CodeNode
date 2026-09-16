@@ -559,7 +559,26 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | `scripts/event-replay.cjs`：`--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1 | （新） |
 | 用例（进 CORE） | `scripts/event-replay-test.cjs`（A 纯函数归一/坏行容忍/过滤、B 真实循环断言 tool 事件带四个 id 且 `toolCallId` 与 assistant 声明一致、C CLI 退出码） |
 
-**未做**：旧四套文件**没有合并**（双写一个版本周期是有意为之）；`checkpoints.jsonl` / `audit.jsonl` / `side-effects.json` 尚未挂到事件流上；UI 侧没有消费 `events.jsonl`（回放目前是 CLI）。
+**第一遍的范围（当日早先）**：只有 `tools_trace` 一条链路双写；`checkpoints.jsonl` / `audit.jsonl` / `side-effects.json` / runs 状态 / 成本 / 告警 都还没挂上事件流。
+
+**补齐（同日第二遍）**：把其余六套日志 + 审批事件全部接进统一流（**旧文件继续写**，遵守「双写一个版本周期」的兼容策略）：
+
+| 来源 | 事件 kind | 接入点 |
+|---|---|---|
+| `runs/<runId>.jsonl` | `run_state` | `runStore.appendEvent`（延迟 `require` 打破 runStore ↔ eventBus 的循环依赖） |
+| `<runId>.checkpoints.jsonl` | `checkpoint` | `runCheckpoint.appendCheckpoint` |
+| `<runId>.side-effects.json` | `side_effect` | `SideEffectLedger._persist`（只报条数与最新相位，不把整份账本搬进事件流） |
+| `metrics/cost.jsonl` | `cost` | `CostLedger.record`（带 runId / model / tokens / costUsd） |
+| `metrics/alerts.jsonl` | `alert` | `AlertDispatcher._persist` |
+| `audit.jsonl` | `audit` | `ipc/project.cjs` 的 `auditLog` |
+| 审批（S7） | `approval` | `AgentToolContext.approval()` 的 trace（`issued / denied / rejected / consumed`，顶层带 `toolCallId`） |
+
+- 新增 `eventBus.bridge(projectRoot, kind, payload)`：**永不抛**的旁路桥 —— 事件流是旁路，任何失败都必须吞掉，不能拖垮工具循环 / 账本 / 检查点。
+- 新增 `eventBus.summarize(events)`：回放摘要（工具调用序列与失败次数、S5 的失败码分布、审批签发/拒绝/消费、成本与 token）——**只统计实际写进事件的字段，不补、不猜**。
+- `scripts/event-replay.cjs` 加 `--summary`（文本摘要）与 `--json --summary`（结构化摘要）。
+- 用例扩展到 18 段：C4/C5（CLI 摘要）、D×6 + D7/D8（六套来源都进流、成本事件带 runId/token、审批事件带 toolCallId）、E1–E4（摘要统计正确 + 空数据不编造）。变异 **5/5 有判别力**：bridge 整体变 no-op → 8 条 FAIL；run 状态 / 副作用账本 / 审批事件分别断桥 → 各 1–2 条 FAIL；摘要 token 统计失效 → 1 条 FAIL。
+
+**仍未做**：UI 侧没有消费 `events.jsonl`（回放目前仍是 CLI）；`events.jsonl` 自身没有独立的轮转策略（复用 runStore 的字节上限）。
 
 ### P4/P5 实施记录（工具契约闭合与显式化、循环上限可配置，2026-09-16）
 

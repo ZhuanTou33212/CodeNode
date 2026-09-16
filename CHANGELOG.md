@@ -136,6 +136,17 @@
   变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
   子代理结果不截断，均当场变红）。
 
+### 新增（S8 补齐：六套日志全部并入统一事件流 + 回放摘要，2026-09-16）
+
+- `runStore`（run 状态）/ `runCheckpoint` / `SideEffectLedger` / `CostLedger` / `AlertDispatcher` /
+  `ipc` 审计 / 审批事件 —— **七条链路全部双写** `.codenode/events.jsonl`（旧文件保留一个版本周期）。
+  至此「按 run 回放：这一轮到底发生了什么」能在一个文件里看全，不必再去翻五个文件。
+- 新增 `eventBus.bridge()`（永不抛的旁路桥）与 `eventBus.summarize()`（回放摘要：工具序列、失败次数、
+  失败码分布、审批签发/拒绝/消费、成本与 token —— 只统计实际字段，不补不猜）。
+- `scripts/event-replay.cjs` 新增 `--summary` / `--json --summary`。
+- 用例 `scripts/event-replay-test.cjs` 扩到 18 段（六套来源 + 成本/审批事件字段 + 摘要统计），
+  变异测试 5/5 有判别力。
+
 ### 新增（S7：ApprovalService 令牌审批 + 画布写工具补审批，2026-09-16）
 
 - **新增 `electron/tools/approval.cjs`**：审批令牌由**服务端签发**（绑定 `capability` / `scope` /
