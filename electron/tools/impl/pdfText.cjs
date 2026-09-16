@@ -118,67 +118,229 @@ function unescapeLit(str) {
   return str.replace(/\\([nrt()\\])/g, (_, c) => ({ n: '\n', r: '\r', t: '\t', '(': '(', ')': ')', '\\': '\\' }[c])).replace(/\\([0-7]{1,3})/g, (_, o) => String.fromCodePoint(parseInt(o, 8)));
 }
 
-/** 提取单个内容流的文本（按 y 坐标下移换行，跨 BT/ET 块跟踪） */
+/**
+ * 提取单个内容流的文本（按 y 坐标下移换行，跨 BT/ET 块跟踪）。
+ *
+ * 实现方式：**单次字符扫描**（O(n)、无回溯），不再用「一条巨型正则反复 exec 长字符串」。
+ * 原因：旧实现在超长内容流上 `RegExp.exec` 会抛 `RangeError: Maximum call stack size exceeded`
+ * （实测内容流 >~8MB 原始文本必现），异常被 `extractPdfText` 外层 catch 吞掉后整份 PDF 变成 null，
+ * `read_file` 于是把一份**完全可解析**的大 PDF 误报成「扫描版或文字层不可用」。
+ * 扫描器没有这个规模上限，语义与旧实现对齐（`scripts/pdf-text-parity-test.cjs` 对拍新旧输出）。
+ *
+ * 支持的操作符（与旧实现一致）：`Tm` / `Td` / `TD` / `T*` / `BT` / `ET` / `<hex>Tj` /
+ * `(lit)Tj` / `[...]TJ` / `(lit)'` / `(lit)"`。
+ */
 function extractContent(text, cidMap) {
   let out = '';
   let inText = false;
   let prevY = null;
-  const re =
-    /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+Tm\b|(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+T[dD]\b|T\*|BT\b|ET\b|<([0-9A-Fa-f]+)>\s*Tj\b|\(((?:\\.|[^()\\])*)\)\s*Tj\b|\[([^\]]*)\]\s*TJ\b|\(((?:\\.|[^()\\])*)\)\s*['"]/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const full = m[0];
-    if (m[6] !== undefined) {
-      // Tm：a b c d e f。换行 = 行间距明显（相对缩放 |d| 计算阈值，兼容不同字体尺寸）
-      const scale = Math.abs(parseFloat(m[4]));
-      const y = parseFloat(m[6]);
-      const thr = Math.max(3, scale * 6);
-      if (inText && out && prevY != null && Math.abs(prevY - y) > thr) out += '\n';
-      prevY = y;
-      continue;
-    }
-    if (m[8] !== undefined) {
-      // Td / TD
-      if (inText && Math.abs(parseFloat(m[8])) > 0.5) out += '\n';
-      continue;
-    }
-    if (/^T\*/.test(full)) {
-      if (inText) out += '\n';
-      continue;
-    }
-    if (/^BT\b/.test(full)) {
-      inText = true;
-      continue;
-    }
-    if (/^ET\b/.test(full)) {
-      inText = false;
-      continue;
-    }
-    if (m[9] !== undefined) {
-      if (inText) out += decodeHex(Buffer.from(m[9], 'hex'), cidMap);
-      continue;
-    }
-    if (m[10] !== undefined) {
-      if (inText) out += unescapeLit(m[10]);
-      continue;
-    }
-    if (m[11] !== undefined) {
-      if (inText) {
-        const order = m[11].match(/<([0-9A-Fa-f]+)>|\(((?:\\.|[^()\\])*)\)/g) || [];
-        let s = '';
-        for (const o of order) {
-          if (o[0] === '<') s += decodeHex(Buffer.from(o.slice(1, -1), 'hex'), cidMap);
-          else s += unescapeLit(o.slice(1, -1));
-        }
-        out += s;
+  /** 最近的数字操作数（只留末尾若干个；被操作符消费后清空） */
+  const nums = [];
+
+  const isWs = (code) => code === 0x20 || code === 0x0a || code === 0x0d || code === 0x09 || code === 0x0c || code === 0x00;
+  const isDigit = (code) => code >= 0x30 && code <= 0x39;
+  const isNameChar = (code) =>
+    code > 0x20 &&
+    code !== 0x28 && code !== 0x29 && code !== 0x3c && code !== 0x3e &&
+    code !== 0x5b && code !== 0x5d && code !== 0x7b && code !== 0x7d &&
+    code !== 0x2f && code !== 0x25;
+  // 用 charCode 判断而不是每字符跑一次正则：扫描 5MB 内容流时这是热点（实测占总耗时的一大截）
+  const isOpCharCode = (code) =>
+    (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || code === 0x2a || code === 0x27 || code === 0x22;
+
+  const n = text.length;
+  let i = 0;
+  /** 最近的字符串操作数：{ kind: 'lit'|'hex', value } */
+  let lastStr = null;
+  /** 最近的 TJ 数组：{ kind: 'lit'|'hex', value }[] */
+  let lastArr = null;
+
+  /**
+   * 读一个字面量字符串（从 '(' 之后开始），返回 { lit, next }。
+   * 内容**原样**返回（保留转义序列），交给 unescapeLit 处理 —— 与旧正则的捕获组一致。
+   * 实现上只扫描一次定边界再 `slice`：逐字符 `lit += ch` 在几 MB 的字面量上是热点
+   * （实测单这一步就让 5MB 内容流慢了近 3 倍）。
+   */
+  const readLiteral = (from) => {
+    let j = from;
+    let depth = 1;
+    while (j < n) {
+      const cj = text.charCodeAt(j);
+      if (cj === 0x5c) {
+        j += 2; // 反斜杠：跳过被转义的字符
+        continue;
       }
+      if (cj === 0x28) depth += 1;
+      else if (cj === 0x29) {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      j += 1;
+    }
+    return { lit: text.slice(from, j), next: j + 1 };
+  };
+
+  const emitStr = (s) => {
+    if (!inText || !s) return;
+    out += s.kind === 'hex' ? decodeHex(Buffer.from(s.value, 'hex'), cidMap) : unescapeLit(s.value);
+  };
+
+  /** 按操作符语义更新状态（与旧正则的各分支一一对应） */
+  const handleOp = (op) => {
+    if (op === 'Tm') {
+      // a b c d e f Tm：换行 = 行间距明显（相对缩放 |d| 计算阈值，兼容不同字体尺寸）
+      if (nums.length >= 6) {
+        const scale = Math.abs(nums[nums.length - 3]);
+        const y = nums[nums.length - 1];
+        const thr = Math.max(3, scale * 6);
+        if (inText && out && prevY != null && Math.abs(prevY - y) > thr) out += '\n';
+        prevY = y;
+      }
+      nums.length = 0;
+      return;
+    }
+    if (op === 'Td' || op === 'TD') {
+      if (inText && nums.length >= 2 && Math.abs(nums[nums.length - 1]) > 0.5) out += '\n';
+      nums.length = 0;
+      return;
+    }
+    if (op === 'T*') {
+      if (inText) out += '\n';
+      nums.length = 0;
+      return;
+    }
+    if (op === 'BT') {
+      inText = true;
+      nums.length = 0;
+      return;
+    }
+    if (op === 'ET') {
+      inText = false;
+      nums.length = 0;
+      return;
+    }
+    if (op === 'Tj') {
+      emitStr(lastStr);
+      lastStr = null;
+      nums.length = 0;
+      return;
+    }
+    if (op === 'TJ') {
+      if (inText && lastArr) for (const item of lastArr) emitStr(item);
+      lastArr = null;
+      nums.length = 0;
+      return;
+    }
+    if (op === "'" || op === '"') {
+      // 注意：旧实现在这两个操作符上是 `out += '\n' + unescapeLit(...)` —— 先补一个换行。
+      // 这一点由 `scripts/pdf-text-parity-test.cjs` 对拍发现（最初漏了，输出少一个前导换行）。
+      if (inText) {
+        out += '\n';
+        emitStr(lastStr);
+      }
+      lastStr = null;
+      nums.length = 0;
+      return;
+    }
+    // 其他操作符（Tf / Tc / rg / cm / re …）：消费掉数字操作数
+    nums.length = 0;
+  };
+
+  while (i < n) {
+    const code = text.charCodeAt(i);
+    if (isWs(code)) {
+      i += 1;
       continue;
     }
-    if (m[12] !== undefined) {
-      if (inText) out += '\n' + unescapeLit(m[12]);
+    const ch = text[i];
+
+    if (ch === '%') {
+      const nl = text.indexOf('\n', i);
+      i = nl < 0 ? n : nl + 1;
       continue;
     }
+    if (ch === '/') {
+      i += 1;
+      while (i < n && isNameChar(text.charCodeAt(i))) i += 1;
+      continue;
+    }
+    if (ch === '<' && text[i + 1] === '<') {
+      i += 2;
+      continue;
+    }
+    if (ch === '>') {
+      i += text[i + 1] === '>' ? 2 : 1;
+      continue;
+    }
+    if (ch === '<') {
+      const close = text.indexOf('>', i + 1);
+      if (close < 0) break;
+      lastStr = { kind: 'hex', value: text.slice(i + 1, close) };
+      i = close + 1;
+      continue;
+    }
+    if (ch === '(') {
+      const r = readLiteral(i + 1);
+      lastStr = { kind: 'lit', value: r.lit };
+      i = r.next;
+      continue;
+    }
+    if (ch === '[') {
+      const items = [];
+      let j = i + 1;
+      while (j < n && text[j] !== ']') {
+        const cj = text[j];
+        if (cj === '(') {
+          const r = readLiteral(j + 1);
+          items.push({ kind: 'lit', value: r.lit });
+          j = r.next;
+          continue;
+        }
+        if (cj === '<') {
+          const close = text.indexOf('>', j + 1);
+          if (close < 0) {
+            j = n;
+            break;
+          }
+          items.push({ kind: 'hex', value: text.slice(j + 1, close) });
+          j = close + 1;
+          continue;
+        }
+        j += 1;
+      }
+      lastArr = items;
+      i = j + 1;
+      continue;
+    }
+    if (isDigit(code) || ch === '-' || ch === '+' || ch === '.') {
+      let j = i;
+      if (ch === '-' || ch === '+') j += 1;
+      while (j < n && (isDigit(text.charCodeAt(j)) || text[j] === '.')) j += 1;
+      const val = parseFloat(text.slice(i, j));
+      if (Number.isFinite(val)) {
+        nums.push(val);
+        if (nums.length > 8) nums.shift();
+      }
+      i = j;
+      continue;
+    }
+    if (isOpCharCode(code)) {
+      let j = i;
+      while (j < n && isOpCharCode(text.charCodeAt(j))) j += 1;
+      const op = text.slice(i, j);
+      i = j;
+      // ' 与 " 是单字符操作符，可能被一并读进来（如 `Tj'`）：拆开依次处理
+      if (op.length > 1 && (op.endsWith("'") || op.endsWith('"'))) {
+        handleOp(op.slice(0, -1));
+        handleOp(op.slice(-1));
+        continue;
+      }
+      handleOp(op);
+      continue;
+    }
+    i += 1;
   }
+
   return out;
 }
 

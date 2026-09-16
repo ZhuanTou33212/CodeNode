@@ -289,10 +289,9 @@ const PAYLOADS = {
     fs.writeFileSync(path.join(pdfDir, 'scanned.pdf'), makePdf('', { withBT: false }));
     fs.writeFileSync(path.join(pdfDir, 'huge.pdf'), Buffer.alloc(20 * 1024 * 1024 + 16, 0x20));
     // 「小文件但解析慢」：原始文本流很大（deflate 后仍很小），解析需要上百毫秒 —— 心跳与取消才稳
-    // 规模是量出来的：5.15MB 文本流解析成功且耗时 ~144ms（够慢，心跳稳）；
-    // 再往上（实测 >~8MB）extractPdfText 会返回 null —— 那是它既有的规模限制，不是本次搬动引入的，
-    // 所以这里刻意停在能成功的量级，避免把「已有限制」误当成 worker 的问题。
-    fs.writeFileSync(path.join(pdfDir, 'slow.pdf'), makePdf('the quick brown fox jumps over the lazy dog. '.repeat(120000)));
+    // 规模是量出来的：8.58MB 文本流解析成功且耗时 ~150ms（够慢，心跳稳），
+    // 而且这正是**旧实现爆栈、被误报成「扫描版」**的规模 —— 这条同时是那次修复的回归锁。
+    fs.writeFileSync(path.join(pdfDir, 'slow.pdf'), makePdf('the quick brown fox jumps over the lazy dog. '.repeat(200000)));
 
     const pdfRegistry = toolkit.buildDefaultRegistryWithConfig({
       projectRoot: pdfDir,

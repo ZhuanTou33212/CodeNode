@@ -43,6 +43,7 @@
     "test:grounding-gate": "node scripts/grounding-gate-test.cjs",
     "test:sync-cancel": "node scripts/sync-tool-cancel-test.cjs",
     "test:fs-worker": "node scripts/fs-worker-test.cjs",
+    "test:pdf-text": "node scripts/pdf-text-test.cjs",
     "test:agent-cache": "node scripts/agent-cache-invalidation-test.cjs",
     "test:tool-call-id": "node scripts/tool-call-id-test.cjs",
     "test:stream-accumulator": "node scripts/stream-accumulator-test.cjs",
