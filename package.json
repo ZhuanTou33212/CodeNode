@@ -48,6 +48,7 @@
     "test:agent-boundary": "node scripts/agent-boundary-test.cjs",
     "test:request-budget": "node scripts/request-budget-test.cjs",
     "test:atomic-file": "node scripts/atomic-file-test.cjs",
+    "test:dep-declaration": "node scripts/dep-declaration-test.cjs",
     "test:runtime-gate": "node scripts/runtime-gate.cjs",
     "test:sandbox": "node scripts/sandbox-test.cjs",
     "test:resume": "node scripts/agent-resume-test.cjs",

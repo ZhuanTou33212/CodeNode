@@ -34,6 +34,7 @@ const CORE = [
   'test:request-budget',
   'test:run-store',
   'test:atomic-file',
+  'test:dep-declaration',
   'test:subagent',
   'test:subagent-isolation',
   'test:compression-batch',

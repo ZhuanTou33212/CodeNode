@@ -22,6 +22,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { LocalRagIndex, clearIndexCache } = require('../electron/rag/index.cjs');
+// 可选 SDK（@zilliz/milvus2-sdk-node）只经生产入口惰性加载：模块名不做字面量 require，
+// 否则 check:js（tsc）会在「未安装该可选依赖」的环境（CI 三平台）报 TS2307 而整条门禁变红。
+const { loadSdk } = require('../electron/vectorStore/milvus.cjs');
 
 const MILVUS_ADDR = String(process.env.MILVUS_ADDR || '').trim();
 const EMBED_BASE = String(process.env.EMBED_BASE || '').trim();
@@ -108,8 +111,8 @@ async function main() {
   } finally {
     clearIndexCache();
     try {
-      const sdk = require('@zilliz/milvus2-sdk-node');
-      const admin = /** @type {any} */ (new sdk.MilvusClient({ address: MILVUS_ADDR }));
+      const milvus = loadSdk();
+      const admin = /** @type {any} */ (new milvus.MilvusClient({ address: MILVUS_ADDR }));
       await admin.dropCollection({ collection_name: collection });
       if (typeof admin.close === 'function') admin.close();
     } catch (error) {
