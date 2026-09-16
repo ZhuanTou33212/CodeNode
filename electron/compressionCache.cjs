@@ -128,7 +128,6 @@ class CompressionCache {
       const oldest = this.entries.get(oldestKey.value);
       this.entries.delete(oldestKey.value);
       if (oldest) this.bytes -= Buffer.byteLength(oldest.value, 'utf8');
-      if (this.entries.size <= 0) break;
     }
     this._persist();
     return item;
