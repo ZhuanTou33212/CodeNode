@@ -39,6 +39,17 @@
   变异测试 4/4 有判别力（只读门退回白名单豁免 / `scan_project` 不检查真写入 / context 不传 actor /
   子代理结果不截断，均当场变红）。
 
+### 新增（S10：压缩请求批量合并，2026-09-16）
+
+- **同一轮工具循环里的多份大结果合并成一次压缩请求**（`agent.compression.batch`，默认开；
+  `agent.compression.batch_max_items` 默认 4）：逐个压缩时 N 份结果要付 N 遍 system 前缀与 N 次请求
+  固定开销（而 system 是常量、前缀缓存只对前缀有效），合并后这些只付一次。分段协议
+  `<!-- summary i=N -->`；解析不出某一段 → 该条退回单条压缩；整批失败 → 降级为截断 ——
+  宁可多花一次调用，也不把「多份结果混成一锅」的摘要塞进上下文。
+- **主循环改为「先登记、轮末结算」**：tool 消息先按原文进上下文，轮末批量压缩后改写对应 tool 消息内容，
+  `assistant(tool_calls) → tool` 配对与断点续跑快照结构不变。
+- 用例 `scripts/compression-batch-test.cjs`（7 段断言）进 CORE 门禁（**39 → 40**），变异 3/3 有判别力。
+
 ### 新增（向量后端可插拔：memory / Milvus）
 
 - **RAG 向量层从内联实现改为可插拔后端契约**（`electron/vectorStore/{index,memory,milvus}.cjs`）：
