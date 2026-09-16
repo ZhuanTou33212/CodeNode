@@ -7,52 +7,9 @@
 const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
-const { scan, detectProjectInfo } = require('../projectScan.cjs');
-const { readTextFile } = require('./shared.cjs');
-
-function summarizeFile(root, meta) {
-  const full = path.join(root, meta.relativePath);
-  try {
-    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
-    const read = readTextFile(full);
-    if (!read.ok) return null;
-    const lines = read.text.split('\n');
-    const imports = [];
-    const classes = [];
-    const functions = [];
-    const variables = [];
-    for (const line of lines.slice(0, 300)) {
-      const t = line.trim();
-      if (!t) continue;
-      if (/^(import|from|using|require\s*\(|include\s+|#include\s*<)/.test(t)) {
-        imports.push(t.length > 120 ? t.slice(0, 120) : t);
-        continue;
-      }
-      const cl = t.match(/\b(class|interface|trait|struct|type)\s+([A-Za-z_$][\w$]*)/);
-      if (cl) {
-        classes.push(cl[2]);
-        continue;
-      }
-      if (/\b(def|func|function|fun)\s+/.test(t) || /^\s*(public|private|protected)\s+\w+\s+\w+\s*\(/.test(t)) {
-        functions.push(t.length > 120 ? t.slice(0, 120) : t);
-        continue;
-      }
-      const vr = t.match(/^\s*(let|var|const|val)\s+([A-Za-z_$][\w$]*)/);
-      if (vr) variables.push(vr[1]);
-    }
-    return {
-      path: meta.relativePath,
-      language: meta.language,
-      imports: imports.slice(0, 40),
-      classes: [...new Set(classes)],
-      functions: functions.slice(0, 40),
-      variables: [...new Set(variables)].slice(0, 60),
-      lineCount: lines.length,
-    };
-  } catch {
-    return null;
-  }
-}
+// 遍历 / 摘要逻辑都在 fsCore（worker 里跑同一份实现）；这里只需要 runner 与取消检查。
+const fsRunner = require('../fsRunner.cjs');
+const { isCancelled } = require('./shared.cjs');
 
 function register(registry) {
   registry.register(
@@ -77,41 +34,41 @@ function register(registry) {
       const limit = typeof args.limitFiles === 'number' && Number.isFinite(args.limitFiles) ? Math.max(1, Math.min(1000, Math.floor(args.limitFiles))) : 1000;
       context.audit('analyze_project root=' + root);
       try {
-        const info = detectProjectInfo(root);
-        const result = scan(root);
-        const files = result.sourceFiles;
-        const fileAnalysis = [];
-        if (analyzeFiles) {
-          for (const f of files) {
-            if (fileAnalysis.length >= limit) break;
-            const entry = summarizeFile(root, f);
-            if (entry) fileAnalysis.push(entry);
-          }
+        // P7 收口：扫描 + 逐文件读取 + 结构摘要**整体**放进 worker 线程 ——
+        //   ① 一次扫描搞定（旧实现 detectProjectInfo 与 scan 各扫一遍，等于把全项目读两轮）；
+        //   ② 主线程不再被「读全项目算行数 + 逐文件摘要」冻住，取消也能真的 terminate。
+        const outcome = await fsRunner.runFsTask(
+          'analyzeProject',
+          { root, analyzeFiles, limit, shouldStop: () => isCancelled(context) },
+          { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+        );
+        if (outcome.cancelled || outcome.timedOut) {
+          return AgentToolResult.failure('CANCELLED', '项目分析已取消（用户停止），结果不完整。', { cancelled: true, root });
         }
+        if (outcome.mode === 'sync-fallback') {
+          context.audit('analyze_project worker 不可用，已退回主线程同步执行：' + outcome.fallbackReason);
+        }
+        const r = outcome.result;
+        /** @type {Record<string, any>} */
         const data = {
           root,
-          buildSystem: info.buildSystem,
-          mainCandidates: info.mainCandidates,
-          modules: info.modules,
-          jdks: info.jdks,
-          sourceFileCount: files.length,
-          assetFileCount: result.assetFiles.length,
-          languageSummary: info.languages,
-          files: files.slice(0, limit).map((f) => ({
-            relativePath: f.relativePath,
-            name: f.name,
-            language: f.language,
-            ext: f.ext,
-            lineCount: f.lineCount,
-          })),
+          workerMode: outcome.mode,
+          buildSystem: r.buildSystem,
+          mainCandidates: r.mainCandidates,
+          modules: r.modules,
+          jdks: r.jdks,
+          sourceFileCount: r.sourceFileCount,
+          assetFileCount: r.assetFileCount,
+          languageSummary: r.languageSummary,
+          files: r.files,
+          analyzedFileCount: r.fileAnalysis.length,
         };
-        if (fileAnalysis.length) data.fileAnalysis = fileAnalysis;
-        data.analyzedFileCount = fileAnalysis.length;
+        if (r.fileAnalysis.length) data.fileAnalysis = r.fileAnalysis;
         const text =
-          '工程识别：' + info.buildSystem +
-          '  |  入口候选: ' + (info.mainCandidates.length ? info.mainCandidates.join(', ') : '无') +
-          '  |  源文件: ' + files.length +
-          (analyzeFiles ? '  |  已分析: ' + fileAnalysis.length + ' 个文件' : '');
+          '工程识别：' + r.buildSystem +
+          '  |  入口候选: ' + (r.mainCandidates.length ? r.mainCandidates.join(', ') : '无') +
+          '  |  源文件: ' + r.sourceFileCount +
+          (analyzeFiles ? '  |  已分析: ' + r.fileAnalysis.length + ' 个文件' : '');
         return AgentToolResult.ok(text, data);
       } catch (e) {
         return AgentToolResult.error('工程分析失败：' + ((e && e.message) || e));

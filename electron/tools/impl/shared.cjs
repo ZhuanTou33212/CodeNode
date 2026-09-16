@@ -9,7 +9,7 @@ const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
 // 敏感文件判定 / 语言检测 / glob 解析的唯一实现在 fsCore —— 同一份逻辑要跑在 worker 线程里，
 // 这里只做 re-export，保持既有 import 路径不变。
 const fsCore = require('../fsCore.cjs');
-const { isSensitivePath, detectLanguage, globToRegExp } = fsCore;
+const { isSensitivePath, detectLanguage, globToRegExp, readTextFileSafe } = fsCore;
 
 
 /** 解析项目内相对路径；越界返回 null。 */
@@ -93,29 +93,8 @@ function resolveFileFuzzy(root, relative) {
 
 
 /** 读取文本文件（UTF-8），最多 maxBytes；二进制返回 null。 */
-function readTextFile(filePath, maxBytes) {
-  const MAX = maxBytes || 2 * 1024 * 1024;
-  const stat = fs.statSync(filePath);
-  if (stat.size > MAX) return { ok: false, error: '文件超过 ' + MAX + ' 字节上限，请用 search_files 或拆分后读取' };
-  if (isBinaryFileName(path.basename(filePath))) {
-    return { ok: false, error: '二进制文件不能用 read_file 读取' };
-  }
-  let buf;
-  try {
-    buf = fs.readFileSync(filePath);
-  } catch (e) {
-    return { ok: false, error: '读取失败：' + ((e && e.message) || e) };
-  }
-  // 简易二进制检测：含 NUL 字节判定为二进制
-  if (buf.includes(0)) {
-    return { ok: false, error: '二进制文件不能用 read_file 读取' };
-  }
-  const text = buf.toString('utf-8');
-  if (text.includes('\uFFFD')) {
-    return { ok: false, error: '非 UTF-8 文本文件，无法直接读取' };
-  }
-  return { ok: true, text };
-}
+// 实现在 fsCore（worker 里的 analyze_project 任务要用同一份；详见该文件头说明）。
+const readTextFile = fsCore.readTextFileSafe;
 
 
 /** 节点类型 → 主色（与前端 NODE_TEMPLATES / WorkflowNode 保持一致，按类型判定而非外观） */

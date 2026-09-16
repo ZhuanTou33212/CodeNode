@@ -147,6 +147,36 @@ function abortAfter(controller, ms) {
     check('4b 同步模式下结果同样标注「不完整」', /不完整/.test(String(res.text)), String(res.text).slice(0, 60));
   }
 
+  // ======================= 5. project_info / analyze_project 同样跑在 worker =======================
+  {
+    const reg = toolkit.buildDefaultRegistryWithConfig({
+      projectRoot: root,
+      ragEnabled: false,
+      toolsAllowed: ['project_info', 'analyze_project'],
+    });
+    let ticks = 0;
+    const hb = setInterval(() => {
+      ticks += 1;
+    }, 3);
+    let infoRes = null;
+    try {
+      infoRes = await reg.execute('project_info', {}, context(new AbortController().signal));
+    } finally {
+      clearInterval(hb);
+    }
+    check('5a project_info 期间主线程事件循环仍在跳（它同样要读全项目算行数）', ticks > 0, 'ticks=' + ticks);
+    check('5b project_info 走 worker，且语言分布不含 undefined 键',
+      infoRes.ok === true && infoRes.data.workerMode === 'worker' && !('undefined' in infoRes.data.languages),
+      JSON.stringify({ mode: infoRes.data && infoRes.data.workerMode, langs: Object.keys((infoRes.data && infoRes.data.languages) || {}).slice(0, 4) }));
+
+    const c9 = new AbortController();
+    abortAfter(c9, 20);
+    const cancelled = await reg.execute('analyze_project', {}, context(c9.signal));
+    check('5c analyze_project 取消后返回 CANCELLED（不是等它跑完）',
+      cancelled.ok === false && cancelled.data.code === 'CANCELLED',
+      JSON.stringify({ ok: cancelled.ok, code: cancelled.data && cancelled.data.code }));
+  }
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log('SYNC TOOL CANCEL TEST: ' + (failures ? 'FAIL' : 'PASS'));
   process.exit(failures ? 1 : 0);

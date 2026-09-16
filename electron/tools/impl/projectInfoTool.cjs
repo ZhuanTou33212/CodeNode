@@ -7,7 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
-const { detectProjectInfo } = require('../projectScan.cjs');
+const fsRunner = require('../fsRunner.cjs');
+const { isCancelled } = require('./shared.cjs');
 
 function register(registry) {
   registry.register(
@@ -25,15 +26,28 @@ function register(registry) {
       const rawPath = String(args.path || '').trim();
       const root = rawPath ? path.resolve(rawPath) : path.resolve(context.projectRoot());
       if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('项目目录不存在: ' + root);
-      const info = detectProjectInfo(root);
       context.audit('project_info root=' + root);
+      // P7 收口：识别工程信息要**扫全项目**（每个源文件读一遍算行数），与 scan_project 属同一类重活 ——
+      // 放进 worker 才不会冻住 Electron 主进程，取消也才真的生效。降级时下面 audit 留痕。
+      const outcome = await fsRunner.runFsTask(
+        'detectProjectInfo',
+        { root, shouldStop: () => isCancelled(context) },
+        { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+      );
+      if (outcome.cancelled || outcome.timedOut) {
+        return AgentToolResult.failure('CANCELLED', '项目识别已取消（用户停止），结果不完整。', { cancelled: true, root });
+      }
+      if (outcome.mode === 'sync-fallback') {
+        context.audit('project_info worker 不可用，已退回主线程同步执行：' + outcome.fallbackReason);
+      }
+      const info = outcome.result;
       const lines = [
         '构建系统: ' + info.buildSystem,
         '模块/源目录: ' + (info.modules.length ? info.modules.join(', ') : '无'),
         '入口候选: ' + (info.mainCandidates.length ? info.mainCandidates.join(', ') : '无'),
         '文件总数: ' + info.fileCount,
       ];
-      return AgentToolResult.ok(lines.join('  |  '), { ...info, root });
+      return AgentToolResult.ok(lines.join('  |  '), { ...info, root, workerMode: outcome.mode });
     }
   );
 }

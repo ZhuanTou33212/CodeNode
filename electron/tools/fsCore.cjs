@@ -289,7 +289,9 @@ function fileMeta(root, f) {
  * @param {string} root
  * @param {{ shouldStop?: () => boolean, onProgress?: (count: number) => void }} [options]
  *   shouldStop 返回 true 时**提前结束**并把 `stopped` 置真 —— 调用方据此如实回报「结果不完整」。
- * @returns {{ files: Array, sourceFiles: Array, assetFiles: Array, stopped: boolean, scanned: number }}
+ * @returns {{ files: Array, sourceFiles: Array, assetFiles: Array, stopped: boolean, cancelled: boolean, scanned: number }}
+ *   `stopped` 与 `cancelled` 同义（后者是给任务层用的统一字段名）：都只由 `shouldStop` 触发，
+ *   `MAX_SCAN_FILES` 截断**不算**取消。
  */
 function scan(root, options) {
   const opts = options || {};
@@ -312,7 +314,7 @@ function scan(root, options) {
     else sourceFiles.push(meta);
     if (onProgress && i > 0 && i % PROGRESS_EVERY === 0) onProgress(i);
   }
-  return { files: out.files, sourceFiles, assetFiles, stopped: out.stopped, scanned: out.files.length };
+  return { files: out.files, sourceFiles, assetFiles, stopped: out.stopped, cancelled: out.stopped, scanned: out.files.length };
 }
 
 /**
@@ -326,7 +328,7 @@ function scanProjectTask(payload) {
   const result = scan(String(p.root || ''), { shouldStop, onProgress });
   // 统一取消标志：scan 的 `stopped` 只由 shouldStop 触发（MAX_SCAN_FILES 截断不设它），
   // 对外暴露成 cancelled —— 调用方（工具层）据此判定「结果不完整」，不该自己猜字段含义。
-  return Object.assign({}, result, { cancelled: result.stopped === true });
+  return Object.assign({}, result, { cancelled: result.cancelled === true });
 }
 
 /**
@@ -435,8 +437,214 @@ function searchFilesTask(payload) {
   return { matches, stopped, cancelled, scanned };
 }
 
+// ---------------------------------------------------------------------------
+// 文本读取 / 结构摘要 / 工程信息（analyze_project 与 project_info 的实现）
+// ---------------------------------------------------------------------------
+
+/**
+ * 读取文本文件（与 read_file 同规则：大小上限、二进制、非 UTF-8 一律拒绝）。
+ * 从 `impl/shared.cjs` 搬来 —— worker 里的 analyze_project 任务要用它，而 fsCore 必须自包含。
+ * @param {string} filePath
+ * @param {number} [maxBytes]
+ */
+function readTextFileSafe(filePath, maxBytes) {
+  const MAX = maxBytes || 2 * 1024 * 1024;
+  const stat = fs.statSync(filePath);
+  if (stat.size > MAX) return { ok: false, error: '文件超过 ' + MAX + ' 字节上限，请用 search_files 或拆分后读取' };
+  if (isBinaryFileName(path.basename(filePath))) {
+    return { ok: false, error: '二进制文件不能用 read_file 读取' };
+  }
+  let buf;
+  try {
+    buf = fs.readFileSync(filePath);
+  } catch (e) {
+    return { ok: false, error: '读取失败：' + ((e && e.message) || e) };
+  }
+  if (buf.includes(0)) return { ok: false, error: '二进制文件不能用 read_file 读取' };
+  const text = buf.toString('utf-8');
+  if (text.includes('\uFFFD')) return { ok: false, error: '非 UTF-8 文本文件，无法直接读取' };
+  return { ok: true, text };
+}
+
+/**
+ * 逐文件结构摘要（import / 类 / 函数 / 变量），只看前 300 行。
+ * 从 `impl/analyzeProjectTool.cjs` 搬来（同一份逻辑要跑在 worker 里）。
+ * @param {string} root
+ * @param {{ relativePath: string, language: string }} meta
+ */
+function summarizeFile(root, meta) {
+  const full = path.join(root, meta.relativePath);
+  try {
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
+    const read = readTextFileSafe(full);
+    if (!read.ok) return null;
+    const lines = read.text.split('\n');
+    const imports = [];
+    const classes = [];
+    const functions = [];
+    const variables = [];
+    for (const line of lines.slice(0, 300)) {
+      const t = line.trim();
+      if (!t) continue;
+      if (/^(import|from|using|require\s*\(|include\s+|#include\s*<)/.test(t)) {
+        imports.push(t.length > 120 ? t.slice(0, 120) : t);
+        continue;
+      }
+      const cl = t.match(/\b(class|interface|trait|struct|type)\s+([A-Za-z_$][\w$]*)/);
+      if (cl) {
+        classes.push(cl[2]);
+        continue;
+      }
+      if (/\b(def|func|function|fun)\s+/.test(t) || /^\s*(public|private|protected)\s+\w+\s+\w+\s*\(/.test(t)) {
+        functions.push(t.length > 120 ? t.slice(0, 120) : t);
+        continue;
+      }
+      const vr = t.match(/^\s*(let|var|const|val)\s+([A-Za-z_$][\w$]*)/);
+      if (vr) variables.push(vr[1]);
+    }
+    return {
+      path: meta.relativePath,
+      language: meta.language,
+      imports: imports.slice(0, 40),
+      classes: [...new Set(classes)],
+      functions: functions.slice(0, 40),
+      variables: [...new Set(variables)].slice(0, 60),
+      lineCount: lines.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 语言统计：{ lang: count } */
+function languageSummary(files) {
+  const counts = {};
+  for (const f of files) {
+    if (f.binary) continue;
+    counts[f.language] = (counts[f.language] || 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * 从扫描结果推导工程信息（构建系统 / 入口候选 / 模块 / 语言概览）。
+ * **纯函数：不碰 fs** —— worker 与主线程共用同一份推导，避免两处漂移。
+ *
+ * ⚠️ 语言统计必须用 `scanned.sourceFiles`（fileMeta 的产物，带 `language` / `binary`），
+ * **不能**用 `scanned.files`（只有 `relPath` / `absPath` / `size`）。旧实现传的是后者，
+ * 于是 `languageSummary` 读到的 language 是 undefined、`f.binary` 也是 undefined，
+ * `languages` 恒为 `{"undefined": <文件数>}` —— 本轮修掉，并有用例锁住。
+ * @param {string} root
+ * @param {{ files?: Array<any>, sourceFiles?: Array<any> }} scanned scan() 的完整结果
+ */
+function buildProjectInfo(root, scanned) {
+  const files = (scanned && scanned.files) || [];
+  const sourceFiles = (scanned && scanned.sourceFiles) || files;
+  const set = new Set(files.map((f) => f.relPath));
+  let buildSystem = 'plain';
+  if (set.has('package.json')) buildSystem = 'npm';
+  else if (set.has('pom.xml')) buildSystem = 'maven';
+  else if (set.has('build.gradle') || set.has('build.gradle.kts') || set.has('settings.gradle')) buildSystem = 'gradle';
+  else if (set.has('requirements.txt') || set.has('pyproject.toml')) buildSystem = 'python';
+  else if (set.has('go.mod')) buildSystem = 'go';
+  else if (set.has('Cargo.toml')) buildSystem = 'cargo';
+
+  const mainCandidates = [];
+  for (const f of files) {
+    const rel = f.relPath;
+    if (/^src\/(main|index)\.[jt]sx?$/.test(rel)) mainCandidates.push(rel);
+    else if (rel === 'main.py' || /^src\/main\.py$/.test(rel)) mainCandidates.push(rel);
+    else if (rel === 'Main.java' || /^src\/main\/java\/.*\/Main\.java$/.test(rel)) mainCandidates.push(rel);
+    else if (rel === 'index.ts' || rel === 'index.js') mainCandidates.push(rel);
+    else if (rel === 'main.go') mainCandidates.push(rel);
+    else if (rel === 'main.rs') mainCandidates.push(rel);
+  }
+
+  const jdks = [];
+  if (buildSystem === 'maven' || buildSystem === 'gradle') {
+    try {
+      const javaHome = process.env.JAVA_HOME;
+      if (javaHome) jdks.push(path.basename(javaHome));
+    } catch {}
+  }
+
+  const srcRoots = ['src', 'src/main', 'src/main/java', 'src/main/kotlin', 'src/main/resources', 'lib', 'packages'];
+  const modules = srcRoots.filter((s) => set.has(s) || files.some((f) => f.relPath.startsWith(s + '/')));
+
+  return { buildSystem, mainCandidates, modules, jdks, languages: languageSummary(sourceFiles), fileCount: files.length };
+}
+
+/**
+ * 任务 4：工程信息识别。
+ * 它内部会**扫全项目**（每个源文件都要读一遍算行数）—— 与 scan_project 同属「必须跑在 worker 里」的重活。
+ * @param {any} payload
+ */
+function detectProjectInfoTask(payload) {
+  const p = payload || {};
+  const root = String(p.root || '');
+  const shouldStop = typeof p.shouldStop === 'function' ? p.shouldStop : null;
+  const onProgress = typeof p.onProgress === 'function' ? p.onProgress : null;
+  const scanned = scan(root, { shouldStop, onProgress });
+  const info = buildProjectInfo(root, scanned);
+  /** @type {Record<string, any>} */
+  const out = Object.assign({}, info, { cancelled: scanned.cancelled === true, scanned: scanned.scanned });
+  // 只有调用方真的要文件清单时才回传（结构化克隆大数组不便宜）
+  if (p.includeFiles) {
+    out.files = scanned.files;
+    out.sourceFiles = scanned.sourceFiles;
+    out.assetFiles = scanned.assetFiles;
+  }
+  return out;
+}
+
+/**
+ * 任务 5：analyze_project —— **一次扫描**同时产出工程信息、文件清单与逐文件结构摘要。
+ * 旧实现是 `detectProjectInfo(root)` + `scan(root)`（扫两遍）再逐文件读；这里合并成一次扫描。
+ * @param {any} payload
+ */
+function analyzeProjectTask(payload) {
+  const p = payload || {};
+  const root = String(p.root || '');
+  const analyzeFiles = p.analyzeFiles !== false;
+  const limit = Number.isFinite(Number(p.limit)) ? Math.max(1, Math.min(1000, Math.floor(Number(p.limit)))) : 1000;
+  const shouldStop = typeof p.shouldStop === 'function' ? p.shouldStop : null;
+  const onProgress = typeof p.onProgress === 'function' ? p.onProgress : null;
+  const scanned = scan(root, { shouldStop, onProgress });
+  const info = buildProjectInfo(root, scanned);
+  /** @type {Array<any>} */
+  const fileAnalysis = [];
+  if (analyzeFiles && !scanned.cancelled) {
+    for (const f of scanned.sourceFiles) {
+      if (fileAnalysis.length >= limit) break;
+      if (shouldStop && shouldStop()) break;
+      const entry = summarizeFile(root, f);
+      if (entry) fileAnalysis.push(entry);
+    }
+  }
+  return {
+    buildSystem: info.buildSystem,
+    mainCandidates: info.mainCandidates,
+    modules: info.modules,
+    jdks: info.jdks,
+    languageSummary: info.languages,
+    fileCount: info.fileCount,
+    sourceFileCount: scanned.sourceFiles.length,
+    assetFileCount: scanned.assetFiles.length,
+    files: scanned.sourceFiles.slice(0, limit).map((f) => ({
+      relativePath: f.relativePath,
+      name: f.name,
+      language: f.language,
+      ext: f.ext,
+      lineCount: f.lineCount,
+    })),
+    fileAnalysis,
+    cancelled: scanned.cancelled === true,
+    scanned: scanned.scanned,
+  };
+}
+
 /** worker 支持的任务名（runner 用它做白名单校验） */
-const FS_TASKS = Object.freeze(['scanProject', 'findFiles', 'searchFiles']);
+const FS_TASKS = Object.freeze(['scanProject', 'findFiles', 'searchFiles', 'detectProjectInfo', 'analyzeProject']);
 
 /**
  * 同步执行一个任务（降级路径：worker 不可用时由主线程直接跑，会阻塞事件循环）。
@@ -447,6 +655,8 @@ function runTaskSync(task, payload) {
   if (task === 'scanProject') return scanProjectTask(payload);
   if (task === 'findFiles') return findFilesTask(payload);
   if (task === 'searchFiles') return searchFilesTask(payload);
+  if (task === 'detectProjectInfo') return detectProjectInfoTask(payload);
+  if (task === 'analyzeProject') return analyzeProjectTask(payload);
   throw new Error('未知文件任务：' + task);
 }
 
@@ -469,6 +679,12 @@ module.exports = {
   scanProjectTask,
   findFilesTask,
   searchFilesTask,
+  detectProjectInfoTask,
+  analyzeProjectTask,
+  readTextFileSafe,
+  summarizeFile,
+  buildProjectInfo,
+  languageSummary,
   runTaskSync,
   FS_TASKS,
 };

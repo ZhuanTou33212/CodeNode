@@ -176,6 +176,79 @@ const PAYLOADS = {
       outcome.ok === true && outcome.mode === 'worker', JSON.stringify({ ok: outcome.ok, mode: outcome.mode }));
   }
 
+  // ======================= H. project_info / analyze_project（工程信息识别）=======================
+  {
+    const projectScan = require('../electron/tools/projectScan.cjs');
+    const registry = toolkit.buildDefaultRegistryWithConfig({
+      projectRoot: root,
+      ragEnabled: false,
+      toolsAllowed: ['project_info', 'analyze_project'],
+    });
+    const ctx = () =>
+      new AgentToolContext({
+        projectRoot: root,
+        confirm: async () => true,
+        audit: () => {},
+        sandbox: policy,
+        signal: new AbortController().signal,
+      });
+
+    // H1/H2：语言统计回归锁 —— 旧实现把 scan().files（只有 relPath/absPath/size）传给
+    // languageSummary，导致 languages 恒为 {"undefined": <文件数>}。fixture 里有 .ts/.js/.md。
+    const info = await registry.execute('project_info', {}, ctx());
+    check('H1 project_info 的语言分布不再是 {"undefined": N}（旧 bug 回归锁）',
+      info.ok === true && !('undefined' in info.data.languages) && (info.data.languages.typescript || 0) >= 1,
+      JSON.stringify(info.data && info.data.languages));
+    check('H2 project_info 走 worker（没悄悄退回主线程）', info.data.workerMode === 'worker', String(info.data.workerMode));
+
+    const analyzed = await registry.execute('analyze_project', {}, ctx());
+    check('H3 analyze_project 语言摘要同样正常 + 带逐文件结构摘要',
+      analyzed.ok === true && !('undefined' in analyzed.data.languageSummary) &&
+        Array.isArray(analyzed.data.fileAnalysis) && analyzed.data.fileAnalysis.length > 0,
+      JSON.stringify({ langs: analyzed.data && analyzed.data.languageSummary, analyzed: analyzed.data && analyzed.data.analyzedFileCount }));
+    check('H4 analyze_project 也走 worker', analyzed.data.workerMode === 'worker', String(analyzed.data.workerMode));
+
+    // H5：**遍历次数**才是「只扫一遍」的判据 —— 旧路径是 detectProjectInfo + scan 各一遍。
+    const realReaddir = fs.readdirSync;
+    let calls = 0;
+    fs.readdirSync = (...a) => {
+      calls += 1;
+      return realReaddir.apply(fs, a);
+    };
+    let once = 0;
+    let twice = 0;
+    try {
+      calls = 0;
+      fsCore.runTaskSync('analyzeProject', { root, limit: 5 });
+      once = calls;
+      calls = 0;
+      projectScan.detectProjectInfo(root);
+      projectScan.scan(root);
+      twice = calls;
+    } finally {
+      fs.readdirSync = realReaddir;
+    }
+    check('H5 新实现只遍历一次（旧路径 detectProjectInfo+scan 是两次）',
+      once > 0 && twice > once, JSON.stringify({ once, twice }));
+
+    // H6：任务层一致性（worker vs 同步逐字节）
+    for (const task of ['detectProjectInfo', 'analyzeProject']) {
+      const payload = task === 'detectProjectInfo' ? { root } : { root, limit: 50 };
+      const viaWorker = await fsRunner.runFsTask(task, payload, {});
+      const viaSync = fsCore.runTaskSync(task, payload);
+      check('H6 ' + task + ' worker 与同步结果逐字节一致',
+        JSON.stringify(viaWorker.result) === JSON.stringify(viaSync),
+        JSON.stringify(viaWorker.result).slice(0, 100));
+    }
+
+    // H7：可取消（terminate）
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
+    const cancelledOutcome = await fsRunner.runFsTask('detectProjectInfo', { root }, { signal: controller.signal });
+    check('H7 detectProjectInfo 能被 terminate 取消（不是只能等它跑完）',
+      cancelledOutcome.cancelled === true, JSON.stringify({ cancelled: cancelledOutcome.cancelled }));
+  }
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log('FS WORKER TEST: ' + (failures ? 'FAIL' : 'PASS'));
   process.exit(failures ? 1 : 0);
