@@ -17,6 +17,8 @@ const TOOL_SEMANTICS = require('./tools/descriptor.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
 // S5：工具失败分类契约（FailureCode 唯一来源）—— 主循环据此分派提示与重试策略
 const failures = require('./tools/failures.cjs');
+// S6：只读并行调度（默认关闭；关闭时行为与串行执行完全一致）
+const schedulerLib = require('./tools/scheduler.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
 function loadProperties(file) {
@@ -71,6 +73,9 @@ function parseToolsConfig(cfg) {
     toolsEnabled: cfg['tools.enabled'] == null ? true : String(cfg['tools.enabled']).toLowerCase() !== 'false',
     toolsAllowed: split(cfg['tools.allowed']),
     toolsDeny: split(cfg['tools.deny']),
+    // S6：只读并行（默认关闭 → 行为与串行一致）；并发上限 1–8
+    toolsParallel: cfg['tools.parallel'] == null ? false : String(cfg['tools.parallel']).toLowerCase() === 'true',
+    toolsParallelConcurrency: configInteger(cfg, 'tools.parallel_concurrency', 3, 1, 8),
   };
 }
 
@@ -1187,6 +1192,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const toolResultCache = new Map();
   /** @type {Record<string, number>} 每个 toolCallId 已发出的失败提示次数（S5：同一调用最多 NUDGE_MAX_PER_CALL 次） */
   const nudgeCounts = {};
+  // S6：只读并行调度器（默认关闭 → prime() 返回空计划，主循环行为与串行完全一致）
+  const toolScheduler = new schedulerLib.ToolScheduler({
+    enabled: !!(cfg.tools && cfg.tools.toolsParallel === true),
+    concurrency: (cfg.tools && cfg.tools.toolsParallelConcurrency) || schedulerLib.DEFAULT_CONCURRENCY,
+  });
   let totalToolCalls = 0;
   let loopIterations = 0;
   let compressCalls = 0;
@@ -1279,6 +1289,36 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         let capped = false;
         let failedAny = false;
         machine.go(STATES.WAITING_TOOL, 'tool_calls:' + toolCalls.length);
+        // S6：先给这一轮里「只读且互不冲突」的调用并发启动执行（默认关闭时是空操作）。
+        // 只启动、不等待 —— 下面的 for 仍按原顺序 await，因此 record / messages / 幂等账本 /
+        // 检查点的顺序与串行执行时逐字节相同（写操作、需确认、参数不完整的调用一律不预启动）。
+        const primed = toolScheduler.enabled
+          ? toolScheduler.prime(
+              toolCalls.map((tc, index) => ({
+                callId: tc.callId || tc.id || 'call_' + iter + '_' + (totalToolCalls + index + 1),
+                name: tc.name,
+                argsText: tc.args,
+                argsValid: tc.argsValid,
+              })),
+              {
+                signal,
+                turnId: iter,
+                budget: Math.max(0, MAX_TOTAL_TOOL_CALLS - totalToolCalls),
+                descriptorOf: (name) => (tools.registry && typeof tools.registry.descriptorOf === 'function' ? tools.registry.descriptorOf(name) : null),
+                isMalformed: (item) => {
+                  const parsedArgs = parseToolArgs(item.argsText);
+                  const rawText = String(item.argsText || '').trim();
+                  return item.argsValid === false || (rawText !== '' && rawText !== '{}' && Object.keys(parsedArgs).length === 0);
+                },
+                execute: (item, execOptions) => tools.registry.execute(item.name, parseToolArgs(item.argsText), tools.context, execOptions),
+                trace: (event) =>
+                  logToolTrace(
+                    tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null,
+                    Object.assign({ iter }, event),
+                  ),
+              },
+            )
+          : null;
         for (const tc of toolCalls) {
           if (signal && signal.aborted) {
             machine.go(STATES.CANCELLED, 'aborted');
@@ -1351,12 +1391,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               result = cached.result;
               repeated = true;
             } else {
-              result = await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
+              // S6：只读并行时这里直接 await 预启动的 promise（只是提前开始了，顺序不变）
+              const primedPromise = primed && primed.promises ? primed.promises.get(callId) : null;
+              result = primedPromise ? await primedPromise : await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
               // 只缓存成功结果：失败不缓存（文件/节点可能随后被创建，需允许重试时重新执行）
               if (result.ok) toolResultCache.set(cacheKey, { result, content: '' });
             }
           } else {
-            result = await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
+            const primedPromise = primed && primed.promises ? primed.promises.get(callId) : null;
+            result = primedPromise ? await primedPromise : await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
           }
           if (signal && signal.aborted) {
             machine.go(STATES.CANCELLED, 'aborted');

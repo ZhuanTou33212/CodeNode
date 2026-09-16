@@ -39,6 +39,7 @@ const CORE = [
   'test:subagent-isolation',
   'test:compression-batch',
   'test:tool-failure-taxonomy',
+  'test:scheduler-parallel',
   'test:agent-cache',
   'test:tool-call-id',
   'test:stream-accumulator',
