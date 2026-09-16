@@ -81,7 +81,6 @@ const FAILURE_SPECS = Object.freeze({
  */
 const LEGACY_CODE_MAP = Object.freeze({
   INVALID_TOOL_ARGUMENTS: { code: 'ARG_SCHEMA' },
-  ARG_INVALID_JSON: { code: 'ARG_INVALID_JSON' },
   PERMISSION_DENIED: { code: 'PERMISSION_DENIED' },
   WORKBENCH_WRITE_DENIED: { code: 'PERMISSION_DENIED' },
   PATH_OUT_OF_ROOT: { code: 'ARG_SEMANTIC', hint: '路径越过项目边界：改用项目内的相对路径；这不是重试能解决的。' },
@@ -93,8 +92,8 @@ const LEGACY_CODE_MAP = Object.freeze({
   SANDBOX_UNAVAILABLE: { code: 'FATAL_FAILURE', hint: '执行隔离不可用：不要反复重试，告诉用户或改用不需要隔离的方式。' },
 });
 
-const DEFAULT_NUDGE_MAX_PER_CALL = 2;
-const NUDGE_MAX_PER_CALL = DEFAULT_NUDGE_MAX_PER_CALL;
+/** 同一个 toolCallId 的提示次数上限（超过只落 trace，不再灌上下文） */
+const NUDGE_MAX_PER_CALL = 2;
 
 /** 是否是我们认识的 FailureCode */
 function isKnownFailureCode(code) {
@@ -193,7 +192,7 @@ function classifyFailure(result, info) {
  * @param {number} [maxPerCallId]
  */
 function planNudges(failures, counts, maxPerCallId) {
-  const limit = Math.max(1, Number(maxPerCallId) || DEFAULT_NUDGE_MAX_PER_CALL);
+  const limit = Math.max(1, Number(maxPerCallId) || NUDGE_MAX_PER_CALL);
   const tally = counts || {};
   const emitted = [];
   const skipped = [];

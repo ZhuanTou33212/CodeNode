@@ -173,9 +173,6 @@ async function runTurn(script) {
   }
 }
 
-const nudgeCount = (turn) => turn.seen.reduce((sum, req) => sum + req.messages.filter((m) => m.role === 'user' && String(m.content).includes(NUDGE_MARK)).length, 0);
-void nudgeCount; // 保留给后续排查用（历史提示会累积，断言一律走「每轮新增」口径）
-
 (async () => {
   // G. 权限类失败 → 提示必须劝退原样重试
   const permTurn = await runTurn([
