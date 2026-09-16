@@ -689,6 +689,26 @@ node -e "... languageSummary(s.sourceFiles) -> {\"json\":164,\"unknown\":116,...
 
 **仍未做**：`read_file` / `edit_file` / `code_review` 仍是主线程同步读（单文件读取，通常远小于一次全项目扫描）。
 
+### P7 收口（再续）：只有 PDF 分支该搬 —— 先量测，再决定（2026-09-16）
+
+**这一轮推翻了我自己上一轮的提议**：我原以为 `read_file` / `edit_file` / `code_review` 都该搬进 worker。量测之后发现它们是**单文件**操作（`code_review` 也只是 review 一个文件，还支持内联 `code`），把单文件读搬进 worker 是**负收益**：
+
+| 量测项 | 耗时 |
+|---|---|
+| worker 冷启动 + 一次往返 | 35 ms |
+| worker 连续任务（每次新建线程） | 23.6 ms |
+| 主线程同步读 2MB 文本（`read_file` 文本上限） | 1.3 ms |
+| 主线程同步读 20MB（`read_file` 的 PDF 上限） | 6.6 ms |
+| 60MB 文本流 `zlib.inflateSync`（PDF 解析的主要成本） | **82 ms** |
+
+结论：worker 固定开销是 2MB 读取的 **18 倍** —— 文本分支搬过去只会更慢，**刻意不搬**（代码注释里写明理由，免得后人为了「统一」搬走）。`edit_file` 另有一条独立理由：它已经是**原子写**（`atomicWriteFile` + `.bak` 备份），把「读」拆到另一个线程只会给读-改-写引入 TOCTOU 窗口。
+
+**唯一有正收益的是 PDF 分支**：读（≤20MB）之后跑自研解析（inflate + CMap + 文本重建），实测 100–300ms 量级 ≫ 24ms 开销。已搬：`fsCore.readPdfTextTask`（任务面 5 → 6）+ `read_file` 走 `fsRunner`；`impl/pdfText.cjs` 加进 `asarUnpack`（fsCore 对它有了新依赖，漏配只有打包版炸，`.get 用例 F2b` 直接断言）。
+
+**判据怎么建的**：合成 PDF fixture（`BT … Tj ET` + FlateDecode stream，152 字节即可解析）；慢 fixture 用 5.15MB 文本流（实测解析 ~144ms，够心跳稳定，且不越过 `extractPdfText` 的规模上限）；取消用**确定性触发**（一开始就 aborted）而不是"比谁快"。实测心跳 `ticks=12~14`（同步实现下必为 0）。
+
+**顺带发现（未修）**：`extractPdfText` 对超大文本流（实测 >~8MB 原始文本）返回 null → 可解析的大 PDF 被报成「扫描版或文字层不可用」（误导性提示）。属既有规模限制，不在本轮范围，已如实登记。
+
 ---
 
 ## 附：本轮机械扫描证据

@@ -34,6 +34,28 @@
   `scripts/event-replay.cjs` 支持 `--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1（可直接
   用于门禁）。
 
+### 变更（read_file 的 PDF 分支搬进 worker；文本分支**刻意不搬**；2026-09-16）
+
+- **先量测再动手**（本轮的关键）：worker 线程固定开销 —— 冷启动 + 一次往返 **35ms**、连续任务每次 **23.6ms**；
+  主线程同步读 **2MB 文本 1.3ms**、读 **20MB 6.6ms**。所以「把单文件读统一搬 worker」是**负收益**（开销是
+  2MB 读取的 18 倍），`read_file` 文本分支、`edit_file`（单文件读 + 已是原子写）、`code_review`
+  （单文件读 + 轻量正则分析，还支持内联 `code`）**都不搬**，并在代码注释里写明理由，免得后人为了「统一」搬走。
+- **真正值得搬的是 CPU 重活**：`read_file` 的 PDF 分支 —— 读（≤20MB）之后要跑自研解析
+  （`extractPdfText`：zlib inflate + CMap 解析 + 文本重建）。实测一个 60MB 文本流**光 inflate 就 82ms**，
+  真实 PDF 在 100–300ms 量级 —— 远超 worker 开销，且这段时间主线程被冻住、不可中断。
+- **修法**：`fsCore` 新增任务 `readPdfText`（任务面 5 → 6）；`read_file` 的 PDF 分支改走 `fsRunner`
+  （可 terminate、主线程不再被冻住、降级时 audit + 留痕）；`impl/pdfText.cjs` 加入 `build.asarUnpack`
+  —— `fsCore` 现在 require 它，而 worker 只能 require **同样被 unpack** 的兄弟文件（漏配只有打包版炸）。
+- **任务结果契约显式化**：每个任务的返回值都必须带 `cancelled`，runner 的同步/降级分支靠它把「半份结果」
+  提升成 `outcome.cancelled`。新任务一开始漏了该字段，被 `check:js` 当场拦下 —— 现已补齐并写成注释契约。
+- **证据**：`scripts/fs-worker-test.cjs` 新增 I 段 7 条 —— 走 worker 的文本层提取、`扫描版不可用` /
+  `PDF 过大（>20MB）` 两种既有文案**逐字未变**、任务层 worker 与同步结果逐字节一致、
+  **解析期间主线程心跳 ticks=12~14**（同步实现下必为 0）、慢 PDF 仍解析成功、取消返回 `CANCELLED`。
+  变异 2/2 有判别力：强制走同步 → `A1`×5 + `I5` 全红；把 20MB 阈值改错 → `I3` 红（且落到错误的提示分支）。
+- **顺带发现（未修，如实记录）**：`extractPdfText` 对**超大文本流**（实测 >~8MB 原始文本）会返回 null，
+  于是一个可解析的大 PDF 会被报成「扫描版或文字层不可用」—— 这是它既有的规模限制，不是本轮搬动引入的，
+  不在本次范围内。
+
 ### 变更（project_info / analyze_project 也搬进 worker，并修掉语言统计的 `undefined` bug；2026-09-16）
 
 - **问题①（同类重活）**：`detectProjectInfo` 与 `scan_project` 干的是同一件事 —— 扫全项目、每个源文件读一遍算行数。
