@@ -157,6 +157,9 @@ function parseCompressionConfig(cfg) {
     model: String(cfg['agent.compression.model'] || '').trim(),
     reasoning: /^(1|true|yes|on)$/i.test(String(cfg['agent.compression.reasoning'] || '')),
     cache: cfg['agent.compression.cache'] == null ? true : String(cfg['agent.compression.cache']).toLowerCase() !== 'false',
+    // S10：同一轮里的多份大结果合并成一次压缩请求（共享同一 system 前缀，请求开销只付一次）
+    batch: cfg['agent.compression.batch'] == null ? true : String(cfg['agent.compression.batch']).toLowerCase() !== 'false',
+    batchMaxItems: configInteger(cfg, 'agent.compression.batch_max_items', 4, 1, 16),
     maxOutputTokens: configInteger(cfg, 'agent.compression.max_output_tokens', 4096, 256, 65536),
     timeoutMs: configInteger(cfg, 'agent.compression.timeout_ms', 60000, 5000, 600000),
     exclude: defaults.concat(exclude.filter((item) => !defaults.includes(item))),
@@ -646,6 +649,194 @@ function shouldCompress(compression, toolName, contentLength, usedCalls) {
 const compressionLib = require('./compressionCache.cjs');
 
 /**
+ * 批量压缩（S10）：同一轮工具循环里的**多份**大结果合并成一次压缩请求。
+ *
+ * 为什么：逐个压缩时，每次请求都要重付一遍 system 前缀和请求固定开销（连接、重试、输出模板），
+ * 而 system 是常量、服务端前缀缓存只对「前缀」有效 —— 合并成一次请求，这些开销只付一次。
+ * 质量上的风险（模型把多份结果混成一锅）用「强制分段标记 + 缺失项逐条兜底」挡住：
+ * 解析不出某一段就对该条退回单条压缩路径，信息不会丢。
+ */
+const COMPRESSION_BATCH_REQUEST =
+  '下面是同一轮工具循环中的多份工具结果。请**逐份**压缩：不要合并、不要遗漏、不要改动序号，\n' +
+  '每份摘要前单独一行输出标记 <!-- summary i=序号 -->，序号与输入里 index 属性一致。';
+
+/** 批量输出的段标记（解析用）：`<!-- summary i=1 -->` */
+const COMPRESSION_BATCH_MARK_RE = /<!--\s*summary\s*i=(\d+)\s*-->/gi;
+
+/**
+ * 组装批量压缩请求。system 与单条路径共用同一个常量 → 两条路径的前缀完全一致。
+ * @param {Array<{toolName: string, content: string}>} items
+ * @param {number} budgetChars
+ */
+function buildCompressionBatchMessages(items, budgetChars) {
+  const parts = (Array.isArray(items) ? items : []).map(
+    (item, i) =>
+      '<tool_result index="' + (i + 1) + '" name="' + String((item && item.toolName) || '') + '">\n' +
+      String((item && item.content) || '') +
+      '\n</tool_result>',
+  );
+  return [
+    { role: 'system', content: COMPRESSOR_SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content:
+        COMPRESSION_BATCH_REQUEST + '\n每份摘要控制在约 ' + budgetChars + ' 字符内。\n\n' + parts.join('\n\n'),
+    },
+  ];
+}
+
+/**
+ * 解析批量压缩输出。
+ * @param {string} text 模型输出
+ * @param {number[]} indexes 期望的段序号（1 基）
+ * @returns {{summaries: Map<number, string>, missing: number[]}}
+ */
+function parseCompressionBatchOutput(text, indexes) {
+  const src = String(text || '');
+  const expected = Array.isArray(indexes) ? indexes.slice() : [];
+  const hits = [];
+  COMPRESSION_BATCH_MARK_RE.lastIndex = 0;
+  let m = COMPRESSION_BATCH_MARK_RE.exec(src);
+  while (m) {
+    hits.push({ index: Number(m[1]), at: m.index, after: COMPRESSION_BATCH_MARK_RE.lastIndex });
+    m = COMPRESSION_BATCH_MARK_RE.exec(src);
+  }
+  /** @type {Map<number, string>} */
+  const summaries = new Map();
+  for (let i = 0; i < hits.length; i++) {
+    const stop = i + 1 < hits.length ? hits[i + 1].at : src.length;
+    const body = src.slice(hits[i].after, stop).trim();
+    if (body) summaries.set(hits[i].index, body);
+  }
+  return { summaries, missing: expected.filter((idx) => !summaries.has(idx)) };
+}
+
+/**
+ * 按「每批条数」与「每批字符上限」切分待压缩项（保持顺序）。
+ * @param {Array<any>} items
+ * @param {number} maxItems
+ * @param {number} maxChars
+ * @returns {Array<Array<any>>}
+ */
+function chunkCompressionItems(items, maxItems, maxChars) {
+  const list = Array.isArray(items) ? items : [];
+  const limitItems = Math.max(1, Number(maxItems) || 1);
+  const limitChars = Math.max(1, Number(maxChars) || 1);
+  /** @type {Array<Array<any>>} */
+  const batches = [];
+  /** @type {Array<any>} */
+  let current = [];
+  let chars = 0;
+  for (const item of list) {
+    const size = String((item && item.content) || '').length;
+    if (current.length && (current.length >= limitItems || chars + size > limitChars)) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(item);
+    chars += size;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+/** 执行一次批量压缩请求；失败或解析失败都返回空结果（由调用方逐条兜底）。 */
+async function runCompressionBatchRequest(cfg, batch, signal, options, budget) {
+  const comp = (cfg && cfg.compression) || {};
+  const chat = typeof options.chat === 'function' ? options.chat : chatCompletion;
+  const model = String(comp.model || '').trim() || cfg.model;
+  const messages = buildCompressionBatchMessages(
+    batch.map((entry) => ({ toolName: entry.item.toolName, content: entry.item.content })),
+    budget,
+  );
+  try {
+    const startedAt = Date.now();
+    /** @type {any} */
+    const body = { ...cfg, model, maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
+    if (comp.reasoning !== true) body.reasoningEffort = false;
+    const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
+    recordCost(cfg, {
+      kind: 'compression',
+      model,
+      usage: res.usage,
+      latencyMs: Date.now() - startedAt,
+      runId: cfg.costRunId,
+      meta: { batchSize: batch.length, tools: batch.map((entry) => entry.item.toolName) },
+    });
+    return parseCompressionBatchOutput(res.content, batch.map((entry) => entry.index + 1));
+  } catch {
+    return { summaries: new Map(), missing: batch.map((entry) => entry.index + 1) };
+  }
+}
+
+/**
+ * 批量压缩入口：先吃内容级缓存，剩下的合并成一次请求；任何一段拿不到就退回单条压缩。
+ * @param {any} cfg
+ * @param {Array<{toolName: string, content: string}>} items
+ * @param {AbortSignal|null} [signal]
+ * @param {{projectRoot?: string|null, chat?: Function}} [options]
+ * @returns {Promise<Array<{text: string, cacheHit: boolean, batched: boolean, degraded: boolean}>>}
+ */
+async function compressToolBatch(cfg, items, signal, options) {
+  const o = options || {};
+  const comp = (cfg && cfg.compression) || {};
+  const budget = comp.budgetChars || 1500;
+  const cache = comp.cache === false ? null : compressionLib.getCompressionCache(o.projectRoot || null);
+  const list = Array.isArray(items) ? items : [];
+  const results = list.map(() => ({ text: '', cacheHit: false, batched: false, degraded: false }));
+  /** @type {Array<{index: number, item: any, key: string}>} */
+  const pending = [];
+  list.forEach((item, index) => {
+    const key = cache ? compressionLib.compressionKey(item.toolName, budget, item.content) : '';
+    const hit = cache && key ? cache.get(key) : null;
+    if (hit) {
+      results[index] = { text: hit, cacheHit: true, batched: false, degraded: false };
+      return;
+    }
+    pending.push({ index, item, key });
+  });
+  if (!pending.length) return results;
+
+  /** @type {Array<{index: number, item: any, key: string}>} */
+  const fallback = [];
+  if (comp.batch !== false && pending.length > 1) {
+    const batches = chunkCompressionItems(pending, comp.batchMaxItems || 4, comp.maxInputChars || 300000);
+    for (const batch of batches) {
+      const parsed = await runCompressionBatchRequest(cfg, batch, signal, o, budget);
+      batch.forEach((entry) => {
+        const body = parsed.summaries.get(entry.index + 1);
+        if (body) {
+          results[entry.index] = { text: body, cacheHit: false, batched: true, degraded: false };
+          if (cache && entry.key) cache.set(entry.key, body, entry.item.toolName);
+        } else {
+          fallback.push(entry);
+        }
+      });
+    }
+  } else {
+    fallback.push(...pending);
+  }
+  for (const entry of fallback) {
+    let cacheHit = false;
+    const text = await compressToolContent(cfg, entry.item.toolName, entry.item.content, signal, {
+      projectRoot: o.projectRoot,
+      chat: o.chat,
+      onCacheHit: () => {
+        cacheHit = true;
+      },
+    });
+    results[entry.index] = {
+      text,
+      cacheHit,
+      batched: false,
+      degraded: text.includes('子代理压缩失败'),
+    };
+  }
+  return results;
+}
+
+/**
  * 子代理压缩：用一次独立的 LLM 调用把超大的工具结果压缩成关键信息摘要。
  * 子代理只看到原始结果本身（不共享主对话上下文）；失败时降级为截断，保证主 Agent 仍能拿到部分信息。
  *
@@ -658,7 +849,7 @@ const compressionLib = require('./compressionCache.cjs');
  * @param {string} toolName
  * @param {string} text
  * @param {AbortSignal|null} [signal]
- * @param {{projectRoot?: string|null, onCacheHit?: (value: string) => void}} [options]
+ * @param {{projectRoot?: string|null, chat?: Function, onCacheHit?: (value: string) => void}} [options]
  * @returns {Promise<string>}
  */
 async function compressToolContent(cfg, toolName, text, signal, options) {
@@ -687,13 +878,15 @@ async function compressToolContent(cfg, toolName, text, signal, options) {
     },
   ];
   const model = String(comp.model || '').trim() || cfg.model;
+  // 可注入 chat（测试用；生产走 chatCompletion）—— 批量路径与单条路径共用同一个注入点
+  const chat = typeof o.chat === 'function' ? o.chat : chatCompletion;
   try {
     const startedAt = Date.now();
     /** @type {any} */
     const body = { ...cfg, model, maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
     // 摘要/搬运类任务不需要思考链：默认关掉 reasoning（agent.compression.reasoning=true 可打开）
     if (comp.reasoning !== true) body.reasoningEffort = false;
-    const res = await chatCompletion(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
+    const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
     recordCost(cfg, { kind: 'compression', model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName } });
     const out = String(res.content || '').trim();
     if (!out) return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
@@ -1066,6 +1259,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         continue;
       }
       if (tools && tools.registry && toolCalls.length) {
+        /** @type {Array<{toolName: string, content: string, record: any, cacheKey: string|null, messageIndex: number}>} */
+        const pendingCompression = [];
         // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
         assignCallIds(toolCalls, iter);
         messages.push({
@@ -1205,29 +1400,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             if (cached && cached.compressed) record.compressed = true;
           } else {
             toolContent = buildToolContent(result, tc.name, malformed, repeated, DATA_TRUNCATE_CAP);
-            // 子代理压缩：超阈值且未到调用上限的原始结果，压缩成关键信息再进上下文。
-            // S9：走内容级缓存（同一份原文只付一次 prefill），并把「命中/未命中」记进工具记录，
-            // 让缓存命中率变成可测量的事实，而不是只能凭感觉说「很低」。
-            if (shouldCompress(cfg && cfg.compression, tc.name, toolContent.length, compressCalls)) {
-              compressCalls++;
-              const before = toolContent.length;
-              let compressionHit = false;
-              toolContent = await compressToolContent(cfg, tc.name, toolContent, signal, {
-                projectRoot: tools && tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null,
-                onCacheHit: () => {
-                  compressionHit = true;
-                },
+            // 子代理压缩（S10）：这里只**登记**待压缩项，等本轮所有工具执行完再合并成一次请求。
+            // 当场逐个压缩时，N 份结果要付 N 遍 system 前缀 + N 次请求固定开销（而 system 是常量）。
+            // max_calls 的额度按「已用调用数 + 本条占用的调用数」预判，避免一轮内无上限地登记。
+            if (shouldCompress(cfg && cfg.compression, tc.name, toolContent.length, compressCalls + pendingCompression.length)) {
+              pendingCompression.push({
+                toolName: tc.name,
+                content: toolContent,
+                record,
+                cacheKey: cacheKey && result.ok ? cacheKey : null,
+                messageIndex: messages.length,
               });
-              record.compressed = true;
-              record.compressionCache = compressionHit ? 'hit' : 'miss';
-              record.compressedChars = { from: before, to: toolContent.length };
-              if (cacheKey && result.ok) {
-                const entry = toolResultCache.get(cacheKey);
-                if (entry) {
-                  entry.content = toolContent;
-                  entry.compressed = true;
-                }
-              }
             }
           }
           if (!toolContent) toolContent = result.text || '';
@@ -1256,6 +1439,48 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                 (clean && clean !== '{}' ? ' args=' + safeLog(clean) : '')
             );
           } catch {}
+        }
+        // 压缩结算（S10）：把本轮登记的待压缩项合并成尽量少的请求，再按段把摘要写回对应的 tool 消息。
+        // 某一段拿不到摘要 → 该条退回单条压缩；整体失败 → 降级为截断（信息不丢，只是没压缩）。
+        if (pendingCompression.length) {
+          const compressionProjectRoot = tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null;
+          const compCfg = (cfg && cfg.compression) || {};
+          const batches = chunkCompressionItems(pendingCompression, compCfg.batchMaxItems || 4, compCfg.maxInputChars || 300000);
+          for (const batch of batches) {
+            compressCalls += 1; // 一批 = 一次压缩调用（max_calls 仍按调用次数计）
+            const startedAt = Date.now();
+            const outs = await compressToolBatch(
+              cfg,
+              batch.map((entry) => ({ toolName: entry.toolName, content: entry.content })),
+              signal,
+              { projectRoot: compressionProjectRoot },
+            );
+            batch.forEach((entry, i) => {
+              const out = outs[i];
+              if (!out) return;
+              const msg = messages[entry.messageIndex];
+              if (msg && msg.role === 'tool') msg.content = out.text;
+              entry.record.compressed = true;
+              entry.record.compressionCache = out.cacheHit ? 'hit' : 'miss';
+              entry.record.compressionMode = out.batched ? 'batch' : out.degraded ? 'degraded' : 'single';
+              entry.record.compressedChars = { from: entry.content.length, to: out.text.length };
+              if (entry.cacheKey) {
+                const cachedEntry = toolResultCache.get(entry.cacheKey);
+                if (cachedEntry) {
+                  cachedEntry.content = out.text;
+                  cachedEntry.compressed = true;
+                }
+              }
+            });
+            logToolTrace(compressionProjectRoot, {
+              kind: 'compression',
+              iter,
+              batchSize: batch.length,
+              tools: batch.map((entry) => entry.toolName),
+              cacheHits: batch.filter((_entry, i) => outs[i] && outs[i].cacheHit).length,
+              elapsedMs: Date.now() - startedAt,
+            });
+          }
         }
         // 工具调用失败时，提示模型重新思考解决方案而不是直接结束
         if (failedAny && !capped) {
@@ -1366,6 +1591,10 @@ module.exports = {
   buildToolContent,
   COMPRESSOR_SYSTEM_PROMPT,
   compressToolContent,
+  compressToolBatch,
+  buildCompressionBatchMessages,
+  parseCompressionBatchOutput,
+  chunkCompressionItems,
   parseCompressionConfig,
   parseSubagentConfig,
   SCALAR_BACKED_TOOLS,

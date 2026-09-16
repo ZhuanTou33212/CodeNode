@@ -36,6 +36,7 @@ const CORE = [
   'test:atomic-file',
   'test:subagent',
   'test:subagent-isolation',
+  'test:compression-batch',
   'test:agent-cache',
   'test:tool-call-id',
   'test:stream-accumulator',

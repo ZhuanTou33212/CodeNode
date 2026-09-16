@@ -30,6 +30,7 @@
     "test:shell-output": "node scripts/shell-output-test.cjs",
     "test:subagent": "node scripts/subagent-test.cjs",
     "test:subagent-isolation": "node scripts/subagent-isolation-test.cjs",
+    "test:compression-batch": "node scripts/compression-batch-test.cjs",
     "test:agent-cache": "node scripts/agent-cache-invalidation-test.cjs",
     "test:tool-call-id": "node scripts/tool-call-id-test.cjs",
     "test:stream-accumulator": "node scripts/stream-accumulator-test.cjs",
