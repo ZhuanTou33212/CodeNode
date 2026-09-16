@@ -644,6 +644,28 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
   **边界（别当成已解决）**：单次同步 fs 调用（一次 `readFileSync` 大文件、一次巨型 `JSON.parse`）**依旧不可打断**，真正的可中断需要把这些工具挪到 worker/子进程 —— 未做。
   用例 `scripts/sync-tool-cancel-test.cjs`：用**计数式 `aborted` getter** 造出「同步循环内部真的发生取消」（`setTimeout` 在同步遍历里排不上队，用它永远测不到），判据是「取消 → `CANCELLED` + `partial < 完整结果`」与「不取消 → 结果完整」（防过度修复）。
 
+### P7 收口（文件遍历搬进 worker 线程，2026-09-16）
+
+**动因**：上一轮只加了「循环之间的检查点」，两件事仍未解决 —— ① **单次同步 fs 调用不可打断**（读 2MB 文件算行数、`statSync` 撞上挂住的网络盘）；② 整个遍历跑在 **Electron 主进程**里，扫 2 万文件的项目会把界面冻住。
+
+**结构（三层，唯一实现来源）**：
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 实现 | `electron/tools/fsCore.cjs`（新） | 遍历 / 扫描的**唯一实现**（纯 `fs`/`path`，零 Electron 依赖）。`toolFiles.cjs` / `impl/shared.cjs` / `projectScan.cjs` 改为从这里 re-export —— 对外 API 不变，5 个既有调用点零改动，也避免 worker 里再抄一份实现后必然漂移 |
+| worker | `electron/tools/fsWorker.cjs`（新） | worker 入口。**自包含**（只 require `fsCore.cjs`）：打包后它落在 `app.asar.unpacked` 的真实文件系统上，相对 require 只能解析同目录的兄弟文件 |
+| 主线程 | `electron/tools/fsRunner.cjs`（新） | `runFsTask`：worker 优先 → abort 时 `terminate` → 失败时显式降级；`clonablePayload` 剥掉函数（`postMessage` 不能克隆 `shouldStop`） |
+
+**三个必须验到的点**（都在用例里）：
+
+1. **真可中断 + 不阻塞主线程**：判据换成真 `AbortSignal` + 主线程 `setTimeout` 触发 + **心跳**（`setInterval` 计数）。同步实现下遍历会占满事件循环、定时器根本排不上队 → 这两条必红。也就是说它们**能区分实现**，不是「看着像对」。
+2. **worker 与同步实现结果逐字节一致**（单一实现来源的意义）：三个任务在混合结构（源码 / 资产 / 忽略目录 / 敏感文件 / 大文件）上比对。
+3. **降级显式留痕**：worker 入口缺失时仍返回正确结果，但必须 `audit` + `data.workerMode='sync-fallback'` + `workerFallback`（原因）。用例把 worker 文件临时改名再还原，并断言「还原后重新走 worker」（降级不是粘住的状态）。
+
+**打包坑（开发模式与 CI 都看不出来）**：`worker_threads` 需要真实文件系统上的入口 → `build.asarUnpack` 必须列出 `fsWorker.cjs` + `fsCore.cjs`，且 `workerFilePath()` 要把路径里的 `app.asar` 重写到 `app.asar.unpacked`（且**不能**把已经是 `.unpacked` 的再替换一次）。用例 F/E 直接断言打包配置与路径重写，把「只有打包版才炸」的坑挪到 CI。
+
+**仍未做**：`project_info` 工具内部的 `detectProjectInfo` 仍是同步执行，未搬进 worker。
+
 ---
 
 ## 附：本轮机械扫描证据

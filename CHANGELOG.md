@@ -34,6 +34,34 @@
   `scripts/event-replay.cjs` 支持 `--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1（可直接
   用于门禁）。
 
+### 变更（文件遍历工具搬到 worker 线程：真可中断 + 不阻塞主进程；2026-09-16）
+
+- **问题**：`scan_project` / `find_files` / `search_files` 是同步 fs 遍历。上一轮只加了「循环之间的
+  取消检查点」，但两件事没解决：① **单次同步 fs 调用不可打断**（读一个 2MB 文件算行数、`statSync`
+  撞上挂住的网络盘）；② 整个遍历跑在 **Electron 主进程**里，扫一个 2 万文件的项目会把界面冻住。
+- **修法**：
+  - 新增 `electron/tools/fsCore.cjs`：遍历 / 扫描的**唯一实现来源**（纯 `fs`/`path`，零 Electron 依赖）。
+    `toolFiles.cjs` / `impl/shared.cjs` / `projectScan.cjs` 改为从这里 re-export —— 对外 API 不变，
+    5 个既有调用点零改动，也避免 worker 里再抄一份实现后必然漂移。
+  - 新增 `electron/tools/fsWorker.cjs`（worker 入口）+ `electron/tools/fsRunner.cjs`（主线程：启动 /
+    `terminate` / 降级 / 进度）；三个工具改走 `fsRunner.runFsTask`。
+  - **取消 = `worker.terminate()`**：连同步 fs 调用中途也能杀掉；进度用 `postMessage` 回报，
+    取消时如实给出 `partial`（此前只能等它自己跑完）。
+  - **降级必须显式留痕**：worker 起不来 / 崩了 → 主线程同步跑完（工具不能因为 worker 缺失就不可用），
+    但必须写 audit + 结果里带 `workerMode: 'sync-fallback'` 与 `workerFallback`（原因）——
+    不静默退回旧的阻塞行为，否则「已搬到 worker」就成了纸面结论。
+  - **打包**：`build.asarUnpack` 加入这两个文件（`worker_threads` 需要真实文件系统上的入口；
+    `app.asar` 路径会被重写到 `app.asar.unpacked`）。漏配只有**打包版**才炸、CI 看不出来，
+    所以用例直接断言打包配置本身。
+  - 配置 `tools.fs_worker`（默认 **true**）；关掉 = 退回主线程同步执行（排障 / 老平台兜底）。
+- **证据**：`scripts/sync-tool-cancel-test.cjs` 判据升级为**真 AbortSignal + 主线程 `setTimeout` 触发**
+  —— 同步实现下遍历会占满事件循环，那个定时器根本轮不到执行，所以「取消真的生效」自身就证明了
+  主线程没被占住；另加**心跳判据**（扫描期间 `setInterval` 仍在跳，同步实现下必为 0），
+  以及「不取消时结果完整」的反向保护。新增 `scripts/fs-worker-test.cjs`：worker 与同步实现的
+  结果**逐字节一致**、取消不被误判成 worker 故障而降级重跑、降级在 audit 与 data 里留痕、
+  asar 路径重写（含 `app.asar.unpacked` 不被二次替换）、打包配置断言、含函数 payload 的可克隆性。
+- **边界（仍未做）**：`project_info` 工具内部的 `detectProjectInfo` 仍是同步执行，未搬进 worker。
+
 ### 变更（工具契约闭合与显式化、循环上限可配置、grounding 门、同步工具可取消；2026-09-16）
 
 - **参数 schema 闭合**：`validateInput` 只校验**已声明**字段 → 模型把 `maxLines` 拼成 `maxLine` 会静默走默认值
