@@ -177,6 +177,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (res.stopReason === 'length_truncated') {
           useUiStore.getState().setToast('回答触到模型长度上限被截断，可回复「继续」让它接着写完');
         }
+      } else if (res.limitReached && res.reply) {
+        // 达到迭代/工具调用上限（第 2 项）：不是「调用失败」，而是「没跑完但有事可交付」——
+        // 结构化收尾（已完成/失败/涉及文件/怎么续跑）必须让用户看见，不能只弹一个报错把结果丢掉。
+        const rawTools = (res.toolCalls as ToolRecord[] | null) || null;
+        tools = (rawTools || []).map((t) => ({ name: t.name || 'tool', args: t.args, result: t.result, ok: t.ok, data: t.data }));
+        useSessionStore.getState().finishTurn(res.reply, res.reasoning || '', tools, res.grounding);
+        useSessionStore.getState().markActive();
+        useUiStore.getState().setToast('本次运行达到步数上限（任务未完成）：已列出阶段性结果，可在「工作流运行」里续跑');
       } else {
         useSessionStore.getState().failTurn(res.error || '未知错误');
         useUiStore.getState().setToast('Agent 调用失败：' + (res.error || '未知错误'));

@@ -1,4 +1,8 @@
 /**
+ * ⚠️ **遗留未接入（第 4 项）**：本文件注册的 `create_nodes` 没有出现在 toolkit.BUILTINS 里，
+ * 模型看不到这个工具；职责已由 `workbench_edit` 覆盖（"不需要再用 create_nodes / workbench_connect"）。
+ * 保留文件是为了不丢历史实现，断言见 scripts/tool-contract-closure-test.cjs 的 NOT_WIRED。
+ *
  * create_nodes：在工作台当前画布创建节点。count 默认 1（最多 50）；name 为名称（数量>1 自动编号）；
  * type 支持任务节点语义（task/stage/tool/start/end/file/scope/object/canvas），agent/user 已废弃（传入回退为 task）。
  * file 类型需 relativePath；canvas（=vector）创建内嵌矢量画布的画布节点；connect=true 时按创建顺序串联成链。返回节点 id 列表。

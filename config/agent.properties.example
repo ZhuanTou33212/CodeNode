@@ -97,6 +97,13 @@ soul_file=config/soul.md
 # 语义能力有限，接 Milvus 建议同时切 openai/ollama 真嵌入。写入失败/服务不可用会降级为
 # 纯 BM25 并在检索结果中标注「向量后端降级」，不会中断检索。
 
+# ---------- 成本单价（用于成本账本 / 告警，不参与模型调用） ----------
+# cost.price.<model>=<输入美元/百万token>,<输出美元/百万token>[,<缓存命中输入美元/百万token>]
+# 第三段是**缓存命中**输入的单价：不写则按全量输入计价（旧行为，成本会被系统性高估），
+# 写了才按「未命中×in + 命中×cachedIn + 输出×out」计。账本 snapshot 的 pricePrecision
+# 会如实标注 single-rate / cached-aware。
+# cost.price.deepseek-v4-flash=0.28,0.42,0.028
+
 # ---------- 本地标量（画布精准数据，不入云） ----------
 # 画布节点等精准数据（prompt/goal/members/filePath）在工具执行时写入工程 .codenode/scalars.json，
 # 不随上下文返回云端；Agent 需要时用 query_scalars key=node:<id> 或 retrieve_context mode=scalar 读取。
@@ -109,4 +116,18 @@ soul_file=config/soul.md
 # agent.compression.budget_chars=1500      # 压缩摘要目标长度
 # agent.compression.max_calls=8            # 单轮最多压缩调用次数
 # agent.compression.exclude=               # 追加不压缩的工具（默认已有 retrieve_context,query_scalars,ask_user）
+# 压缩配额按**请求数**计（每请求最多 batch_max_items 条）：配额用尽后原文会进上下文，
+# 兜底交给下面的上下文预算（agent.context.*），两者互补 —— 压缩保质量、预算保上限。
+
+# ---------- 上下文预算（每次模型请求前的硬兜底） ----------
+# 压缩配额用尽 / 压缩关闭 / 压缩失败回退时，工具结果仍不能把上下文顶爆：请求前把「旧的、超大的
+# 工具结果正文」换成可追溯占位符（消息条数、角色顺序、tool_calls↔tool_call_id 配对一律不动）。
+# agent.context.trim=true                        # 总开关（默认开；关掉即回到旧行为）
+# agent.context.max_input_chars=250000           # 单次请求的整段 messages 字符预算（≈70k tokens）
+# agent.context.keep_recent_messages=12          # 最近 N 条消息永不裁
+# agent.context.min_result_chars=2000            # 小于这个长度的工具结果不裁（省不了多少还丢信息）
+# agent.context.hard_keep_recent_messages=1      # 预算单靠上面那条压不住时，仍然保护最后 N 条（默认 1 = 最后一条）
+#
+# 实测（2026-09-17）：40 次 27KB 的 read_file 结果会让第 11 次请求的输入涨到 434,743 字符
+# （≈145k tokens）；开启预算后同一场景最大输入 59,605 字符，且 tool 配对仍然合法。
 # 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索

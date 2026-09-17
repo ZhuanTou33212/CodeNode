@@ -312,7 +312,9 @@ function register(ctx) {
       }
       const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
       const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
-      const memoryText = memory.entries.slice(-30).map((entry) => `- ${entry.key ? '[' + entry.key + '] ' : ''}${entry.content}`).join('\n');
+      // 第 5 项：注入按当前提问检索（key/tags/content 打分，均无命中才退回最近的记忆），
+      // 不再是 entries.slice(-30) 的纯时间切片。
+      const memoryText = memoryStore.buildMemoryText(memory.entries, prompt, { limit: 30 });
       const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
       const skillsText = skills.map((item) => `- ${item.name}: ${item.instructions || item.description || '按项目扩展定义执行'}`).join('\n');
       const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText);
@@ -476,6 +478,15 @@ function register(ctx) {
       // 交付形态要如实传给界面：被长度上限截断 / 中途重发过，用户有权知道
       out.stopReason = result.stopReason || null;
       out.streamRestarts = result.streamRestarts || 0;
+      // 第 2 项：上限中止时带上结构化收尾（界面据此把阶段性结果交付给用户，而不是只弹一个报错），
+      // 并让「续跑」入口能认出这类 Run（status 仍是 error，靠 state 区分）。
+      if (result.wrapUp) {
+        out.wrapUp = result.wrapUp;
+        out.limitReached = true;
+      }
+      // 第 1 项：上下文裁剪次数（0 表示这一次运行没有触发预算裁剪）
+      out.contextTrims = Number(result.contextTrims) || 0;
+      out.contextTrimmedChars = Number(result.contextTrimmedChars) || 0;
       if (dirty && model) out.document = model.doc;
       if (bridge) bridge.cleanup();
       return out;

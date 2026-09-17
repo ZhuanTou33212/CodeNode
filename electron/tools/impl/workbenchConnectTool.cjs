@@ -1,4 +1,8 @@
 /**
+ * ⚠️ **遗留未接入（第 4 项）**：本文件注册的 `workbench_connect` 没有出现在 toolkit.BUILTINS 里，
+ * 模型看不到这个工具；连线职责已由 `workbench_edit` 的 connect 操作覆盖。
+ * 断言见 scripts/tool-contract-closure-test.cjs 的 NOT_WIRED。
+ *
  * workbench_connect：节点连线操作。action=connect（sourceId→targetId）或
  * action=disconnect（断开 sourceId→targetId；只给 targetId 则断开其全部入边）。
  */

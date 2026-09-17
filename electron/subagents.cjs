@@ -198,6 +198,28 @@ class SubagentManager {
       }
     );
     registry.register(
+      'cancel_subagent_task',
+      '取消一个**正在运行**的子代理任务（只取消这一个，不影响主 Agent 与其他子代理；已提交的写操作不会被回滚）。',
+      {
+        type: 'object',
+        properties: { taskId: { type: 'string' }, reason: { type: 'string' } },
+        required: ['taskId'],
+      },
+      async (context, args) => {
+        const taskId = String(args.taskId || '');
+        const task = this.tasks.get(taskId);
+        if (!task) return AgentToolResult.error('子代理任务不存在：' + taskId);
+        if (task.status !== 'running') return AgentToolResult.error('子代理任务已结束（status=' + task.status + '），无需取消');
+        // 只 abort 这一个子任务自己的 controller（父信号/其他子代理不受影响）
+        task.cancelRequested = true;
+        task.cancelReason = String(args.reason || '主 Agent 主动取消');
+        if (task.controller && !task.controller.signal.aborted) task.controller.abort();
+        context.audit(JSON.stringify({ kind: 'subagent_cancel', runId: this.runId, taskId, role: task.role, reason: task.cancelReason }));
+        if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId, role: task.role, status: 'cancelling', summary: task.cancelReason });
+        return AgentToolResult.ok('已取消子代理任务 ' + taskId + '（' + task.role + '）', { taskId, role: task.role, status: 'cancelling' });
+      }
+    );
+    registry.register(
       'delegate_tasks',
       '批量执行子代理任务（角色含义与 delegate_task 一致；全部为只读角色时并行执行，包含写角色时按顺序执行）。',
       {
@@ -257,6 +279,8 @@ class SubagentManager {
     // 超时分支可能永不执行（S3 踩过同一个坑）。
     const parentSignal = typeof context.signal === 'function' ? context.signal() : null;
     const controller = new AbortController();
+    // 单任务取消通道（第 6 项）：cancel_subagent_task 靠它只 abort 这一个子任务
+    task.controller = controller;
     const onParentAbort = () => controller.abort();
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -317,8 +341,14 @@ class SubagentManager {
         task.status = 'failed';
         task.error = String(result.error);
       } else if (result.aborted) {
-        task.status = 'blocked';
-        task.error = '子代理被取消（主 Agent 停止或信号中断）';
+        if (task.cancelRequested) {
+          // 第 6 项：主动取消要如实说清是「被谁取消的」，而不是统一报成「信号中断」
+          task.status = 'cancelled';
+          task.error = '子代理任务被主动取消：' + (task.cancelReason || '未说明原因') + '（已提交的写操作不会回滚）';
+        } else {
+          task.status = 'blocked';
+          task.error = '子代理被取消（主 Agent 停止或信号中断）';
+        }
       } else {
         task.status = 'done';
       }
@@ -341,6 +371,7 @@ class SubagentManager {
     } finally {
       clearTimeout(timer);
       if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+      task.controller = null; // 释放取消引用（任务已结束）
     }
 
     task.finishedAt = new Date().toISOString();

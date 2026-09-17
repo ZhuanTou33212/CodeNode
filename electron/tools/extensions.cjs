@@ -7,11 +7,24 @@ const { ConfirmationLevel } = require('./context.cjs');
 const { safeEnvironment } = require('../envPolicy.cjs');
 const sandbox = require('../sandbox.cjs');
 
+/**
+ * 拆分命令行。
+ *
+ * 第 7 项修复：整段字符串如果本身就是一个**存在的可执行文件路径**（Windows 上常见
+ * `C:\Program Files\nodejs\node.exe`），即使没加引号也直接当单个 token —— 旧实现按空格硬拆，
+ * 结果 spawn 的是 `C:\Program`，报 `ENOENT`。含引号的写法仍然照旧处理。
+ */
 function splitCommand(command) {
+  const raw = String(command || '').trim();
+  if (raw && !/^["']/.test(raw) && /\s/.test(raw)) {
+    try {
+      if (fs.existsSync(raw)) return [raw];
+    } catch {}
+  }
   const tokens = [];
   let current = '';
   let quote = '';
-  for (const c of String(command || '')) {
+  for (const c of raw) {
     if ((c === '"' || c === "'") && !quote) { quote = c; continue; }
     if (c === quote) { quote = ''; continue; }
     if (/\s/.test(c) && !quote) {
@@ -35,6 +48,18 @@ function readManifest(projectRoot) {
     } catch {}
   }
   return [];
+}
+
+/**
+ * spawn 失败时补一句可操作的原因：ENOENT + 命令里含空格，十有八九是路径没加引号。
+ * 这类错误只报 `spawn C:\Program ENOENT` 时，用户完全看不出该怎么修（第 7 项实测踩到）。
+ */
+function spawnErrorHint(command, error) {
+  const text = String((error && error.message) || error || '');
+  if (/ENOENT/.test(text) && /\s/.test(String(command || '').trim())) {
+    return text + '（扩展/MCP 的 command 含空格，请写成带引号的形式，例如 command="C:\\Program Files\\nodejs\\node.exe"）';
+  }
+  return text;
 }
 
 function runExternal(root, command, args, extraEnv, signal, allowlist, context) {
@@ -69,7 +94,7 @@ function runExternal(root, command, args, extraEnv, signal, allowlist, context) 
     if (signal && signal.aborted) onAbort();
     const cleanup = () => signal && signal.removeEventListener('abort', onAbort);
     const timer = setTimeout(() => { sandbox.killSandboxed(child, true); cleanup(); finish({ ok: false, output, error: '扩展执行超时' }); }, 120000);
-    child.on('error', (e) => { clearTimeout(timer); cleanup(); finish({ ok: false, output, error: String((e && e.message) || e) }); });
+    child.on('error', (e) => { clearTimeout(timer); cleanup(); finish({ ok: false, output, error: spawnErrorHint(command, e) }); });
     child.on('close', (code) => { clearTimeout(timer); cleanup(); finish({ ok: code === 0, output, exitCode: code }); });
   });
 }
@@ -78,12 +103,18 @@ function runMcpTool(root, extension, tool, args, signal, context) {
   if (signal?.aborted) return Promise.resolve({ ok: false, cancelled: true, error: 'MCP 执行已取消' });
   const tokens = splitCommand(extension.command);
   if (!tokens.length) return Promise.resolve({ ok: false, error: 'MCP command 为空' });
+  const callTimeoutMs = Math.max(1000, Number(extension.timeoutMs) || 120000);
+  // 握手单独计时：旧实现把 initialize 和 tools/call 一起发出去、只等 id=2，**从不校验握手结果**
+  // （探针实测：server 对 initialize 完全不回应，工具调用照样成功）—— 于是「不是 MCP server」
+  // 或「server 启动失败」这类问题会被报成 tools/call 层的怪错误，排查方向全错。
+  const handshakeMs = Math.max(500, Math.min(5000, Math.floor(callTimeoutMs / 4)));
   return new Promise((resolve) => {
     let child;
     let buffer = '';
     let finished = false;
     let timer;
     let onAbort = null;
+    let handshaken = false;
     const finish = (result) => {
       if (finished) return;
       finished = true;
@@ -98,8 +129,16 @@ function runMcpTool(root, extension, tool, args, signal, context) {
         { file: tokens[0], args: [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])] },
         { cwd: root, env: safeEnvironment({ PYTHONUTF8: '1' }, extension.envAllowlist), policy: sandbox.currentPolicy(context), context }
       );
-    } catch (e) { finish({ ok: false, error: String((e && e.message) || e) }); return; }
+    } catch (e) { finish({ ok: false, error: spawnErrorHint(extension.command, e) }); return; }
     const send = (message) => { try { child.stdin.write(JSON.stringify(message) + '\n'); } catch {} };
+    /** 握手成功后：发 notifications/initialized + tools/call，并开始整体调用计时 */
+    const startCall = () => {
+      handshaken = true;
+      if (timer) clearTimeout(timer);
+      send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: args || {} } });
+      timer = setTimeout(() => finish({ ok: false, error: 'MCP 调用超时' }), callTimeoutMs);
+    };
     const parse = (data) => {
       buffer += String(data);
       if (Buffer.byteLength(buffer) > 1024 * 1024) {
@@ -112,6 +151,14 @@ function runMcpTool(root, extension, tool, args, signal, context) {
         if (!line.trim().startsWith('{')) continue;
         try {
           const message = JSON.parse(line);
+          if (message.id === 1 && !handshaken) {
+            if (message.error) {
+              finish({ ok: false, error: 'MCP 握手失败：' + JSON.stringify(message.error) });
+              return;
+            }
+            startCall();
+            continue;
+          }
           if (message.id === 2) {
             if (message.error) finish({ ok: false, error: JSON.stringify(message.error) });
             else finish({ ok: true, output: JSON.stringify(message.result || {}) });
@@ -121,14 +168,16 @@ function runMcpTool(root, extension, tool, args, signal, context) {
     };
     child.stdout?.on('data', parse);
     child.stderr?.on('data', () => {});
-    child.on('error', (e) => finish({ ok: false, error: String((e && e.message) || e) }));
+    child.on('error', (e) => finish({ ok: false, error: spawnErrorHint(extension.command, e) }));
     child.on('close', (code) => { if (!finished) finish({ ok: false, error: `MCP 进程提前退出（${code}）` }); });
     onAbort = () => finish({ ok: false, error: 'MCP 扩展执行已取消', cancelled: true });
     signal && signal.addEventListener('abort', onAbort, { once: true });
+    // 先握手，再调用；握手超时/失败都如实报出来
     send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: extension.protocolVersion || '2024-11-05', capabilities: {}, clientInfo: { name: 'CodeNode', version: '0.12.0' } } });
-    send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
-    send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: args || {} } });
-    timer = setTimeout(() => finish({ ok: false, error: 'MCP 调用超时' }), Math.max(1000, Number(extension.timeoutMs) || 120000));
+    timer = setTimeout(
+      () => finish({ ok: false, error: 'MCP 握手超时（' + handshakeMs + 'ms 内未收到 initialize 应答）：server 可能不是 MCP stdio server，或启动被环境/权限拦住' }),
+      handshakeMs,
+    );
   });
 }
 

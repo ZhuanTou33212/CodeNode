@@ -13,6 +13,8 @@ const runStore = require('./runStore.cjs');
 // S8：统一运行事件流（.codenode/events.jsonl，带 runId/turnId/toolCallId/attemptId，可按 run 回放）
 const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
+// 上下文预算：每次请求前把最旧的超大工具结果裁成占位符（见 electron/contextBudget.cjs 顶部注释）
+const contextBudget = require('./contextBudget.cjs');
 const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
 // 工具的只读/缓存/变更语义只有一份来源（electron/tools/descriptor.cjs），不再各文件各留一份名单
 const TOOL_SEMANTICS = require('./tools/descriptor.cjs');
@@ -100,6 +102,7 @@ function loadConfig(projectRoot) {
     subagent: parseSubagentConfig(cfg),
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
+    context: parseContextConfig(cfg),
     sandbox: parseSandboxConfig(cfg),
     costPrices: parseCostPrices(cfg),
     alertThresholds: parseAlertThresholds(cfg),
@@ -321,6 +324,28 @@ function parseLimitsConfig(cfg) {
     maxToolIterations: configInteger(cfg, 'agent.max_tool_iterations', 12, 1, 200),
     maxTotalToolCalls: configInteger(cfg, 'agent.max_total_tool_calls', 100, 1, 2000),
     dataTruncateCap: configInteger(cfg, 'agent.data_truncate_cap', 120000, 2000, 2000000),
+  };
+}
+
+/**
+ * 上下文预算（第 1 项缺陷的最小修复）：见 electron/contextBudget.cjs 顶部注释。
+ *
+ * 默认值依据（2026-09-17 实测）：40 次 27KB 的 read_file 结果会把第 11 次请求的输入顶到
+ * 434,743 字符（≈145k tokens）—— 超过主流模型 128k 窗口，压缩配额用尽后原文直接进上下文。
+ * 250,000 字符 ≈ 70k tokens 的保守估计，给 system 提示、工具 schema 与输出留出余量。
+ */
+function parseContextConfig(cfg) {
+  return {
+    enabled: cfg['agent.context.trim'] == null ? true : String(cfg['agent.context.trim']).toLowerCase() !== 'false',
+    maxInputChars: configInteger(cfg, 'agent.context.max_input_chars', 250000, 20000, 4000000),
+    // 最近这么多条消息永不裁（少而精：当前任务的最新结果几乎总是要用的）
+    keepRecentMessages: configInteger(cfg, 'agent.context.keep_recent_messages', 12, 0, 200),
+    // 小于这个长度的工具结果不裁：省不下多少，反而丢信息
+    minResultChars: configInteger(cfg, 'agent.context.min_result_chars', 2000, 200, 100000),
+    // 第二档（预算单靠「最近 N 条之外」还是压不住时）仍然保护最后几条：默认 1
+    // —— 只保证「最后一条（通常是本轮最新的工具结果）+ system」永不被裁；再往上都属于可裁区，
+    // 因为唯一的替代方案是整条请求被供应商拒掉（超窗），那对用户更糟。
+    hardKeepRecentMessages: configInteger(cfg, 'agent.context.hard_keep_recent_messages', 1, 0, 50),
   };
 }
 
@@ -1431,6 +1456,74 @@ function mergeUsage(previous, next) {
 }
 
 /**
+ * 上限收尾（第 2 项缺陷的最小修复）。
+ *
+ * 缺陷：`agent.max_tool_iterations` / `agent.max_tool_calls` 触顶时只返回一句
+ * 「已达到模型迭代上限，任务未完成。」——**已完成的部分、失败原因、涉及的文件、能不能续跑**
+ * 全都没有；用户拿到的是一个看起来像报错的黑箱（而续跑入口又只列 interrupted 的 Run，
+ * 上限中止的 Run 因为 status='error' 被过滤掉了，等于连续跑按钮都看不到）。
+ *
+ * 本函数只做「如实陈述」：把这一轮真实发生过的工具调用按工具名归类，列出失败与涉及文件，
+ * 并说明续跑方式。**不做任何自动续跑**（是否继续由用户决定，且已提交的写操作由幂等账本保证不被重放）。
+ */
+function buildLimitWrapUp(options = {}) {
+  const toolCalls = Array.isArray(options.toolCalls) ? options.toolCalls : [];
+  const stopReason = options.stopReason || 'iteration_limit';
+  /** @type {Map<string, {ok: number, failed: number}>} */
+  const byName = new Map();
+  /** @type {Set<string>} */
+  const touched = new Set();
+  /** @type {Array<{tool: string, code: string, message: string}>} */
+  const failed = [];
+  for (const call of toolCalls) {
+    const name = String(call.name || 'unknown');
+    const stats = byName.get(name) || { ok: 0, failed: 0 };
+    if (call.ok === false) stats.failed += 1;
+    else stats.ok += 1;
+    byName.set(name, stats);
+    const data = call.data || {};
+    if (call.ok !== false) {
+      if (typeof data.path === 'string' && data.path) touched.add(data.path);
+      if (typeof data.file === 'string' && data.file) touched.add(data.file);
+      if (Array.isArray(data.changedFiles)) for (const file of data.changedFiles) if (typeof file === 'string' && file) touched.add(file);
+    }
+    if (call.ok === false) {
+      failed.push({
+        tool: name,
+        code: (call.failure && call.failure.code) || data.code || 'UNKNOWN',
+        message: String((call.failure && call.failure.message) || call.result || '').slice(0, 200),
+      });
+    }
+  }
+  const executed = [...byName.entries()].map(([name, stats]) => ({ name, ...stats }));
+  const doneText = executed.length
+    ? executed.map((item) => item.name + '×' + item.ok + (item.failed ? '（失败 ' + item.failed + '）' : '')).join('、')
+    : '（本轮没有成功完成的工具调用）';
+  const lines = [];
+  lines.push(stopReason === 'tool_limit' ? '【已达工具调用上限，任务未完成】' : '【已达模型迭代上限，任务未完成】');
+  lines.push('- 已实际执行：' + doneText);
+  if (failed.length) {
+    lines.push('- 失败的调用：' + failed.map((item) => item.tool + '（' + item.code + '）').join('、'));
+  }
+  if (touched.size) {
+    lines.push('- 涉及的文件（来自工具返回）：' + [...touched].slice(0, 10).join('、') + (touched.size > 10 ? ' 等 ' + touched.size + ' 个' : ''));
+  }
+  lines.push('- 接下来的选择：① 在界面上点「续跑」——会从断点检查点继续，已提交的写操作不会被重放；② 直接把下一步要做什么告诉我，我接着做。');
+  return {
+    text: lines.join('\n'),
+    data: {
+      stopReason,
+      executed,
+      failed,
+      touchedFiles: [...touched],
+      loopIterations: Number(options.loopIterations) || 0,
+      modelTurns: Number(options.modelTurns) || 0,
+      resumable: true,
+    },
+  };
+}
+
+/**
  * 带工具循环的 Agent 对话（ReAct）。
  * @param {object} opts
  *   cfg          loadConfig 返回值
@@ -1441,7 +1534,7 @@ function mergeUsage(previous, next) {
  *   timeoutMs     单轮模型请求的**总时长上限**（含流式中断后的重发；默认取
  *                 cfg.reliability.turnTimeoutMs，出厂 600s）。「停滞」与「重发次数」分别由
  *                 cfg.reliability.streamIdleTimeoutMs / streamMaxAttempts 控制。
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = null }) {
   // 单轮总时长：调用方显式传值优先（子代理按任务总时长钳制），否则读配置。
@@ -1483,6 +1576,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const maxTruncationNudges = Number.isFinite(cfg && cfg.reliability && cfg.reliability.truncationNudges)
     ? Math.max(0, Math.min(8, Number(cfg.reliability.truncationNudges)))
     : DEFAULT_TRUNCATION_NUDGES;
+  // 上下文预算：压缩（质量优先的摘要）之外的**硬兜底** —— 压缩配额用尽/压缩关闭时上下文仍有界。
+  const contextCfg = (cfg && cfg.context) || {};
+  const contextTrimEnabled = contextCfg.enabled !== false;
+  const contextMaxChars = Number(contextCfg.maxInputChars) > 0 ? Number(contextCfg.maxInputChars) : 250000;
+  const contextKeepRecent = Number.isFinite(Number(contextCfg.keepRecentMessages)) ? Number(contextCfg.keepRecentMessages) : 12;
+  const contextMinResultChars = Number(contextCfg.minResultChars) > 0 ? Number(contextCfg.minResultChars) : 2000;
+  const contextHardKeepRecent = Number.isFinite(Number(contextCfg.hardKeepRecentMessages)) ? Number(contextCfg.hardKeepRecentMessages) : 1;
+  let contextTrimCount = 0;
+  let contextTrimmedChars = 0;
   // P6：来源校验门（默认 warn = 只上报，行为与之前完全一致；enforce 才拦交付）
   const groundingCfg = (cfg && cfg.grounding) || {};
   const groundingEnforce = groundingCfg.mode === 'enforce';
@@ -1528,6 +1630,32 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         taskId: tools && tools.context && typeof tools.context.taskId === 'function' ? tools.context.taskId() : '',
         role: tools && tools.context && typeof tools.context.role === 'function' ? tools.context.role() : 'supervisor',
       };
+      // 上下文预算（第 1 项）：请求前裁剪。只把**旧的、超大的工具结果正文**换成占位符，
+      // 消息条数/角色顺序/tool_calls↔tool_call_id 配对一概不动 —— 不制造「孤立 tool 消息」。
+      if (contextTrimEnabled) {
+        const trim = contextBudget.applyTrim(messages, {
+          maxChars: contextMaxChars,
+          keepRecent: contextKeepRecent,
+          minResultChars: contextMinResultChars,
+          hardKeepRecent: contextHardKeepRecent,
+        });
+        if (trim.trimmed > 0) {
+          contextTrimCount += trim.trimmed;
+          contextTrimmedChars += trim.before - trim.after;
+          emitTrace({
+            kind: 'context_trim',
+            turnId: iter,
+            trimmed: trim.trimmed,
+            before: trim.before,
+            after: trim.after,
+            maxChars: trim.maxChars,
+            tier: trim.tier,
+            overBudget: trim.overBudget,
+            tools: trim.details.map((item) => item.toolName + ':' + item.originalChars),
+          });
+          onDelta && onDelta({ kind: 'context_trim', trimmed: trim.trimmed, before: trim.before, after: trim.after, tier: trim.tier, overBudget: trim.overBudget });
+        }
+      }
       const payload = {
         model: cfg.model,
         messages,
@@ -1970,11 +2098,19 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       break;
     }
     if (!endedNaturally) {
+      // 上限收尾（第 2 项）：不再只给一句「任务未完成」——把这一轮真实执行过什么、失败什么、
+      // 涉及哪些文件、怎么续跑，作为**阶段性结果**交付（模型已输出的部分保留在前面）。
+      const wrapUp = buildLimitWrapUp({ stopReason, toolCalls: allToolCalls, loopIterations, modelTurns });
       const error = stopReason === 'tool_limit' ? '已达到工具调用上限，任务未完成。' : '已达到模型迭代上限，任务未完成。';
+      const wrapped = content ? content + '\n\n' + wrapUp.text : wrapUp.text;
       // 上限不是「执行失败」：状态单列为 LIMIT_REACHED（调用方可据此提示续跑而不是让用户去排查错误）
       machine.go(classifyOutcome({ error, stopReason }), stopReason);
+      emitTrace({ kind: 'limit_wrapup', turnId: loopIterations, stopReason, executed: wrapUp.data.executed, failed: wrapUp.data.failed, touchedFiles: wrapUp.data.touchedFiles, contextTrims: contextTrimCount });
+      // 兼容既有契约：`error` delta 依然发（消费方/评测 `delta-kind: error` 锁着它，别偷偷换成别的 kind，
+      // 那会让上游判据变成红墙）；结构化收尾另走 limit_reached，两者是补充关系。
       onDelta && onDelta({ kind: 'error', error, stopReason, state: machine.state });
-      return { content, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state, iterations: modelTurns };
+      onDelta && onDelta({ kind: 'limit_reached', error, stopReason, state: machine.state, wrapUp: wrapUp.data, text: wrapUp.text });
+      return { content: wrapped, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state, iterations: modelTurns, wrapUp: wrapUp.data, contextTrims: contextTrimCount, contextTrimmedChars };
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
@@ -2004,16 +2140,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       streamRestarts,
       ...(endedNaturally && stopReason === 'length_truncated' ? { stopReason: 'length_truncated' } : {}),
       ...(groundingBlocked ? { groundingBlocked: true, groundingRetries } : {}),
+      contextTrims: contextTrimCount,
+      contextTrimmedChars,
     };
   } catch (e) {
     if (signal && signal.aborted) {
       machine.go(STATES.CANCELLED, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
-      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
+      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars };
     }
     machine.go(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
     onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e), state: machine.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns };
+    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars };
   }
 }
 
@@ -2039,6 +2177,8 @@ module.exports = {
   parseRagConfig,
   parseGroundingConfig,
   parseLimitsConfig,
+  parseContextConfig,
+  buildLimitWrapUp,
   mergeUsage,
   assignCallIds,
   redactSecrets,

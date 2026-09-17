@@ -6,6 +6,9 @@
 
 const fs = require('fs');
 const path = require('path');
+// 第 9 项：文本分支的读取上限（含原因区分报错）。2MB 是量测后的取舍：同步读 2MB 实测 7ms，
+// worker 固定往返约 24ms —— 搬 worker 是净变慢，所以这里用上限把最坏情况钉住。
+const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const { AgentToolResult } = require('../result.cjs');
 const { resolveInRoot, resolveFileFuzzy, detectLanguage, readTextFile, isSensitivePath } = require('./shared.cjs');
 const fsRunner = require('../fsRunner.cjs');
@@ -154,10 +157,22 @@ function register(registry) {
         }
         text = pdfResult.text;
       } else {
-        const read = readTextFile(file, 2 * 1024 * 1024);
+        const read = readTextFile(file, MAX_TEXT_BYTES);
         if (!read.ok) {
-          meta.binary = true;
-          return AgentToolResult.error(relative + ' 是二进制或不可读文件，不能用 read_file 读取；请按建议解析：' + binarySuggestion(relative), meta);
+          // 第 9 项：超上限 / 二进制 / 非 UTF-8 是**三种不同**情况，必须分开报。
+          // 此前统一渲染成「是二进制或不可读文件」—— 实测 20MB 的纯文本 .txt 也被这么说，
+          // 模型于是去试别的解析方式（甚至装 Python 库）把「文件太大」当成「文件坏了」。
+          const reason = String(read.error || '');
+          const overLimit = reason.includes('字节上限');
+          meta.binary = !overLimit;
+          if (overLimit) {
+            return AgentToolResult.error(
+              relative + ' ' + reason + '（read_file 文本分支上限 ' + Math.round(MAX_TEXT_BYTES / 1024 / 1024) + 'MB）。' +
+                '请改用 offset/maxLines 分段读取，或用 search_files / find_files 先定位目标片段，不要当成二进制文件处理。',
+              meta
+            );
+          }
+          return AgentToolResult.error(relative + ' 是二进制或不可读文件，不能用 read_file 读取（' + reason + '）；请按建议解析：' + binarySuggestion(relative), meta);
         }
         text = read.text;
       }

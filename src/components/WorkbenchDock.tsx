@@ -11,7 +11,17 @@ import type { Node } from '@xyflow/react';
 
 type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
 type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
-type AgentRun = { runId: string | null; status: string; startedAt: string | null; eventCount: number };
+type AgentRun = { runId: string | null; status: string; state?: string | null; startedAt: string | null; eventCount: number };
+/**
+ * 哪些 Run 值得出现在「可续跑」列表里（第 2 项缺陷）：
+ *   - `interrupted`：进程/连接中断，本来就在列；
+ *   - `state === 'LIMIT_REACHED'`：**跑到上限停下**（status 仍是 error，靠 state 区分）——
+ *     这些 Run 有检查点、续跑计划通常也是 auto，却被 `status === 'interrupted'` 的过滤挡在门外，
+ *     用户只能看到一句「任务未完成」，连续跑按钮都找不到。
+ */
+function isResumableRun(run: AgentRun) {
+  return run.status === 'interrupted' || run.state === 'LIMIT_REACHED';
+}
 type ResumePlan = {
   runId?: string;
   prompt?: string;
@@ -298,7 +308,7 @@ function RunsPanel() {
     let alive = true;
     if (!root || !window.codenode?.agentRuns) { setAgentRuns([]); return () => { alive = false; }; }
     void window.codenode.agentRuns(root).then((runs) => {
-      if (alive) setAgentRuns(runs.filter((run) => run.status === 'interrupted'));
+      if (alive) setAgentRuns(runs.filter(isResumableRun));
     }).catch(() => { if (alive) setAgentRuns([]); });
     return () => { alive = false; };
   }, [root]);
@@ -341,7 +351,7 @@ function RunsPanel() {
     try {
       await sendChat('（自动断点续跑）' + (resumePlan.prompt || ''), { resumeRunId: resumePlan.runId });
       setResumePlan(null);
-      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter((run) => run.status === 'interrupted'));
+      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
     } finally {
       setRecoveryBusy(false);
     }
@@ -358,7 +368,7 @@ function RunsPanel() {
       if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
       await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
       setResumePlan(null);
-      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter((run) => run.status === 'interrupted'));
+      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
     } finally { setRecoveryBusy(false); }
   };
 
@@ -430,7 +440,7 @@ function RunsPanel() {
       <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button><button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
-        <strong>中断的 Agent 运行</strong>
+        <strong>可续跑的 Agent 运行（中断 / 达到步数上限）</strong>
         {agentRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
           <span>{run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
           <button onClick={() => run.runId && void inspectResume(run.runId)} disabled={recoveryBusy}>查看恢复计划</button>

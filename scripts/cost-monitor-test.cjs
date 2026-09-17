@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { CostLedger, parsePrices, costOf } = require('../electron/costLedger.cjs');
+const { CostLedger, parsePrices, costOf, pricePrecision, tokenParts } = require('../electron/costLedger.cjs');
 const { AlertDispatcher, evaluateAlertRules, parseThresholds, DEFAULT_THRESHOLDS } = require('../electron/alerts.cjs');
 const { RequestQueue, modelQueue } = require('../electron/requestQueue.cjs');
 
@@ -37,6 +37,39 @@ fs.mkdirSync(path.join(root, '.codenode'), { recursive: true });
     JSON.stringify(prices));
   check('单价计算：按输入/输出分别计价（每百万 token）', Math.abs(costOf('scripted-model', { prompt_tokens: 1000000, completion_tokens: 1000000 }, prices) - 3) < 1e-9,
     String(costOf('scripted-model', { prompt_tokens: 1000000, completion_tokens: 1000000 }, prices)));
+
+  // ---- 缓存命中计价（任务单第 3 项）----
+  {
+    const cachedPrices = parsePrices({ 'cost.price.cached-model': '2,4,0.2' });
+    check('H1 单价支持第三段（缓存命中输入价）：解析进 price.cachedIn',
+      cachedPrices['cached-model'] && cachedPrices['cached-model'].cachedIn === 0.2 && cachedPrices['cached-model'].in === 2,
+      JSON.stringify(cachedPrices['cached-model']));
+    check('H1b 不写第三段时 precision=single-rate（只说精度，不假装精确）',
+      pricePrecision(parsePrices({ 'cost.price.plain': '1,2' })) === 'single-rate' && pricePrecision(cachedPrices) === 'cached-aware',
+      pricePrecision(parsePrices({ 'cost.price.plain': '1,2' })));
+    const usage = { prompt_tokens: 1000000, completion_tokens: 0, total_tokens: 1000000, prompt_cache_hit_tokens: 900000, prompt_cache_miss_tokens: 100000 };
+    const aware = costOf('cached-model', usage, cachedPrices);
+    check('H2 命中感知计费：900k 命中×0.2 + 100k 未命中×2 = 0.38 美元',
+      Math.abs(aware - (0.9 * 0.2 + 0.1 * 2)) < 1e-9, String(aware));
+    const single = costOf('cached-model', usage, parsePrices({ 'cost.price.cached-model': '2,4' }));
+    check('H2b 未配命中价时退回旧口径（全量输入计价）——不打折也不涨价',
+      Math.abs(single - 2) < 1e-9, String(single));
+    const openaiUsage = { prompt_tokens: 1000, completion_tokens: 10, total_tokens: 1010, prompt_tokens_details: { cached_tokens: 400 } };
+    const parts = tokenParts(openaiUsage);
+    check('H3 OpenAI 口径也认（prompt_tokens_details.cached_tokens，未命中由差额推）',
+      parts.cached === 400 && parts.miss === 600, JSON.stringify(parts));
+    const reasoning = tokenParts({ prompt_tokens: 10, completion_tokens: 500, total_tokens: 510, completion_tokens_details: { reasoning_tokens: 320 } });
+    check('H4 reasoning token 单独记录（并且不再重复计入总量）',
+      reasoning.reasoning === 320 && reasoning.completion === 500 && reasoning.total === 510, JSON.stringify(reasoning));
+    const reasonLedger = new CostLedger({ projectRoot: root, runId: 'run-cost-reasoning', prices: cachedPrices });
+    reasonLedger.record({ kind: 'main', model: 'cached-model', usage: { prompt_tokens: 0, completion_tokens: 500, total_tokens: 500, completion_tokens_details: { reasoning_tokens: 320 } } });
+    check('H5 账本累计 reasoningTokens，且成本只按 output 计一次（0.002）',
+      reasonLedger.summary().reasoningTokens === 320 && Math.abs(reasonLedger.summary().costUsd - 0.002) < 1e-9,
+      JSON.stringify({ reasoning: reasonLedger.summary().reasoningTokens, cost: reasonLedger.summary().costUsd }));
+    check('H6 snapshot 暴露计价精度（界面/日志能说清是估算还是命中感知）',
+      new CostLedger({ projectRoot: root, runId: 'run-cost-precision', prices: cachedPrices }).snapshot().pricePrecision === 'cached-aware',
+      String(new CostLedger({ projectRoot: root, runId: 'run-cost-precision2', prices: cachedPrices }).snapshot().pricePrecision));
+  }
 
   const ledger = new CostLedger({ projectRoot: root, runId: 'run-cost-1', prices });
   ledger.record({ kind: 'main', model: 'scripted-model', usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 }, latencyMs: 1200 });

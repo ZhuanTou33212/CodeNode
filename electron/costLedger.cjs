@@ -23,7 +23,14 @@ const runStore = require('./runStore.cjs');
 const MAX_IN_MEMORY = 5000;
 const DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 
-/** 解析 cost.price.<model>=<inPerMillion>,<outPerMillion> */
+/**
+ * 解析 cost.price.<model>=<inPerMillion>,<outPerMillion>[,<cachedInPerMillion>]
+ *
+ * 第 3 段是**缓存命中输入的单价**（第 3 项缺陷）：供应商对「命中的前缀缓存」收得比普通输入
+ * 便宜得多（DeepSeek 命中价约为未命中的 1/10，OpenAI 约 1/2），而账本此前只按 input/output
+ * 两个总价目乘全量 prompt —— 命中率一高，成本就被系统性高估（进而让成本告警与额度判断失真）。
+ * 不配第 3 段时行为与旧版逐字相同（按全量 prompt 计价），只是精度标注为 single-rate。
+ */
 function parsePrices(cfg) {
   const prices = {};
   for (const [key, value] of Object.entries(cfg || {})) {
@@ -33,7 +40,9 @@ function parsePrices(cfg) {
       .split(',')
       .map((item) => Number(String(item).trim()));
     if (!model || parts.length < 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) continue;
-    prices[model] = { in: parts[0], out: parts[1] };
+    const price = { in: parts[0], out: parts[1] };
+    if (parts.length >= 3 && Number.isFinite(parts[2])) price.cachedIn = parts[2];
+    prices[model] = price;
   }
   return prices;
 }
@@ -52,7 +61,13 @@ function tokenParts(usage) {
   const cached = Number.isFinite(Number(hitRaw)) ? Math.max(0, Number(hitRaw)) : 0;
   const missRaw = u.prompt_cache_miss_tokens ?? details.miss_tokens;
   const miss = Number.isFinite(Number(missRaw)) ? Math.max(0, Number(missRaw)) : Math.max(0, prompt - cached);
-  return { prompt, completion, total, cached, miss };
+  // reasoning token：供应商通常已把它算进 completion（DeepSeek 如此），这里**只单独记录供观测**，
+  // 绝不再加一遍 —— 重复计价比不记更糟。
+  const reasoningRaw = (u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens != null)
+    ? u.completion_tokens_details.reasoning_tokens
+    : u.reasoning_tokens;
+  const reasoning = Number.isFinite(Number(reasoningRaw)) ? Math.max(0, Number(reasoningRaw)) : null;
+  return { prompt, completion, total, cached, miss, reasoning };
 }
 
 /** 缓存命中率：命中 /（命中 + 未命中）；没有数据时为 null —— 不编造。 */
@@ -63,15 +78,32 @@ function withCacheRate(counters) {
   return { ...counters, promptCacheHitRate: denom > 0 ? Number((hit / denom).toFixed(4)) : null };
 }
 
+/**
+ * 计费。
+ *   - 配了 cachedIn（第 3 段）：按「未命中输入 × in + 命中输入 × cachedIn + 输出 × out」计价，
+ *     数据缺失（cached 为 0）时退化成全量按 in 计 —— 与旧版一致，不会凭空变便宜。
+ *   - 没配 cachedIn：沿用旧口径（全量 prompt × in），精度标注为 single-rate。
+ */
 function costOf(model, usage, prices) {
   const price = prices && prices[model];
   if (!price) return null;
-  const { prompt, completion } = tokenParts(usage);
+  const { prompt, completion, cached, miss } = tokenParts(usage);
+  if (Number.isFinite(price.cachedIn)) {
+    const missTokens = Number.isFinite(miss) ? Math.min(miss, prompt) : prompt;
+    return (missTokens / 1e6) * price.in + (cached / 1e6) * price.cachedIn + (completion / 1e6) * price.out;
+  }
   return (prompt / 1e6) * price.in + (completion / 1e6) * price.out;
 }
 
+/** 计价精度：账本对外必须说清「这是估算还是命中感知的计费」（第 3 项的结论要求） */
+function pricePrecision(prices) {
+  const models = Object.keys(prices || {});
+  if (!models.length) return 'unknown';
+  return models.every((model) => Number.isFinite(prices[model].cachedIn)) ? 'cached-aware' : 'single-rate';
+}
+
 function emptyCounters() {
-  return { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, promptCachedTokens: 0, promptMissTokens: 0, totalTokens: 0, costUsd: 0, costKnown: true, estimated: 0, latencyMs: 0 };
+  return { requests: 0, errors: 0, retries: 0, promptTokens: 0, completionTokens: 0, promptCachedTokens: 0, promptMissTokens: 0, reasoningTokens: 0, totalTokens: 0, costUsd: 0, costKnown: true, estimated: 0, latencyMs: 0 };
 }
 
 function addCounters(target, entry, cost) {
@@ -82,6 +114,8 @@ function addCounters(target, entry, cost) {
   target.completionTokens += entry.tokens.completion;
   target.promptCachedTokens += Number(entry.tokens.cached) || 0;
   target.promptMissTokens += Number(entry.tokens.miss) || 0;
+  // reasoning 是 completion 的子集（供应商口径），只做观测统计，不进 costUsd 的算式
+  target.reasoningTokens += Number(entry.tokens.reasoning) || 0;
   target.totalTokens += entry.tokens.total;
   if (cost == null) target.costKnown = false;
   else target.costUsd += cost;
@@ -200,10 +234,12 @@ class CostLedger {
       today: this.today(),
       kinds: { ...this.byKind },
       priceModels: Object.keys(this.prices),
+      // 计价精度（第 3 项）：single-rate = 命中价未配置，成本是按全量输入估的；cached-aware = 命中/未命中分价
+      pricePrecision: pricePrecision(this.prices),
       queue: queueInfo || null,
       recent: this.entries.slice(-20),
     };
   }
 }
 
-module.exports = { CostLedger, parsePrices, costOf, tokenParts, emptyCounters, withCacheRate };
+module.exports = { CostLedger, parsePrices, costOf, pricePrecision, tokenParts, emptyCounters, withCacheRate };

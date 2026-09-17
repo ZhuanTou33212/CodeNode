@@ -26,6 +26,8 @@ const READ_ONLY_TOOLS = new Set([
   'retrieve_context',
   // 语义上只读，但**故意不进缓存白名单**：画布/标量是权威读源，变更后必须立刻读到最新状态
   'get_workbench_model', 'query_scalars', 'poll_job', 'recall', 'get_subagent_task',
+  // 取消子任务（第 6 项）：只 abort 一个子代理，不改工作区；与 get_subagent_task 同类
+  'cancel_subagent_task',
 ]);
 
 /**
@@ -42,6 +44,9 @@ const CACHEABLE_TOOLS = new Set([
 const MUTATION_TOOLS = new Set([
   'workbench_edit', 'bulk_edit', 'write_file', 'edit_file',
   'write_analysis_md', 'save_project', 'ui_control', 'remember',
+  // 遗留未接入（第 4 项）：create_nodes / workbench_connect 的实现文件在，但没注册进
+  // toolkit.BUILTINS，模型看不到它们（断言见 scripts/tool-contract-closure-test.cjs 的 NOT_WIRED）。
+  // 这里保留名字只为「万一有新路径注册它们」时语义仍然正确，不代表它们是可用工具。
   'create_nodes', 'workbench_connect', 'delegate_task', 'delegate_tasks',
 ]);
 
@@ -78,6 +83,7 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   scan_project: 'workspace.write',
   recall: 'workspace.read',
   get_subagent_task: 'workspace.read',
+  cancel_subagent_task: 'subagent.delegate',
   poll_job: 'shell.execute',
   write_file: 'workspace.write',
   edit_file: 'workspace.write',

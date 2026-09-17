@@ -162,6 +162,8 @@ interface CodenodeApi {
   agentRuns: (root: string | null) => Promise<Array<{
     runId: string | null;
     status: string;
+    /** 终态细分：LIMIT_REACHED（跑到上限）与 FAILED 都写 status='error'，靠它区分 */
+    state?: string | null;
     startedAt: string | null;
     finishedAt: string | null;
     eventCount: number;
@@ -285,6 +287,19 @@ interface CodenodeApi {
     alerts?: AlertDto[];
     resumedFrom?: string;
     needsReview?: boolean;
+    /** 达到迭代/工具调用上限时的结构化收尾（第 2 项）：已完成/失败/涉及文件/是否可续跑 */
+    wrapUp?: {
+      stopReason?: string;
+      executed?: { name: string; ok: number; failed: number }[];
+      failed?: { tool: string; code: string; message: string }[];
+      touchedFiles?: string[];
+      resumable?: boolean;
+    };
+    /** 上限中止（status 仍是 error，靠它区分「跑不完」与「真的出错」） */
+    limitReached?: boolean;
+    /** 上下文预算裁剪：被裁掉的工具结果条数与释放的字符数（第 1 项） */
+    contextTrims?: number;
+    contextTrimmedChars?: number;
   }>;
   stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {
