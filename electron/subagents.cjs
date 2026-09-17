@@ -21,6 +21,7 @@
 
 const { AgentToolResult } = require('./tools/result.cjs');
 const roles = require('./tools/roles.cjs');
+const subagentPrompt = require('./subagentPrompt.cjs');
 const { createSubagentBudget } = require('./requestBudget.cjs');
 
 /** 只读角色（来自角色契约，不再各留一份名单） */
@@ -65,24 +66,22 @@ function clampTotalTimeout(seconds, fallbackSeconds) {
   return Math.max(MIN_TOTAL_TIMEOUT_MS, Math.min(MAX_TOTAL_TIMEOUT_MS, Math.floor(base * 1000)));
 }
 
-function taskPrompt(task) {
-  const criteria = Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length
-    ? '\n验收条件：\n- ' + task.acceptanceCriteria.join('\n- ')
-    : '';
-  const inputs = task.inputs && typeof task.inputs === 'object'
-    ? '\n上游输入：\n' + JSON.stringify(task.inputs)
-    : '';
-  return [
-    '你是 CodeNode 的子代理。',
-    roles.rolePrompt(task.role),
-    '只完成当前任务，不扩展范围；不要假设未读取到的事实。',
-    '任务编号：' + task.taskId,
-    '任务目标：' + task.objective,
-    criteria,
-    inputs,
-    '总时长上限：' + Math.round(task.totalTimeoutMs / 1000) + ' 秒（超时会被中止，请优先产出可交付的部分）。',
-    '完成后用固定小标题返回：结论 / 证据引用 / 变更文件 / 测试结果 / 风险 / 未完成事项。',
-  ].filter(Boolean).join('\n');
+/**
+ * 默认的项目 Skill 读取：与主代理**同一个来源**（`.codenode/extensions.json` 或
+ * `config/extensions.json` 里 kind=skills 的条目），此前子代理完全看不到它们。
+ * 延迟 require extensions.cjs —— 它连带 sandbox / context 等重量级依赖，构造路径上不需要。
+ * @param {string|null} projectRoot
+ */
+function defaultProjectSkills(projectRoot) {
+  if (!projectRoot) return [];
+  try {
+    return require('./tools/extensions.cjs')
+      .readManifest(projectRoot)
+      .filter((item) => String(item.kind || '').toLowerCase() === 'skills')
+      .map((item) => ({ name: String(item.name), instructions: String(item.instructions || item.description || '') }));
+  } catch {
+    return [];
+  }
 }
 
 /** 从工具调用记录里提取被改动的文件（best-effort，解析不出就跳过，绝不猜） */
@@ -147,6 +146,8 @@ class SubagentManager {
     this.registry = o.registry;
     this.runId = o.runId || 'run-' + Date.now().toString(36);
     this.onDelta = o.onDelta || null;
+    /** 读项目自定义 Skill（kind=skills 的扩展）；可注入，便于用例离线验证 */
+    this.readProjectSkills = typeof o.readProjectSkills === 'function' ? o.readProjectSkills : defaultProjectSkills;
     this.tasks = new Map();
     /** @type {Record<string, number>} 子代理配置（agent.subagent.*），缺项用默认值 */
     this.subCfg = Object.assign({}, DEFAULTS, (o.cfg && o.cfg.subagent) || {});
@@ -155,10 +156,17 @@ class SubagentManager {
   register(registry) {
     this.registry = registry;
     const roleList = roles.ROLE_NAMES.join('/');
+    // 派活对照表：主代理必须能看出「这类工作该交给哪个角色」，否则会拿 explorer 去改代码、拿 reviewer 去跑测试
+    const roleGuide = roles.ROLE_NAMES
+      .map((name) => {
+        const def = roles.roleDefinition(name);
+        return '  - ' + name + '（' + (def ? def.label : name) + '）：' + (def ? def.work.join('；') : '');
+      })
+      .join('\n');
     registry.register(
       'delegate_task',
-      '创建并执行一个受角色工具权限约束的子代理任务。role 可选 ' + roleList +
-        '；stageNodeId 可绑定画布 stage 节点；timeoutSeconds 是**任务总时长**（秒，默认 ' + this.subCfg.totalTimeoutSeconds + '）。',
+      '创建并执行一个受角色工具权限约束的子代理任务。\n按工作类型选角色：\n' + roleGuide +
+        '\nstageNodeId 可绑定画布 stage 节点；timeoutSeconds 是**任务总时长**（秒，默认 ' + this.subCfg.totalTimeoutSeconds + '）。',
       {
         type: 'object',
         properties: {
@@ -191,7 +199,7 @@ class SubagentManager {
     );
     registry.register(
       'delegate_tasks',
-      '批量执行子代理任务；全部为只读角色时并行执行，包含写角色时按顺序执行。',
+      '批量执行子代理任务（角色含义与 delegate_task 一致；全部为只读角色时并行执行，包含写角色时按顺序执行）。',
       {
         type: 'object',
         properties: { tasks: { type: 'array', items: { type: 'object' } } },
@@ -279,10 +287,18 @@ class SubagentManager {
       const childCfg = childBudget && childBudget !== this.cfg.requestBudget
         ? { ...this.cfg, requestBudget: childBudget }
         : this.cfg;
+      // 子代理的 system prompt：身份 + 工作范围 + **真实注册表里的**可用工具 + 职责技能 + 项目 Skill + 运行规则。
+      // 工具清单取自 childRegistry（不是手写名单），永远不会与角色权限裁剪漂移。
+      const childTools = childRegistry.listTools().map((spec) => ({ name: spec.name, description: spec.description }));
+      const systemPrompt = subagentPrompt.buildSubagentPrompt(task, {
+        role,
+        tools: childTools,
+        projectSkills: this.readProjectSkills(context.projectRoot()),
+      });
       result = await this.agent.runAgentChat({
         cfg: childCfg,
         messages: [
-          { role: 'system', content: taskPrompt(task) },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: objective },
         ],
         tools: { registry: childRegistry, context: childContext },

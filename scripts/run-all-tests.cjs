@@ -37,6 +37,7 @@ const CORE = [
   'test:dep-declaration',
   'test:subagent',
   'test:subagent-isolation',
+  'test:subagent-role-skill',
   'test:compression-batch',
   'test:tool-failure-taxonomy',
   'test:scheduler-parallel',
