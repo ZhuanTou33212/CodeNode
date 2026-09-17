@@ -62,6 +62,8 @@ const CORE = [
   'test:stream-accumulator',
   'test:stream-recovery',
   'test:compaction',
+  'test:subagent-envelope',
+  'test:context-overflow',
   'test:truncation-safety',
   'test:agent-state',
   'test:tool-descriptor',
@@ -84,7 +86,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:vector', 'test:event-replay-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:vector', 'test:event-replay-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);

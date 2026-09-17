@@ -20,6 +20,8 @@
 'use strict';
 
 const { AgentToolResult } = require('./tools/result.cjs');
+// 子代理结果的**单一 JSON 信封**（多 Agent 信息完整性 P1/P2）：契约校验 + 产物哈希 + 有损自报
+const subagentEnvelope = require('./subagentEnvelope.cjs');
 const roles = require('./tools/roles.cjs');
 const subagentPrompt = require('./subagentPrompt.cjs');
 const { createSubagentBudget } = require('./requestBudget.cjs');
@@ -104,10 +106,11 @@ function changedFiles(toolCalls) {
 
 /**
  * 对外的任务视图（也会作为 AgentToolResult.data 回给主代理）。
- * contract 字段是 S9 的「结构化合并契约」：主代理不必只靠读自然语言判断成败。
+ * `envelope` = 该任务完成时**一次性**建好的单一 JSON 信封（见 electron/subagentEnvelope.cjs）：
+ * 哈希/产物是那一刻的真实值，之后的查询只做回放，不重算（重算会让哈希随世界变化而变化，
+ * 反而毁掉「判断报告之后世界是否又变过」的用途）。
  */
 function taskView(task) {
-  const files = changedFiles(task.toolCalls);
   return {
     taskId: task.taskId,
     runId: task.runId,
@@ -120,18 +123,7 @@ function taskView(task) {
     grounding: task.grounding || null,
     usage: task.usage || null,
     stageWarning: task.stageWarning || null,
-    contract: {
-      role: task.role,
-      status: task.status,
-      totalTimeoutMs: task.totalTimeoutMs,
-      toolCalls: Array.isArray(task.toolCalls)
-        ? task.toolCalls.slice(-30).map((call) => ({ name: call && call.name, ok: !!(call && call.ok) }))
-        : [],
-      changedFiles: files,
-      toolCallCount: Array.isArray(task.toolCalls) ? task.toolCalls.length : 0,
-      // 验收是否达成不做自动判定（会变成编造）：交给主代理按 acceptanceCriteria 自行核对
-      acceptanceJudgement: 'manual',
-    },
+    envelope: task.envelope || null,
     startedAt: task.startedAt,
     finishedAt: task.finishedAt || null,
   };
@@ -377,20 +369,43 @@ class SubagentManager {
     task.finishedAt = new Date().toISOString();
     this.tasks.set(task.taskId, task);
 
-    const view = taskView(task);
-    const head =
-      '[子代理结果] taskId=' + task.taskId + ' role=' + task.role + ' status=' + task.status +
-      ' 工具调用=' + view.contract.toolCallCount +
-      (view.contract.changedFiles.length ? ' 变更文件=' + view.contract.changedFiles.length : '');
     const body = task.status === 'done' ? (task.summary || '（子代理未返回文本）') : (task.error || '子代理任务未完成');
     const cap = this.subCfg.resultMaxChars;
-    const clipped = body.length > cap
-      ? body.slice(0, cap) + '\n…（结果过长，已截断 ' + (body.length - cap) + ' 字符；完整结果可用 get_subagent_task(taskId=' + task.taskId + ') 查看）'
-      : body;
-    const text = head + '\n' + clipped;
+    const clipped = body.length > cap;
+    const summaryText = clipped ? body.slice(0, cap) : body;
+    // 单一 JSON 信封（P1）：字段齐全、带世界状态快照、产物真实哈希、截断自报 lossy。
+    // 契约违约 → 下面的工具结果会是 error（**拒收**），主代理不得把它的结论当证据。
+    const built = subagentEnvelope.buildEnvelope({
+      task,
+      projectRoot: context.projectRoot(),
+      model: typeof context.model === 'function' ? context.model() : null,
+      inReplyTo: task.parentToolCallId || null,
+      changedFiles: changedFiles(task.toolCalls),
+      summary: task.status === 'done' ? summaryText : '',
+      error: task.status === 'done' ? '' : summaryText,
+      clipped: clipped ? { droppedChars: body.length - cap } : null,
+    });
+    task.envelope = built.envelope;
+    // view 必须在信封建好之后再取：view.envelope 要带上它（回放不改哈希）
+    const view = taskView(task);
+    const text = subagentEnvelope.renderEnvelopeText(built.envelope, built.violations);
     await this.updateStage(context, task, task.status, text.slice(0, 4000));
     context.audit(JSON.stringify({ kind: 'subagent_end', runId: this.runId, taskId: task.taskId, role, status: task.status }));
-    if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId: task.taskId, role, status: task.status, summary: clipped.slice(0, 200) });
+    if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId: task.taskId, role, status: task.status, summary: summaryText.slice(0, 200) });
+    if (built.violations.length) {
+      // 拒收：契约不完整的结果**不能**当结论用（这正是「信任放大」的闸门）
+      context.audit(
+        JSON.stringify({
+          kind: 'subagent_envelope_rejected',
+          taskId: task.taskId,
+          violations: built.violations.map((v) => v.path + ': ' + v.message),
+        })
+      );
+      return AgentToolResult.error(
+        text + '\n（该结果已被契约校验**拒收**：缺字段/缺快照/无结论的结果不得作为证据。可按上面的违约项让子代理重做，或由主代理直接完成这一步。）',
+        view
+      );
+    }
     return task.status === 'done'
       ? AgentToolResult.ok(text, view)
       : AgentToolResult.error(

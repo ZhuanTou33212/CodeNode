@@ -304,6 +304,8 @@ interface CodenodeApi {
     contextTrimmedChars?: number;
     /** 上下文压缩（照 Codex CLI）：本次运行压了几次；摘要与「给模型的信封」供界面折叠旧消息 */
     compacted?: number;
+    /** 供应商报超窗后「降级窗口 + 压一次 + 重发」救回来的次数（0 = 没发生） */
+    overflowRecoveries?: number;
     contextSummary?: string;
     contextSummaryEnvelope?: string;
   }>;

@@ -224,7 +224,10 @@ async function runTurn(options) {
   // ---- (6) 摘要失败 → fail-open：不阻断本轮、如实上报、硬裁剪仍兜底 ----
   {
     const turn = await runTurn({
-      contextWindow: 1000,
+      // 窗口取值要卡在一个窄区间里：估算（**含工具 schema**，≈2376）> 阈值，且 ≥ 输入本身。
+      // 取 2500：阈值 2250 < 2376（会触发压缩）、2376 ≤ 2500（预检不会拒发）。
+      // 若不把工具 schema 计入估算，窗口就会选小 → 压缩失败后预检直接拒发（那是另一条判据）。
+      contextWindow: 2500,
       script: [
         {},  // 摘要请求：脚本给空内容（模型没吐摘要）
         { content: '照常交付。', finishReason: 'stop' },

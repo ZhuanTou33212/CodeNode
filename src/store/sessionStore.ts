@@ -55,6 +55,15 @@ interface SessionState {
     tokensAfter?: number;
     keptUserTurns?: number;
     reason?: string;
+    /** kind==='context_overflow'：preflight | recovering；以及估算 token / 窗口 */
+    phase?: string;
+    tokens?: number;
+    reserve?: number;
+    window?: number;
+    /** kind==='max_tokens_capped'：收缩前/后的输出上限 */
+    from?: number;
+    to?: number;
+    providerMessage?: string;
   }) => void;
   /**
    * 上下文压缩（照 Codex CLI）：把当前对话折叠成一张交接摘要卡 —— 旧消息标记 `compacted`
@@ -278,6 +287,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     if (d.kind === 'compacted' && d.ok === false) {
       useUiStore.getState().setToast('上下文压缩失败：' + (d.reason || '未知原因') + '（已改用硬裁剪兜底）');
+      return;
+    }
+    // 超窗自救：供应商真报了超窗 → 立刻压缩重发。必须让用户看到「为什么这一轮慢了一拍」。
+    if (d.kind === 'context_overflow') {
+      useUiStore
+        .getState()
+        .setToast(
+          d.phase === 'recovering'
+            ? '上下文超窗：正在压缩后重试（估算 ' + (d.tokens || 0) + ' tokens，已将本模型窗口下调为 ' + (d.window || 0) + '）'
+            : '上下文超窗：本轮未发送（估算 ' + (d.tokens || 0) + ' tokens > 窗口 ' + (d.window || 0) + '）'
+        );
+      return;
+    }
+    // 输出预算被上下文挤压：本轮输出上限临时缩小（如实告知，别让用户以为模型变笨了）
+    if (d.kind === 'max_tokens_capped') {
+      useUiStore.getState().setToast('上下文偏满：本轮输出上限临时从 ' + (d.from || 0) + ' 降为 ' + (d.to || 0));
       return;
     }
     const msgs = s.messages.map((m) => ({ ...m }));

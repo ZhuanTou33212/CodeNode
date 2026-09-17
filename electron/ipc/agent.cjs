@@ -309,6 +309,25 @@ function register(ctx) {
             window: delta.window || 0,
             trigger: delta.trigger || null,
           });
+        } else if (delta.kind === 'context_overflow') {
+          // 超窗（预检拦住 / 供应商真拒了后自救）：这是「回答写一半就断」的最后一类现场，
+          // 必须能在 run 记录里查到「当时估算多少 token、窗口按多少算的」。
+          runStore.appendEvent(projectRoot, runId, delta.phase === 'recovering' ? 'context_overflow_recovering' : 'context_overflow', {
+            phase: delta.phase || null,
+            tokens: delta.tokens || 0,
+            reserve: delta.reserve || 0,
+            window: delta.window || 0,
+            status: delta.status || null,
+            providerMessage: delta.providerMessage || null,
+          });
+        } else if (delta.kind === 'max_tokens_capped') {
+          // 上下文挤掉输出预算 → 本轮输出上限临时收缩（用户会看到回答变短，原因要留痕）
+          runStore.appendEvent(projectRoot, runId, 'max_tokens_capped', {
+            from: delta.from || 0,
+            to: delta.to || 0,
+            tokens: delta.tokens || 0,
+            window: delta.window || 0,
+          });
         } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
           runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null, state: delta.state || null });
         }
@@ -516,6 +535,7 @@ function register(ctx) {
       // 界面据此把压缩前的消息折叠掉（下次请求只送摘要 + 之后的新消息），
       // 否则每个新回合都会把整段旧历史再发一遍 —— 刚压完又立刻超线，白烧一次压缩调用。
       out.compacted = Number(result.compacted) || 0;
+      out.overflowRecoveries = Number(result.overflowRecoveries) || 0;
       if (result.contextSummary) out.contextSummary = String(result.contextSummary);
       if (result.contextSummaryEnvelope) out.contextSummaryEnvelope = String(result.contextSummaryEnvelope);
       if (dirty && model) out.document = model.doc;

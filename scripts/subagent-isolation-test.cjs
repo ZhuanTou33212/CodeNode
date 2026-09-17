@@ -174,15 +174,27 @@ const ok = (label) => console.log('  ✓ ' + label);
   manager.register(supervisor);
   const done = await supervisor.execute('delegate_task', { role: 'builder', objective: '写文件', stageNodeId: 'stage-1' }, context);
   assert.strictEqual(done.ok, true);
-  assert.ok(String(done.text).startsWith('[子代理结果] taskId='), '结果必须有固定字段头');
+  // P1：结果不再是「字段头 + 自由文本」，而是一个带契约的 JSON 信封（可校验、可拒收）
+  const envelope = done.data.envelope;
+  assert.ok(String(done.text).startsWith('[子代理结果] 契约 v1'), '结果必须是单一 JSON 信封（契约 v1）');
   assert.ok(String(done.text).includes('已截断'), '超长结果必须截断');
-  assert.ok(String(done.text).length < 1200, '截断后才进主上下文（不是 20000 字符全灌进去）');
-  assert.deepStrictEqual(done.data.contract.changedFiles, ['a/b.txt'], '变更文件要结构化回传');
-  assert.strictEqual(done.data.contract.acceptanceJudgement, 'manual', '验收结论不自动编造');
-  assert.strictEqual(done.data.contract.totalTimeoutMs, 600000);
+  assert.ok(String(done.text).length < 2000, '截断后才进主上下文（不是 20000 字符全灌进去）');
+  assert.strictEqual(envelope.v, 1);
+  assert.ok(/^sha256:[0-9a-f]{64}$/.test(envelope.snapshot.hash), '必须带世界状态（画布）快照哈希');
+  assert.deepStrictEqual(envelope.refs, [{ kind: 'changed_file', path: 'a/b.txt' }], '变更文件要结构化回传');
+  assert.strictEqual(envelope.payload.acceptanceJudgement, 'manual', '验收结论不自动编造');
+  assert.strictEqual(envelope.payload.totalTimeoutMs, 600000);
+  assert.strictEqual(envelope.trust, 'derived', 'trust 不自动升到 verified（只有独立复跑产物才能升）');
+  assert.strictEqual(envelope.lossy.isLossy, true, '截断必须自报有损');
+  assert.ok(String(envelope.lossy.originalRef).includes('get_subagent_task'), '有损必须给出完整原文的取回方式');
+  assert.strictEqual(
+    envelope.evidence.files[0].exists,
+    false,
+    '声称改了、文件却不存在 → 如实记 exists:false（不得当真产物）'
+  );
   assert.strictEqual(model.byId('stage-1').data.status, 'done');
   assert.strictEqual(model.byId('stage-1').data.result_summary.startsWith('[子代理结果]'), true);
-  ok('F 结果合并契约（字段头/截断/变更文件/结构化 contract）');
+  ok('F 结果合并契约（单一 JSON 信封：快照/产物/有损自报/trust 不自动升级）');
 
   const missing = await supervisor.execute('delegate_task', { role: 'explorer', objective: '探查', stageNodeId: 'missing' }, context);
   assert.strictEqual(missing.ok, true);

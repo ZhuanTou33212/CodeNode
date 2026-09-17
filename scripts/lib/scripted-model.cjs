@@ -65,10 +65,31 @@ function installScriptedModel(script, options = {}) {
     try {
       body = JSON.parse(String((init && init.body) || '{}'));
     } catch {}
-    state.seen.push({ url: String(url), messages: body.messages || [] });
+    // 记录请求体的关键字段：用例除了 messages 还要断言 max_tokens（超窗收缩）、tools 等
+    state.seen.push({
+      url: String(url),
+      messages: body.messages || [],
+      maxTokens: body.max_tokens,
+      hasTools: Array.isArray(body.tools) && body.tools.length > 0,
+      model: body.model,
+    });
     const index = state.calls - 1;
     const turn = script[index] || (state.loopLast ? script[script.length - 1] : { content: '（脚本已用尽）' });
     if (typeof options.onTurn === 'function') options.onTurn(turn, state.calls, body);
+    // 失败响应（httpStatus）：用于验证「供应商 400/超窗」这类路径 —— 之前的 stub 只会成功，
+    // 任何错误分支都没法离线复现（要么真连网，要么测不到）。
+    if (turn && Number(turn.httpStatus) >= 400) {
+      const errBody =
+        typeof turn.body === 'string' ? turn.body : JSON.stringify(turn.body || { error: { message: 'scripted error', type: 'invalid_request_error' } });
+      return {
+        ok: false,
+        status: Number(turn.httpStatus),
+        headers: { get: () => null },
+        text: async () => errBody,
+        json: async () => JSON.parse(errBody),
+        body: null,
+      };
+    }
     const stream = buildStream(turn || { content: '' });
     const encoder = new TextEncoder();
     // 非流式消费（chatCompletion：压缩/摘要这类内部调用）走 json()：必须给一个**合法**的

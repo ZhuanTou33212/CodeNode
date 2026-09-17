@@ -353,6 +353,71 @@ function parseContextConfig(cfg) {
 }
 
 /**
+ * 上下文超窗（供应商 400）的识别与「窗口降级」账本。
+ *
+ * 为什么需要：压缩的触发线依赖**模型管理里填的 contextWindow**。如果那个值比供应商实际允许的
+ * 窗口大（标称 1M、实际 128k 这种），压缩就会**迟于** 400 触发 —— 表现还是「聊一半断掉」。
+ * 所以真被拒过一次之后，就把该模型的**保守窗口下限**记在进程内（不写用户配置），
+ * 让压缩线立刻变得可信；同时本轮的请求压一次再重发，尽量把这次对话救回来。
+ */
+const contextWindowOverrides = new Map();
+
+function contextWindowKey(cfg) {
+  return String((cfg && cfg.apiBase) || '') + '|' + String((cfg && cfg.model) || '');
+}
+
+/**
+ * 记下一次「供应商说超窗」→ 该模型的有效窗口下调到 `估算 × 0.9`（保守，宁可早压不可晚压）。
+ * 取**历史最小值**：多次被拒说明猜得还不够保守。
+ * @returns {number} 记录后的保守窗口
+ */
+function noteContextOverflow(cfg, tokens) {
+  const key = contextWindowKey(cfg);
+  const guess = Math.max(1024, Math.floor((Number(tokens) || 0) * 0.9));
+  const prev = contextWindowOverrides.get(key);
+  if (prev === undefined || guess < prev) contextWindowOverrides.set(key, guess);
+  return contextWindowOverrides.get(key);
+}
+
+function getContextWindowOverride(cfg) {
+  return contextWindowOverrides.get(contextWindowKey(cfg)) || 0;
+}
+
+/** 用例/自检用：清空窗口降级账本 */
+function resetContextWindowOverrides() {
+  contextWindowOverrides.clear();
+}
+
+/**
+ * 判断一个请求错误是不是「上下文超窗」。只认「HTTP 4xx + 上下文/长度相关措辞」——
+ * 光看 400 会把「工具 schema 非法」这类真错误误判成超窗，那会掩盖真因。
+ * @returns {{message: string, status: number|null}|null}
+ */
+function classifyContextOverflow(error) {
+  const parts = [];
+  const push = (value, depth) => {
+    if (!value || depth > 2) return;
+    if (typeof value === 'string') parts.push(value);
+    else if (typeof value === 'object') {
+      if (value.message) parts.push(String(value.message));
+      if (value.cause && depth < 2) push(value.cause, depth + 1);
+      if (value.error && depth < 2) push(value.error, depth + 1);
+    }
+  };
+  push(error, 0);
+  const text = parts.join(' | ').slice(0, 2000);
+  if (!text) return null;
+  const statusMatch = text.match(/HTTP\s+(\d{3})/);
+  const status = statusMatch ? Number(statusMatch[1]) : null;
+  const overflowish = /context[_ ]length|maximum context|max(?:imum)?[ _]?context[_ ]?(?:length|tokens)|reduce the length|too many tokens|exceed(?:s|ed)?[^.]{0,24}context|上下文.{0,6}(?:超|过长|上限)|tokens? in the (?:messages|completion)/i.test(
+    text
+  );
+  const httpish = status === null || status === 400 || status === 413 || status === 422;
+  if (!overflowish || !httpish) return null;
+  return { message: text, status };
+}
+
+/**
  * 上下文压缩（照 **Codex CLI** 的做法）：提示词、触发线、新历史形状都取自 Codex 的实测行为，
  * 详见 electron/compaction.cjs 顶部注释（含取证来源与行号级依据）。
  *
@@ -376,6 +441,11 @@ function parseCompactionConfig(cfg) {
     keepUserTotalChars: configInteger(cfg, 'agent.compact.keep_user_total_chars', 20000, 500, 500000),
     // 硬裁剪一启动（占位符已经开始顶替正文）就顺手做语义压缩：占位符换不出质量
     onTrim: cfg['agent.compact.on_trim'] == null ? true : String(cfg['agent.compact.on_trim']).toLowerCase() !== 'false',
+    /**
+     * 供应商真报超窗（400）时「压一次 + 重发」的自救次数。只救一次是刻意的：
+     * 压完还超说明剩下的东西本身超窗，硬重试只会烧钱。0 = 关掉自救（仅如实报错）。
+     */
+    overflowRecoveries: configInteger(cfg, 'agent.compact.overflow_recoveries', 1, 0, 3),
     // 摘要用哪个模型（留空跟随主模型）；摘要不需要思考链，默认关
     model: String(cfg['agent.compact.model'] || '').trim(),
     reasoning: /^(1|true|yes|on)$/i.test(String(cfg['agent.compact.reasoning'] || '')),
@@ -1570,7 +1640,7 @@ function buildLimitWrapUp(options = {}) {
  *                 cfg.reliability.turnTimeoutMs，出厂 600s）。「停滞」与「重发次数」分别由
  *                 cfg.reliability.streamIdleTimeoutMs / streamMaxAttempts 控制。
  *   forceCompaction true = /compact（照 Codex 的手动压缩命令）：无视阈值立刻压一次
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number, compacted?: number, contextSummary?: string, contextSummaryEnvelope?: string}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number, compacted?: number, contextSummary?: string, contextSummaryEnvelope?: string, overflowRecoveries?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = null, forceCompaction = false }) {
   // 单轮总时长：调用方显式传值优先（子代理按任务总时长钳制），否则读配置。
@@ -1631,13 +1701,23 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
    */
   const compactionCfg = (cfg && cfg.compaction) || {};
   const compactionEnabled = compactionCfg.enabled === true;
-  const compactionWindow = Number(cfg && cfg.contextWindow) > 0
-    ? Number(cfg.contextWindow)
-    : Number(compactionCfg.contextWindow) > 0
-      ? Number(compactionCfg.contextWindow)
-      : Number(compactionCfg.fallbackWindow) > 0
-        ? Number(compactionCfg.fallbackWindow)
-        : 0;
+  /** 模型管理里声明的窗口（0 = 没声明） */
+  const declaredWindow = Number(cfg && cfg.contextWindow) > 0 ? Number(cfg.contextWindow) : 0;
+  /** 供应商**真报过**超窗 → 进程内记下的保守窗口下限（比声明值可信） */
+  const overflowWindow = getContextWindowOverride(cfg);
+  const fallbackWindow = Number(compactionCfg.fallbackWindow) > 0 ? Number(compactionCfg.fallbackWindow) : 0;
+  const compactionWindow =
+    overflowWindow || declaredWindow || (Number(compactionCfg.contextWindow) > 0 ? Number(compactionCfg.contextWindow) : 0) || fallbackWindow;
+  /**
+   * 窗口是否**已知**：只有「被供应商拒过 / 模型管理声明过 / 覆盖配置」才算知道。
+   * 只剩兜底值时**不做超窗预检** —— 兜底值是猜的，拿它拒发会误伤大窗口模型（宁可发出去被拒）。
+   */
+  const windowKnown = overflowWindow > 0 || declaredWindow > 0 || Number(compactionCfg.contextWindow) > 0;
+  /** 供应商报超窗 → 自动「降级窗口 + 压一次 + 重发」的次数上限（每个 run 一次就够，避免死循环烧钱） */
+  const maxOverflowRecoveries = Number.isFinite(Number(compactionCfg.overflowRecoveries))
+    ? Math.max(0, Math.min(3, Number(compactionCfg.overflowRecoveries)))
+    : 1;
+  let overflowRecoveries = 0;
   let compactionCount = 0;
   let compactionWindowNumber = 0;
   let lastContextSummary = '';
@@ -1682,7 +1762,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
    * 因为这一层失败意味着下一次请求很可能被供应商以「超上下文」拒掉，用户有权知道原因。
    * 真正的兜底是紧随其后的硬裁剪（contextBudget），所以这里不抛异常。
    */
-  const runCompactionStep = async (iter) => {
+  const runCompactionStep = async (iter, opts = {}) => {
     if (!compactionEnabled || !(compactionWindow > 0)) return null;
     const toolSpecs = tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null;
     const tokens = compactionLib.estimateTokens(messages, toolSpecs);
@@ -1694,7 +1774,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       compressible,
     });
     const trimmedNow = !!(lastTrimStats && (lastTrimStats.trimmed > 0 || lastTrimStats.overBudget) && compactionCfg.onTrim !== false);
-    const forced = forceCompaction === true;
+    const forced = forceCompaction === true || opts.force === true;
     if (!forced && !plan.needed && !trimmedNow) return null;
     // /compact 强制压缩、但确实没东西可压（只剩 system 与人的话）：如实说明，别假装压过
     if (compressible <= 0) {
@@ -1709,8 +1789,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         });
       return { ok: false, error: 'nothing-to-compact' };
     }
-    /** 触发来源：manual（/compact）/ over-limit（窗口阈值）/ after-trim（硬裁剪已开始丢正文） */
-    const trigger = forced ? 'manual' : plan.needed ? 'over-limit' : 'after-trim';
+    /** 触发来源：manual（/compact）/ over-limit（窗口阈值）/ after-trim（硬裁剪已开始丢正文）/
+     *  provider-rejected（供应商真报了超窗后的补救压缩） */
+    const trigger = opts.trigger || (forced ? 'manual' : plan.needed ? 'over-limit' : 'after-trim');
     // 压缩进行中：机器轮次不保留（等价于 Codex 丢掉 <codex_internal_context> 那类注入）
     const machineTurns = messages.filter((m) => m && m.role === 'user' && compactionLib.isMachineInjectedUserMessage(String(m.content || ''))).length;
     emitTrace({
@@ -1852,11 +1933,63 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           onDelta && onDelta({ kind: 'context_trim', trimmed: trim.trimmed, before: trim.before, after: trim.after, tier: trim.tier, overBudget: trim.overBudget });
         }
       }
+      /**
+       * 超窗预检（**只在窗口已知时**生效，见 windowKnown 注释）：
+       *   ① 输入本身就超窗 → 别发出去吃 400，如实报 CONTEXT_OVERFLOW 并给出可执行的出路；
+       *   ② 输入能装下、只是把输出预算挤掉了 → **缩小 max_tokens 继续发**（这比拒发好得多：
+       *      用户仍然拿到回答，只是短一点），并把这次收缩如实上报。
+       */
+      let turnMaxTokens = Number(cfg.maxTokens) || 0;
+      if (windowKnown && compactionWindow > 0) {
+        const preflightTools = tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null;
+        const estimate = compactionLib.estimateTokens(messages, preflightTools);
+        if (estimate > compactionWindow) {
+          const error =
+            '上下文超窗：本次请求的输入本身估算 ' +
+            estimate +
+            ' tokens，已超过模型窗口 ' +
+            compactionWindow +
+            '，直接发送会被供应商拒掉（此前的表现就是「回答写一半就断」）。可执行：' +
+            '① 开一个新会话（最快）；② 调小 agent.compact.keep_user_total_chars / keep_user_max_chars，让压缩保留更少；' +
+            '③ 若模型管理里的上下文窗口值与供应商实际不符（标称大、实际小），改成真实值；④ 换窗口更大的模型。';
+          emitTrace({ kind: 'context_overflow', turnId: iter, phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: compactionWindow });
+          onDelta && onDelta({ kind: 'context_overflow', phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: compactionWindow });
+          onDelta && onDelta({ kind: 'error', error });
+          return {
+            content,
+            reasoning,
+            toolCalls: allToolCalls,
+            usage,
+            error,
+            stopReason: 'context_overflow',
+            state: machine.state,
+            iterations: modelTurns,
+            contextTrims: contextTrimCount,
+            contextTrimmedChars,
+            compacted: compactionCount,
+            overflowRecoveries,
+          };
+        }
+        if (estimate + turnMaxTokens > compactionWindow) {
+          const capped = Math.max(1024, compactionWindow - estimate - 64);
+          emitTrace({
+            kind: 'max_tokens_capped',
+            turnId: iter,
+            from: turnMaxTokens,
+            to: capped,
+            tokens: estimate,
+            window: compactionWindow,
+          });
+          onDelta &&
+            onDelta({ kind: 'max_tokens_capped', from: turnMaxTokens, to: capped, tokens: estimate, window: compactionWindow });
+          turnMaxTokens = capped;
+        }
+      }
       const payload = {
         model: cfg.model,
         messages,
         stream: true,
-        max_tokens: cfg.maxTokens,
+        max_tokens: turnMaxTokens,
         stream_options: { include_usage: true },
       };
       if (tools && tools.registry) {
@@ -1895,11 +2028,57 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           onDelta && onDelta({ kind: 'tool', toolCalls: ev.toolCalls });
         }
       };
-      const res = await chatCompletionStream(cfg, messages, onEvent, {
-        signal,
-        timeoutMs: turnTimeoutMs,
-        tools: payload.tools,
-      });
+      /**
+       * 发这一轮请求。供应商**真报了超窗**（400）时不只是冒错，而是自救一次：
+       *   ① 把该模型的保守窗口下限记进进程内账本（下次压缩线按它算，不再等声明值）；
+       *   ② **同时**把本轮输出预算压进这个窗口 —— 400 有两种成因：输入太大，或
+       *      「输入 + max_tokens 输出预留」超出窗口（实测 DeepSeek 会回
+       *      "… you requested N tokens (X in the messages, Y in the completion)"）。
+       *      只压历史不压输出预算，对第二种成因等于没救（重发还是同一个 400）。
+       *   ③ 强制一次语义压缩（越过阈值判定），然后用压缩后的历史重发。
+       * 只救一次：压完还超说明剩下的东西本身超窗 —— 那种情况该走预检/开新会话，硬重试只会烧钱。
+       */
+      const buildTurnCfg = () => (turnMaxTokens === Number(cfg.maxTokens) ? cfg : { ...cfg, maxTokens: turnMaxTokens });
+      const sendTurn = async () => {
+        try {
+          return await chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools });
+        } catch (error) {
+          const overflow = classifyContextOverflow(error);
+          if (!overflow || !compactionEnabled || overflowRecoveries >= maxOverflowRecoveries) throw error;
+          overflowRecoveries += 1;
+          const tokens = compactionLib.estimateTokens(messages, payload.tools);
+          const window = noteContextOverflow(cfg, tokens);
+          emitTrace({
+            kind: 'context_overflow',
+            turnId: iter,
+            phase: 'provider-rejected',
+            tokens,
+            window,
+            status: overflow.status,
+            maxTokens: turnMaxTokens,
+            message: overflow.message.slice(0, 300),
+          });
+          onDelta &&
+            onDelta({
+              kind: 'context_overflow',
+              phase: 'recovering',
+              tokens,
+              window,
+              maxTokens: turnMaxTokens,
+              providerMessage: overflow.message.slice(0, 300),
+            });
+          const compacted = await runCompactionStep(iter, { force: true, trigger: 'provider-rejected' });
+          if (!compacted || compacted.ok !== true) throw error; // 压不动就别装作能救，原样抛出真因
+          // 输出预算用**压缩之后**的输入重算：这时输入已经小了，不该把输出也一起饿死
+          const tokensAfter = compactionLib.estimateTokens(messages, payload.tools);
+          const fit = Math.max(1024, window - tokensAfter - 64);
+          const shrankOutput = fit < turnMaxTokens;
+          if (shrankOutput) turnMaxTokens = fit;
+          emitTrace({ kind: 'context_overflow_retry', turnId: iter, tokens, tokensAfter, maxTokens: turnMaxTokens, shrankOutput });
+          return chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools });
+        }
+      };
+      const res = await sendTurn();
       modelTurns += 1;
       // 本轮结束：本轮缓冲交还（content/reasoning 里已经含它，不需要再留着回滚）
       turnContent = '';
@@ -2340,6 +2519,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       contextTrimmedChars,
       // 上下文压缩（照 Codex）：次数 + 最后一次的交接摘要（界面据此把旧消息折叠成摘要卡）
       compacted: compactionCount,
+      // 供应商报超窗后「降级窗口 + 压一次 + 重发」救回来的次数（0 = 没发生过）
+      overflowRecoveries,
       contextSummary: lastContextSummary || undefined,
       contextSummaryEnvelope: lastContextSummary ? compactionLib.buildSummaryEnvelope(lastContextSummary) : undefined,
     };
@@ -2347,11 +2528,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     if (signal && signal.aborted) {
       machine.go(STATES.CANCELLED, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
-      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
+      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
     }
     machine.go(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
     onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e), state: machine.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
+    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
   }
 }
 
@@ -2379,6 +2560,10 @@ module.exports = {
   parseLimitsConfig,
   parseContextConfig,
   parseCompactionConfig,
+  classifyContextOverflow,
+  noteContextOverflow,
+  getContextWindowOverride,
+  resetContextWindowOverrides,
   buildLimitWrapUp,
   mergeUsage,
   assignCallIds,
