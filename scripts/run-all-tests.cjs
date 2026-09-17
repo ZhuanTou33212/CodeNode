@@ -46,6 +46,7 @@ const CORE = [
   'test:test-mode',
   'test:event-replay',
   'test:agent-limits',
+  'test:agent-iterations',
   'test:tool-contract',
   'test:grounding-gate',
   'test:sync-cancel',

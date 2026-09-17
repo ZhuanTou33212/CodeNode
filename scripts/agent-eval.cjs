@@ -650,7 +650,7 @@ async function runTask(task, opts) {
     runId,
     before,
     after,
-    modelSteps: transport ? transport.stats.streamRequests : deltas.filter((d) => d.kind === 'tool').length,
+    modelSteps: transport ? transport.stats.streamRequests : Number(result && result.iterations),
     citations: collectCitations(result.toolCalls || []),
     transport,
   };
@@ -688,6 +688,11 @@ async function runTask(task, opts) {
     record.failed.unshift('脚本回合不足：模型又请求了 ' + transport.stats.exhausted + ' 次');
   }
 
+  // fail-closed：判据（steps-at-most）依赖模型步数，取不到就显式判失败，绝不当成 0 ——
+  // 0 会让「模型步数 ≤ N」永远通过，等于判据消失（此前真实模型模式数的是 SSE 分片数，虚高 20 倍，门禁恒红）。
+  if (!Number.isFinite(ctx.modelSteps)) {
+    record.failed.unshift('无法确定模型步数（runAgentChat 返回值缺 iterations）');
+  }
   record.modelSteps = ctx.modelSteps;
   record.toolCalls = (result.toolCalls || []).length;
   record.toolSequence = (result.toolCalls || []).map((r) => r.name + (r.ok ? '' : '!' ) + (r.compressed ? '~' : '')).join(' → ');

@@ -1240,7 +1240,7 @@ function mergeUsage(previous, next) {
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
  *   timeoutMs     单轮超时（默认 180s）
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, steps?: number, toolCount?: number}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, steps?: number, toolCount?: number, iterations?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
   onDelta && onDelta({ kind: 'start' });
@@ -1286,6 +1286,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     logToolTrace(rootOverride || traceProjectRoot(), Object.assign({ runId: (cfg && cfg.costRunId) || null }, event));
   let totalToolCalls = 0;
   let loopIterations = 0;
+  /**
+   * 真正**成功完成**的模型请求次数（每轮一次 chat completion，含截断补问那轮；
+   * 请求失败/还没发出去的不计）。对外通过返回值 `iterations` 上报 —— 评测的
+   * `steps-at-most` 判据用它。与 `loopIterations` 的差别：进入循环就被取消 /
+   * 预算拦截 / 抛异常时循环体没走完，后者会多算一轮；而**流式分片数**（`kind:'tool'`
+   * 的 delta 条数）更不能用：实测真实 DeepSeek 把 3 次工具调用切成 77 条 delta，
+   * 拿它当「模型步数」会让上限判据恒红（2026-09-17 真实模型评测实测）。
+   */
+  let modelTurns = 0;
   let compressCalls = 0;
   let endedNaturally = false;
   let stopReason = 'iteration_limit';
@@ -1297,7 +1306,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       if (signal && signal.aborted) {
         machine.go(STATES.CANCELLED, 'aborted');
         onDelta && onDelta({ kind: 'stopped' });
-        return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
+        return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
       }
       const turnActor = {
         taskId: tools && tools.context && typeof tools.context.taskId === 'function' ? tools.context.taskId() : '',
@@ -1330,6 +1339,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         timeoutMs,
         tools: payload.tools,
       });
+      modelTurns += 1;
       if (res.usage) {
         usage = mergeUsage(usage, res.usage);
         recordCost(cfg, { kind: 'main', model: cfg.model, usage: res.usage, latencyMs: Date.now() - turnStartedAt, runId: cfg.costRunId });
@@ -1338,7 +1348,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         if (totalTokens > maxTotalTokens) {
           const error = '已达到本轮 Agent token 预算（' + maxTotalTokens + '），已停止继续调用模型。';
           onDelta && onDelta({ kind: 'error', error });
-          return { content, reasoning, toolCalls: allToolCalls, usage, error };
+          return { content, reasoning, toolCalls: allToolCalls, usage, error, iterations: modelTurns };
         }
       }
 
@@ -1404,7 +1414,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           if (signal && signal.aborted) {
             machine.go(STATES.CANCELLED, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
-            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
           }
           if (totalToolCalls >= maxTotalToolCalls) {
             capped = true;
@@ -1485,7 +1495,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           if (signal && signal.aborted) {
             machine.go(STATES.CANCELLED, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
-            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
           }
           // 缓存失效按「只读白名单」判定：只要本轮执行的不是纯只读工具（execute_shell / poll_job /
           // delegate_task / 扩展与 MCP 工具 / 任何变更类工具），就整表清空，保证随后读取拿到最新状态。
@@ -1708,7 +1718,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       // 上限不是「执行失败」：状态单列为 LIMIT_REACHED（调用方可据此提示续跑而不是让用户去排查错误）
       machine.go(classifyOutcome({ error, stopReason }), stopReason);
       onDelta && onDelta({ kind: 'error', error, stopReason, state: machine.state });
-      return { content, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state };
+      return { content, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state, iterations: modelTurns };
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
@@ -1721,7 +1731,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     onDelta && onDelta({ kind: 'done', grounding });
     emitTrace({
       kind: 'turn_end', totalToolCalls, executedUnique: allToolCalls.filter((t) => !t.repeated).length,
-      repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations,
+      repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations, modelTurns,
       resultLen: content.length, finishReason: lastFinishReason, grounding,
     });
     machine.go(classifyOutcome({}), stopReason === 'length_truncated' ? 'length_truncated' : 'answer_complete');
@@ -1734,6 +1744,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       finishReason: lastFinishReason,
       state: machine.state,
       stateHistory: machine.history.slice(),
+      iterations: modelTurns,
       ...(endedNaturally && stopReason === 'length_truncated' ? { stopReason: 'length_truncated' } : {}),
       ...(groundingBlocked ? { groundingBlocked: true, groundingRetries } : {}),
     };
@@ -1741,11 +1752,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     if (signal && signal.aborted) {
       machine.go(STATES.CANCELLED, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
-      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state };
+      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
     }
     machine.go(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
     onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e), state: machine.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state };
+    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns };
   }
 }
 
