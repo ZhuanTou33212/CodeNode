@@ -18,8 +18,17 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 const agent = require('../electron/agent.cjs');
+
+/** 读仓库里某个 .properties 的键值（相对仓库根）：用来锁「入库的口径」而不是本机临时值 */
+function readPropertiesValue(relPath, key) {
+  const text = fs.readFileSync(path.join(__dirname, '..', relPath), 'utf8');
+  const m = new RegExp('^' + key + '=(\\d+)', 'm').exec(text);
+  return m ? Number(m[1]) : NaN;
+}
 
 let failures = 0;
 function check(label, condition, detail) {
@@ -291,8 +300,15 @@ const RECOVERY = { maxAttempts: 1, retryBaseMs: 5, retryMaxMs: 10, turnTimeoutMs
     check('[出厂口径] streamMaxAttempts 默认 2', rel.streamMaxAttempts === 2, String(rel.streamMaxAttempts));
     check('[出厂口径] 停滞超时默认 120s、单轮 600s', rel.streamIdleTimeoutMs === 120000 && rel.turnTimeoutMs === 600000,
       JSON.stringify({ idle: rel.streamIdleTimeoutMs, turn: rel.turnTimeoutMs }));
-    const cfg = agent.loadConfig(null);
-    check('[出厂口径] max_tokens 不再是 8192 档位', cfg.maxTokens >= 16384, String(cfg.maxTokens));
+    // 三处口径都要锁：代码默认、**入库的** properties（tracked + skip-worktree，本地改动不会进 CI）、
+    // 配置样例。只锁其中一处就会出现「本地绿、CI 用旧值红」（2026-09-17 真实踩到）。
+    check('[出厂口径] 代码默认 max_tokens 足够（≥16384）', agent.DEFAULTS.maxTokens >= 16384, String(agent.DEFAULTS.maxTokens));
+    const shipped = readPropertiesValue('config/agent.properties', 'max_tokens');
+    check('[出厂口径] 入库的 agent.properties 里 max_tokens 足够（≥16384）', shipped >= 16384, String(shipped));
+    const sample = readPropertiesValue('config/agent.properties.example', 'max_tokens');
+    check('[出厂口径] 配置样例的 max_tokens 足够（≥16384，思考链与正文共用这笔额度）', sample >= 16384, String(sample));
+    check('[出厂口径] 生效配置的 max_tokens 足够（避免「文件对了但没生效」）', agent.loadConfig(null).maxTokens >= 16384,
+      String(agent.loadConfig(null).maxTokens));
   }
 
   console.log(failures === 0 ? 'STREAM RECOVERY TEST: PASS' : 'STREAM RECOVERY TEST: FAIL (' + failures + ')');

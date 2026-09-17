@@ -63,6 +63,21 @@ const DEFAULT_STREAM_MAX_ATTEMPTS = 2;
 /** finish_reason=length 时最多补问几次（接着写），用尽仍截断则如实标 length_truncated */
 const DEFAULT_TRUNCATION_NUDGES = 4;
 
+/**
+ * 出厂默认口径（唯一来源，供测试与生产自检引用）。
+ *
+ * 为什么要单独导出：这些值此前散落在源码常量与 `config/agent.properties` 两处，而那个
+ * 配置文件是 **tracked + skip-worktree** —— 本地改了它，`git status` 也看不见，于是
+ * 「本地测试全绿、CI 用的还是旧值」这种偏差只能等 CI 红才发现（2026-09-17 真实踩到）。
+ */
+const DEFAULTS = Object.freeze({
+  maxTokens: DEFAULT_MAX_TOKENS,
+  turnTimeoutMs: DEFAULT_TURN_TIMEOUT_MS,
+  streamIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  streamMaxAttempts: DEFAULT_STREAM_MAX_ATTEMPTS,
+  truncationNudges: DEFAULT_TRUNCATION_NUDGES,
+});
+
 function loadConfig(projectRoot) {
   const globalCfg = loadProperties(path.join(__dirname, '..', 'config', 'agent.properties'));
   const projectCfg = projectRoot
@@ -2004,6 +2019,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
 
 module.exports = {
   loadConfig,
+  DEFAULTS,
   parseSandboxConfig,
   recordCost,
   parseCostPrices,
