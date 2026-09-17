@@ -262,6 +262,8 @@ interface CodenodeApi {
     reasoningEffort?: string;
     document?: { root?: unknown };
     projectFile?: string;
+    /** /compact（照 Codex 的手动压缩命令）：无视窗口阈值，立刻做一次上下文压缩 */
+    forceCompact?: boolean;
   }) => Promise<{
     ok: boolean;
     aborted?: boolean;
@@ -300,6 +302,10 @@ interface CodenodeApi {
     /** 上下文预算裁剪：被裁掉的工具结果条数与释放的字符数（第 1 项） */
     contextTrims?: number;
     contextTrimmedChars?: number;
+    /** 上下文压缩（照 Codex CLI）：本次运行压了几次；摘要与「给模型的信封」供界面折叠旧消息 */
+    compacted?: number;
+    contextSummary?: string;
+    contextSummaryEnvelope?: string;
   }>;
   stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {

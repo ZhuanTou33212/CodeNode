@@ -71,12 +71,38 @@ function installScriptedModel(script, options = {}) {
     if (typeof options.onTurn === 'function') options.onTurn(turn, state.calls, body);
     const stream = buildStream(turn || { content: '' });
     const encoder = new TextEncoder();
+    // 非流式消费（chatCompletion：压缩/摘要这类内部调用）走 json()：必须给一个**合法**的
+    // OpenAI 兼容响应体。此前它只是 `JSON.parse(stream)`（拿 SSE 文本当 JSON 解析）——
+    // 任何人用 chatCompletion 都会被这个 stub 骗成「JSON 解析失败」，把生产代码的失败归因搞错。
+    const messageBody = {
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: turn && turn.content !== undefined ? turn.content : '',
+            ...(Array.isArray(turn && turn.toolCalls) && turn.toolCalls.length
+              ? {
+                  tool_calls: turn.toolCalls.map((call, i) => ({
+                    id: call.id === undefined ? 'call_' + i : call.id,
+                    type: 'function',
+                    function: { name: call.name, arguments: typeof call.args === 'string' ? call.args : JSON.stringify(call.args || {}) },
+                  })),
+                }
+              : {}),
+            ...(turn && turn.reasoning ? { reasoning_content: turn.reasoning } : {}),
+          },
+          finish_reason: (turn && turn.finishReason) || 'stop',
+        },
+      ],
+      usage: (turn && turn.usage) || { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 },
+    };
     return {
       ok: true,
       status: 200,
       headers: { get: () => null },
       text: async () => stream,
-      json: async () => JSON.parse(stream),
+      json: async () => messageBody,
       body: {
         getReader() {
           let sent = false;

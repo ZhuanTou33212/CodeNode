@@ -465,6 +465,9 @@ function buildConfig(task, workspace, mode, modelCfg) {
   // 评测内重试固定为 1、且不做流式中断重发：脚本化传输的失败必须确定性可判定
   // （新配置项显式补齐，避免「继承了生产默认值」把评测判据悄悄改掉）。
   cfg.reliability = { ...agent.loadConfig(null).reliability, maxAttempts: 1, retryBaseMs: 10, retryMaxMs: 20, streamMaxAttempts: 0 };
+  // 评测内的脚本化传输必须确定性：**关掉上下文压缩**（否则脚本化模型会多收到一次摘要请求，
+  // 打乱 `steps-at-most` 与脚本轮次的对齐）。压缩本身由 scripts/compaction-test.cjs 单独锁。
+  cfg.compaction = { ...agent.loadConfig(null).compaction, enabled: false };
   if (override.compression) cfg.compression = { ...cfg.compression, ...override.compression };
   if (task.budget && task.budget.maxTotalTokens) {
     cfg.limits = { ...cfg.limits, maxTotalTokens: task.budget.maxTotalTokens };

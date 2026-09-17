@@ -73,16 +73,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // 允许「只有图片、没有文字」的消息
     if (!text && !attachments.length) return empty;
 
+    // /compact（照 Codex 的手动压缩命令）：命令本身**不当作对话发出去**，只把 forceCompact
+    // 传给主进程立刻压一次；命令后面若还跟了正文，就当作本轮的正式指令。
+    let forceCompact = false;
+    let userText = text;
+    if (/^\/compact\b/i.test(text)) {
+      forceCompact = true;
+      userText = text.replace(/^\/compact\b/i, '').trim() || '（/compact：压缩上下文）';
+    }
+
     const ss = useSessionStore.getState();
     // 指令前已有的对话（作为历史传给 Agent）
-    const prior = ss.messages.map((m) => ({ role: m.role, content: m.content }));
+    // 被上下文压缩折叠掉的消息**不再发送**（它们的内容已经进了摘要卡）；压缩卡本身按 user 轮
+    // 回传 —— 与主进程压缩后的历史形状（[system, ...人的轮次, 摘要]）逐字对齐，避免「刚压完又超线」。
+    const prior = ss.messages
+      .filter((m) => !m.compacted)
+      .map((m) => ({ role: m.role === 'system' ? 'user' : m.role, content: m.content }));
     // 当前画布内容：作为 Agent 的「读取上下文」，保证它能读到已有节点
     const ctx = useGraphStore.getState().getDocument();
     // 确保有当前画布（无会话时创建画布1）
     if (!ss.current()) {
-      ss.startOnCurrent(text);
+      ss.startOnCurrent(userText);
     }
-    ss.pushUser(text, attachments);
+    ss.pushUser(userText, attachments);
     ss.beginTurn();
 
     const requestId = 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -97,8 +110,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const res = await api.agentChat({
         projectRoot: useProjectStore.getState().root,
-        prompt: text,
+        prompt: userText,
         attachments: attachments.length ? attachments : undefined,
+        // /compact：让主进程无视阈值立刻压一次（见上面对命令的解析）
+        forceCompact: forceCompact || undefined,
         history: prior,
         canvasSummary: summarizeDoc(ctx),
         nodeId: null,
@@ -160,7 +175,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           } else {
             // 全新内容：标记当前画布完成并新开一个画布承载输出
             useSessionStore.getState().syncActiveGraph();
-            useSessionStore.getState().beginWorkSession(text);
+            useSessionStore.getState().beginWorkSession(userText);
             useSessionStore.getState().applyAgentDoc(clean as never);
           }
         }
@@ -176,6 +191,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // 交付形态如实告知：被长度上限截断的回答不是完整答案，别让用户以为写完了
         if (res.stopReason === 'length_truncated') {
           useUiStore.getState().setToast('回答触到模型长度上限被截断，可回复「继续」让它接着写完');
+        }
+        // 上下文压缩的兜底路径：正常情况下 compressed 的消息已由 `compacted` 增量折叠好；
+        // 增量丢失（例如续跑重放）时，用结果里的信封补一张卡，保证「旧历史不会再被整段重发」。
+        if (Number(res.compacted) > 0 && res.contextSummaryEnvelope) {
+          useSessionStore.getState().compactHistory({
+            envelope: String(res.contextSummaryEnvelope),
+            summary: res.contextSummary ? String(res.contextSummary) : undefined,
+          });
         }
       } else if (res.limitReached && res.reply) {
         // 达到迭代/工具调用上限（第 2 项）：不是「调用失败」，而是「没跑完但有事可交付」——

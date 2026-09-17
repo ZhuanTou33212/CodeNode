@@ -128,6 +128,21 @@ export type SessionMsg = {
   grounding?: RagGrounding;
   /** 用户消息携带的图片（仅用户消息会有） */
   attachments?: AgentAttachment[];
+  /**
+   * 上下文压缩（照 Codex CLI）：这条消息已经被摘要取代 —— 仍留在界面上供回溯，
+   * 但**不再发给模型**（历史里只送摘要卡 + 压缩之后的新消息）。
+   */
+  compacted?: boolean;
+  /** 压缩摘要卡：正文是给模型的 `<compaction>` 信封原文，不是对话轮次 */
+  compaction?: boolean;
+  compactionMeta?: {
+    windowNumber?: number;
+    tokensBefore?: number;
+    tokensAfter?: number;
+    keptUserTurns?: number;
+    /** 摘要正文（界面折叠区里给人看；发给模型的是 content 里的信封） */
+    summary?: string;
+  };
 };
 
 /** 单个画布的文档快照（仅根图，无组嵌套） */

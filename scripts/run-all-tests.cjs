@@ -61,6 +61,7 @@ const CORE = [
   'test:tool-call-id',
   'test:stream-accumulator',
   'test:stream-recovery',
+  'test:compaction',
   'test:truncation-safety',
   'test:agent-state',
   'test:tool-descriptor',

@@ -8,6 +8,27 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
   const tools = msg.tools || [];
   const grounding = msg.grounding;
 
+  // 上下文压缩卡（照 Codex CLI）：不是对话轮次，而是「更早的对话已被这份交接摘要取代」的标记。
+  // 正文（content）是发给模型的信封原文；给人看的是折叠区里的摘要。
+  if (msg.compaction) {
+    const meta = msg.compactionMeta || {};
+    return (
+      <div className="cs-msg cs-msg-compaction" title="更早的对话已被一份交接摘要取代（同 Codex 的上下文压缩）；后续请求只发送摘要与本条之后的新消息">
+        <span className="cs-msg-label">上下文已压缩</span>
+        <div className="cs-msg-compaction-hint">
+          更早的对话已换成一份交接摘要
+          {meta.windowNumber ? ` · 第 ${meta.windowNumber} 次` : ''}
+          {typeof meta.tokensBefore === 'number' ? ` · ${meta.tokensBefore} → ${meta.tokensAfter ?? 0} tokens` : ''}
+          {meta.keptUserTurns ? ` · 保留 ${meta.keptUserTurns} 轮你的指令` : ''}
+        </div>
+        <details className="cs-msg-compaction-detail">
+          <summary>查看交接摘要</summary>
+          <div className="cs-msg-text">{meta.summary || msg.content}</div>
+        </details>
+      </div>
+    );
+  }
+
   if (msg.role === 'user') {
     return (
       <div className="cs-msg cs-msg-user">

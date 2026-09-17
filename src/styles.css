@@ -1329,6 +1329,65 @@ button:disabled {
   color: #ffffff;
 }
 
+/* ---------- 上下文压缩卡（照 Codex CLI 的「Context compacted」标记）---------- */
+/* 视觉层级：比对话气泡低一档（左侧一道分隔线 + 更暗的文字），因为它是「分界标记」而不是内容；
+   摘要本身折叠收起，需要时才展开看。 */
+.cs-msg-compaction {
+  margin: 14px 0;
+  padding: 7px 10px;
+  border-left: 2px solid rgba(147, 197, 253, 0.35);
+  background: rgba(147, 197, 253, 0.06);
+  border-radius: 0 6px 6px 0;
+}
+
+.cs-msg-compaction .cs-msg-label {
+  margin-bottom: 2px;
+  color: rgba(219, 234, 254, 0.7);
+  letter-spacing: 0.02em;
+}
+
+.cs-msg-compaction-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(215, 230, 255, 0.62);
+}
+
+.cs-msg-compaction-detail {
+  margin-top: 5px;
+}
+
+.cs-msg-compaction-detail > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: rgba(147, 197, 253, 0.85);
+  list-style: none;
+  user-select: none;
+}
+
+.cs-msg-compaction-detail > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cs-msg-compaction-detail > summary::before {
+  content: '▸ ';
+  font-size: 9px;
+}
+
+.cs-msg-compaction-detail[open] > summary::before {
+  content: '▾ ';
+}
+
+.cs-msg-compaction-detail .cs-msg-text {
+  margin-top: 5px;
+  padding: 7px 9px;
+  background: rgba(8, 10, 14, 0.35);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.82);
+  max-height: 260px;
+  overflow: auto;
+}
+
 /* ---------- 模型管理对话框 ---------- */
 .mm-mask {
   position: fixed;

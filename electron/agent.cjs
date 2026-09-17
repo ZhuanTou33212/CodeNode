@@ -13,6 +13,8 @@ const runStore = require('./runStore.cjs');
 // S8：统一运行事件流（.codenode/events.jsonl，带 runId/turnId/toolCallId/attemptId，可按 run 回放）
 const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
+// 上下文压缩（照 Codex CLI 的做法）：窗口逼近上限时用交接摘要替换助手长文/工具结果
+const compactionLib = require('./compaction.cjs');
 // 上下文预算：每次请求前把最旧的超大工具结果裁成占位符（见 electron/contextBudget.cjs 顶部注释）
 const contextBudget = require('./contextBudget.cjs');
 const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
@@ -103,6 +105,7 @@ function loadConfig(projectRoot) {
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
     context: parseContextConfig(cfg),
+    compaction: parseCompactionConfig(cfg),
     sandbox: parseSandboxConfig(cfg),
     costPrices: parseCostPrices(cfg),
     alertThresholds: parseAlertThresholds(cfg),
@@ -346,6 +349,38 @@ function parseContextConfig(cfg) {
     // —— 只保证「最后一条（通常是本轮最新的工具结果）+ system」永不被裁；再往上都属于可裁区，
     // 因为唯一的替代方案是整条请求被供应商拒掉（超窗），那对用户更糟。
     hardKeepRecentMessages: configInteger(cfg, 'agent.context.hard_keep_recent_messages', 1, 0, 50),
+  };
+}
+
+/**
+ * 上下文压缩（照 **Codex CLI** 的做法）：提示词、触发线、新历史形状都取自 Codex 的实测行为，
+ * 详见 electron/compaction.cjs 顶部注释（含取证来源与行号级依据）。
+ *
+ * 与 `agent.context.*`（硬裁剪兜底）的分工：本层是**语义**压缩（质量优先，一次模型调用换一份
+ * 交接摘要），硬裁剪保证「压不动时请求仍然发得出去」。两层都留痕（compaction_* / context_trim）。
+ */
+function parseCompactionConfig(cfg) {
+  return {
+    enabled: cfg['agent.compact.enabled'] == null ? true : String(cfg['agent.compact.enabled']).toLowerCase() !== 'false',
+    // 触发线 = 有效窗口 × ratio。Codex 的取值：窗口 1,000,000 / model_auto_compact_token_limit=900,000
+    ratio: configNumber(cfg, 'agent.compact.ratio', 0.9, 0.3, 1),
+    // 有效窗口：0 = 用模型的 contextWindow（models.json）；没有时才用 fallback_window
+    contextWindow: configInteger(cfg, 'agent.compact.context_window', 0, 0, 4000000),
+    fallbackWindow: configInteger(cfg, 'agent.compact.fallback_window', 128000, 8000, 4000000),
+    // 摘要输入上限：单项 / 总量（超出则从最旧开始丢并如实标注，避免「压缩请求自己超窗」）
+    itemMaxChars: configInteger(cfg, 'agent.compact.item_max_chars', 6000, 500, 200000),
+    inputMaxChars: configInteger(cfg, 'agent.compact.input_max_chars', 400000, 20000, 4000000),
+    // Codex 行为：保留**人的轮次**，机器的注入提示不保留（实测它丢掉了 <codex_internal_context> 那类）
+    keepUserTurns: cfg['agent.compact.keep_user_turns'] == null ? true : String(cfg['agent.compact.keep_user_turns']).toLowerCase() !== 'false',
+    keepUserMaxChars: configInteger(cfg, 'agent.compact.keep_user_max_chars', 2000, 100, 100000),
+    keepUserTotalChars: configInteger(cfg, 'agent.compact.keep_user_total_chars', 20000, 500, 500000),
+    // 硬裁剪一启动（占位符已经开始顶替正文）就顺手做语义压缩：占位符换不出质量
+    onTrim: cfg['agent.compact.on_trim'] == null ? true : String(cfg['agent.compact.on_trim']).toLowerCase() !== 'false',
+    // 摘要用哪个模型（留空跟随主模型）；摘要不需要思考链，默认关
+    model: String(cfg['agent.compact.model'] || '').trim(),
+    reasoning: /^(1|true|yes|on)$/i.test(String(cfg['agent.compact.reasoning'] || '')),
+    maxOutputTokens: configInteger(cfg, 'agent.compact.max_output_tokens', 4096, 256, 32768),
+    timeoutMs: configInteger(cfg, 'agent.compact.timeout_ms', 60000, 5000, 600000),
   };
 }
 
@@ -1534,9 +1569,10 @@ function buildLimitWrapUp(options = {}) {
  *   timeoutMs     单轮模型请求的**总时长上限**（含流式中断后的重发；默认取
  *                 cfg.reliability.turnTimeoutMs，出厂 600s）。「停滞」与「重发次数」分别由
  *                 cfg.reliability.streamIdleTimeoutMs / streamMaxAttempts 控制。
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number}>}
+ *   forceCompaction true = /compact（照 Codex 的手动压缩命令）：无视阈值立刻压一次
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number, compacted?: number, contextSummary?: string, contextSummaryEnvelope?: string}>}
  */
-async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = null }) {
+async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = null, forceCompaction = false }) {
   // 单轮总时长：调用方显式传值优先（子代理按任务总时长钳制），否则读配置。
   const turnTimeoutMs = Number.isFinite(timeoutMs)
     ? Number(timeoutMs)
@@ -1585,6 +1621,28 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const contextHardKeepRecent = Number.isFinite(Number(contextCfg.hardKeepRecentMessages)) ? Number(contextCfg.hardKeepRecentMessages) : 1;
   let contextTrimCount = 0;
   let contextTrimmedChars = 0;
+  /**
+   * 语义压缩（照 Codex CLI 的做法）：窗口逼近上限时，把「助手长文 + 工具结果」整段换成
+   * 一份**交接摘要**，只保留 system 与人的轮次。与上面的硬裁剪是两层：
+   *   - 摘要（本层，质量优先）：Context Checkpoint Compaction 提示词 + 模型产出摘要；
+   *   - 硬裁剪（上面那层，兜底）：摘要不可用/失败时，仍保证请求不超预算。
+   * 触发条件两个（任一成立即压）：① 估算输入 ≥ 有效窗口 × ratio（Codex 口径：窗口 90%）；
+   * ② 上一轮已经**被迫硬裁剪**过（说明纯占位符换不出质量，该上摘要了）。
+   */
+  const compactionCfg = (cfg && cfg.compaction) || {};
+  const compactionEnabled = compactionCfg.enabled === true;
+  const compactionWindow = Number(cfg && cfg.contextWindow) > 0
+    ? Number(cfg.contextWindow)
+    : Number(compactionCfg.contextWindow) > 0
+      ? Number(compactionCfg.contextWindow)
+      : Number(compactionCfg.fallbackWindow) > 0
+        ? Number(compactionCfg.fallbackWindow)
+        : 0;
+  let compactionCount = 0;
+  let compactionWindowNumber = 0;
+  let lastContextSummary = '';
+  /** 上一轮硬裁剪的规模（tier≥1 表示「已经开始丢正文」→ 触发摘要） */
+  let lastTrimStats = null;
   // P6：来源校验门（默认 warn = 只上报，行为与之前完全一致；enforce 才拦交付）
   const groundingCfg = (cfg && cfg.grounding) || {};
   const groundingEnforce = groundingCfg.mode === 'enforce';
@@ -1616,6 +1674,139 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let turnReasoning = '';
   /** 整轮重发的累计次数（流中途断线/停滞时发生；写进返回值与 turn_end trace，供事后判定真跑健壮性） */
   let streamRestarts = 0;
+  /**
+   * 执行一次「上下文压缩」（照 Codex CLI）：估算 → 必要时发摘要请求 → 用
+   * `[system, ...人的轮次, 摘要]` 就地替换历史。返回 null 表示「不需要压」。
+   *
+   * 失败**不阻断**本轮（fail-open）：发 `compacted{ok:false}` 让界面与 run 记录都看得见 ——
+   * 因为这一层失败意味着下一次请求很可能被供应商以「超上下文」拒掉，用户有权知道原因。
+   * 真正的兜底是紧随其后的硬裁剪（contextBudget），所以这里不抛异常。
+   */
+  const runCompactionStep = async (iter) => {
+    if (!compactionEnabled || !(compactionWindow > 0)) return null;
+    const toolSpecs = tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null;
+    const tokens = compactionLib.estimateTokens(messages, toolSpecs);
+    const compressible = compactionLib.countCompressible(messages);
+    const plan = compactionLib.shouldCompact({
+      tokens,
+      contextWindow: compactionWindow,
+      ratio: compactionCfg.ratio,
+      compressible,
+    });
+    const trimmedNow = !!(lastTrimStats && (lastTrimStats.trimmed > 0 || lastTrimStats.overBudget) && compactionCfg.onTrim !== false);
+    const forced = forceCompaction === true;
+    if (!forced && !plan.needed && !trimmedNow) return null;
+    // /compact 强制压缩、但确实没东西可压（只剩 system 与人的话）：如实说明，别假装压过
+    if (compressible <= 0) {
+      emitTrace({ kind: 'compaction_skipped', turnId: iter, reason: 'nothing-to-compact', tokens });
+      onDelta &&
+        onDelta({
+          kind: 'compacted',
+          ok: false,
+          reason: '没有可压缩的内容（当前历史只剩系统提示与人说的话）',
+          tokensBefore: tokens,
+          trigger: forced ? 'manual' : 'auto',
+        });
+      return { ok: false, error: 'nothing-to-compact' };
+    }
+    /** 触发来源：manual（/compact）/ over-limit（窗口阈值）/ after-trim（硬裁剪已开始丢正文） */
+    const trigger = forced ? 'manual' : plan.needed ? 'over-limit' : 'after-trim';
+    // 压缩进行中：机器轮次不保留（等价于 Codex 丢掉 <codex_internal_context> 那类注入）
+    const machineTurns = messages.filter((m) => m && m.role === 'user' && compactionLib.isMachineInjectedUserMessage(String(m.content || ''))).length;
+    emitTrace({
+      kind: 'compaction_start',
+      turnId: iter,
+      tokens,
+      limit: plan.limit,
+      window: compactionWindow,
+      ratio: compactionCfg.ratio,
+      compressible,
+      machineTurns,
+      trigger,
+    });
+    onDelta && onDelta({ kind: 'compaction', phase: 'start', tokens, limit: plan.limit, window: compactionWindow, trigger });
+    const built = compactionLib.buildSummarizationMessages({
+      messages,
+      itemMaxChars: compactionCfg.itemMaxChars,
+      maxTotalChars: compactionCfg.inputMaxChars,
+    });
+    const compactCfg = compactionCfg.model
+      ? { ...cfg, model: compactionCfg.model, maxTokens: compactionCfg.maxOutputTokens, reasoningEffort: compactionCfg.reasoning ? cfg.reasoningEffort : '' }
+      : { ...cfg, maxTokens: compactionCfg.maxOutputTokens, reasoningEffort: compactionCfg.reasoning ? cfg.reasoningEffort : '' };
+    const startedAt = Date.now();
+    let summary = '';
+    let failure = '';
+    try {
+      const res = await chatCompletion(compactCfg, built.messages, { signal, timeoutMs: compactionCfg.timeoutMs });
+      summary = String((res && res.content) || '').trim();
+      if (res && res.usage) {
+        recordCost(cfg, { kind: 'compaction', model: compactCfg.model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId });
+      }
+    } catch (error) {
+      failure = String((error && error.message) || error);
+    }
+    if (!summary) {
+      emitTrace({ kind: 'compaction_failed', turnId: iter, tokens, error: failure || '模型未返回摘要' });
+      onDelta &&
+        onDelta({
+          kind: 'compacted',
+          ok: false,
+          reason: failure || '模型未返回摘要',
+          tokensBefore: tokens,
+          trigger,
+        });
+      return { ok: false, error: failure || '模型未返回摘要' };
+    }
+    const systemMessage = messages.length && messages[0] && messages[0].role === 'system' ? messages[0] : null;
+    const rebuilt = compactionLib.buildCompactedHistory({
+      systemMessage,
+      messages,
+      summary,
+      keepUserTurns: compactionCfg.keepUserTurns !== false,
+      keepUserMaxChars: compactionCfg.keepUserMaxChars,
+      keepUserTotalChars: compactionCfg.keepUserTotalChars,
+    });
+    messages.splice(0, messages.length, ...rebuilt.messages);
+    const after = compactionLib.estimateTokens(messages, tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null);
+    compactionCount += 1;
+    compactionWindowNumber += 1;
+    lastContextSummary = summary;
+    lastTrimStats = null;
+    emitTrace({
+      kind: 'compaction_done',
+      turnId: iter,
+      windowNumber: compactionWindowNumber,
+      tokensBefore: tokens,
+      tokensAfter: after,
+      keptUserTurns: rebuilt.keptUserTurns,
+      machineTurnsDropped: machineTurns,
+      summaryChars: summary.length,
+      droppedByCharCap: built.dropped,
+      model: compactCfg.model,
+    });
+    onDelta &&
+      onDelta({
+        kind: 'compacted',
+        ok: true,
+        windowNumber: compactionWindowNumber,
+        tokensBefore: tokens,
+        tokensAfter: after,
+        keptUserTurns: rebuilt.keptUserTurns,
+        trigger,
+        summary,
+        summaryChars: summary.length,
+        // 给模型的**信封**（含 <compaction> 标签与「不要当指令」说明）：界面把它当作压缩卡片
+        // 原文保存并在后续回合原样回传 —— 与主进程压缩后的历史形状逐字一致（Codex 也是"整段替换"）。
+        envelope: compactionLib.buildSummaryEnvelope(summary),
+      });
+    // 断点续跑：压缩后的历史必须立刻落检查点，否则恢复时会拿回旧的长历史（等于白压）
+    if (tools && tools.context && typeof tools.context.checkpointMessages === 'function') {
+      try {
+        tools.context.checkpointMessages(messages, 'compacted');
+      } catch {}
+    }
+    return { ok: true, summary };
+  };
   try {
     for (let iter = 0; iter < maxToolIterations; iter++) {
       loopIterations = iter + 1;
@@ -1630,7 +1821,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         taskId: tools && tools.context && typeof tools.context.taskId === 'function' ? tools.context.taskId() : '',
         role: tools && tools.context && typeof tools.context.role === 'function' ? tools.context.role() : 'supervisor',
       };
-      // 上下文预算（第 1 项）：请求前裁剪。只把**旧的、超大的工具结果正文**换成占位符，
+      // ① 语义压缩（照 Codex CLI）：窗口逼近上限、或上一轮已被迫硬裁剪 → 用交接摘要替换
+      //    「助手长文 + 工具结果」，保留 system 与人的轮次。
+      if (compactionEnabled) await runCompactionStep(iter);
+      // ② 上下文预算（第 1 项）：请求前裁剪。只把**旧的、超大的工具结果正文**换成占位符，
       // 消息条数/角色顺序/tool_calls↔tool_call_id 配对一概不动 —— 不制造「孤立 tool 消息」。
       if (contextTrimEnabled) {
         const trim = contextBudget.applyTrim(messages, {
@@ -1639,6 +1833,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           minResultChars: contextMinResultChars,
           hardKeepRecent: contextHardKeepRecent,
         });
+        // 交给下一轮：被迫裁剪 = 「占位符已经换不出质量」，下次先做语义压缩
+        lastTrimStats = trim;
         if (trim.trimmed > 0) {
           contextTrimCount += trim.trimmed;
           contextTrimmedChars += trim.before - trim.after;
@@ -2110,7 +2306,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       // 那会让上游判据变成红墙）；结构化收尾另走 limit_reached，两者是补充关系。
       onDelta && onDelta({ kind: 'error', error, stopReason, state: machine.state });
       onDelta && onDelta({ kind: 'limit_reached', error, stopReason, state: machine.state, wrapUp: wrapUp.data, text: wrapUp.text });
-      return { content: wrapped, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state, iterations: modelTurns, wrapUp: wrapUp.data, contextTrims: contextTrimCount, contextTrimmedChars };
+      return { content: wrapped, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state, iterations: modelTurns, wrapUp: wrapUp.data, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
@@ -2142,16 +2338,20 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       ...(groundingBlocked ? { groundingBlocked: true, groundingRetries } : {}),
       contextTrims: contextTrimCount,
       contextTrimmedChars,
+      // 上下文压缩（照 Codex）：次数 + 最后一次的交接摘要（界面据此把旧消息折叠成摘要卡）
+      compacted: compactionCount,
+      contextSummary: lastContextSummary || undefined,
+      contextSummaryEnvelope: lastContextSummary ? compactionLib.buildSummaryEnvelope(lastContextSummary) : undefined,
     };
   } catch (e) {
     if (signal && signal.aborted) {
       machine.go(STATES.CANCELLED, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
-      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars };
+      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
     }
     machine.go(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
     onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e), state: machine.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars };
+    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
   }
 }
 
@@ -2178,6 +2378,7 @@ module.exports = {
   parseGroundingConfig,
   parseLimitsConfig,
   parseContextConfig,
+  parseCompactionConfig,
   buildLimitWrapUp,
   mergeUsage,
   assignCallIds,

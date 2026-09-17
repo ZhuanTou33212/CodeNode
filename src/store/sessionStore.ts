@@ -46,7 +46,21 @@ interface SessionState {
     toolCalls?: unknown;
     saved?: { filePath?: string };
     error?: string;
+    /** kind==='compacted'：压缩结果与给模型的信封 */
+    ok?: boolean;
+    envelope?: string;
+    summary?: string;
+    windowNumber?: number;
+    tokensBefore?: number;
+    tokensAfter?: number;
+    keptUserTurns?: number;
+    reason?: string;
   }) => void;
+  /**
+   * 上下文压缩（照 Codex CLI）：把当前对话折叠成一张交接摘要卡 —— 旧消息标记 `compacted`
+   * （不再发给模型），摘要卡（`compaction:true`）原文进历史。幂等：同一份摘要重复到达不叠卡。
+   */
+  compactHistory: (payload: { envelope: string; summary?: string; windowNumber?: number; tokensBefore?: number; tokensAfter?: number; keptUserTurns?: number }) => void;
   finishTurn: (reply: string, reasoning: string, tools: ToolRecord[], grounding?: RagGrounding) => void;
   failTurn: (error: string) => void;
   stopTurn: () => void;
@@ -248,6 +262,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    // 上下文压缩（照 Codex）：把已有消息折叠掉、换成一张交接摘要卡。必须在「最后一条是 assistant」
+    // 的守卫之前处理 —— 压缩发生在模型轮次之间，那时气泡状态不该影响它。
+    if (d.kind === 'compacted' && d.ok !== false) {
+      get().compactHistory({
+        envelope: String(d.envelope || ''),
+        summary: d.summary,
+        windowNumber: d.windowNumber,
+        tokensBefore: d.tokensBefore,
+        tokensAfter: d.tokensAfter,
+        keptUserTurns: d.keptUserTurns,
+      });
+      useUiStore.getState().setToast('上下文已压缩（' + (d.windowNumber ? '第 ' + d.windowNumber + ' 次 · ' : '') + (d.tokensBefore || 0) + ' → ' + (d.tokensAfter || 0) + ' tokens）');
+      return;
+    }
+    if (d.kind === 'compacted' && d.ok === false) {
+      useUiStore.getState().setToast('上下文压缩失败：' + (d.reason || '未知原因') + '（已改用硬裁剪兜底）');
+      return;
+    }
     const msgs = s.messages.map((m) => ({ ...m }));
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== 'assistant') return;
@@ -300,6 +332,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions[active.id] = { ...active, status: 'completed', summary: reply || active.summary };
     }
     set({ messages: msgs, sessions, streaming: false });
+  },
+
+  compactHistory: ({ envelope, summary, windowNumber, tokensBefore, tokensAfter, keptUserTurns }) => {
+    const text = String(envelope || '');
+    if (!text) return;
+    const s = get();
+    // 幂等：同一份信封重复到达（续跑重放 / delta 与结果双路径）不叠第二张卡
+    if (s.messages.some((m) => m.compaction && m.content === text)) return;
+    const msgs: SessionMsg[] = s.messages.map((m) => ({ ...m, compacted: true }));
+    msgs.push({
+      role: 'system',
+      content: text,
+      status: 'done',
+      compaction: true,
+      compactionMeta: { windowNumber, tokensBefore, tokensAfter, keptUserTurns, summary },
+    });
+    set({ messages: msgs });
   },
 
   failTurn: (error) => {

@@ -156,7 +156,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('agent:chat', async (event, payload) => {
-    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments } = payload || {};
+    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
     const sender = event.sender;
     let runId = null;
     const sendDelta = (d) => {
@@ -178,6 +178,9 @@ function register(ctx) {
         if (sel.apiBase) cfg.apiBase = sel.apiBase;
         if (sel.apiKey) cfg.apiKey = sel.apiKey;
         if (sel.model) cfg.model = sel.model;
+        // 上下文窗口来自模型管理（models.json）：上下文压缩的触发线 = 窗口 × agent.compact.ratio
+        // （Codex 口径）。取不到时留给 agent.compact.fallback_window。
+        cfg.contextWindow = Number(sel.contextWindow) > 0 ? Number(sel.contextWindow) : 0;
       } else if (reqModel) {
         cfg.model = reqModel;
       }
@@ -285,6 +288,26 @@ function register(ctx) {
             max: delta.max || 0,
             continuing: !!delta.continuing,
             finishReason: delta.finishReason || null,
+          });
+        } else if (delta.kind === 'compacted') {
+          // 上下文压缩（照 Codex CLI）：run 记录里留下「窗口号 + 前后 token + 保留了几轮人的话」——
+          // 这是事后判断「答案为什么对早期细节记忆变模糊 / 为什么少了一次模型调用」的唯一线索。
+          runStore.appendEvent(projectRoot, runId, 'compacted', {
+            ok: delta.ok !== false,
+            windowNumber: delta.windowNumber || null,
+            tokensBefore: delta.tokensBefore || 0,
+            tokensAfter: delta.tokensAfter || 0,
+            keptUserTurns: delta.keptUserTurns || 0,
+            trigger: delta.trigger || null,
+            summaryChars: delta.summaryChars || 0,
+            reason: delta.reason || null,
+          });
+        } else if (delta.kind === 'compaction') {
+          runStore.appendEvent(projectRoot, runId, 'compaction_start', {
+            tokens: delta.tokens || 0,
+            limit: delta.limit || 0,
+            window: delta.window || 0,
+            trigger: delta.trigger || null,
           });
         } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
           runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null, state: delta.state || null });
@@ -419,6 +442,8 @@ function register(ctx) {
           onDelta: onAgentDelta,
           tools,
           signal: controller.signal,
+          // /compact（照 Codex 的手动压缩命令）：无视阈值立刻压一次
+          forceCompaction: forceCompact === true,
         });
       } finally {
         activeRequests.delete(runId);
@@ -487,6 +512,12 @@ function register(ctx) {
       // 第 1 项：上下文裁剪次数（0 表示这一次运行没有触发预算裁剪）
       out.contextTrims = Number(result.contextTrims) || 0;
       out.contextTrimmedChars = Number(result.contextTrimmedChars) || 0;
+      // 上下文压缩（照 Codex）：次数 + 最后一次的交接摘要。
+      // 界面据此把压缩前的消息折叠掉（下次请求只送摘要 + 之后的新消息），
+      // 否则每个新回合都会把整段旧历史再发一遍 —— 刚压完又立刻超线，白烧一次压缩调用。
+      out.compacted = Number(result.compacted) || 0;
+      if (result.contextSummary) out.contextSummary = String(result.contextSummary);
+      if (result.contextSummaryEnvelope) out.contextSummaryEnvelope = String(result.contextSummaryEnvelope);
       if (dirty && model) out.document = model.doc;
       if (bridge) bridge.cleanup();
       return out;

@@ -130,4 +130,30 @@ soul_file=config/soul.md
 #
 # 实测（2026-09-17）：40 次 27KB 的 read_file 结果会让第 11 次请求的输入涨到 434,743 字符
 # （≈145k tokens）；开启预算后同一场景最大输入 59,605 字符，且 tool 配对仍然合法。
+
+# ---------- 上下文压缩（照 Codex CLI 的做法：摘要优先） ----------
+# 分工：上面两层是「按条压缩 / 按字符硬裁」，本层是**语义**压缩 —— 窗口逼近上限时，把
+# 「助手长文 + 工具结果」整段换成一份**交接摘要**，只保留系统提示与**人的轮次**。
+# 取值全部来自 Codex 的实测行为（codex-cli 0.135.0）：
+#   * 触发线 = 窗口 × 0.9（Codex: model_context_window=1000000 / model_auto_compact_token_limit=900000）；
+#   * 提示词逐字使用 Codex 的 "You are performing a CONTEXT CHECKPOINT COMPACTION…"（见 electron/compaction.cjs）；
+#   * 压缩后的历史 = [system, ...人的轮次, 摘要]（Codex 的 rollout `replacement_history` 就是这个形状：
+#     实测 16 条 user 消息只保留 9 条 —— 被丢的是机器注入的 <codex_internal_context>/<turn_aborted> 那类）。
+# agent.compact.enabled=true                     # 总开关（默认开）
+# agent.compact.ratio=0.9                        # 触发线 = 有效窗口 × 该比例
+# agent.compact.context_window=0                 # 有效窗口覆盖（0 = 用模型管理里的 contextWindow）
+# agent.compact.fallback_window=128000           # 模型没配上下文窗口时的兜底（宁小勿大）
+# agent.compact.model=                           # 摘要用哪个模型（留空跟随主模型；可换便宜模型）
+# agent.compact.reasoning=false                  # 摘要是否开思考链（默认关：搬运任务不需要）
+# agent.compact.max_output_tokens=4096           # 摘要输出上限
+# agent.compact.timeout_ms=60000                 # 摘要请求超时
+# agent.compact.item_max_chars=6000              # 送进摘要请求时单条消息的字符上限（防「压缩请求自己超窗」）
+# agent.compact.input_max_chars=400000           # 摘要请求总量上限（超出从最旧开始丢并如实标注）
+# agent.compact.keep_user_turns=true             # 保留人的轮次（Codex 行为；false = 只留摘要）
+# agent.compact.keep_user_max_chars=2000         # 单条保留消息的字符上限
+# agent.compact.keep_user_total_chars=20000      # 保留消息的总字符预算
+# agent.compact.on_trim=true                     # 硬裁剪一开始丢正文，就顺手做一次语义压缩
+# 手动压缩：在对话框里发 `/compact`（等价 Codex 的 /compact 命令），无视阈值立刻压一次。
+# 留痕：run 记录里写 `compaction_start`/`compacted` 事件（窗口号、前后 token、保留几轮人的话）；
+#       界面出现「上下文已压缩」卡片，旧消息折叠但仍可回看，折叠掉的部分不再发给模型。
 # 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索
