@@ -4,6 +4,44 @@
 
 ## [未发布]
 
+### 新增（子代理结果契约 P1：单一 JSON 信封 + 违约拒收；多 Agent 信息完整性第一步；2026-09-17）
+
+`docs/multi-agent-info-integrity-2026-09-17.md` 的 P1 从设计变成代码（新模块
+`electron/subagentEnvelope.cjs`，用例 `scripts/subagent-envelope-test.cjs` 进 CORE）：
+
+- 子代理结果不再是「`[子代理结果] taskId=… status=…` + 自由文本」，而是**一个**带契约的 JSON 信封：
+  `v/msgId/from/to/snapshot/kind/payload/refs/evidence/trust/lossy`。
+- **硬规则**：缺字段 / 缺 `snapshot.hash` / `kind`、`trust` 非法 / result 没结论 / error 没原因
+  → 工具结果变成 **error（拒收）**，文本明写「不得作为结论证据」，audit 留 `subagent_envelope_rejected`
+  —— 这是「信任放大」的闸门（子代理说"完成了"不再等同"可信"）。
+- `trust` **不自动给 verified**（只给 derived/untrusted）；`acceptanceJudgement` 仍固定 `manual`。
+- 有损自报：截断 → `lossy.isLossy/droppedChars/originalRef`（完整原文用 `get_subagent_task` 取）。
+- `evidence.files[].sha256` 是**真哈希**（改内容就变）；声称改了但文件不存在 → `exists:false` + warning；
+  工程外路径不作为产物。
+- `snapshot.hash` = 画布文档的键序无关 SHA-256 → 主代理可判断「报告之后世界是否又变过」。
+  `revision` 暂为 null（GraphModel 没有单调版本号计数器，不拿节点数冒充）。
+- 代价：每个子代理结果进主上下文从约 1.1KB → 1.7KB（字段空则省）。用例同时锁住「不许把 20000 字符
+  原样灌进主上下文」。
+
+### 新增（超窗的收尾：预检 / 输出收缩 / 供应商报超窗后的自救；2026-09-17）
+
+压缩把「长会话迟早撞窗」变成「基本不会撞」，但还有两种情况要收尾（`docs/context-overflow-guard-2026-09-17.md`）：
+
+- **预检**：输入本身就超窗 → **不发出去吃 400**，`stopReason=context_overflow` + 中文可执行出路
+  （开新会话 / 调小 `keep_user_*` / 修模型窗口值 / 换大窗口模型）。只在**窗口已知**时拦
+  （模型管理声明过 / `agent.compact.context_window` / 被供应商拒过）；只有兜底值时不拦，避免误伤大窗口模型。
+- **输出收缩**：输入装得下、只是挤掉了输出预算 → 自动缩小本轮 `max_tokens` 继续发（上报
+  `max_tokens_capped`），而不是拒发。
+- **自救**：供应商真报超窗 → 记下该模型**保守窗口下限**（估算 × 0.9，取历史最小值，进程内、不写用户配置）
+  → 强制压缩一次（`trigger=provider-rejected`）→ 用压缩后的历史重发；**只救一次**，压完还超就如实失败
+  并保留供应商原文。识别器只认「HTTP 4xx + 上下文/长度措辞」，非超窗的 400 不被误判。
+- 判据 `scripts/context-overflow-test.cjs`（进 CORE，10 段 26 断言，含「重发的请求体真的用了收缩后的
+  max_tokens」这条——它抓到过一次真 bug：流式请求体由 cfg 生成，收缩后的值必须进 cfg）。
+- **真机验证（真实 DeepSeek）**：`输入 748,074 + max_tokens 393,216 > 1,048,576` 被真实拒绝
+  （`This model's maximum context length is 1048576 tokens …`）→ 降级窗口 590,035 → 压缩
+  655,595 → 1,526 tokens → 重发成功交付（真实用量 1,724 tokens，`自救次数=1`）。另有一次
+  `max_tokens` 超范围的真 400 被识别器正确**排除**在超窗之外。变异 12/12 有判别力。
+
 ### 新增（上下文压缩：照 Codex CLI 的做法做摘要压缩；2026-09-17）
 
 用户口径「做摘要压缩，codex 怎么做我们就怎么做」。取值先在本机 codex-cli **0.135.0** 上取证，

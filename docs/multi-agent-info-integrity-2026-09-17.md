@@ -93,16 +93,58 @@
 | 子代理说"已完成"就信 | 信任放大，错误向下游传播 | 独立复跑产物 |
 | 没有 snapshot 就合并信息 | 版本错位，结论混了不同世界状态 | 信封带 revision |
 
-## 7. 落地顺序（建议）
+## 7. 落地顺序（建议）与进度
 
-| 阶段 | 内容 | 判据（能区分实现的） |
-|---|---|---|
-| P1 | 子代理结果改 JSON 信封（字段 + snapshot + refs + evidence + lossy） | 缺字段/缺 snapshot 时**拒收**；收下的必须 schema 校验通过 |
-| P2 | 内容寻址引用 + 有损自报（截断点带 originalRef） | 哈希不符拒收；lossy 内容不得作为交付证据 |
-| P3 | 跨子代理资源租约 + expectedRevision 写 | 并发写同一资源 → 一个成功一个冲突（不是双双成功） |
-| P4 | 产物独立复跑核验（files 哈希 + tests 退出码） | 篡改子代理自述的产物 → 核验必须红 |
-| P5 | 确定性合并 + 冲突裁决（approval 令牌） | 同一批消息不同到达顺序 → 合并结果逐字节相同 |
+| 阶段 | 内容 | 判据（能区分实现的） | 进度 |
+|---|---|---|---|
+| P1 | 子代理结果改 JSON 信封（字段 + snapshot + refs + evidence + lossy） | 缺字段/缺 snapshot 时**拒收**；收下的必须 schema 校验通过 | ✅ **已落地**（见 §8） |
+| P2 | 内容寻址引用 + 有损自报（截断点带 originalRef） | 哈希不符拒收；lossy 内容不得作为交付证据 | ◐ 部分（产物带真实 sha256、截断自报 lossy；尚未做「接收方校验哈希不符即拒收」） |
+| P3 | 跨子代理资源租约 + expectedRevision 写 | 并发写同一资源 → 一个成功一个冲突（不是双双成功） | ☐ |
+| P4 | 产物独立复跑核验（files 哈希 + tests 退出码） | 篡改子代理自述的产物 → 核验必须红 | ☐ |
+| P5 | 确定性合并 + 冲突裁决（approval 令牌） | 同一批消息不同到达顺序 → 合并结果逐字节相同 | ☐ |
 
 > 现在能直接复用的：`eventBus` / `runCheckpoint` / `sideEffects`（幂等 + 归因）/ `failures`（错误码）/
 > `scheduler`（写独占）/ `approval`（令牌）/ `roles`+`roleSkills`（角色权限与技能）/
 > `validateRagGrounding`（只认真实来源的思路）/ `compressionCache`（内容级键）。
+
+## 8. P1 已落地：子代理结果的单一 JSON 信封（2026-09-17）
+
+实现：`electron/subagentEnvelope.cjs`（契约构建/校验/渲染 + 产物哈希）+ `electron/subagents.cjs`
+完成路径；用例 `scripts/subagent-envelope-test.cjs`（13 段，进 CORE）。
+
+```jsonc
+{
+  "v": 1,
+  "msgId": "m_<taskId>",
+  "from": { "runId": "…", "taskId": "…", "role": "builder" },
+  "to": { "taskId": "supervisor", "role": "supervisor" },
+  "snapshot": { "source": "canvas", "hash": "sha256:…", "revision": null },
+  "kind": "result",                     // result | error
+  "payload": { "objective", "status", "summary", "acceptanceJudgement": "manual",
+               "toolCallCount", "summaryChars", "stageNodeId?", "totalTimeoutMs?" },
+  "refs": [ { "kind": "changed_file", "path": "a/b.txt" } ],
+  "evidence": { "files": [ { "path", "exists", "bytes", "sha256" } ],
+                "commands": [ { "cmd", "ok" } ], "warnings": [ "…" ] },
+  "trust": "derived",                   // verified 只能由独立复跑产物的核验方给
+  "lossy": { "isLossy": true, "droppedChars": 19507, "originalRef": "get_subagent_task(taskId=…)" }
+}
+```
+
+**硬规则（照 §0 的 E 类错因）**：
+
+- 缺必填字段 / 缺 `snapshot.hash` / `kind`、`trust` 取值非法 / result 没有结论 / error 没有原因
+  → `validateEnvelope` 报违约 → 工具结果变成 **error（拒收）** + 文本明写「不得作为结论证据」，
+  并在 audit 里留 `subagent_envelope_rejected`。**这就是「信任放大」的闸门**。
+- `trust` **不自动给 verified**（只给 derived/untrusted）：验收判定保持 `acceptanceJudgement: 'manual'`，
+  绝不替主代理下结论。
+- 有损必须自报：截断 → `lossy.isLossy/droppedChars/originalRef`（完整原文用 `get_subagent_task` 取）。
+- 产物哈希是**真算的**：改文件内容 → 哈希变（用例锁住）；声称改了但文件不存在 → `exists:false`
+  + warning，绝不当交付证据；工程外路径不纳入产物。
+- `snapshot.hash` = 画布文档的**键序无关** SHA-256：主代理拿当前画布再算一次，就能判断
+  「子代理报告之后世界有没有又变过」（C 类版本错位的检测手段）。
+  `revision` 暂为 null —— `GraphModel` 目前没有单调版本号计数器，**不拿节点数之类冒充版本号**；
+  补真计数器是 P1 的后续小项。
+
+代价：每个子代理结果进主上下文的文本从「字段头 + 正文」变成「一段引导语 + 一个 JSON 对象」，
+本仓库实测 1.1KB → 1.7KB（信封字段空则省）。换来的是**可校验、可拒收、可知有损**。
+
