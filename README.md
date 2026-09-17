@@ -162,7 +162,8 @@ Agent 侧不是「套一层 API」，实现要点：
 
 ### 画布节点读写一致性
 - `get_workbench_model` 不在只读缓存内，任何时刻都读实时画布模型
-- 变更类工具（`workbench_edit`/`create_nodes`/`workbench_connect`/`bulk_edit`/`write_file`/`edit_file`/`save_project`/`ui_control` 等）执行成功后自动清空只读结果缓存，避免「写入成功但读到旧数据/0 节点」
+- 变更类工具（`workbench_edit`/`bulk_edit`/`write_file`/`edit_file`/`save_project`/`ui_control` 等）执行成功后自动清空只读结果缓存，避免「写入成功但读到旧数据/0 节点」
+- **`create_nodes` / `workbench_connect` 是未接入的遗留实现**：源码 `electron/tools/impl/{createNodesTool,workbenchConnectTool}.cjs` 仍在仓库里，但**没有注册进默认注册表**（`electron/tools/toolkit.cjs` 的 `BUILTINS` 里没有它们，`scripts/tool-contract-closure-test.cjs` 有断言锁住「未接入白名单只有这两个文件」）。它们的职责已由 `workbench_edit` 全量覆盖（创建/编辑/连线同一个工具），模型看不到这两个工具名 —— 文档与实现一致，别再按旧文档调用它们
 - `query_scalars`/`retrieve_context` 的 `prefix=node:<部分id>` 在严格前缀无命中时，会按「同类型 key 的 id 是否包含该片段」回退，命中 `node:<type>-<部分id>-<rand>`
 - **链路完整性**：`workbench_edit` 会在结果中提示「不在 start→end 完整路径上的节点」，驱动 Agent 补全连线
 

@@ -4,6 +4,52 @@
 
 ## [未发布]
 
+### 修复（`deepseek-agent-issues.md` 任务单逐项核查：8 项确认为缺陷并修复；2026-09-17）
+
+按任务单要求逐项区分「确认缺陷 / 能力缺口 / 性能债 / 设计取舍 / 不成立」，全文见
+`docs/AGENT_GAP_FIX_2026-09-17.md`（含每项的 file:line、复现输出、最小修复与回归测试）。
+
+- **第 1 项（P1）工具结果把上下文顶爆**：`agent.context.*` 上下文预算（新模块 `electron/contextBudget.cjs`）——
+  每次模型请求前把**旧的、超大的 tool 消息正文**换成可追溯占位符，直到落回预算内。
+  两条硬约束：**不改消息结构**（条数/角色顺序/`tool_calls`↔`tool_call_id` 配对一概不动，不制造孤立 tool 消息）、
+  **两档保护**（第一档只裁「最近 keepRecent 条之外」；仍超预算才退第二档，system 与最后一条始终保留）。
+  实测：40 次 27KB 的 read_file 之后，末轮请求输入从 **434,743 字符（≈145k tokens）→ 59,605 字符**；
+  裁剪事件 `context_trim` 如实上报，压不进时如实标 `overBudget=true`（不谎报）。
+  用例 `scripts/context-budget-test.cjs`（20 条断言，进 CORE）。
+- **第 2 项（P1）跑到上限只剩一句「任务未完成」**：`agent.buildLimitWrapUp()` 从真实调用记录聚合
+  「已实际执行 / 失败的调用（带失败码）/ 涉及的文件 / 怎么续跑」，拼在模型已输出内容之后交付；
+  `limit_reached` delta 带结构化 `wrapUp`，`error` delta 照旧发（兼容既有契约）。
+  界面同步修两处：`chatStore` 不再把这类 Run 的结果丢掉（原来只在 `ok=true` 时交付 reply），
+  `WorkbenchDock` 的「可续跑」列表改用 `isResumableRun()`（`state==='LIMIT_REACHED'` 也列出来 ——
+  旧过滤 `status==='interrupted'` 会让跑到上限的 Run 连入口都看不到）。
+  用例 `scripts/limit-wrapup-test.cjs`（16 条断言，进 CORE）。
+- **第 3 项（P2）成本账本把缓存命中按未命中价计**：单价支持第三段
+  `cost.price.<model>=in,out[,cachedIn]`（不写则行为与旧版逐字相同），配了才按
+  「未命中×in + 命中×cachedIn + 输出×out」计；`snapshot().pricePrecision` 如实标注
+  `single-rate` / `cached-aware`；`reasoning` token 单独记录（**不重复计入金额**）。
+- **第 5 项（P2）项目记忆只按时间取最近 30 条**：`electron/memory.cjs` 新增
+  tokenize（英文按词 / 中文 2-gram）、scoreEntry（key×6 / tags×4 / content×2）、selectRelevant
+  （**一条都没命中才退回最近 N 条**并标 `matched:false`）、buildMemoryText（未命中时显式说明
+  「未按当前问题检索」）；注入与 `recall` 工具共用同一口径。用例 `scripts/memory-recall-test.cjs`（12 条，进 CORE）。
+- **第 6(a) 项（P2）子代理无法单独取消**：新增工具 `cancel_subagent_task(taskId, reason?)` ——
+  只 abort 该任务自己的 controller，状态如实标 `cancelled`（不再统一报成「信号中断」）并写审计；
+  对已结束任务明确拒绝。UI 与任务视图持久化仍待做（如实记为能力缺口）。
+- **第 7 项（P2）MCP 适配不校验握手 + 含空格路径被拆坏**：先握手（等 `initialize` 应答，
+  超时/error 分别如实报）再发 `notifications/initialized` + `tools/call`；整段 `command` 就是存在的
+  可执行文件时不再按空格硬拆；spawn `ENOENT` 且命令含空格时补「请加引号」的修法提示。
+  实测每次调用 spawn 一个 server ≈70ms（记为可接受的性能债，不做连接池）。
+  用例 `scripts/mcp-handshake-test.cjs`（5 条，进 CORE）。
+- **第 9 项（P3）超 2MB 的文本文件被报成「二进制或不可读」**：按原因分流报错
+  （超上限 → 明确 2MB 上限 + 给出 offset/`search_files` 的做法；二进制/编码问题 → 保留解析建议），
+  把上限提成常量 `MAX_TEXT_BYTES`。用例 `scripts/read-file-limits-test.cjs`（7 条，进 CORE）。
+- **第 4 项（P2）文档/清单漂移**：`create_nodes` / `workbench_connect` 有实现但**未注册**
+  （`toolkit.BUILTINS` 里没有，`tool-contract-closure-test` 的 NOT_WIRED 白名单锁着），
+  README 与语义名单却把它们当现役工具 —— 本轮修文档与注释，**没有为了让数字对上而注册未完成工具**。
+- **不成立/设计取舍（明确不改）**：第 10 项（无每工具限流：已有超时/并发/次数/成本四道闸）、
+  第 11 项（压缩配额按请求数计是**有意**限制压缩模型请求数）、第 7 项（MCP 每次 spawn 换来必定清理干净）、
+  第 9 项（单文件同步读不搬 worker：2MB 上限下 7ms vs worker 固定开销 24ms）。
+- **剩余未做（如实单列）**：第 8 项 IPC 侧历史上限、第 6(b)(c) 子代理 UI 与任务视图持久化、
+  第 5 项跨项目用户记忆与记忆管理 UI、第 7 项 `tools/list` 动态发现。
 ### 修复（聊天「回答写一半就断」的四类根因；2026-09-17）
 
 - **根因 1｜输出上限与思考链共用额度，8192 档位把长回答砍半（真实模型实测）**：主循环无条件下发
