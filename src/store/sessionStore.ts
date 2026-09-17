@@ -253,7 +253,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!last || last.role !== 'assistant') return;
     if (d.kind === 'reasoning' && d.text) last.reasoning = (last.reasoning || '') + d.text;
     else if (d.kind === 'content' && d.text) last.content += d.text;
-    else if (d.kind === 'tool' && d.toolCalls) {
+    else if (d.kind === 'content_reset') {
+      // 流中途断线 → 主进程整轮重发：已流出的半截内容作废，否则重发的完整回答
+      // 会接在半截后面，用户看到两遍开头。
+      last.content = '';
+      last.reasoning = '';
+      last.tools = [];
+    } else if (d.kind === 'tool' && d.toolCalls) {
       const list = (d.toolCalls as { id?: string; name?: string; args?: unknown }[]).map((t) => ({
         id: t.id,
         name: t.name || 'tool',
@@ -302,7 +308,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {
       last.status = 'failed';
-      last.content = '（调用失败：' + error + '）';
+      // 已流出的半截内容**不能抹掉**：流式中断时那是用户唯一拿到的东西，
+      // 直接替换成「（调用失败：…）」会让回答看起来凭空消失（这正是「聊一半断掉」的观感）。
+      const partial = typeof last.content === 'string' ? last.content.trim() : '';
+      last.content = partial ? partial + '\n\n---\n> ⚠️ 本轮中断：' + error : '（调用失败：' + error + '）';
     }
     set({ messages: msgs, streaming: false });
   },

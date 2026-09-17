@@ -173,6 +173,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         useSessionStore.getState().finishTurn(res.reply, res.reasoning || '', tools, res.grounding);
         // 画布是独立工作系统：turn 结束后当前画布始终是工作画布，保持 active（不被标记为 completed）
         useSessionStore.getState().markActive();
+        // 交付形态如实告知：被长度上限截断的回答不是完整答案，别让用户以为写完了
+        if (res.stopReason === 'length_truncated') {
+          useUiStore.getState().setToast('回答触到模型长度上限被截断，可回复「继续」让它接着写完');
+        }
       } else {
         useSessionStore.getState().failTurn(res.error || '未知错误');
         useUiStore.getState().setToast('Agent 调用失败：' + (res.error || '未知错误'));

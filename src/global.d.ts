@@ -276,6 +276,10 @@ interface CodenodeApi {
       invalid: string[];
     };
     error?: string;
+    /** 交付形态：'length_truncated' = 回答触到长度上限被截断（不是完整答案） */
+    stopReason?: string | null;
+    /** 流式中断后整轮重发的次数（网络/代理中途掉线时 > 0） */
+    streamRestarts?: number;
     document?: { root?: unknown };
     cost?: Record<string, unknown>;
     alerts?: AlertDto[];

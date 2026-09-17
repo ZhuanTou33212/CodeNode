@@ -76,6 +76,14 @@ function cfg() {
 }
 
 async function runTurn(script) {
+  return runTurnWithCfg({}, script);
+}
+
+/**
+ * 同 runTurn，但可覆盖 reliability（用于锁定 agent.truncation_nudges 这类新配置项），
+ * 并收集 `truncated` 增量 —— 「界面有没有被通知到」也是判据的一部分。
+ */
+async function runTurnWithCfg(reliabilityOverride, script) {
   const controller = new AbortController();
   const context = new AgentToolContext({
     projectRoot: root,
@@ -86,16 +94,21 @@ async function runTurn(script) {
     sandbox: policy,
     signal: controller.signal,
   });
+  const turnCfg = cfg();
+  turnCfg.reliability = { ...turnCfg.reliability, ...reliabilityOverride };
+  const truncatedDeltas = [];
   const stub = installScriptedModel(script, { loopLast: false });
   try {
     const result = await agent.runAgentChat({
-      cfg: cfg(),
+      cfg: turnCfg,
       messages: [{ role: 'system', content: '测试用 system' }, { role: 'user', content: '请完成测试任务' }],
       tools: { registry: makeRegistry(), context },
       signal: controller.signal,
-      onDelta: () => {},
+      onDelta: (d) => {
+        if (d && d.kind === 'truncated') truncatedDeltas.push(d);
+      },
     });
-    return { result, seen: stub.seen, calls: stub.calls };
+    return { result, seen: stub.seen, calls: stub.calls, truncatedDeltas };
   } finally {
     stub.restore();
   }
@@ -138,27 +151,60 @@ async function runTurn(script) {
     spyRuns === 1 && (okTurn.result.toolCalls || []).every((t) => t.ok === true),
     JSON.stringify({ spyRuns, toolCalls: (okTurn.result.toolCalls || []).map((t) => t.ok) }));
 
-  // ---- (3) 被截断的回答：补问有上限，且最终如实标注 ----
+  // ---- (3) 被截断的回答：补问「接着写」，补问上限可配，且最终如实标注 ----
   const longText = '很长的回答……'.repeat(50);
+  // 出厂 agent.truncation_nudges=4：连截 4 次各补问一次，第 5 轮才自然收尾
   const truncating = await runTurn([
     { content: longText, finishReason: 'length' },
     { content: longText, finishReason: 'length' },
     { content: longText, finishReason: 'length' },
+    { content: longText, finishReason: 'length' },
+    { content: '（收尾）', finishReason: 'stop' },
   ]);
-  check('[截断回答] 只补问了 2 次（共 3 轮请求：1 次原始 + 2 次补问）', truncating.calls === 3, 'calls=' + truncating.calls);
+  check('[截断回答] 补问 4 次（共 5 轮请求：1 次原始 + 4 次补问）', truncating.calls === 5, 'calls=' + truncating.calls);
   const nudgeMessages = truncating.seen.slice(1).filter((req) => req.messages.some((m) => m.role === 'user' && /截断/.test(String(m.content))));
-  check('[截断回答] 补问消息里说明「被长度上限截断」并要求拆短', nudgeMessages.length === 2, 'nudgeReqs=' + nudgeMessages.length);
+  check('[截断回答] 补问消息里说明「被长度上限截断」', nudgeMessages.length === 4, 'nudgeReqs=' + nudgeMessages.length);
+  const nudgeText = String(
+    (truncating.seen[1].messages.find((m) => m.role === 'user' && /截断/.test(String(m.content))) || {}).content || '',
+  );
+  check('[截断回答] 补问要求「从断点接着写」（不能被要求拆短 = 主动丢信息）',
+    /接着写/.test(nudgeText) && !/拆短/.test(nudgeText), nudgeText.slice(0, 60));
   const carried = truncating.seen[1] && truncating.seen[1].messages.some((m) => m.role === 'assistant' && String(m.content).includes('很长的回答'));
   check('[截断回答] 已输出的部分作为 assistant 消息带回（不重复生成同一段）', !!carried);
-  check('[截断回答] 次数用尽后如实标注 stopReason=length_truncated',
-    truncating.result.stopReason === 'length_truncated', String(truncating.result.stopReason));
-  check('[截断回答] 仍然把内容交付出去（不是空手而归）', String(truncating.result.content || '').includes('很长的回答'), String(truncating.result.content || '').slice(0, 40));
+  const joined = String(truncating.result.content || '');
+  check('[截断回答] 每段都交付出去（接着写 = 拼接，不丢信息）',
+    joined.split(longText).length - 1 === 4 && joined.includes('（收尾）'),
+    JSON.stringify({ segments: joined.split(longText).length - 1, len: joined.length, stopReason: truncating.result.stopReason }));
+  check('[截断回答] 自然收尾时不带 length_truncated 标记',
+    truncating.result.stopReason === undefined, String(truncating.result.stopReason));
+
+  // ---- (3b) 补问次数用尽仍然截断 → 如实标注（次数由 agent.truncation_nudges 控制） ----
+  const exhausted = await runTurnWithCfg({ truncationNudges: 1 }, [
+    { content: longText, finishReason: 'length' },
+    { content: longText, finishReason: 'length' },
+  ]);
+  check('[补问用尽] 只补问 1 次（配置生效，不是写死 2/4）', exhausted.calls === 2, 'calls=' + exhausted.calls);
+  check('[补问用尽] 如实标注 stopReason=length_truncated',
+    exhausted.result.stopReason === 'length_truncated', String(exhausted.result.stopReason));
+  check('[补问用尽] 用尽时通知界面「不再继续写」', exhausted.truncatedDeltas.some((d) => d.continuing === false),
+    JSON.stringify(exhausted.truncatedDeltas));
 
   // ---- (4) 正常结束不应被误标 ----
   const normal = await runTurn([{ content: '一切正常。', finishReason: 'stop' }]);
   check('[正常结束] 不带 length_truncated 标记且 finishReason=stop',
     normal.result.stopReason === undefined && normal.result.finishReason === 'stop',
     JSON.stringify({ stopReason: normal.result.stopReason, finishReason: normal.result.finishReason }));
+
+  // ---- (5) 出厂配置口径：这些值决定「回答会不会被砍半」，必须锁住 ----
+  const rel = agent.parseReliabilityConfig({});
+  check('[出厂口径] 单轮总时长 600s（不再是写死的 180s）', rel.turnTimeoutMs === 600000, String(rel.turnTimeoutMs));
+  check('[出厂口径] 停滞超时 120s（有数据就重置）', rel.streamIdleTimeoutMs === 120000, String(rel.streamIdleTimeoutMs));
+  check('[出厂口径] 流中断重发 2 次（0 = 旧行为：半截 + 报错）', rel.streamMaxAttempts === 2, String(rel.streamMaxAttempts));
+  check('[出厂口径] 截断补问 4 次', rel.truncationNudges === 4, String(rel.truncationNudges));
+  const sample = fs.readFileSync(path.join(__dirname, '..', 'config', 'agent.properties.example'), 'utf8');
+  const maxTokens = Number((/^max_tokens=(\d+)/m.exec(sample) || [])[1]);
+  check('[出厂口径] 配置样例的 max_tokens 足够（≥16384，思考链与正文共用这笔额度）',
+    Number.isFinite(maxTokens) && maxTokens >= 16384, String(maxTokens));
 
   console.log(failures === 0 ? 'TRUNCATION SAFETY TEST: PASS' : 'TRUNCATION SAFETY TEST: FAIL (' + failures + ')');
   process.exitCode = failures === 0 ? 0 : 1;

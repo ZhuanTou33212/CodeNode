@@ -2,13 +2,21 @@
 api_base=https://api.deepseek.com
 api_key=
 model=deepseek-v4-flash
-max_tokens=8192
+# 单次回答的输出上限（token）。**思考链的 token 也算在这笔额度里**：真实实测
+# （reasoning_effort=medium）一份 4000 字文档会用掉 5k~8k，其中一半是思考 ——
+# 8k 档位上「回答写一半就被截断」是掷硬币；供应商侧 32768 / 65536 都接受。
+max_tokens=32768
 # 推理强度：low / medium / high
 # reasoning_effort=high
 # 瞬时网络错误重试（408/425/429/5xx 与连接失败），不会重试用户取消/超时
 # agent.request_max_attempts=3
 # agent.retry_base_ms=400
 # agent.retry_max_ms=5000
+# ── 单轮时长与流式中断恢复（回答「聊一半断掉」的两类根因）───────────────
+# agent.turn_timeout_ms=600000          # 单轮模型请求的总时长上限（含重发），出厂 600s（旧行为写死 180s）
+# agent.stream_idle_timeout_ms=120000   # 停滞判定：连续这么久没有任何分片才认为卡死（有数据就重置）
+# agent.stream_max_attempts=2           # 流中途断线/停滞 → 丢弃半截、整轮重发的次数（0=旧行为：半截+报错）
+# agent.truncation_nudges=4             # 回答触到 max_tokens 时最多补问几次（让它从断点接着写）
 # 单进程并发与单轮累计 token 上限
 # agent.max_concurrent_runs=2
 # agent.max_total_tokens=250000

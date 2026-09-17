@@ -462,8 +462,9 @@ function buildConfig(task, workspace, mode, modelCfg) {
   cfg.model = mode === 'model' ? modelCfg.model : 'scripted-eval/' + task.id;
   cfg.maxTokens = 4096;
   cfg.reasoningEffort = 'low';
-  // 评测内重试固定为 1：脚本化传输的失败必须确定性可判定
-  cfg.reliability = { maxAttempts: 1, retryBaseMs: 10, retryMaxMs: 20 };
+  // 评测内重试固定为 1、且不做流式中断重发：脚本化传输的失败必须确定性可判定
+  // （新配置项显式补齐，避免「继承了生产默认值」把评测判据悄悄改掉）。
+  cfg.reliability = { ...agent.loadConfig(null).reliability, maxAttempts: 1, retryBaseMs: 10, retryMaxMs: 20, streamMaxAttempts: 0 };
   if (override.compression) cfg.compression = { ...cfg.compression, ...override.compression };
   if (task.budget && task.budget.maxTotalTokens) {
     cfg.limits = { ...cfg.limits, maxTotalTokens: task.budget.maxTotalTokens };

@@ -269,6 +269,23 @@ function register(ctx) {
             role: delta.role || null,
             status: delta.status || null,
           });
+        } else if (delta.kind === 'content_reset') {
+          // 流中途断线 → 整轮重发，已流出的半截作废。落进 run 事件，事后能看出
+          // 「这次回答为什么先出了一段又重来」。
+          runStore.appendEvent(projectRoot, runId, 'content_reset', {
+            attempt: delta.attempt || null,
+            maxAttempts: delta.maxAttempts || null,
+            reason: delta.reason || null,
+          });
+        } else if (delta.kind === 'truncated') {
+          // 回答触到 max_tokens 被截断（正在接着写 / 已用尽补问次数）：这是「回答看起来写一半就停」
+          // 的第一现场，必须留痕，否则只能靠猜。
+          runStore.appendEvent(projectRoot, runId, 'truncated', {
+            count: delta.count || 0,
+            max: delta.max || 0,
+            continuing: !!delta.continuing,
+            finishReason: delta.finishReason || null,
+          });
         } else if (['start', 'error', 'stopped', 'done'].includes(delta.kind)) {
           runStore.appendEvent(projectRoot, runId, delta.kind, { error: delta.error || null, state: delta.state || null });
         }
@@ -427,6 +444,7 @@ function register(ctx) {
         usage: result.usage || null,
         grounding: result.grounding || null,
         error: result.error || null,
+        streamRestarts: result.streamRestarts || 0,
       });
       // 续跑成功 → 原 Run 标记为已被取代，避免重复出现在「中断」列表里
       if (resumePlan) {
@@ -455,6 +473,9 @@ function register(ctx) {
       if (resumePlan) out.resumedFrom = resumePlan.runId;
       if (result.aborted) out.aborted = true;
       if (result.error) out.error = result.error;
+      // 交付形态要如实传给界面：被长度上限截断 / 中途重发过，用户有权知道
+      out.stopReason = result.stopReason || null;
+      out.streamRestarts = result.streamRestarts || 0;
       if (dirty && model) out.document = model.doc;
       if (bridge) bridge.cleanup();
       return out;

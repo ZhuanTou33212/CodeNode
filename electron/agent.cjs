@@ -36,6 +36,33 @@ function loadProperties(file) {
   return out;
 }
 
+/**
+ * 输出上限的默认值。
+ *
+ * 8192 曾是这个项目的默认值，**在开思考链时是不够用的**：真实 DeepSeek 实测
+ * （2026-09-17，reasoning_effort=medium，让它写一份 4000 字文档）——
+ *   max_tokens=1000  → completion=1000，其中 reasoning=1000，正文 **0 字**（整轮只剩思考）
+ *   max_tokens=8192  → completion=8196，其中 reasoning=5037，正文 5520 字，finish_reason=length
+ *   max_tokens=8192  → 另一次 completion=5440，其中 reasoning=1939，正文 6061 字，finish_reason=stop
+ * 即：思考 token 与正文**共用** max_tokens，8k 档位上「回答写一半就被砍」是掷硬币；
+ * 而供应商侧 32768 / 65536 都接受。所以默认提到 32768（仍可由 config 覆盖）。
+ */
+const DEFAULT_MAX_TOKENS = 32768;
+/** 单轮模型请求的总时长上限（含流式中断后的重发）。旧默认是 180s 硬超时，见 DEFAULT_STREAM_IDLE_TIMEOUT_MS 注释 */
+const DEFAULT_TURN_TIMEOUT_MS = 600000;
+/**
+ * 流式「停滞」超时：**只要还有数据到达就重置**。
+ *
+ * 之前只有 180s 的墙钟总超时，于是「慢但在持续输出」的长回答会被整轮砍掉，
+ * 报错还是英文的 `This operation was aborted`，用户只看到回答写一半就没了。
+ * 现在把两种情形分开：不再有数据 = 停滞（可重发）；总时长超限 = 真超时。
+ */
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120000;
+/** 流式响应中断（网络掉线 / 停滞）后整轮重发的次数；0 = 不重发（旧行为） */
+const DEFAULT_STREAM_MAX_ATTEMPTS = 2;
+/** finish_reason=length 时最多补问几次（接着写），用尽仍截断则如实标 length_truncated */
+const DEFAULT_TRUNCATION_NUDGES = 4;
+
 function loadConfig(projectRoot) {
   const globalCfg = loadProperties(path.join(__dirname, '..', 'config', 'agent.properties'));
   const projectCfg = projectRoot
@@ -47,7 +74,7 @@ function loadConfig(projectRoot) {
     apiBase: (cfg.api_base || 'https://api.deepseek.com').replace(/\/+$/, ''),
     apiKey: cfg.api_key || '',
     model: cfg.model || 'deepseek-v4-flash',
-    maxTokens: Number(cfg.max_tokens) || 8192,
+    maxTokens: Number(cfg.max_tokens) || DEFAULT_MAX_TOKENS,
     reasoningEffort: cfg.reasoning_effort || 'medium',
     soulFile: cfg.soul_file || 'config/soul.md',
     tools: parseToolsConfig(cfg),
@@ -224,6 +251,16 @@ function parseReliabilityConfig(cfg) {
     maxAttempts: configInteger(cfg, 'agent.request_max_attempts', 3, 1, 5),
     retryBaseMs: configInteger(cfg, 'agent.retry_base_ms', 400, 50, 5000),
     retryMaxMs: configInteger(cfg, 'agent.retry_max_ms', 5000, 250, 30000),
+    // 单轮（一次模型请求，含流式中断后的重发）的总时长上限。旧行为是写死的 180s：
+    // 思考链 + 长上下文下很容易撞到，撞到就整轮作废（半截回答 + 英文报错）。
+    turnTimeoutMs: configInteger(cfg, 'agent.turn_timeout_ms', DEFAULT_TURN_TIMEOUT_MS, 10000, 3600000),
+    // 流式停滞超时：连续这么久没收到任何分片才判定「卡死」（有数据就重置）。
+    streamIdleTimeoutMs: configInteger(cfg, 'agent.stream_idle_timeout_ms', DEFAULT_STREAM_IDLE_TIMEOUT_MS, 10000, 600000),
+    // 流中途断线（网络重置 / 停滞）后**整轮重发**的次数：0 = 不重发（旧行为，半截输出 + 报错）。
+    // 重发是「丢弃半截、从头再生成」，不是拼接续写 —— 拼接会得到前后不一致的答案。
+    streamMaxAttempts: configInteger(cfg, 'agent.stream_max_attempts', DEFAULT_STREAM_MAX_ATTEMPTS, 0, 4),
+    // finish_reason=length（触到 max_tokens）时最多补问几次，让模型从断点接着写。
+    truncationNudges: configInteger(cfg, 'agent.truncation_nudges', DEFAULT_TRUNCATION_NUDGES, 0, 8),
   };
 }
 
@@ -553,26 +590,43 @@ async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
  * @param {any} cfg
  * @param {Array<any>} messages
  * @param {(event: any) => void} onEvent
- * @param {{ signal?: AbortSignal, timeoutMs?: number, tools?: any, attemptsRef?: { count: number } }} [options]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, tools?: any, attemptsRef?: { count: number }, sentBefore?: number }} [options]
  */
-async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, timeoutMs = 180000, tools, attemptsRef } = {}) {
+async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS, tools, attemptsRef, sentBefore = 0 } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   const url = cfg.apiBase + '/chat/completions';
   const controller = new AbortController();
   let timedOut = false;
+  let stalled = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
+  // 停滞计时器：只要有分片到达就重置。它和上面的总时长上限是两件事 ——
+  // 总上限抓「一整轮太久」，停滞抓「连接还活着但一个字都不来了」。
+  let idleTimer = setTimeout(() => {
+    stalled = true;
+    controller.abort();
+  }, idleTimeoutMs);
+  const armIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, idleTimeoutMs);
+  };
   const onAbort = () => controller.abort();
   signal && signal.addEventListener('abort', onAbort);
   let usage = null;
+  /** 本尝试已流出的部分（供重发时如实上报「作废了多少字」） */
+  const partial = { content: '', reasoning: '', toolCalls: [] };
   try {
     const body = chatBody(cfg, messages, { stream: true, tools });
     const attempts = maxAttemptsFor(cfg);
     let res = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      if (attemptsRef) attemptsRef.count = attempt;
+      // 重发过的输入要计进预算补偿：sentBefore = 此前已经整轮重发过的次数
+      if (attemptsRef) attemptsRef.count = sentBefore + attempt;
       try {
         res = await fetch(url, {
           method: 'POST',
@@ -588,7 +642,7 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, ti
         }
         throw Object.assign(new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`), { retryable: false });
       } catch (error) {
-        if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
+        if (timedOut || stalled || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
         await waitForRetry(retryDelay(cfg, attempt), controller.signal);
       }
     }
@@ -601,14 +655,23 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, ti
     const forward = (events) => {
       for (const event of events) {
         if (!event) continue;
-        if (event.kind === 'reasoning') onEvent && onEvent({ kind: 'reasoning', text: event.text });
-        else if (event.kind === 'content') onEvent && onEvent({ kind: 'content', text: event.text });
-        else if (event.kind === 'tool') onEvent && onEvent({ kind: 'tool', toolCalls: event.toolCalls });
+        if (event.kind === 'reasoning') {
+          partial.reasoning += event.text;
+          onEvent && onEvent({ kind: 'reasoning', text: event.text });
+        } else if (event.kind === 'content') {
+          partial.content += event.text;
+          onEvent && onEvent({ kind: 'content', text: event.text });
+        } else if (event.kind === 'tool') {
+          partial.toolCalls = event.toolCalls || partial.toolCalls;
+          onEvent && onEvent({ kind: 'tool', toolCalls: event.toolCalls });
+        }
       }
     };
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      // 有分片到达 = 连接还活着：重置停滞计时
+      armIdle();
       forward(streamAccumulator.applySseText(state, decoder.decode(value, { stream: true })));
     }
     // Some OpenAI-compatible providers omit the final newline. Do not drop its
@@ -624,11 +687,134 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, { signal, ti
       usage,
       finishReason: final.finishReason,
       anomalies: final.anomalies,
+      partial,
+      stalled,
     };
+  } catch (error) {
+    // 标注失败形态，供「整轮重发」判断是卡住不动 / 连接被重置 / 总时长超限，
+    // 并带上本尝试已流出的部分（报错文案要如实说「已收到多少字」）。
+    if (error && typeof error === 'object') {
+      error.stalled = stalled;
+      error.timedOut = timedOut;
+      error.partial = partial;
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
+    clearTimeout(idleTimer);
     signal && signal.removeEventListener('abort', onAbort);
   }
+}
+
+/**
+ * 一次「流式模型请求」的**整轮**语义（含中断重发）。
+ *
+ * 为什么需要它：网络或代理在流的中途重置时，此前只重试**建连**阶段 —— 一旦响应体开始
+ * 流动，`reader.read()` 抛错就直接冒到主循环，用户看到的是「回答写一半突然没了」
+ * 外加一句英文 `terminated`（实测：mock 服务吐 3 个分片后杀连接，服务端只收到 1 次请求）。
+ *
+ * 这里的策略是**丢弃半截、整轮重发**（不是拼接续写 —— 拼接会得到前后不一致的答案）：
+ *   ① 重发前先发 `stream_restart` 事件，让主循环与界面把已流出的部分作废（否则两遍内容会叠在一起）；
+ *   ② 停滞/断线可重发，**用户取消**与**总时长超限**不重发；
+ *   ③ 重发次数用尽仍失败 → 抛带 `code`（STREAM_INTERRUPTED / STREAM_STALLED / TURN_TIMEOUT）
+ *      与 `partial` 的中文错误，让调用方如实告诉用户「已收到多少字、为什么停」。
+ *
+ * @param {any} cfg
+ * @param {Array<any>} messages
+ * @param {(event: any) => void} onEvent
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, streamMaxAttempts?: number, tools?: any, attemptsRef?: { count: number } }} [options]
+ */
+async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}) {
+  const reliability = (cfg && cfg.reliability) || {};
+  const signal = options.signal;
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : Number(reliability.turnTimeoutMs) || DEFAULT_TURN_TIMEOUT_MS;
+  const idleTimeoutMs = Number.isFinite(options.idleTimeoutMs) ? options.idleTimeoutMs : Number(reliability.streamIdleTimeoutMs) || DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+  const restarts = Number.isFinite(options.streamMaxAttempts) ? options.streamMaxAttempts : Number(reliability.streamMaxAttempts) || 0;
+  const totalAttempts = 1 + Math.max(0, restarts);
+  const startedAt = Date.now();
+  let firstError = null;
+  let partial = { content: '', reasoning: '', toolCalls: [] };
+  for (let attemptNo = 1; attemptNo <= totalAttempts; attemptNo++) {
+    if (signal && signal.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
+    if (attemptNo > 1) {
+      onEvent &&
+        onEvent({
+          kind: 'stream_restart',
+          attempt: attemptNo,
+          maxAttempts: totalAttempts,
+          reason: String((firstError && firstError.message) || firstError || ''),
+          receivedChars: partial.content.length,
+        });
+      const waitMs = retryDelay(cfg, attemptNo - 1);
+      if (waitMs > 0) await waitForRetry(waitMs, signal);
+    }
+    const remaining = timeoutMs - (Date.now() - startedAt);
+    if (remaining <= 0) {
+      throw decoratedStreamError(new Error('本轮模型请求已达总时长上限'), {
+        code: 'TURN_TIMEOUT',
+        timeoutMs,
+        partial,
+        attempts: attemptNo - 1,
+      });
+    }
+    try {
+      const result = await streamOnce(cfg, messages, onEvent, {
+        ...options,
+        timeoutMs: remaining,
+        idleTimeoutMs,
+        sentBefore: attemptNo - 1,
+      });
+      return { ...result, streamAttempts: attemptNo, streamRestarts: attemptNo - 1 };
+    } catch (error) {
+      // 用户主动停止：原样抛出（主循环按 signal.aborted 归类为 CANCELLED）
+      if (signal && signal.aborted) throw error;
+      const stalled = !!(error && error.stalled);
+      const timedOut = !!(error && error.timedOut) || Date.now() - startedAt >= timeoutMs;
+      if (error && error.partial) partial = error.partial;
+      if (!firstError) firstError = error;
+      const retryable = !timedOut && (stalled || error.retryable !== false);
+      if (!retryable || attemptNo >= totalAttempts) {
+        throw decoratedStreamError(error, {
+          code: timedOut ? 'TURN_TIMEOUT' : stalled ? 'STREAM_STALLED' : 'STREAM_INTERRUPTED',
+          timeoutMs,
+          idleTimeoutMs,
+          partial,
+          // 报的是**重发**次数（第 1 次不算重发），文案才与事实一致
+          attempts: attemptNo - 1,
+        });
+      }
+    }
+  }
+  /* istanbul ignore next —— 循环必然 return 或 throw，这里只为让分支闭合 */
+  throw decoratedStreamError(firstError || new Error('模型请求失败'), { code: 'STREAM_INTERRUPTED', partial, attempts: totalAttempts });
+}
+
+/**
+ * 把流式中断的底层错误包装成「用户/模型都能读懂」的错误：
+ * 保留原始原因（排障要用），补上中文前缀与结构化字段（已收到多少字、重发了几次）。
+ * `retryable: false` —— 主循环不应把这类错误当成工具失败再喂回模型重试一轮。
+ */
+function decoratedStreamError(error, info) {
+  const original = String((error && error.message) || error || '未知原因');
+  const received = String((info && info.partial && info.partial.content) || '').length;
+  // 亚秒级的超时（测试里常用）要按 ms 显示，否则会写出「停滞（0s）」这种误导文案
+  const fmtDuration = (ms) => {
+    const n = Number(ms) || 0;
+    return n >= 1000 ? Math.round(n / 1000) + 's' : Math.round(n) + 'ms';
+  };
+  let prefix;
+  if (info && info.code === 'STREAM_STALLED') prefix = `模型响应停滞（${fmtDuration(info.idleTimeoutMs)} 内没有收到任何数据）`;
+  else if (info && info.code === 'TURN_TIMEOUT') prefix = `本轮模型请求超过 ${fmtDuration(info.timeoutMs)} 总时长上限`;
+  else prefix = '模型流式响应中断';
+  const attemptsText = info && info.attempts > 0 ? `，已重发 ${info.attempts} 次` : '';
+  const message = `${prefix}${received > 0 ? `（已收到 ${received} 字，这些内容不作为最终答复）` : ''}${attemptsText}：${original}`;
+  return Object.assign(new Error(message), {
+    code: (info && info.code) || 'STREAM_INTERRUPTED',
+    retryable: false,
+    streamPartial: (info && info.partial) || null,
+    streamAttempts: (info && info.attempts) || 0,
+    cause: error,
+  });
 }
 
 function logConversation(projectRoot, entry) {
@@ -647,8 +833,6 @@ function redactSecrets(value) {
 const MAX_TOOL_ITERATIONS = 12;
 const MAX_TOTAL_TOOL_CALLS = 100;
 const DATA_TRUNCATE_CAP = 120000;
-/** finish_reason=length（被 max_tokens 截断）时最多补问几次，避免模型一直输出半截内容导致空转 */
-const MAX_TRUNCATION_NUDGES = 2;
 
 /**
  * 画布/标量类工具：结果本身已压缩到最小必要信息，完整属性已落本地标量库。
@@ -1239,10 +1423,16 @@ function mergeUsage(previous, next) {
  *   onDelta       增量回调 {kind:'start'|'reasoning'|'content'|'tool'|'tool_result'|'grounding'|'done'|'error', ...}
  *   tools         { registry, context } 或 null（禁用工具）
  *   signal        AbortSignal（可选）
- *   timeoutMs     单轮超时（默认 180s）
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, steps?: number, toolCount?: number, iterations?: number}>}
+ *   timeoutMs     单轮模型请求的**总时长上限**（含流式中断后的重发；默认取
+ *                 cfg.reliability.turnTimeoutMs，出厂 600s）。「停滞」与「重发次数」分别由
+ *                 cfg.reliability.streamIdleTimeoutMs / streamMaxAttempts 控制。
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number}>}
  */
-async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = 180000 }) {
+async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = null }) {
+  // 单轮总时长：调用方显式传值优先（子代理按任务总时长钳制），否则读配置。
+  const turnTimeoutMs = Number.isFinite(timeoutMs)
+    ? Number(timeoutMs)
+    : Number(cfg && cfg.reliability && cfg.reliability.turnTimeoutMs) || DEFAULT_TURN_TIMEOUT_MS;
   onDelta && onDelta({ kind: 'start' });
   // 状态机：把「执行中 / 等工具 / 等用户 / 完成 / 失败 / 取消 / 达上限」显式化，并逐次上报
   const machine = createStateMachine({
@@ -1274,6 +1464,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const maxToolIterations = limits.maxToolIterations > 0 ? limits.maxToolIterations : MAX_TOOL_ITERATIONS;
   const maxTotalToolCalls = limits.maxTotalToolCalls > 0 ? limits.maxTotalToolCalls : MAX_TOTAL_TOOL_CALLS;
   const dataTruncateCap = limits.dataTruncateCap > 0 ? limits.dataTruncateCap : DATA_TRUNCATE_CAP;
+  // finish_reason=length 的补问上限：可配（agent.truncation_nudges），旧行为是写死 2 次。
+  const maxTruncationNudges = Number.isFinite(cfg && cfg.reliability && cfg.reliability.truncationNudges)
+    ? Math.max(0, Math.min(8, Number(cfg.reliability.truncationNudges)))
+    : DEFAULT_TRUNCATION_NUDGES;
   // P6：来源校验门（默认 warn = 只上报，行为与之前完全一致；enforce 才拦交付）
   const groundingCfg = (cfg && cfg.grounding) || {};
   const groundingEnforce = groundingCfg.mode === 'enforce';
@@ -1300,9 +1494,16 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let stopReason = 'iteration_limit';
   let lastFinishReason = null;
   let truncationNudges = 0;
+  /** 本**轮**已流出的正文/思考（跨轮累加的是 content/reasoning；这两个只用于中断重发时回滚本轮） */
+  let turnContent = '';
+  let turnReasoning = '';
+  /** 整轮重发的累计次数（流中途断线/停滞时发生；写进返回值与 turn_end trace，供事后判定真跑健壮性） */
+  let streamRestarts = 0;
   try {
     for (let iter = 0; iter < maxToolIterations; iter++) {
       loopIterations = iter + 1;
+      turnContent = '';
+      turnReasoning = '';
       if (signal && signal.aborted) {
         machine.go(STATES.CANCELLED, 'aborted');
         onDelta && onDelta({ kind: 'stopped' });
@@ -1324,11 +1525,32 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       }
       const turnStartedAt = Date.now();
       const onEvent = (ev) => {
+        if (ev.kind === 'stream_restart') {
+          // 流中途断了、这一轮要整轮重发：**本轮的**累加与界面上的半截输出都必须作废，
+          // 否则重发出来的完整回答会接在半截后面（用户看到两遍开头）。
+          content = content.slice(0, Math.max(0, content.length - turnContent.length));
+          reasoning = reasoning.slice(0, Math.max(0, reasoning.length - turnReasoning.length));
+          turnContent = '';
+          turnReasoning = '';
+          streamRestarts += 1;
+          emitTrace({
+            kind: 'stream_restart',
+            turnId: iter,
+            attempt: ev.attempt,
+            maxAttempts: ev.maxAttempts,
+            reason: ev.reason,
+            receivedChars: ev.receivedChars,
+          });
+          onDelta && onDelta({ kind: 'content_reset', attempt: ev.attempt, maxAttempts: ev.maxAttempts, reason: ev.reason });
+          return;
+        }
         if (ev.kind === 'reasoning') {
           reasoning += ev.text;
+          turnReasoning += ev.text;
           onDelta && onDelta({ kind: 'reasoning', text: ev.text });
         } else if (ev.kind === 'content') {
           content += ev.text;
+          turnContent += ev.text;
           onDelta && onDelta({ kind: 'content', text: ev.text });
         } else if (ev.kind === 'tool') {
           onDelta && onDelta({ kind: 'tool', toolCalls: ev.toolCalls });
@@ -1336,10 +1558,13 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       };
       const res = await chatCompletionStream(cfg, messages, onEvent, {
         signal,
-        timeoutMs,
+        timeoutMs: turnTimeoutMs,
         tools: payload.tools,
       });
       modelTurns += 1;
+      // 本轮结束：本轮缓冲交还（content/reasoning 里已经含它，不需要再留着回滚）
+      turnContent = '';
+      turnReasoning = '';
       if (res.usage) {
         usage = mergeUsage(usage, res.usage);
         recordCost(cfg, { kind: 'main', model: cfg.model, usage: res.usage, latencyMs: Date.now() - turnStartedAt, runId: cfg.costRunId });
@@ -1356,15 +1581,21 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const finishReason = res.finishReason || null;
       if (finishReason) lastFinishReason = finishReason;
       // 被 max_tokens 截断（finish_reason=length）且没有任何工具调用：不能把半截回答当最终答案，
-      // 也不能无限补问 —— 最多补 MAX_TRUNCATION_NUDGES 次，其余交给 MAX_TOOL_ITERATIONS 兜底。
-      if (!toolCalls.length && finishReason === 'length' && truncationNudges < MAX_TRUNCATION_NUDGES) {
+      // 也不能无限补问 —— 最多补 maxTruncationNudges 次（agent.truncation_nudges，出厂 4），
+      // 其余交给 MAX_TOOL_ITERATIONS 兜底。
+      // 提示语必须是「从断点接着写」：早先写的是「把回复拆短：只给结论」——那等于让模型
+      // 在被截断之后主动丢信息，用户拿到的是越缩越水的半份交付。
+      if (!toolCalls.length && finishReason === 'length' && truncationNudges < maxTruncationNudges) {
         truncationNudges += 1;
-        messages.push({ role: 'assistant', content: res.content || content });
+        messages.push({ role: 'assistant', content: String(res.content || '') });
         messages.push({
           role: 'user',
-          content: '【系统提示】上一轮输出被长度上限截断（finish_reason=length）。请把回复拆短：只给结论，或直接继续调用工具，不要重复已经输出过的内容。',
+          content:
+            '【系统提示】上一轮输出触到长度上限被截断（finish_reason=length）。请**直接从断点接着写**：' +
+            '不要重新开头、不要重复已经输出过的内容，也不要为了缩短篇幅丢信息。',
         });
         emitTrace({ kind: 'truncation_nudge', turnId: iter, finishReason, count: truncationNudges });
+        onDelta && onDelta({ kind: 'truncated', count: truncationNudges, max: maxTruncationNudges, finishReason, continuing: true });
         continue;
       }
       if (tools && tools.registry && toolCalls.length) {
@@ -1707,7 +1938,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       content = content || res.content || '';
       endedNaturally = true;
       // 回答本身被截断（且补问次数已用尽）：如实标记，别让调用方以为这是完整的最终答案
-      if (finishReason === 'length') stopReason = 'length_truncated';
+      if (finishReason === 'length') {
+        stopReason = 'length_truncated';
+        onDelta &&
+          onDelta({
+            kind: 'truncated',
+            count: truncationNudges,
+            max: maxTruncationNudges,
+            finishReason,
+            continuing: false,
+          });
+      }
       if (!content && reasoning) {
         onDelta && onDelta({ kind: 'content', text: '' });
       }
@@ -1732,7 +1973,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     emitTrace({
       kind: 'turn_end', totalToolCalls, executedUnique: allToolCalls.filter((t) => !t.repeated).length,
       repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations, modelTurns,
-      resultLen: content.length, finishReason: lastFinishReason, grounding,
+      resultLen: content.length, finishReason: lastFinishReason, grounding, streamRestarts,
     });
     machine.go(classifyOutcome({}), stopReason === 'length_truncated' ? 'length_truncated' : 'answer_complete');
     return {
@@ -1745,6 +1986,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       state: machine.state,
       stateHistory: machine.history.slice(),
       iterations: modelTurns,
+      streamRestarts,
       ...(endedNaturally && stopReason === 'length_truncated' ? { stopReason: 'length_truncated' } : {}),
       ...(groundingBlocked ? { groundingBlocked: true, groundingRetries } : {}),
     };

@@ -49,6 +49,7 @@
     "test:agent-cache": "node scripts/agent-cache-invalidation-test.cjs",
     "test:tool-call-id": "node scripts/tool-call-id-test.cjs",
     "test:stream-accumulator": "node scripts/stream-accumulator-test.cjs",
+    "test:stream-recovery": "node scripts/stream-recovery-test.cjs",
     "test:truncation-safety": "node scripts/truncation-safety-test.cjs",
     "test:agent-state": "node scripts/agent-state-test.cjs",
     "test:side-effect-idem": "node scripts/side-effect-idempotency-test.cjs",
