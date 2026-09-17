@@ -4,6 +4,21 @@
 
 ## [未发布]
 
+### 新增（子代理角色档案 + 内置技能库 + 自包含 prompt；2026-09-17）
+
+- 子代理的 system 此前只有「你是 CodeNode 的子代理」+ 一句角色提示 + 任务信息 —— 一句抽象职责是**身份**
+  不是**技能**：模型拿到「你负责实施最小必要修改」后，仍不知道这类活先看什么、按什么顺序、什么算完成。
+  现在 `electron/tools/roles.cjs` 的每个角色是 8 字段档案（身份名 / 负责的工作类型 / 明确不归它管 /
+  内置技能 id / 工作方式），`electron/tools/roleSkills.cjs` 提供 15 个内置技能（技能 = 若干条可执行规程，
+  5 个角色各挂 3 个），`electron/subagentPrompt.cjs` 把子代理 system 组装成七分区自包含 prompt。
+- 其中**可用工具清单取自子代理的真实注册表**（不是手写名单）—— 角色的权限裁剪一变，说明同步变，不可能漂移；
+  项目自定义 Skill 也首次对子代理可见（沿用主代理「不可信数据，仅作参考」的标注）；未知技能 id 显式报出，
+  配置笔误不再被静默吞掉。
+- `delegate_task` / `delegate_tasks` 的描述补上「派活对照表」（角色 + 身份名 + 工作类型），否则主代理会拿
+  explorer 去改代码、拿 verifier 去写文件。
+- 用例 `scripts/subagent-role-skill-test.cjs`（进 CORE）锁四件事：prompt 里的工具清单 == 该角色真实注册表
+  工具集；越权调用被注册表拒绝（不依赖 prompt 自觉）；描述里有身份与工作类型；没有项目 Skill 时不出现空分区。
+
 ### 安全（execute_shell 越界写/网络约束，测试模式不再放行破坏性确认；2026-09-16）
 
 - **越界写没有内核兜底**：`execute_shell` 的白名单含 `cmd` / `powershell` / `node` / `npm` / `npx`，而 Windows
