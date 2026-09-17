@@ -4,6 +4,37 @@
 
 ## [未发布]
 
+### 新增（上下文压缩：照 Codex CLI 的做法做摘要压缩；2026-09-17）
+
+用户口径「做摘要压缩，codex 怎么做我们就怎么做」。取值先在本机 codex-cli **0.135.0** 上取证，
+再落到实现（取证全文与逐条对照见 `docs/context-compaction-codex-parity-2026-09-17.md`）：
+
+- **触发线 = 窗口 × 0.9**：与 Codex 的 `model_context_window=1000000` /
+  `model_auto_compact_token_limit=900000` 同口径（`agent.compact.ratio`，有效窗口取模型管理里的
+  `contextWindow`）。额外一条触发：一旦硬裁剪已开始顶替正文（占位符换不出质量），下一轮先做语义压缩。
+- **提示词逐字照抄** Codex 二进制里的 `You are performing a CONTEXT CHECKPOINT COMPACTION…`
+  （英文原文，未改写）。
+- **压缩后的历史 = `[system, ...人的轮次, 摘要]`**：助手长文与工具结果被摘要取代；**机器注入的
+  user 提示**（`【系统提示】`/`【参数格式错误】`/`【工具失败】`/`RAG 来源校验：`）不保留 ——
+  对应 Codex rollout 的 `replacement_history`（实测 16 条 user 只留 9 条，丢的正是
+  `<codex_internal_context>` 那类注入）。与 Codex 的唯一实质差异：OpenAI 兼容接口没有服务端
+  加密压缩项，摘要以可见信封 `<compaction>…</compaction>` 带回。
+- **手动命令 `/compact`**：等价 Codex 的 `/compact`（命令本身不当作对话发出，无视阈值立刻压一次）。
+- **留痕与界面**：run 记录写 `compaction_start`/`compacted`（窗口号、前后 token、保留几轮人的话）；
+  聊天里出现「上下文已压缩」卡片（旧消息折叠可回看、但**不再发送**）；结果里回传摘要与信封，
+  避免「下一回合又把整段旧历史重发 → 刚压完又超线」。
+- **估算口径**：中文按 ≈0.7 token/字、其余 ≈1/4 token（实测 1000 中文字 ≈708）；**不能**沿用
+  `requestBudget` 的「按 UTF-8 字节」保守估算 —— 那会在远没到窗口时就疯狂压缩。
+- **fail-open**：摘要请求失败/空摘要 → 本轮照常交付、如实上报原因、**不把历史换成空摘要**；
+  兜底仍是 `agent.context.*` 硬裁剪。
+- 用例 `scripts/compaction-test.cjs`（进 CORE，8 段 28 断言）。顺带修掉 `scripts/lib/scripted-model.cjs`
+  的 `json()`：它此前把 SSE 文本当 JSON 解析，任何走 `chatCompletion`（非流式：压缩/摘要类调用）
+  的测试都会被这个 stub 骗成「JSON 解析失败」。评测内显式关掉压缩以保持脚本化传输的确定性。
+- **真机验证（真实 DeepSeek）**：把有效窗口压到 600 触发一次压缩 —— 供应商接受非流式摘要调用、
+  产出 330 字结构化交接摘要、历史变成 `[system, 3 轮人的话, 摘要]`、本轮照常交付；
+  同段历史的 token 估算 **331** vs 供应商实测 `prompt_tokens` **326**（偏差 1.5%），
+  对比「按字节」口径会报 ≈500+。变异测试 6/6 有判别力。
+
 ### 修复（`deepseek-agent-issues.md` 任务单逐项核查：8 项确认为缺陷并修复；2026-09-17）
 
 按任务单要求逐项区分「确认缺陷 / 能力缺口 / 性能债 / 设计取舍 / 不成立」，全文见
