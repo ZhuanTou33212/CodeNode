@@ -184,4 +184,11 @@ soul_file=config/soul.md
 #   工具成功时会回传写入后的 sha256，可直接当作下一个写者的 expectedSha256（交接棒）。
 # 核验（不采信自述）：get_subagent_task 会**重算**信封里的产物哈希与画布快照，返回 verification：
 #   valid / stale（报告后世界又变过）/ invalid（产物对不上 → 该结果拒收、trust 降级、audit 留痕）。
+# ---------- 多 Agent 结果的确定性合并与冲突裁决（P5）----------
+# delegate_tasks 的返回里带 merged.digest：同一组子代理结果**无论谁先返回**，digest 逐字节相同
+#   （合并只依赖贡献项自身：资源键/内容/起止时刻/来源，不看到达顺序）。
+#   内容一致 → agreed；有明确先后 → superseded（记清谁覆盖谁，两份都留痕）；判不出先后 → conflict，
+#   **不得默认取胜者** —— 主代理要用 merge_subagent_results({decisions:[{resourceKey,winnerTaskId}]})
+#   显式裁决（winnerTaskId 必须是该资源的候选来源，否则裁决被拒且冲突仍在）。
+#   待裁决冲突会以 delta/run 事件 `subagent_merge` 暴露，界面会提示（一致的批次不打扰用户）。
 # 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索

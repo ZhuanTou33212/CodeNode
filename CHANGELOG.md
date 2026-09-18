@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+### 新增（多 Agent 信息完整性 P5：确定性合并 + 冲突裁决；2026-09-17）
+
+`docs/multi-agent-info-integrity-2026-09-17.md` §12；实现 `electron/tools/merge.cjs`；
+用例 `scripts/multi-agent-integrity-test.cjs` E 段（排列断言：6 种到达顺序 → 同一 digest）。
+
+- **确定性**：合并只依赖贡献项自身（资源键/内容/起止时刻/来源），先把贡献集**规范排序**再去重合并 ——
+  同一组结果任意到达顺序 → `digest` 逐字节相同，且**幂等**（重复到达的报告不影响结果）。
+  digest 只覆盖合并**视图**（`resources`），输入侧元数据（去重数/被拒裁决）不进 digest。
+- **不猜**：内容不同且有明确先后 → `superseded`（记录**谁覆盖谁**，双方的值都留痕，不再是静默覆盖）；
+  判不出先后（时刻相同或缺失）→ `conflict` + `requiresArbitration`，**绝不默认取胜者**。
+  裁决只能来自显式 `decisions`，且 `winnerTaskId` 必须是候选来源，否则记录 `rejectedDecisions` 且冲突仍在。
+- **入口**：`delegate_tasks` 返回 `merged{digest,counts,conflicts}` + 文本合并报告（干净批次只留一行摘要）；
+  新工具 `merge_subagent_results({taskIds?, decisions?})` 供主代理重放/裁决；run 事件与 delta
+  `subagent_merge` 留痕，界面在**有待裁决冲突**时提示（其余不打扰）。
+- **信封新增 `at.startedAt/finishedAt`**：判先后的唯一依据（合并看不到到达时间）；没有时刻则整体不写该字段。
+- 判据：排列（顺序无关）+ 幂等（去重）+ 覆盖留痕 + 冲突不猜 + 有效/无效裁决 + 负向（不存在的 taskId 报错）
+  + 端到端（两个 builder 先后写同一文件 → 记成「被覆盖」而非无声覆盖）；变异 8/8 有判别力。
+
 ### 新增（多 Agent 信息完整性 P2/P3/P4 落地：接收侧核验 + 资源租约 + 乐观并发写；2026-09-17）
 
 承接 P1（子代理结果单一 JSON 信封），把「不采信自述」「单一写者」「版本不漂」三件事落成代码。

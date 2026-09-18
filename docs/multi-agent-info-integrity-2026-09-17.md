@@ -101,7 +101,7 @@
 | P2 | 内容寻址引用 + 有损自报（截断点带 originalRef） | 哈希不符拒收；lossy 内容不得作为交付证据 | ✅ **已落地**（见 §9） |
 | P3 | 跨子代理资源租约 + expectedRevision 写 | 并发写同一资源 → 一个成功一个冲突（不是双双成功） | ✅ **已落地**（见 §10） |
 | P4 | 产物独立复跑核验（files 哈希 + tests 退出码） | 篡改子代理自述的产物 → 核验必须红 | ◐ 哈希核验已落地（§9）；**复跑命令**由 verifier 用既有 `execute_shell` 按角色规程执行 |
-| P5 | 确定性合并 + 冲突裁决（approval 令牌） | 同一批消息不同到达顺序 → 合并结果逐字节相同 | ☐ |
+| P5 | 确定性合并 + 冲突裁决 | 同一批消息不同到达顺序 → 合并结果逐字节相同；冲突**不得默认取胜者** | ✅ **已落地**（见 §12） |
 
 > 现在能直接复用的：`eventBus` / `runCheckpoint` / `sideEffects`（幂等 + 归因）/ `failures`（错误码）/
 > `scheduler`（写独占）/ `approval`（令牌）/ `roles`+`roleSkills`（角色权限与技能）/
@@ -196,3 +196,38 @@
 `out.document = model.doc` 会带着它回到渲染层，下一轮再传回来接着数），每个 mutator 与 ipc 的
 `mutateWorkbench`/`undo`/`redo` 都会 +1。**不拿节点数/时间戳冒充版本号**：节点数相同的两份不同画布必须能区分开。
 撤销/重做也要 +1（从快照恢复会带回旧版本号，那样「报告之后世界变过没有」就判不出来了）。
+
+## 12. P5 已落地：确定性合并 + 冲突裁决
+
+实现：`electron/tools/merge.cjs`（纯函数）+ `SubagentManager` 的 `delegate_tasks`（附合并报告）与
+新工具 `merge_subagent_results`（可带显式裁决）。用例：`multi-agent-integrity-test.cjs` 的 E 段
+（含 6 种到达顺序的排列断言），变异 8/8 有判别力。
+
+**要解决的问题**：多个子代理各自报告「我对世界做了什么」，这些报告**到达顺序不确定**（并行、重试、
+取消都可能打乱）。如果合并按到达顺序应用（`for (r of results) apply(r)`），同一批工作两次运行会得到
+不同的结果 —— 「谁覆盖谁」尤其危险：先到后到写法不同、结果就不同，而且**谁也说不清到底谁覆盖了谁**。
+
+**两条硬规则**：
+
+1. **合并只依赖贡献项自身**（资源键 / 内容 / 起止时刻 / 来源），不依赖到达顺序。先规范排序
+   （`resourceKey, finishedAt, actor, value, kind`）再去重合并 → 同一组贡献项任意顺序进来，`digest`
+   **逐字节相同**；同时**幂等**（同一份报告重复到达不影响结果）。
+2. **不猜**。内容不同的两个贡献：
+   - 有可判定的先后（完成时刻都非空且互不相同）→ `superseded`：明确记录「谁覆盖谁」，**两份值都留痕**
+     （`supersedes` 里带被覆盖方的值与时刻），不再是静默覆盖；
+   - 无法判定先后（时刻相同或缺失）→ `conflict` + `requiresArbitration`，**绝不默认取胜者**
+     （拿字典序/到达顺序决定事实等于编造）。裁决只能来自显式决定 `decisions`，且 `winnerTaskId`
+     必须是该资源的候选来源之一，否则 `rejectedDecisions` 记录被拒原因、冲突仍然存在。
+
+**digest 的语义**：只覆盖 `resources`（合并**视图**）。刻意不含 `duplicatesRemoved` /
+`rejectedDecisions` —— 那些是输入侧元数据；否则同一份视图只因为多收了一次重复报告就会换指纹，
+幂等与「同一批消息 → 同一指纹」都不成立。
+
+**入口**：
+- `delegate_tasks` 的返回里带 `merged: {digest, counts, conflicts}`，文本尾部附合并报告
+  （全一致时只留一行摘要；有被覆盖/待裁决/裁决被拒才逐条展开 —— 不让干净的一批平白多几百 token）；
+  同时落 run 事件 `subagent_merge` 与 delta `subagent_merge`（UI 在**有待裁决冲突**时提示用户，
+  其余情况不打扰）。
+- `merge_subagent_results({taskIds?, decisions?})`：主代理可随时重放合并；带 `decisions` 时应用裁决。
+- 判先后的唯一依据是信封的 `at.startedAt/finishedAt`（合并**看不到**任何到达时间）；信封没有时刻时
+  `at` 字段整体不写，合并如实按「判不出先后」处理。
