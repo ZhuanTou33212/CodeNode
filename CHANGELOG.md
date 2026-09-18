@@ -4,6 +4,36 @@
 
 ## [未发布]
 
+### 新增（多 Agent 信息完整性 P2/P3/P4 落地：接收侧核验 + 资源租约 + 乐观并发写；2026-09-17）
+
+承接 P1（子代理结果单一 JSON 信封），把「不采信自述」「单一写者」「版本不漂」三件事落成代码。
+设计文档 `docs/multi-agent-info-integrity-2026-09-17.md` §9–§11，用例
+`scripts/multi-agent-integrity-test.cjs`（进 CORE，25 条断言）。
+
+- **P2 接收侧核验**（`subagentEnvelope.verifyEnvelope` + `get_subagent_task`）：读信封时**重算**产物哈希与
+  画布快照 → `valid`（可采信）/ `stale`（报告后世界又变过，需按最新状态核对）/ `invalid`（产物对不上 →
+  工具结果 error + `trust: 'untrusted'` + audit `subagent_verification_failed`）。哈希口径与写工具
+  （`impl/shared.cjs`）逐字节一致，用例有交叉核对断言防漂移；无哈希条目退化成存在性比对。
+- **P3 跨 Agent 资源租约**（新模块 `electron/tools/leases.cjs` + `registry.execute` 第 4 道门）：
+  同一资源同一时刻只允许一个写者。只在写类工具上生效（读不加锁）；申请**原子**（多文件批量要么全拿到
+  要么不占）；被占用**不排队**，直接 `RESOURCE_LOCKED`（可重试 + 谁持有/多久过期）；持有到**任务结束**
+  或 TTL 到期（写完就放会让别人基于过期的读覆盖）。资源键归一：`file:<posix 绝对路径>` /
+  `resource:canvas` / `resource:project-save`。配置 `agent.subagent.leases`、`lease_ttl_ms`。
+- **P3 乐观并发写**：`write_file`/`edit_file` 新增可选 `expectedSha256`（新文件用 `"absent"`）——
+  校验失败**不写盘**并返回 `CONFLICT_STALE`；成功回传写入后的 `sha256` 作为下一个写者的期望值（交接棒）。
+  校验在**确认之前**（注定失败的写不打扰用户）。
+- **失败码表**：新增 `RESOURCE_LOCKED`（`conflict`，可重试）/ `CONFLICT_STALE`（不可原样重试）+
+  `conflict` 类别的中文标签与 nudge 指引。
+- **`GraphModel` 单调 revision**：`bumpRevision()` 写进 `doc.root.revision` 并跨请求 round-trip；
+  每个 mutator 与 ipc 的 `mutateWorkbench`/`undo`/`redo` 都 +1；信封 `snapshot.revision` 从 `null`
+  变成真版本号（撤销/重做也递增，否则「报告后世界变过没有」判不出来）。**不拿节点数冒充版本号**。
+- **verifier 角色规程**：work/guidance 补「先看 verification（invalid 不采信 / stale 重新核对）→
+  独立**复跑** `evidence.commands` 里的命令 → 不一致就直说哪条对不上」。
+- 判据：`test:multi-agent-integrity`（进 CORE）25 条 —— revision 递增与 round-trip、信封带真 revision、
+  三档核验判定与端到端拒收（含 trust 降级与 audit）、租约的原子性/续期/TTL/按持有者隔离、写工具闸门
+  （同文件被拒 / 别的文件与读不受影响 / 释放后可写）、任务结束自动释放、expectedSha256 的三条路径
+  （对得上 / 过期 / `absent`）与「失败必须不落盘」。
+
 ### 新增（子代理结果契约 P1：单一 JSON 信封 + 违约拒收；多 Agent 信息完整性第一步；2026-09-17）
 
 `docs/multi-agent-info-integrity-2026-09-17.md` 的 P1 从设计变成代码（新模块

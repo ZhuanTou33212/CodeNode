@@ -98,9 +98,9 @@
 | 阶段 | 内容 | 判据（能区分实现的） | 进度 |
 |---|---|---|---|
 | P1 | 子代理结果改 JSON 信封（字段 + snapshot + refs + evidence + lossy） | 缺字段/缺 snapshot 时**拒收**；收下的必须 schema 校验通过 | ✅ **已落地**（见 §8） |
-| P2 | 内容寻址引用 + 有损自报（截断点带 originalRef） | 哈希不符拒收；lossy 内容不得作为交付证据 | ◐ 部分（产物带真实 sha256、截断自报 lossy；尚未做「接收方校验哈希不符即拒收」） |
-| P3 | 跨子代理资源租约 + expectedRevision 写 | 并发写同一资源 → 一个成功一个冲突（不是双双成功） | ☐ |
-| P4 | 产物独立复跑核验（files 哈希 + tests 退出码） | 篡改子代理自述的产物 → 核验必须红 | ☐ |
+| P2 | 内容寻址引用 + 有损自报（截断点带 originalRef） | 哈希不符拒收；lossy 内容不得作为交付证据 | ✅ **已落地**（见 §9） |
+| P3 | 跨子代理资源租约 + expectedRevision 写 | 并发写同一资源 → 一个成功一个冲突（不是双双成功） | ✅ **已落地**（见 §10） |
+| P4 | 产物独立复跑核验（files 哈希 + tests 退出码） | 篡改子代理自述的产物 → 核验必须红 | ◐ 哈希核验已落地（§9）；**复跑命令**由 verifier 用既有 `execute_shell` 按角色规程执行 |
 | P5 | 确定性合并 + 冲突裁决（approval 令牌） | 同一批消息不同到达顺序 → 合并结果逐字节相同 | ☐ |
 
 > 现在能直接复用的：`eventBus` / `runCheckpoint` / `sideEffects`（幂等 + 归因）/ `failures`（错误码）/
@@ -148,3 +148,51 @@
 代价：每个子代理结果进主上下文的文本从「字段头 + 正文」变成「一段引导语 + 一个 JSON 对象」，
 本仓库实测 1.1KB → 1.7KB（信封字段空则省）。换来的是**可校验、可拒收、可知有损**。
 
+## 9. P2 已落地：接收侧核验（不采信自述的落点）
+
+实现：`electron/subagentEnvelope.cjs` 的 `verifyEnvelope(envelope, {projectRoot, model})`
++ `SubagentManager` 的 `get_subagent_task`（每次读取都重算，返回 `verification`）。
+用例：`scripts/multi-agent-integrity-test.cjs` 的 B 段（含端到端拒收）。
+
+**为什么必须在接收侧做**：信封里的 `evidence.files[].sha256` 与 `snapshot.hash` 都是**报告那一刻**测出来的；
+报告之后文件可能被改、画布可能被改 —— 只看信封永远看不出来，必须**重算再比**。
+
+判定分三档（不是只有对/错）：
+
+| verdict | 含义 | 处理 |
+|---|---|---|
+| `valid` | 产物哈希与画布快照都与报告时一致 | 结论仍可信 |
+| `stale` | 只有画布变了 | 结论**可能过期**，按最新状态重新核对（不是造假） |
+| `invalid` | 有产物对不上（被改 / 该在的不在 / 声称不存在却存在） | **不得作为结论证据**：工具结果 error + `trust: 'untrusted'` + `verificationNote` + audit `subagent_verification_failed` |
+
+细节：哈希口径与写工具（`impl/shared.cjs` 的 `sha256OfText`）**逐字节一致**，用例里有交叉核对断言防漂移；
+没有哈希的条目（超大文件）退化成**存在性**比对，不用「都算过」放过去。
+
+## 10. P3 已落地：跨 Agent 资源租约 + 乐观并发写
+
+实现：`electron/tools/leases.cjs`（`LeaseRegistry` + `resourceKeysFor`）+ `registry.execute` 的第 4 道门
++ `write_file`/`edit_file` 的 `expectedSha256`。用例：`multi-agent-integrity-test.cjs` 的 C/D 段。
+
+**租约（单一写者）**：只在写类工具上生效（读不加锁）；申请是**原子**的（多文件批量编辑要么全拿到
+要么一个都不占 —— 部分占用正是死锁的成因）；被占用时**不排队等待**，直接返回 `RESOURCE_LOCKED`
+（可重试，带「谁在持有、什么角色、多久过期」）。租约持有到**任务结束**或 TTL 到期：
+写完就放会让另一个 Agent 基于过期的读去覆盖 —— 那正是「静默互相覆盖」本身。
+
+资源键归一（同一文件的不同写法必须是同一把锁）：`file:<绝对路径 posix 化>`、`resource:canvas`（画布是单一资源）、
+`resource:project-save`。
+
+**乐观并发**：`write_file`/`edit_file` 新增可选 `expectedSha256`（新文件用 `"absent"`）——
+写入前校验，不匹配则**不写盘**并返回 `CONFLICT_STALE`；成功时回传写入后的 `sha256`，可直接作为
+下一个写者的期望值（交接棒）。校验发生在**确认之前**：注定失败的写不该去打扰用户。
+
+**失败码**：`RESOURCE_LOCKED`（category `conflict`，可重试）/ `CONFLICT_STALE`（不可原样重试），
+已进 `failures.cjs` 码表 → nudge 会给出「不要用相同调用硬撞」的分类指引。
+
+**配置**：`agent.subagent.leases`（默认开）/ `agent.subagent.lease_ttl_ms`（默认 120000）。
+
+## 11. `GraphModel` 的单调 revision（信封里 snapshot.revision 的真值）
+
+`electron/tools/GraphModel.cjs`：`bumpRevision()` 把计数写进 `doc.root.revision`（跨请求 round-trip ——
+`out.document = model.doc` 会带着它回到渲染层，下一轮再传回来接着数），每个 mutator 与 ipc 的
+`mutateWorkbench`/`undo`/`redo` 都会 +1。**不拿节点数/时间戳冒充版本号**：节点数相同的两份不同画布必须能区分开。
+撤销/重做也要 +1（从快照恢复会带回旧版本号，那样「报告之后世界变过没有」就判不出来了）。
