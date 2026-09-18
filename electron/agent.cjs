@@ -263,6 +263,9 @@ function parseSubagentConfig(cfg) {
     resultMaxChars: configInteger(cfg, 'agent.subagent.result_max_chars', 8000, 500, 200000),
     maxTasksPerRun: configInteger(cfg, 'agent.subagent.max_tasks_per_run', 12, 1, 100),
     maxBatchTasks: configInteger(cfg, 'agent.subagent.max_batch_tasks', 8, 1, 32),
+    // 跨 Agent 资源租约（多 Agent 信息完整性 P3）：同一资源同一时刻只允许一个写者
+    leases: cfg['agent.subagent.leases'] == null ? true : String(cfg['agent.subagent.leases']).toLowerCase() !== 'false',
+    leaseTtlMs: configInteger(cfg, 'agent.subagent.lease_ttl_ms', 120000, 5000, 3600000),
   };
 }
 

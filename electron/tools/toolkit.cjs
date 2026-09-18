@@ -109,6 +109,9 @@ function buildDefaultRegistryWithConfig(config) {
   if (cfg.toolsConfirmWrites !== undefined) {
     registry.confirmWrites = cfg.toolsConfirmWrites === true ? true : cfg.toolsConfirmWrites === false ? false : undefined;
   }
+  // 跨 Agent 资源租约（P3）：**同一个 run 内的所有注册表（主代理 + 每个子代理）必须共享同一个实例**，
+  // 否则各建一份 = 谁也没锁住谁。实例由 ipc 按 run 创建后传进来。
+  if (cfg.leases) registry.leases = cfg.leases;
   if (cfg.projectRoot) registerProjectExtensions(registry, cfg.projectRoot);
   if (cfg.role) filterByRole(registry, cfg.role);
   return filterByConfig(registry, cfg);

@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
-const { resolveInRoot } = require('./shared.cjs');
+const { resolveInRoot, checkExpectedHash, sha256OfFile } = require('./shared.cjs');
 const { atomicWriteFile } = require('../../atomicFile.cjs');
 
 function register(registry) {
@@ -20,6 +20,12 @@ function register(registry) {
         path: { type: 'string', description: '项目内相对路径' },
         content: { type: 'string', description: '要写入的内容' },
         backup: { type: 'boolean', description: '覆盖前是否备份，默认 true' },
+        expectedSha256: {
+          type: 'string',
+          description:
+            '乐观并发（可选）：写入前校验文件当前内容哈希必须等于它（新文件用 "absent"）。' +
+            '不匹配则**不写**并返回 CONFLICT_STALE —— 用于「并行 Agent 都改同一个文件」时避免静默覆盖。',
+        },
       },
       required: ['path', 'content'],
     },
@@ -30,6 +36,17 @@ function register(registry) {
       const root = path.resolve(context.projectRoot());
       const target = resolveInRoot(root, relative);
       if (!target) return AgentToolResult.error('路径越过项目边界');
+      // 乐观并发：基于「我看到的那一版」写。校验放在**确认之前** —— 注定失败的写别去打扰用户。
+      if (args.expectedSha256 != null && String(args.expectedSha256).trim()) {
+        const guard = checkExpectedHash(target, args.expectedSha256);
+        if (!guard.ok) {
+          return AgentToolResult.failure(
+            'CONFLICT_STALE',
+            '写入前校验失败（' + guard.reason + '）：' + relative + '。先重新读回最新内容，基于它重做再写。',
+            { path: relative, expected: String(args.expectedSha256), actual: guard.actual }
+          );
+        }
+      }
       const existed = fs.existsSync(target);
       const what = '写入文件 ' + relative + (existed ? '（覆盖已有文件）' : '（新建文件）');
       const ok = await context.confirm(ConfirmationLevel.WRITE, what, '将 ' + content.length + ' 字节内容写入 ' + relative + '。');
@@ -43,7 +60,12 @@ function register(registry) {
         atomicWriteFile(target, content, 'utf-8');
         context.audit('write_file ' + relative + ' bytes=' + content.length);
         context.notifyFileChange(relative, existed ? 'modify' : 'create', content.length + ' 字节');
-        return AgentToolResult.ok('已写入 ' + relative + '（' + content.length + ' 字节）', { path: relative, bytes: content.length });
+        return AgentToolResult.ok('已写入 ' + relative + '（' + content.length + ' 字节）', {
+          path: relative,
+          bytes: content.length,
+          // 回传写入后的哈希：下一个写者可以拿它当 expectedSha256（乐观并发的交接棒）
+          sha256: sha256OfFile(target),
+        });
       } catch (e) {
         return AgentToolResult.error('写入失败：' + ((e && e.message) || e));
       }

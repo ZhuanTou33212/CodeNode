@@ -261,13 +261,77 @@ function validateEnvelope(envelope) {
 }
 
 /**
+ * **接收侧核验**（P2 尾 + P4 的地基）：把信封里的「声称」跟**当前**世界对一次账。
+ *
+ * 为什么必须在接收侧做：信封里的 `evidence.files[].sha256` 与 `snapshot.hash` 都是**报告那一刻**
+ * 测出来的。报告之后文件可能被改、画布可能被改 —— 只看信封是看不出来的，必须重算再比。
+ *
+ * - 逐条重算产物哈希（路径按工程根解析）→ 不符即「产物已变」
+ * - 重算当前画布哈希 → 与 `snapshot.hash` 不一致即「报告之后世界又变过」
+ *
+ * 判定分三档（不是只有对/错）：
+ *   `valid`   产物与画布都与报告时一致 → 结论仍然可信
+ *   `stale`   只有画布变了 → 结论**可能过期**，要基于最新状态重新核对（不当作造假）
+ *   `invalid` 有产物对不上（被改 / 该在的不在 / 声称不存在却存在）→ **不得作为结论证据**
+ *
+ * @param {any} envelope
+ * @param {{projectRoot?: string, model?: any}} [world]
+ * @returns {{verdict: 'valid'|'stale'|'invalid', checkedAt: number, files: Array<any>, snapshot: any, reasons: string[]}}
+ */
+function verifyEnvelope(envelope, world = {}) {
+  const { projectRoot, model } = world;
+  const reasons = [];
+  const files = [];
+  const declaredFiles = (envelope && envelope.evidence && envelope.evidence.files) || [];
+  for (const entry of declaredFiles) {
+    const rel = entry && entry.path ? String(entry.path) : '';
+    if (!rel) continue;
+    const declared = entry.sha256 || null;
+    const abs = resolveArtifactPath(projectRoot, rel);
+    let exists = false;
+    let bytes = 0;
+    let actual = null;
+    if (abs) {
+      try {
+        const stat = fs.statSync(abs);
+        if (stat.isFile()) {
+          exists = true;
+          bytes = stat.size;
+          if (stat.size <= MAX_EVIDENCE_FILE_BYTES) actual = sha256Of(fs.readFileSync(abs, 'utf8'));
+        }
+      } catch {
+        exists = false;
+      }
+    }
+    // 有哈希就比哈希；没有哈希（超大文件/不存在）就比存在性，别用「都算过」放过去
+    const ok = declared ? actual === declared : exists === (entry.exists === true);
+    files.push({ path: rel, declared, actual, exists, bytes, ok });
+    if (!ok) {
+      reasons.push(
+        declared
+          ? '产物内容与报告时不一致（报告后可能被改动或被删）：' + rel
+          : '报告里声称「不存在」的文件现在存在了：' + rel
+      );
+    }
+  }
+  const snapshotNow = buildSnapshot(model);
+  const declaredHash = (envelope && envelope.snapshot && envelope.snapshot.hash) || null;
+  const snapshot = { declared: declaredHash, actual: snapshotNow.hash, revision: snapshotNow.revision, ok: !declaredHash || declaredHash === snapshotNow.hash };
+  if (!snapshot.ok) reasons.push('报告之后画布（世界状态）又变过：结论可能已过期，需按最新状态重新核对');
+  const verdict = files.some((f) => !f.ok) ? 'invalid' : snapshot.ok ? 'valid' : 'stale';
+  return { verdict, checkedAt: Date.now(), files, snapshot, reasons };
+}
+
+/**
  * 给模型看的**单一信封文本**：只有一段引导语 + 一个 JSON 对象。
  * 引导语只做两件事：告诉接收方「这是契约」与「违约了就别采信」，不夹带第二份数据。
  */
 function renderEnvelopeText(envelope, violations = []) {
   const head = violations.length
     ? '[子代理结果] 下列 JSON 信封有 ' + violations.length + ' 项**契约违约** → 本结果不得作为结论证据（不要引用它的结论；可让子代理按契约重做或由你直接完成）。交付仍需要原始内容时用 get_subagent_task(taskId=…)。'
-    : '[子代理结果] 契约 v' + ENVELOPE_VERSION + '（信封即全部结论；snapshot.hash 用于判断报告之后世界是否又变过）';
+    : '[子代理结果] 契约 v' + ENVELOPE_VERSION + '（信封即全部结论）。' +
+      '核验方式：get_subagent_task(taskId=…) 会**重算**产物哈希与画布快照并返回 verification（valid/stale/invalid）——' +
+      'invalid 的结果不得作为结论证据，stale 说明报告之后世界又变过、需按最新状态核对。';
   // 有损必须**显式**说出来，不能让人以为读到的是全文
   const lossyNote =
     envelope && envelope.lossy && envelope.lossy.isLossy
@@ -291,5 +355,6 @@ module.exports = {
   collectEvidence,
   buildEnvelope,
   validateEnvelope,
+  verifyEnvelope,
   renderEnvelopeText,
 };

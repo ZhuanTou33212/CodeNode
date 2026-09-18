@@ -15,6 +15,8 @@
 'use strict';
 
 const { AgentToolResult } = require('./result.cjs');
+// 跨 Agent 资源租约（多 Agent 信息完整性 P3 的「单一写者」）：资源键的推导也在那边
+const { resourceKeysFor } = require('./leases.cjs');
 const descriptorLib = require('./descriptor.cjs');
 
 /**
@@ -119,6 +121,12 @@ class AgentToolRegistry {
      * @type {Set<string>|null}
      */
     this.roleCapabilities = null;
+    /**
+     * 跨 Agent 资源租约账本（P3）。由 toolkit 注入：**同一 run 内所有注册表共享同一个实例**，
+     * 否则各建一份就等于没锁。null = 不开租约（既有单测/独立用法不受影响）。
+     * @type {{enabled?: boolean, acquire?: Function, releaseAll?: Function, holder?: Function}|null}
+     */
+    this.leases = null;
     // 注册表兜底超时：工具未声明 timeoutMs 时用它（0 = 不加限制）
     this.defaultTimeoutMs = descriptorLib.DEFAULT_TIMEOUT_MS;
     /**
@@ -329,6 +337,36 @@ class AgentToolRegistry {
           '审批令牌校验失败（' + ((verdict && verdict.reason) || 'UNKNOWN') + '），已跳过 ' + name + '（未执行任何操作）。',
           { tool: name, userActionRequired: true },
         );
+      }
+    }
+
+    // 门 4（S16）：跨 Agent **资源租约** —— 多 Agent 信息完整性的「单一写者」。
+    // 只在写类工具上生效；申请是原子的（多文件批量编辑要么全拿到要么不占），被占用时**不排队等待**，
+    // 直接返回 RESOURCE_LOCKED（可重试）+ 谁在占用。租约持有到**任务结束**（子代理完成/取消/主 run 收尾）
+    // 或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖，那正是我们要防的「静默互相覆盖」。
+    if (descriptor.mutatesWorkspace && this.leases && this.leases.enabled) {
+      const base = (context && context.__context) || context;
+      const itsRoot = base && typeof base.projectRoot === 'function' ? base.projectRoot() : '';
+      const keys = resourceKeysFor(name, args, { projectRoot: itsRoot || process.cwd() });
+      if (keys.length) {
+        const holder = (base && typeof base.taskId === 'function' && base.taskId()) || 'supervisor';
+        const role = (base && typeof base.role === 'function' && base.role()) || '';
+        const claim = this.leases.acquire(keys, holder, { role });
+        if (!claim.ok) {
+          const c = claim.conflict || {};
+          const traceNote = /** @type {any} */ (execContext).trace;
+          if (traceNote && typeof traceNote.note === 'function') {
+            traceNote.note('resource_locked', { tool: name, keys, holder, owner: c.holder, expiresAt: c.expiresAt });
+          }
+          return AgentToolResult.failure(
+            'RESOURCE_LOCKED',
+            '该资源正被另一个 Agent 持有（并行写会互相覆盖）：' + String(c.key || keys[0]) +
+              ' 由 ' + String(c.holder || '未知') + ' 持有（' + String(c.role || '未知角色') + '，约 ' +
+              Math.max(0, Math.round(((c.expiresAt || 0) - Date.now()) / 1000)) +
+              's 后过期）。不要用相同调用硬撞：等它结束再试，或先做与它不冲突的步骤。',
+            { tool: name, keys, holder: c.holder || null, role: c.role || null, expiresAt: c.expiresAt || null },
+          );
+        }
       }
     }
 

@@ -21,6 +21,8 @@ const FAILURE_CODES = Object.freeze({
   ARG_INVALID_JSON: 'ARG_INVALID_JSON',
   ARG_SCHEMA: 'ARG_SCHEMA',
   ARG_SEMANTIC: 'ARG_SEMANTIC',
+  RESOURCE_LOCKED: 'RESOURCE_LOCKED',
+  CONFLICT_STALE: 'CONFLICT_STALE',
   PERMISSION_DENIED: 'PERMISSION_DENIED',
   APPROVAL_REQUIRED: 'APPROVAL_REQUIRED',
   APPROVAL_DENIED: 'APPROVAL_DENIED',
@@ -42,6 +44,7 @@ const CATEGORY_LABELS = Object.freeze({
   fatal: '不可重试',
   effect: '副作用未知',
   system: '程序错误',
+  conflict: '写冲突',
 });
 
 /** 类别 → 给模型的处理指引（提示文案用；与 system prompt 第 5 条「失败分类处理」口径一致） */
@@ -54,6 +57,7 @@ const CATEGORY_GUIDES = Object.freeze({
   fatal: '不要原样重试：先分析原因，换工具或换思路。',
   effect: '副作用结果未知：先用只读工具核对真实状态，再决定是否重做，禁止盲目重放。',
   system: '这是程序内部错误：如实告诉用户，不要重试同一调用。',
+  conflict: '这是写冲突：不要用相同调用重试。先确认谁在持有 / 内容是否已被改动，再决定换顺序、换文件或基于最新内容重做。',
 });
 
 /**
@@ -73,6 +77,8 @@ const FAILURE_SPECS = Object.freeze({
   FATAL_FAILURE: { category: 'fatal', retryable: false, userActionRequired: false, hint: '不可重试的失败：先看原因再决定，别重复同一调用。' },
   EFFECT_UNKNOWN: { category: 'effect', retryable: false, userActionRequired: true, hint: '副作用结果未知（可能已经生效）：先用只读工具核对真实状态，禁止盲目重放。' },
   SYSTEM_ERROR: { category: 'system', retryable: false, userActionRequired: false, hint: '程序内部错误：报告给用户，不要重试同一调用。' },
+  RESOURCE_LOCKED: { category: 'conflict', retryable: true, userActionRequired: false, hint: '该资源正被另一个 Agent 持有（并行写会互相覆盖）：等它结束后重试，或改做别的文件/别的步骤，**不要**用相同调用硬撞。' },
+  CONFLICT_STALE: { category: 'conflict', retryable: false, userActionRequired: false, hint: '写入前校验失败（内容在你读取之后被人改过）：先重新读回最新内容，基于它重做，再带上新的期望值。' },
 });
 
 /**

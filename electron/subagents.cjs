@@ -20,6 +20,7 @@
 'use strict';
 
 const { AgentToolResult } = require('./tools/result.cjs');
+const { LeaseRegistry } = require('./tools/leases.cjs');
 // 子代理结果的**单一 JSON 信封**（多 Agent 信息完整性 P1/P2）：契约校验 + 产物哈希 + 有损自报
 const subagentEnvelope = require('./subagentEnvelope.cjs');
 const roles = require('./tools/roles.cjs');
@@ -34,11 +35,22 @@ const ROLE_PROMPTS = Object.freeze(
   Object.fromEntries(roles.ROLE_NAMES.map((name) => [name, roles.rolePrompt(name)])),
 );
 
+/**
+ * 子代理默认值。
+ * 注意：`@type` 里的键类型必须显式写出，否则 `Object.freeze` 会把 `leases: true` 收窄成字面量
+ * `true`、`leaseTtlMs` 收窄成 `120000`，随后 `this.subCfg.leases !== false` 会被 tsc 判成
+ * 「number 与 boolean 不可能重叠」（checkJs 实测）。
+ * @type {{maxTasksPerRun: number, maxBatchTasks: number, totalTimeoutSeconds: number,
+ *         resultMaxChars: number, leases: boolean, leaseTtlMs: number}}
+ */
 const DEFAULTS = Object.freeze({
   maxTasksPerRun: 12,
   maxBatchTasks: 8,
   totalTimeoutSeconds: 600,
   resultMaxChars: 8000,
+  /** 跨 Agent 资源租约（P3）：默认开 */
+  leases: true,
+  leaseTtlMs: 120000,
 });
 
 /** 单轮模型调用超时上限（子代理总时长再长，单轮也不该无限等） */
@@ -143,6 +155,18 @@ class SubagentManager {
     this.tasks = new Map();
     /** @type {Record<string, number>} 子代理配置（agent.subagent.*），缺项用默认值 */
     this.subCfg = Object.assign({}, DEFAULTS, (o.cfg && o.cfg.subagent) || {});
+    /**
+     * 跨 Agent 资源租约：**必须与主代理共享同一个实例**（由 ipc 按 run 建好传进来），
+     * 否则每个子代理各有一份注册表 = 谁也没锁住谁。没传进来时自己建一个（单测/独立使用场景）。
+     */
+    this.leases =
+      o.leases ||
+      new LeaseRegistry({
+        // String() 兜一层：subCfg 的类型来自多处 Object.assign 的交集，字面量比较会被 tsc 判成
+        // 「number 与 boolean 不可能重叠」（checkJs 实测），而这只是配置读值
+        enabled: String(this.subCfg.leases) !== 'false',
+        ttlMs: Number(this.subCfg.leaseTtlMs) || 120000,
+      });
   }
 
   register(registry) {
@@ -182,11 +206,37 @@ class SubagentManager {
         properties: { taskId: { type: 'string' } },
         required: ['taskId'],
       },
-      async (_context, args) => {
+      // 这里**需要** context（拿 projectRoot 与画布模型做接收侧核验），所以用实名参数
+      async (context, args) => {
         const task = this.tasks.get(String(args.taskId || ''));
-        return task
-          ? AgentToolResult.ok(JSON.stringify(taskView(task)), taskView(task))
-          : AgentToolResult.error('子代理任务不存在：' + String(args.taskId || ''));
+        if (!task) return AgentToolResult.error('子代理任务不存在：' + String(args.taskId || ''));
+        const view = taskView(task);
+        /**
+         * **接收侧核验**：读信封的这一刻跟当前世界对一次账（重算产物哈希 + 画布快照）。
+         * 这是「不采信自述」的落点 —— 报告之后文件被改/画布被动过，只有重算才发现得了。
+         * invalid（产物对不上）→ 拒收（工具结果 error + trust 降级）；stale（世界又变过）→ 交付但明确标出。
+         */
+        if (view.envelope) {
+          const verification = subagentEnvelope.verifyEnvelope(view.envelope, {
+            projectRoot: context.projectRoot(),
+            model: typeof context.model === 'function' ? context.model() : null,
+          });
+          view.verification = verification;
+          if (verification.verdict === 'invalid') {
+            view.envelope = { ...view.envelope, trust: 'untrusted', verificationNote: verification.reasons.join('；') };
+            context.audit(
+              JSON.stringify({ kind: 'subagent_verification_failed', taskId: task.taskId, reasons: verification.reasons.slice(0, 5) })
+            );
+            return AgentToolResult.error(
+              '该子代理结果的**接收侧核验未通过**，不得作为结论证据：\n- ' +
+                verification.reasons.join('\n- ') +
+                '\n如需继续用它，请先查明产物为何变化（或被改动的是你自己而不是它）。\n' +
+                JSON.stringify(view),
+              view
+            );
+          }
+        }
+        return AgentToolResult.ok(JSON.stringify(view), view);
       }
     );
     registry.register(
@@ -290,6 +340,8 @@ class SubagentManager {
         ...this.cfg.tools,
         ragEnabled: this.cfg.rag.enabled && !!context.projectRoot(),
         role,
+        // 与父共享同一份租约账本（跨子代理的「单一写者」就靠它）
+        leases: this.leases,
       });
       const childContext = context.fork({
         runId: this.runId,
@@ -368,6 +420,14 @@ class SubagentManager {
 
     task.finishedAt = new Date().toISOString();
     this.tasks.set(task.taskId, task);
+    // 任务结束（成功/失败都算）→ 释放它持有的全部资源租约。
+    // 释放点放在这里而不是「每次写完」：写完就放，另一个 Agent 会基于过期的读去覆盖（丢更新）。
+    if (this.leases && typeof this.leases.releaseAll === 'function') {
+      const released = this.leases.releaseAll(task.taskId);
+      if (released > 0) {
+        context.audit(JSON.stringify({ kind: 'subagent_leases_released', taskId: task.taskId, released }));
+      }
+    }
 
     const body = task.status === 'done' ? (task.summary || '（子代理未返回文本）') : (task.error || '子代理任务未完成');
     const cap = this.subCfg.resultMaxChars;

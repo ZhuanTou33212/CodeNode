@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
-const { resolveInRoot, readTextFile } = require('./shared.cjs');
+const { resolveInRoot, readTextFile, checkExpectedHash, sha256OfFile } = require('./shared.cjs');
 const { atomicWriteFile } = require('../../atomicFile.cjs');
 
 function indexOfOccurrence(content, needle, occurrence) {
@@ -51,6 +51,12 @@ function register(registry) {
         oldText: { type: 'string', description: '要查找的原文（必须精确匹配）' },
         newText: { type: 'string', description: '替换后的文本' },
         occurrence: { type: 'integer', description: '只替换第几次出现，缺省全部' },
+        expectedSha256: {
+          type: 'string',
+          description:
+            '乐观并发（可选）：编辑前校验文件当前内容哈希必须等于它（可省 sha256: 前缀）；' +
+            '不匹配则**不写**并返回 CONFLICT_STALE —— 并行 Agent 同时改一个文件时用它防静默覆盖。',
+        },
       },
       required: ['path', 'oldText'],
     },
@@ -64,6 +70,17 @@ function register(registry) {
       const file = resolveInRoot(root, relative);
       if (!file) return AgentToolResult.error('路径越过项目边界');
       if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return AgentToolResult.error('文件不存在：' + relative);
+      // 乐观并发：基于「我读到的那一版」改（校验在确认之前，注定失败的编辑不打扰用户）
+      if (args.expectedSha256 != null && String(args.expectedSha256).trim()) {
+        const guard = checkExpectedHash(file, args.expectedSha256);
+        if (!guard.ok) {
+          return AgentToolResult.failure(
+            'CONFLICT_STALE',
+            '编辑前校验失败（' + guard.reason + '）：' + relative + '。先重新读回最新内容，再基于它重做。',
+            { path: relative, expected: String(args.expectedSha256), actual: guard.actual }
+          );
+        }
+      }
       const occurrence = typeof args.occurrence === 'number' && Number.isFinite(args.occurrence) ? Math.floor(args.occurrence) : 0;
       try {
         const read = readTextFile(file);
@@ -87,7 +104,12 @@ function register(registry) {
         atomicWriteFile(file, updated, 'utf-8');
         context.audit('edit_file ' + relative + ' replaced=' + replaced);
         context.notifyFileChange(relative, 'modify', '替换 ' + replaced + ' 处');
-        return AgentToolResult.ok('已替换 ' + replaced + ' 处：' + relative, { path: relative, replaced });
+        return AgentToolResult.ok('已替换 ' + replaced + ' 处：' + relative, {
+          path: relative,
+          replaced,
+          // 回传写入后的哈希：下一个写者可以拿它当 expectedSha256（乐观并发的交接棒）
+          sha256: sha256OfFile(file),
+        });
       } catch (e) {
         return AgentToolResult.error('编辑失败：' + ((e && e.message) || e));
       }

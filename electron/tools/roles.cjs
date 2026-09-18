@@ -82,13 +82,19 @@ const ROLE_DEFINITIONS = Object.freeze({
       '跑测试 / 构建 / 静态检查并给出原始输出',
       '复现问题、确认修复是否真的生效',
       '把失败定位到最小可复现命令',
+      // P4：核验别人的交付（子代理信封）—— 不采信自述，重算 + 复跑
+      '核验子代理交付：先用 get_subagent_task 拿 verification（它会重算产物哈希与画布快照），再独立复跑 evidence.commands 里的命令',
     ]),
     notWork: Object.freeze([
       '修改被测源码、测试或配置',
       '凭阅读代码推断「应该能过」而跳过执行',
     ]),
     skills: Object.freeze(['verify-by-execution', 'raw-output-discipline', 'no-source-edits']),
-    guidance: '工作方式：用执行说话。先跑最小可判定命令，失败再扩大范围；长任务用 async + poll_job 轮询，不要前台硬等。结论必须附命令与原始输出摘要。',
+    guidance:
+      '工作方式：用执行说话。先跑最小可判定命令，失败再扩大范围；长任务用 async + poll_job 轮询，不要前台硬等。' +
+      '结论必须附命令与原始输出摘要。核验别人的交付时按三步走：① get_subagent_task 看 verification（哈希对不上=invalid，' +
+      '结论不得采信；只是画布变过=stale，要按最新状态重新核对）；② 独立**复跑**信封里 evidence.commands 的命令，用真实退出码对账，' +
+      '不要复述它的自述；③ 结果不一致就直说哪一条对不上，不要为了给出结论而含糊。',
     prompt: '你负责执行验证、测试和静态检查，不修改项目文件（execute_shell 只用于跑测试/检查/构建，不得写盘或改配置）。',
   }),
   reviewer: Object.freeze({

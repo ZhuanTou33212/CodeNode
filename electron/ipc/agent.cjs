@@ -36,6 +36,24 @@ const memoryStore = require('../memory.cjs');
 const extensionStore = require('../tools/extensions.cjs');
 const { getScalarStore } = require('../scalars/index.cjs');
 const { GraphModel } = require('../tools/GraphModel.cjs');
+// 跨 Agent 资源租约（P3）：**按 run 一个实例**，主代理与所有子代理共享
+const { LeaseRegistry } = require('../tools/leases.cjs');
+
+/**
+ * 画布被 Agent 改过 → 世界状态版本号 +1（并把计数写回 doc.root.revision 供跨请求 round-trip）。
+ * 画布变更可能走 GraphModel 的 mutator（那里面自己会 bump），也可能由 `workbench_edit` 直接改
+ * `node.data`（绕过 mutator）—— 所以这里在**能力面**统一兜一次，保证「改过就 +1」。
+ */
+function bumpCanvasRevision(model) {
+  if (model && typeof model.bumpRevision === 'function') {
+    try {
+      model.bumpRevision();
+    } catch {
+      /* 计数失败绝不影响真正的写入 */
+    }
+  }
+}
+
 const { AgentToolContext } = require('../tools/context.cjs');
 const { makeBridge } = require('../tools/bridge.cjs');
 const { SubagentManager } = require('../subagents.cjs');
@@ -336,12 +354,20 @@ function register(ctx) {
 
       // 先装配工具注册表：用于系统提示中的工具引导，也用于工具循环
       let registry = null;
+      /** @type {any} 本次 run 的资源租约账本（P3）；run 收尾时释放主代理持有的全部租约 */
+      let leases = null;
       if (cfg.tools.toolsEnabled) {
-        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
+        // 资源租约账本：一次 run 一份（主代理 + 它的所有子代理共享同一个实例，否则锁不住）
+        leases = new LeaseRegistry({
+          enabled: (cfg.subagent && cfg.subagent.leases) !== false,
+          ttlMs: (cfg.subagent && cfg.subagent.leaseTtlMs) || 120000,
+        });
+        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases });
       }
       let subagentManager = null;
       if (registry) {
         subagentManager = new SubagentManager({
+          leases,
           agent,
           toolkit,
           cfg,
@@ -418,6 +444,7 @@ function register(ctx) {
             undoStack.push(JSON.parse(JSON.stringify(model.doc)));
             if (redoStack.length) redoStack.length = 0;
             fn(model);
+            bumpCanvasRevision(model);
             dirty = true;
             return true;
           },
@@ -425,6 +452,9 @@ function register(ctx) {
             if (undoStack.length) {
               redoStack.push(JSON.parse(JSON.stringify(model.doc)));
               model.doc = JSON.parse(JSON.stringify(undoStack.pop()));
+              // 撤销也是一次世界状态变更：版本号必须**继续递增**（从快照恢复会带回旧版本号，
+              // 那样「报告之后世界变过没有」就判不出来了）
+              bumpCanvasRevision(model);
               dirty = true;
             }
           },
@@ -432,6 +462,7 @@ function register(ctx) {
             if (redoStack.length) {
               undoStack.push(JSON.parse(JSON.stringify(model.doc)));
               model.doc = JSON.parse(JSON.stringify(redoStack.pop()));
+              bumpCanvasRevision(model);
               dirty = true;
             }
           },
@@ -465,6 +496,15 @@ function register(ctx) {
           forceCompaction: forceCompact === true,
         });
       } finally {
+        // run 收尾：释放主代理持有的全部资源租约（子代理的在各自任务结束时已释放）
+        if (leases) {
+          try {
+            const released = leases.releaseAll('supervisor');
+            if (released > 0) runStore.appendEvent(projectRoot, runId, 'leases_released', { released, holder: 'supervisor' });
+          } catch {
+            /* 释放失败不影响 run 结果（TTL 会兜底） */
+          }
+        }
         activeRequests.delete(runId);
         if (bridge) bridge.cleanup();
       }

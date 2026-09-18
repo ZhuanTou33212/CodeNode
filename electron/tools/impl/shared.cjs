@@ -145,7 +145,46 @@ function isCancelled(context) {
   return false;
 }
 
+/**
+ * 内容哈希（`sha256:<hex>`）—— 与 `electron/subagentEnvelope.cjs` 的 `sha256Of` **同口径**
+ * （`sha256:<hex of utf8 text>`），两边必须一致才能互相比对（用例里有交叉核对断言防漂移）。
+ */
+function sha256OfText(text) {
+  return 'sha256:' + require('crypto').createHash('sha256').update(String(text), 'utf8').digest('hex');
+}
+
+/** 文件内容哈希；文件不存在返回 null */
+function sha256OfFile(absPath) {
+  try {
+    return sha256OfText(fs.readFileSync(absPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 乐观并发校验（P3 的另一半）：「我要基于**这一版**内容去写」。
+ * @param {string} absPath
+ * @param {any} expected `'absent'`（要求文件不存在）或 `sha256:…`（可省前缀）
+ * @returns {{ok: boolean, reason?: string, actual: string|null}}
+ */
+function checkExpectedHash(absPath, expected) {
+  const want = String(expected == null ? '' : expected).trim().toLowerCase();
+  if (!want) return { ok: true, actual: null };
+  const exists = fs.existsSync(absPath);
+  const actual = exists ? sha256OfFile(absPath) : null;
+  if (want === 'absent' || want === 'absent()' || want === 'none') {
+    return exists ? { ok: false, reason: '要求「文件不存在」，但它已经存在（可能是别人先建了）', actual } : { ok: true, actual };
+  }
+  const normalized = want.startsWith('sha256:') ? want : 'sha256:' + want;
+  if (!exists) return { ok: false, reason: '要求基于某个版本写入，但文件不存在了', actual: null };
+  return actual === normalized ? { ok: true, actual } : { ok: false, reason: '内容与读入时不一致（读入后被人改过）', actual };
+}
+
 module.exports = {
+  sha256OfText,
+  sha256OfFile,
+  checkExpectedHash,
   resolveInRoot,
   resolveFileFuzzy,
   normalizeQuotes,

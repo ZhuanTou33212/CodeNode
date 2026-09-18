@@ -14,6 +14,20 @@ class GraphModel {
   constructor(doc) {
     this.doc = doc || { root: { nodes: [], edges: [] } };
     if (!this.doc.root) this.doc.root = { nodes: [], edges: [] };
+    /**
+     * 世界状态的**单调版本号**（多 Agent 信息完整性的 C 类「版本错位」需要它）。
+     * 从文档读回：`out.document = model.doc` 会带着 `root.revision` 回到渲染层，
+     * 下一轮再传回来时接着数 —— 否则每建一个新实例都从 0 开始，版本号就没有比较意义。
+     * 用**实例计数**而不是「节点数/时间戳」冒充：节点数相同的两份不同画布必须能区分开。
+     */
+    this.revision = Number(this.doc.root.revision) || 0;
+  }
+
+  /** 世界状态变了：版本号 +1，并写进文档（供跨请求 round-trip）。返回新版本号。 */
+  bumpRevision() {
+    this.revision += 1;
+    this.doc.root.revision = this.revision;
+    return this.revision;
   }
 
   /** 当前可见画布 */
@@ -44,6 +58,7 @@ class GraphModel {
       data: data || { label: type || '节点', status: 'pending' },
     };
     this.current().nodes.push(node);
+    this.bumpRevision();
     return node;
   }
 
@@ -58,6 +73,7 @@ class GraphModel {
       animated: true,
     };
     this.current().edges.push(edge);
+    this.bumpRevision();
     return edge;
   }
 
@@ -69,12 +85,14 @@ class GraphModel {
     const g = this.current();
     g.nodes = g.nodes.filter((n) => n.id !== node.id);
     g.edges = g.edges.filter((e) => e.source !== node.id && e.target !== node.id);
+    this.bumpRevision();
   }
 
   removeEdges(edges) {
     const ids = new Set(edges.map((e) => e.id));
     const g = this.current();
     g.edges = g.edges.filter((e) => !ids.has(e.id));
+    this.bumpRevision();
   }
 
   /** 复制节点，返回新节点 */
@@ -97,6 +115,7 @@ class GraphModel {
     }
     if (copy.type === 'scope') copy.data.childIds = [];
     this.current().nodes.push(copy);
+    this.bumpRevision();
     return copy;
   }
 
