@@ -188,6 +188,11 @@ function buildEnvelope(input = {}) {
       role: (task && task.role) || '',
     },
     to: { taskId: 'supervisor', role: 'supervisor' },
+    // 起止时刻：合并（P5）判定「谁覆盖谁」只能靠它 —— **绝不能靠报告到达顺序**。
+    // 空则省（老的信封/手工构造的信封没有它，合并会如实按「无法判定先后」处理）。
+    ...((task && (task.startedAt || task.finishedAt))
+      ? { at: { ...(task.startedAt ? { startedAt: task.startedAt } : {}), ...(task.finishedAt ? { finishedAt: task.finishedAt } : {}) } }
+      : {}),
     ...(inReplyTo ? { inReplyTo: String(inReplyTo) } : {}),
     snapshot: buildSnapshot(model),
     kind,

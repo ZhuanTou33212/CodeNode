@@ -21,6 +21,8 @@
 
 const { AgentToolResult } = require('./tools/result.cjs');
 const { LeaseRegistry } = require('./tools/leases.cjs');
+// 确定性合并 + 冲突裁决（P5）：合并结果只依赖贡献项自身，不依赖到达顺序
+const mergeLib = require('./tools/merge.cjs');
 // 子代理结果的**单一 JSON 信封**（多 Agent 信息完整性 P1/P2）：契约校验 + 产物哈希 + 有损自报
 const subagentEnvelope = require('./subagentEnvelope.cjs');
 const roles = require('./tools/roles.cjs');
@@ -282,7 +284,70 @@ class SubagentManager {
           ? Promise.all(tasks.map((item) => this.delegate(context, item)))
           : tasks.reduce(async (previous, item) => [...await previous, await this.delegate(context, item)], Promise.resolve([]));
         const results = await run;
-        return AgentToolResult.ok(results.map((result) => result.text).join('\n'), { results: results.map((result) => taskView(result.data)) });
+        /**
+         * P5 确定性合并：把这一批信封里的「对世界声称了什么」合并成一份报告。
+         * 合并只用贡献项自身的字段（资源键/内容/完成时刻/来源），**不看到达顺序** ——
+         * 同一批工作无论谁先返回，digest 逐字节相同。冲突不会被默认消解（requiresArbitration）。
+         */
+        const envelopes = results.map((r) => r && r.data && r.data.envelope).filter(Boolean);
+        const contributions = envelopes.reduce((acc, env) => acc.concat(mergeLib.contributionsFromEnvelope(env)), []);
+        const merged = mergeLib.merge({ contributions });
+        context.audit(
+          JSON.stringify({ kind: 'subagent_batch_merged', runId: this.runId, digest: merged.digest, counts: merged.counts })
+        );
+        if (this.onDelta) {
+          this.onDelta({ kind: 'subagent_merge', digest: merged.digest, counts: merged.counts });
+        }
+        return AgentToolResult.ok(
+          results.map((result) => result.text).join('\n') + '\n\n' + mergeLib.renderMergeReport(merged),
+          {
+            results: results.map((result) => taskView(result.data)),
+            merged: { digest: merged.digest, counts: merged.counts, conflicts: merged.conflicts },
+          }
+        );
+      }
+    );
+
+    registry.register(
+      'merge_subagent_results',
+      '把**已完成**的子代理结果确定性合并成一份报告：同一组结果无论到达顺序如何，digest 逐字节相同。' +
+        '内容一致 → agreed；有明确先后 → superseded（记清谁覆盖谁，两份都留痕）；' +
+        '无法判定先后 → conflict，**不得默认取胜者** —— 用 decisions 显式裁决（只能指向该资源的候选 taskId）。',
+      {
+        type: 'object',
+        properties: {
+          taskIds: { type: 'array', items: { type: 'string' }, description: '要合并的任务 id（缺省 = 本轮所有已完成且有信封的任务）' },
+          decisions: {
+            type: 'array',
+            items: { type: 'object' },
+            description: '冲突裁决：[{resourceKey, winnerTaskId, note?}]；winnerTaskId 必须是该资源的候选来源之一',
+          },
+        },
+      },
+      async (context, args) => {
+        const wanted = Array.isArray(args.taskIds) && args.taskIds.length ? args.taskIds.map(String) : null;
+        const tasks = [...this.tasks.values()].filter(
+          (task) => task.envelope && (!wanted || wanted.includes(task.taskId))
+        );
+        if (!tasks.length) {
+          return AgentToolResult.error('没有可合并的子代理结果（信封只在任务完成后生成；taskIds 可能写错了）');
+        }
+        const contributions = tasks.reduce((acc, task) => acc.concat(mergeLib.contributionsFromEnvelope(task.envelope)), []);
+        const merged = mergeLib.merge({ contributions, decisions: args.decisions });
+        context.audit(
+          JSON.stringify({
+            kind: 'subagent_merge_requested',
+            runId: this.runId,
+            taskIds: tasks.map((task) => task.taskId),
+            digest: merged.digest,
+            counts: merged.counts,
+            decidedKeys: (Array.isArray(args.decisions) ? args.decisions : []).map((d) => d && d.resourceKey),
+          })
+        );
+        return AgentToolResult.ok(mergeLib.renderMergeReport(merged, { compact: false }), {
+          merged,
+          taskIds: tasks.map((task) => task.taskId),
+        });
       }
     );
   }

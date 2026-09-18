@@ -9,6 +9,9 @@
  *      registry.execute 层的闸门（同文件被占用 → RESOURCE_LOCKED；读/别的文件不受影响）
  *   D. **乐观并发写入**（P3 另一半）：write_file / edit_file 的 expectedSha256（含 'absent'），
  *      校验失败必须**不写盘**并返回 CONFLICT_STALE
+ *   E. **确定性合并 + 冲突裁决**（P5）：同一组贡献项任意到达顺序 → digest 逐字节相同；
+ *      内容一致/被覆盖（留痕）/无法判定先后（必须裁决，不得默认取胜者）；delegate_tasks 与
+ *      merge_subagent_results 的端到端；信封带 at 时间戳（判先后的唯一依据）
  */
 'use strict';
 
@@ -26,6 +29,7 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 const sandbox = require('../electron/sandbox.cjs');
 const failures = require('../electron/tools/failures.cjs');
 const { sha256OfText } = require('../electron/tools/impl/shared.cjs');
+const mergeLib = require('../electron/tools/merge.cjs');
 
 let failuresCount = 0;
 function check(label, fn) {
@@ -405,6 +409,178 @@ function registryFor(leases, over = {}) {
       assert.strictEqual(editOk.ok, true, String(editOk.text));
       assert.strictEqual(fs.readFileSync(target, 'utf8'), 'v4（基于 v2）');
       assert.strictEqual(editOk.data.sha256, sha256OfText('v4（基于 v2）'));
+    });
+  }
+
+  // ================= E. 确定性合并 + 冲突裁决（P5） =================
+  const envOf = (actor, finishedAt, filePath, sha, snapshotHash = 'snap-1') => ({
+    msgId: 'm_' + actor,
+    from: { taskId: actor, role: 'builder' },
+    ...(finishedAt ? { at: { finishedAt } } : {}),
+    snapshot: { hash: snapshotHash },
+    evidence: { files: [{ path: filePath, exists: true, sha256: sha }] },
+  });
+  const contributionsOf = (envelopes) =>
+    envelopes.reduce((acc, env) => acc.concat(mergeLib.contributionsFromEnvelope(env)), []);
+  const permutations = (arr) => {
+    if (arr.length <= 1) return [arr];
+    const out = [];
+    arr.forEach((item, index) => {
+      const rest = arr.slice(0, index).concat(arr.slice(index + 1));
+      for (const tail of permutations(rest)) out.push([item].concat(tail));
+    });
+    return out;
+  };
+
+  check('[E] 同一组贡献项，**任意到达顺序** → digest 逐字节相同（P5 的核心判据）', () => {
+    const list = contributionsOf([
+      envOf('t-a', '2026-09-17T10:00:00.000Z', 'a.txt', 'sha256:aaa'),
+      envOf('t-b', '2026-09-17T10:00:01.000Z', 'b.txt', 'sha256:bbb'),
+      envOf('t-c', '2026-09-17T10:00:02.000Z', 'c.txt', 'sha256:ccc'),
+    ]);
+    const digests = new Set(permutations(list).map((order) => mergeLib.merge({ contributions: order }).digest));
+    assert.strictEqual(digests.size, 1, '6 种顺序必须只产生一个 digest，实测 ' + digests.size + ' 个；' + JSON.stringify([...digests]));
+    // 资源顺序也是规范的（按 resourceKey 排序），与到达顺序无关
+    const keys = mergeLib.merge({ contributions: [...list].reverse() }).resources.map((r) => r.resourceKey);
+    assert.deepStrictEqual(keys, [...keys].sort());
+  });
+
+  check('[E] 幂等：同一份贡献重复出现不影响结果（去重后 digest 不变）', () => {
+    const list = contributionsOf([envOf('t-a', '2026-09-17T10:00:00.000Z', 'a.txt', 'sha256:aaa')]);
+    const once = mergeLib.merge({ contributions: list });
+    const twice = mergeLib.merge({ contributions: list.concat(list) });
+    assert.strictEqual(once.digest, twice.digest);
+    assert.strictEqual(twice.counts.duplicatesRemoved, list.length, '重复项要被去掉：' + JSON.stringify(twice.counts));
+  });
+
+  check('[E] 内容不同但有明确先后 → superseded：记清谁覆盖谁，两份值都留痕', () => {
+    const merged = mergeLib.merge({
+      contributions: contributionsOf([
+        envOf('t-a', '2026-09-17T10:00:00.000Z', 'same.txt', 'sha256:v1'),
+        envOf('t-b', '2026-09-17T10:00:05.000Z', 'same.txt', 'sha256:v2'),
+      ]),
+    });
+    const entry = merged.resources.find((r) => r.resourceKey === 'file:same.txt');
+    assert.strictEqual(entry.status, 'superseded');
+    assert.strictEqual(entry.value, 'sha256:v2');
+    assert.strictEqual(entry.winner, 't-b');
+    assert.deepStrictEqual(entry.supersedes, [{ actor: 't-a', value: 'sha256:v1', finishedAt: '2026-09-17T10:00:00.000Z', supersededBy: 't-b' }], '被覆盖的那份必须留痕：' + JSON.stringify(entry.supersedes));
+    assert.strictEqual(merged.requiresArbitration, false);
+    assert.ok(/被覆盖/.test(mergeLib.renderMergeReport(merged)));
+  });
+
+  check('[E] 内容不同且**无法判定先后** → conflict：绝不默认取胜者（requiresArbitration）', () => {
+    const tied = contributionsOf([
+      envOf('t-a', '2026-09-17T10:00:00.000Z', 'same.txt', 'sha256:v1'),
+      envOf('t-b', '2026-09-17T10:00:00.000Z', 'same.txt', 'sha256:v2'), // 同一毫秒 → 判不出先后
+    ]);
+    const merged = mergeLib.merge({ contributions: tied });
+    assert.strictEqual(merged.requiresArbitration, true);
+    assert.strictEqual(merged.counts.conflicts, 1);
+    const entry = merged.resources.find((r) => r.resourceKey === 'file:same.txt');
+    assert.strictEqual(entry.status, 'conflict');
+    assert.strictEqual(entry.value, null, '冲突时不得给出「生效值」');
+    const text = mergeLib.renderMergeReport(merged);
+    assert.ok(/不得默认取胜者/.test(text), text);
+    // 没有时间戳也一样：缺失 = 判不出来 = 冲突（不能拿字典序猜）
+    const noTime = mergeLib.merge({ contributions: contributionsOf([envOf('t-a', '', 'same.txt', 'sha256:v1'), envOf('t-b', '', 'same.txt', 'sha256:v2')]) });
+    assert.strictEqual(noTime.requiresArbitration, true);
+    // 冲突状态的 digest 同样与顺序无关
+    const reversed = mergeLib.merge({ contributions: [...tied].reverse() });
+    assert.strictEqual(reversed.digest, merged.digest);
+  });
+
+  check('[E] 显式裁决消解冲突；无效裁决被拒且冲突仍在', () => {
+    const tied = contributionsOf([
+      envOf('t-a', '2026-09-17T10:00:00.000Z', 'same.txt', 'sha256:v1'),
+      envOf('t-b', '2026-09-17T10:00:00.000Z', 'same.txt', 'sha256:v2'),
+    ]);
+    const decided = mergeLib.merge({ contributions: tied, decisions: [{ resourceKey: 'file:same.txt', winnerTaskId: 't-b', decidedBy: 'user', note: '人工判定' }] });
+    const entry = decided.resources.find((r) => r.resourceKey === 'file:same.txt');
+    assert.strictEqual(entry.status, 'arbitrated');
+    assert.strictEqual(entry.value, 'sha256:v2');
+    assert.strictEqual(entry.decidedBy, 'user');
+    assert.strictEqual(decided.requiresArbitration, false);
+    assert.strictEqual(decided.rejectedDecisions.length, 0);
+
+    const bogusWinner = mergeLib.merge({ contributions: tied, decisions: [{ resourceKey: 'file:same.txt', winnerTaskId: 't-不存在' }] });
+    assert.strictEqual(bogusWinner.rejectedDecisions.length, 1, '裁决必须只能指向该资源的候选来源');
+    assert.ok(/候选/.test(bogusWinner.rejectedDecisions[0].reason));
+    assert.strictEqual(bogusWinner.requiresArbitration, true, '无效裁决不能把冲突「解掉」');
+
+    const bogusResource = mergeLib.merge({ contributions: tied, decisions: [{ resourceKey: 'file:never-seen.txt', winnerTaskId: 't-a' }] });
+    assert.strictEqual(bogusResource.rejectedDecisions.length, 1, '裁决一个不存在的资源必须被拒（不能静默吞掉决定）');
+  });
+
+  check('[E] 信封带 at 时间戳；没有时刻就**不写** at（负向判据）', () => {
+    const withAt = envelopeLib.buildEnvelope({
+      task: { taskId: 'x1', runId: 'r', role: 'builder', objective: 'o', status: 'done', summary: 's', toolCalls: [], startedAt: '2026-09-17T09:00:00.000Z', finishedAt: '2026-09-17T09:00:30.000Z' },
+      projectRoot: root,
+      model: new GraphModel({ root: { nodes: [], edges: [] } }),
+    }).envelope;
+    assert.deepStrictEqual(withAt.at, { startedAt: '2026-09-17T09:00:00.000Z', finishedAt: '2026-09-17T09:00:30.000Z' });
+    const withoutAt = envelopeLib.buildEnvelope({
+      task: { taskId: 'x2', runId: 'r', role: 'builder', objective: 'o', status: 'done', summary: 's', toolCalls: [] },
+      projectRoot: root,
+      model: new GraphModel({ root: { nodes: [], edges: [] } }),
+    }).envelope;
+    assert.strictEqual('at' in withoutAt, false, '没有时刻就不该有个空的 at');
+  });
+
+  // ---- 端到端：两个 builder 先后写同一个文件 ----
+  {
+    const model = new GraphModel({ root: { nodes: [], edges: [] } });
+    let seq = 0;
+    const manager = new SubagentManager({
+      agent: {
+        runAgentChat: async ({ tools, messages }) => {
+          // 让两个子代理都写同一个文件（内容不同）：第二个覆盖第一个
+          seq += 1;
+          const content = '版本 ' + seq + '（' + (messages && messages[0] && messages[0].role) + '）';
+          const res = await tools.registry.execute('write_file', { path: 'shared-e2e.txt', content }, tools.context);
+          return { content: '结论：写入 ' + content, toolCalls: [{ name: 'write_file', ok: !!res.ok, args: JSON.stringify({ path: 'shared-e2e.txt' }) }], usage: { total_tokens: 3 } };
+        },
+      },
+      toolkit,
+      cfg: { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }, rag: { enabled: false }, subagent: {} },
+      registry: registryFor(null),
+      runId: 'run-merge',
+    });
+    const parent = registryFor(null);
+    manager.register(parent);
+    const { context } = makeContext({ model });
+    // 模型换成带 revision 的那个 context 的 model（信封快照用同一个世界）
+    const batch = await parent.execute(
+      'delegate_tasks',
+      { tasks: [{ role: 'builder', objective: '写 shared-e2e.txt' }, { role: 'builder', objective: '再写一次 shared-e2e.txt' }] },
+      context
+    );
+    check('[E] delegate_tasks 端到端：写出单一合并报告（含被覆盖留痕）', () => {
+      assert.strictEqual(batch.ok, true, String(batch.text).slice(0, 300));
+      assert.ok(batch.data.merged && /^sha256:[0-9a-f]{64}$/.test(batch.data.merged.digest), JSON.stringify(batch.data.merged));
+      assert.ok(/\[合并报告\]/.test(String(batch.text)), String(batch.text).slice(0, 400));
+      assert.ok(batch.data.merged.counts.superseded >= 1, '同一文件被两个子代理先后写 → 必须记成「被覆盖」而不是无声覆盖：' + JSON.stringify(batch.data.merged.counts));
+      assert.ok(/被覆盖/.test(String(batch.text)));
+      assert.ok(/shared-e2e\.txt/.test(String(batch.text)));
+    });
+    check('[E] 端到端的合并结果与「到达顺序」无关（把两个任务的信封反序再合并，digest 不变）', () => {
+      const tasks = [...manager.tasks.values()].filter((t) => t.envelope);
+      assert.strictEqual(tasks.length, 2, '两个任务都应完成并带信封');
+      const forward = mergeLib.merge({ contributions: contributionsOf(tasks.map((t) => t.envelope)) });
+      const backward = mergeLib.merge({ contributions: contributionsOf([...tasks].reverse().map((t) => t.envelope)) });
+      assert.strictEqual(forward.digest, backward.digest);
+    });
+    const mergedTool = await parent.execute('merge_subagent_results', {}, context);
+    check('[E] merge_subagent_results 工具：可重放、返回 digest 与逐条资源', () => {
+      assert.strictEqual(mergedTool.ok, true, String(mergedTool.text).slice(0, 200));
+      assert.ok(mergedTool.data.taskIds.length === 2);
+      assert.ok(Array.isArray(mergedTool.data.merged.resources) && mergedTool.data.merged.resources.length >= 1);
+      assert.ok(/\[合并报告\]/.test(String(mergedTool.text)));
+    });
+    const missing = await parent.execute('merge_subagent_results', { taskIds: ['no-such-task'] }, context);
+    check('[E] 负向：taskIds 写了不存在的任务 → 明确报错（不是空报告）', () => {
+      assert.strictEqual(missing.ok, false);
+      assert.ok(/没有可合并/.test(String(missing.text)), String(missing.text).slice(0, 120));
     });
   }
 

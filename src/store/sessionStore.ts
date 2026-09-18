@@ -63,6 +63,9 @@ interface SessionState {
     /** kind==='max_tokens_capped'：收缩前/后的输出上限 */
     from?: number;
     to?: number;
+    /** kind==='subagent_merge'：确定性合并的指纹与统计（P5） */
+    digest?: string;
+    counts?: Record<string, number>;
     providerMessage?: string;
   }) => void;
   /**
@@ -298,6 +301,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             ? '上下文超窗：正在压缩后重试（估算 ' + (d.tokens || 0) + ' tokens，已将本模型窗口下调为 ' + (d.window || 0) + '）'
             : '上下文超窗：本轮未发送（估算 ' + (d.tokens || 0) + ' tokens > 窗口 ' + (d.window || 0) + '）'
         );
+      return;
+    }
+    /**
+     * 子代理结果的确定性合并（P5）：一致/被覆盖时无需打扰用户，但**待裁决的冲突必须让人看到** ——
+     * 「不猜」是设计原则，用户得有机会来判。
+     */
+    if (d.kind === 'subagent_merge') {
+      const conflicts = Number((d.counts && d.counts.conflicts) || 0);
+      const superseded = Number((d.counts && d.counts.superseded) || 0);
+      if (conflicts > 0) {
+        useUiStore
+          .getState()
+          .setToast('子代理结果有 ' + conflicts + ' 处冲突待裁决（同一资源被不同内容改动，未擅自取舍）');
+      } else if (superseded > 0) {
+        useUiStore.getState().setToast('子代理结果已合并：' + superseded + ' 处被后写的覆盖（两份都留痕）');
+      }
       return;
     }
     // 输出预算被上下文挤压：本轮输出上限临时缩小（如实告知，别让用户以为模型变笨了）

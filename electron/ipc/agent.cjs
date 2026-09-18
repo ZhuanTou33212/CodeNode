@@ -290,6 +290,13 @@ function register(ctx) {
             role: delta.role || null,
             status: delta.status || null,
           });
+        } else if (delta.kind === 'subagent_merge') {
+          // P5 确定性合并：把指纹与统计落进 run 事件 —— 事后能核对「这一批结果合并成了什么」，
+          // 尤其是有冲突待裁决时（冲突不得被静默消化，run 记录是留痕的一处）
+          runStore.appendEvent(projectRoot, runId, 'subagent_merge', {
+            digest: delta.digest || null,
+            counts: delta.counts || null,
+          });
         } else if (delta.kind === 'content_reset') {
           // 流中途断线 → 整轮重发，已流出的半截作废。落进 run 事件，事后能看出
           // 「这次回答为什么先出了一段又重来」。
