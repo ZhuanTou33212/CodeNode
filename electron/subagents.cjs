@@ -21,6 +21,7 @@
 
 const { AgentToolResult } = require('./tools/result.cjs');
 const { LeaseRegistry } = require('./tools/leases.cjs');
+const { changedFilesFromToolCalls } = require('./tools/fileChanges.cjs');
 // 确定性合并 + 冲突裁决（P5）：合并结果只依赖贡献项自身，不依赖到达顺序
 const mergeLib = require('./tools/merge.cjs');
 // 子代理结果的**单一 JSON 信封**（多 Agent 信息完整性 P1/P2）：契约校验 + 产物哈希 + 有损自报
@@ -59,9 +60,6 @@ const DEFAULTS = Object.freeze({
 const MAX_SINGLE_TURN_TIMEOUT_MS = 180000;
 const MIN_TOTAL_TIMEOUT_MS = 10000;
 const MAX_TOTAL_TIMEOUT_MS = 3600000;
-/** 会改文件/画布的工具名（用于从工具调用记录里提取「变更了什么」，只报事实） */
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'bulk_edit', 'write_analysis_md']);
-
 function makeTaskId() {
   return 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
@@ -101,21 +99,12 @@ function defaultProjectSkills(projectRoot) {
 }
 
 /** 从工具调用记录里提取被改动的文件（best-effort，解析不出就跳过，绝不猜） */
+/**
+ * 「已改动文件」的唯一口径在 tools/fileChanges.cjs —— 主循环的进度检查层用的是同一份实现。
+ * 这里保留同名薄封装，避免两处各写一份（此前本文件那份还会漏掉 bulk_edit 的 edits[] 路径）。
+ */
 function changedFiles(toolCalls) {
-  const out = new Set();
-  for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
-    if (!call || call.ok === false || !WRITE_TOOLS.has(call.name)) continue;
-    let parsed = null;
-    try {
-      parsed = typeof call.args === 'string' ? JSON.parse(call.args || '{}') : call.args;
-    } catch {
-      parsed = null;
-    }
-    const p = parsed && (parsed.path || parsed.filePath || parsed.file || parsed.target);
-    if (p) out.add(String(p));
-    if (out.size >= 20) break;
-  }
-  return [...out];
+  return changedFilesFromToolCalls(toolCalls);
 }
 
 /**

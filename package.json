@@ -59,6 +59,8 @@
     "test:subagent-envelope": "node scripts/subagent-envelope-test.cjs",
     "test:context-overflow": "node scripts/context-overflow-test.cjs",
     "test:multi-agent-integrity": "node scripts/multi-agent-integrity-test.cjs",
+    "test:agent-request-shape": "node scripts/agent-request-shape-test.cjs",
+    "test:agent-progress": "node scripts/agent-progress-test.cjs",
     "test:compaction-ui": "vite build && node scripts/run-electron.cjs scripts/compaction-ui-test.cjs",
     "test:truncation-safety": "node scripts/truncation-safety-test.cjs",
     "test:agent-state": "node scripts/agent-state-test.cjs",

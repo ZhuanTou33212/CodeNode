@@ -35,9 +35,16 @@ const READ_ONLY_TOOLS = new Set([
  * 注意：这是在「谁能读」里再挑一层「结果不会因为别的东西变化而失效」的工具，
  * 所以 get_workbench_model / poll_job / recall 不在其中。
  */
+/**
+ * 结果可在同一个 run 内复用的只读工具（缓存白名单）。
+ *
+ * `ask_user` **故意不在里面**：它是交互输入，不是幂等读。此前它在白名单里，导致同一个 run 内
+ * 同样的问题问第二次时**直接复用旧答案**（用户根本看不到第二次提问），而「再问一次」往往正是
+ * 情况变了之后该做的事。它是唯一被排除的交互型工具，其余只读工具照旧缓存。
+ */
 const CACHEABLE_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
-  'find_files', 'search_files', 'list_directory', 'code_review', 'ask_user',
+  'find_files', 'search_files', 'list_directory', 'code_review',
 ]);
 
 /** 会改变画布模型 / 文件 / 工程状态的工具（语义清单，供文档与并行冲突判定引用） */

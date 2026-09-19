@@ -23,6 +23,8 @@ const TOOL_SEMANTICS = require('./tools/descriptor.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
 // S5：工具失败分类契约（FailureCode 唯一来源）—— 主循环据此分派提示与重试策略
 const failures = require('./tools/failures.cjs');
+// 「已改动文件」的唯一口径（子代理信封与这里的进度检查层共用同一份实现）
+const { changedFilesFromToolCalls } = require('./tools/fileChanges.cjs');
 // S6：只读并行调度（默认关闭；关闭时行为与串行执行完全一致）
 const schedulerLib = require('./tools/scheduler.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
@@ -82,6 +84,26 @@ const DEFAULTS = Object.freeze({
   truncationNudges: DEFAULT_TRUNCATION_NUDGES,
 });
 
+/**
+ * 推理强度：**能关掉**。
+ *
+ * 此前是 `cfg.reasoning_effort || 'medium'` —— 配置里留空也回落 `medium`，于是「网关不接受
+ * `reasoning_effort` 字段」的用户**无法**让它消失（每次请求都被 400 拒掉），这是实测复现的短板。
+ * 现在的口径：
+ *   键**不存在**      → 出厂默认 `medium`（既有行为不变）
+ *   显式留空 / none / off / false / no / - / null → `null`（请求体里**不带**这个字段）
+ *   其他值            → 原样下发
+ */
+const REASONING_EFFORT_DEFAULT = 'medium';
+const REASONING_EFFORT_OFF = new Set(['none', 'off', 'false', 'no', '-', 'null', 'disabled']);
+function parseReasoningEffort(raw) {
+  if (raw == null) return REASONING_EFFORT_DEFAULT;
+  const value = String(raw).trim();
+  if (!value) return null; // 显式留空 = 关掉
+  if (REASONING_EFFORT_OFF.has(value.toLowerCase())) return null;
+  return value;
+}
+
 function loadConfig(projectRoot) {
   const globalCfg = loadProperties(path.join(__dirname, '..', 'config', 'agent.properties'));
   const projectCfg = projectRoot
@@ -94,7 +116,14 @@ function loadConfig(projectRoot) {
     apiKey: cfg.api_key || '',
     model: cfg.model || 'deepseek-v4-flash',
     maxTokens: Number(cfg.max_tokens) || DEFAULT_MAX_TOKENS,
-    reasoningEffort: cfg.reasoning_effort || 'medium',
+    reasoningEffort: parseReasoningEffort(cfg.reasoning_effort),
+    /**
+     * `stream_options.include_usage` 是否随流式请求下发。默认 true（DeepSeek 用它报用量）；
+     * 部分 OpenAI 兼容网关不认这个字段 → 400。**可关**（agent.send_stream_options=false）。
+     */
+    sendStreamOptions: cfg['agent.send_stream_options'] == null
+      ? true
+      : String(cfg['agent.send_stream_options']).toLowerCase() !== 'false',
     soulFile: cfg.soul_file || 'config/soul.md',
     tools: parseToolsConfig(cfg),
     rag: parseRagConfig(cfg),
@@ -322,6 +351,13 @@ function recordCost(cfg, entry) {
 /** 单次运行与进程级资源上限，避免上下文/工具 fan-out 失控。 */
 function parseLimitsConfig(cfg) {
   return {
+    /**
+     * 进度检查层（对齐 Java 版「每 3 步注入任务清单」）：每 N 轮注入一条**只讲事实**的进度清单，
+     * 逼模型在长任务里交代目标/已完成/下一步，减少空转与目标漂移。0 = 关闭。
+     * 放在 limits 里而不是 reliability：它属于「循环预算」这一族（与 maxToolIterations 同类），
+     * 与重试策略无关 —— 放错地方会导致主循环读不到（接线错误，用例已锁）。
+     */
+    progressEvery: configInteger(cfg, 'agent.progress_every', 3, 0, 50),
     maxConcurrentRuns: configInteger(cfg, 'agent.max_concurrent_runs', 2, 1, 8),
     // 单次运行的累计 token 上限。带图对话的输入会明显变大，默认给到 60 万；
     // 真正防止"算错"的是 requestBudget 的估算口径（图片按 token 规则折算，不按 base64 字节）。
@@ -697,6 +733,47 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
   }
 }
 
+/** 进度检查提示的固定前缀：与 compaction 的 MACHINE_USER_PREFIXES 对齐（机器注入，不进摘要） */
+const PROGRESS_NOTE_PREFIX = '【系统提示】进度检查（第 ';
+
+/**
+ * 生成一条**只讲可核对事实**的进度清单（不评价、不编造）。
+ *
+ * 为什么需要它：长任务里模型会陷在「又调一次同样的工具」或忘了最初目标（实测 12 轮上限里
+ * 后几轮常在同一件事上打转）。Java 版的做法是每 3 步注入任务清单，这里对齐该口径 ——
+ * 但只注入**事实**（轮次、调用数、改了哪些文件、失败过几次、用量），并要求下一步先交代
+ * 目标/已完成/下一步，避免把「进度」变成又一段空话。
+ *
+ * @param {{iteration: number, maxIterations: number, toolCallsUsed: number, toolCallBudget: number,
+ *          changedFiles?: string[], failures?: Array<{tool: string, code: string}>, tokensUsed?: number,
+ *          tokenBudget?: number}} input
+ * @returns {string}
+ */
+function buildProgressNote(input) {
+  const {
+    iteration = 0,
+    maxIterations = 0,
+    toolCallsUsed = 0,
+    toolCallBudget = 0,
+    changedFiles = [],
+    failures: recentFailures = [],
+    tokensUsed = 0,
+    tokenBudget = 0,
+  } = input || {};
+  const parts = [
+    PROGRESS_NOTE_PREFIX + iteration + '/' + maxIterations + ' 轮）：' +
+      '工具调用 ' + toolCallsUsed + (toolCallBudget > 0 ? '/' + toolCallBudget : '') + ' 次',
+  ];
+  parts.push('已改动文件 ' + (changedFiles.length ? changedFiles.length + ' 个（' + changedFiles.slice(0, 6).join('、') + '）' : '0 个'));
+  parts.push('失败 ' + recentFailures.length + ' 次' + (recentFailures.length ? '（最近：' + recentFailures.slice(0, 3).map((f) => f.tool + (f.code ? '/' + f.code : '')).join('、') + '）' : ''));
+  if (tokensUsed > 0) parts.push('用量 ' + tokensUsed + (tokenBudget > 0 ? '/' + tokenBudget : '') + ' tokens');
+  return (
+    parts.join('；') +
+    '。\n下一步先交代清楚三件事：① 当前目标（还在做哪一件事）② 已完成（以产物或命令输出为证）' +
+    '③ 下一步要做的**一个**具体动作。不要重复已经成功过的调用（同参数重复会命中缓存，等于空转）。'
+  );
+}
+
 /**
  * 构建 /chat/completions 请求体：模型 + 消息 + 推理强度 + 工具参数。
  * DeepSeek V4 全部支持 thinking 模式，reasoning_effort 始终随配置下发。
@@ -711,7 +788,8 @@ function chatBody(cfg, messages, /** @type {{ stream?: boolean, tools?: any }} *
   if (cfg.reasoningEffort) {
     body.reasoning_effort = cfg.reasoningEffort;
   }
-  if (stream) {
+  // stream_options 只有流式才有意义；且**可关**（网关不认这个字段时用 agent.send_stream_options=false）
+  if (stream && cfg.sendStreamOptions !== false) {
     body.stream_options = { include_usage: true };
   }
   if (tools && tools.length) body.tools = tools;
@@ -1680,6 +1758,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const limits = (cfg && cfg.limits) || {};
   const maxToolIterations = limits.maxToolIterations > 0 ? limits.maxToolIterations : MAX_TOOL_ITERATIONS;
   const maxTotalToolCalls = limits.maxTotalToolCalls > 0 ? limits.maxTotalToolCalls : MAX_TOTAL_TOOL_CALLS;
+  // 进度检查层：0 = 关闭（parseConfig 传的是 agent.progress_every，出厂 3；手工构造的 cfg 需要显式给）
+  const progressEvery = Number(cfg && cfg.limits && cfg.limits.progressEvery) > 0 ? Math.floor(Number(cfg.limits.progressEvery)) : 0;
+  // 只用于进度清单里的「用量 X/Y」显示；与下面预算门用的是同一个来源
+  const progressTokenBudget = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 0;
   const dataTruncateCap = limits.dataTruncateCap > 0 ? limits.dataTruncateCap : DATA_TRUNCATE_CAP;
   // finish_reason=length 的补问上限：可配（agent.truncation_nudges），旧行为是写死 2 次。
   const maxTruncationNudges = Number.isFinite(cfg && cfg.reliability && cfg.reliability.truncationNudges)
@@ -1987,6 +2069,31 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             onDelta({ kind: 'max_tokens_capped', from: turnMaxTokens, to: capped, tokens: estimate, window: compactionWindow });
           turnMaxTokens = capped;
         }
+      }
+      /**
+       * 进度检查层：注入点必须在压缩/硬裁剪**之后** —— 放在前面的话，本次迭代的压缩会把这条
+       * 「机器注入的 user 消息」从重建后的历史里丢掉，等于白注（模型本轮根本看不到）。
+       * 同一时刻只保留一条：旧的那条**原地替换**（不 splice —— 缓存条目里存着消息下标，
+       * 挪动下标会让后续的缓存回填改错消息）。
+       */
+      if (progressEvery > 0 && iter > 0 && iter % progressEvery === 0) {
+        const note = buildProgressNote({
+          iteration: iter + 1,
+          maxIterations: maxToolIterations,
+          toolCallsUsed: allToolCalls.length,
+          toolCallBudget: maxTotalToolCalls,
+          changedFiles: changedFilesFromToolCalls(allToolCalls),
+          failures: allToolCalls.filter((call) => call && call.ok === false).map((call) => ({ tool: call.name, code: (call.failure && call.failure.code) || '' })),
+          tokensUsed: totalTokens,
+          tokenBudget: progressTokenBudget,
+        });
+        const previous = messages.findIndex(
+          (msg) => msg && msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith(PROGRESS_NOTE_PREFIX)
+        );
+        if (previous >= 0) messages[previous] = { role: 'user', content: note };
+        else messages.push({ role: 'user', content: note });
+        emitTrace({ kind: 'progress_check', turnId: iter, iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
+        onDelta && onDelta({ kind: 'progress_check', iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
       }
       const payload = {
         model: cfg.model,
@@ -2571,6 +2678,10 @@ module.exports = {
   mergeUsage,
   assignCallIds,
   redactSecrets,
+  chatBody,
+  buildProgressNote,
+  PROGRESS_NOTE_PREFIX,
+  parseReasoningEffort,
   parseReliabilityConfig,
   shouldCompress,
   buildToolContent,

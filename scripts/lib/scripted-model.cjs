@@ -72,6 +72,10 @@ function installScriptedModel(script, options = {}) {
       maxTokens: body.max_tokens,
       hasTools: Array.isArray(body.tools) && body.tools.length > 0,
       model: body.model,
+      // 可选字段按「有没有」记：可关的字段（reasoning_effort / stream_options）要靠它做负向判据
+      reasoningEffort: body.reasoning_effort === undefined ? null : body.reasoning_effort,
+      hasStreamOptions: body.stream_options !== undefined,
+      body,
     });
     const index = state.calls - 1;
     const turn = script[index] || (state.loopLast ? script[script.length - 1] : { content: '（脚本已用尽）' });
