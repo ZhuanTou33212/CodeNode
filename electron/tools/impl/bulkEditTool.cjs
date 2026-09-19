@@ -11,7 +11,8 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
-const { resolveInRoot } = require('./shared.cjs');
+const { resolveInRoot, summarizeContentForConfirm } = require('./shared.cjs');
+const { atomicWriteFile } = require('../../atomicFile.cjs');
 const { nodeToScalarRecords } = require('../../scalars/index.cjs');
 
 const MAX_BATCH = 200;
@@ -88,13 +89,21 @@ function detailFor(action, args) {
     let shown = 0;
     for (const item of args.list) {
       if (item && typeof item === 'object') {
-        sb.push('  - ' + String(item.path || ''));
+        const content = item.content == null ? '' : String(item.content);
+        // #10：只列路径而不给内容，用户无法判断写进去的是什么 —— 每条给长度 + 预览
+        sb.push('  - ' + String(item.path || '') + '（' + content.length + ' 字符）');
+        const firstLine = content.split('\n').find((line) => line.trim().length > 0) || '';
+        if (firstLine.trim()) sb.push('    首行：' + (firstLine.length > 160 ? firstLine.slice(0, 160) + '…' : firstLine.trim()));
         shown++;
         if (shown >= 20) {
           sb.push('  …共 ' + args.list.length + ' 个文件');
           break;
         }
       }
+    }
+    // 单个文件时给完整摘要（多文件时逐条预览已经足够，再多会淹掉对话框）
+    if (args.list.length === 1 && args.list[0] && typeof args.list[0] === 'object') {
+      sb.push(summarizeContentForConfirm(args.list[0].content == null ? '' : String(args.list[0].content)));
     }
   } else if (action === 'delete_nodes') {
     sb.push('删除的节点数：' + nodeIds(args).length + '（此操作不可撤销，请确认）');
@@ -197,7 +206,9 @@ async function createFiles(context, args) {
     }
     try {
       if (path.dirname(target)) fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, content, 'utf-8');
+      // #23：与 write_file / edit_file 统一走原子替换（临时文件 + fsync + rename）——
+      // 裸 writeFileSync 在中途崩溃/断电时会把文件截成半截且没有 .bak。
+      atomicWriteFile(target, content, 'utf-8');
       written.push(relative);
     } catch (e) {
       errors.push(relative + ': ' + ((e && e.message) || e));

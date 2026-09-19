@@ -205,6 +205,13 @@ function buildEnvelope(input = {}) {
       acceptanceJudgement: 'manual',
       toolCallCount: Array.isArray(task && task.toolCalls) ? task.toolCalls.length : 0,
       summaryChars: bodyChars,
+      /**
+       * #5：主循环的收尾原因必须进信封 —— 接收方据此判断「这份结果是完整结论还是半截」。
+       * `stopReason='length_truncated'` 时 status 已不是 done（信封 kind='error'），
+       * 但把原因本身带出来，主代理才能给出「缩小范围/分段委派」这类可执行处置，而不是只看到一句失败。
+       */
+      ...((task && task.stopReason) ? { stopReason: String(task.stopReason) } : {}),
+      ...((task && task.finishReason) ? { finishReason: String(task.finishReason) } : {}),
       ...((task && task.stageNodeId) ? { stageNodeId: task.stageNodeId } : {}),
       ...((task && task.stageWarning) ? { stageWarning: task.stageWarning } : {}),
       ...((task && task.totalTimeoutMs) ? { totalTimeoutMs: task.totalTimeoutMs } : {}),
@@ -332,11 +339,21 @@ function verifyEnvelope(envelope, world = {}) {
  * 引导语只做两件事：告诉接收方「这是契约」与「违约了就别采信」，不夹带第二份数据。
  */
 function renderEnvelopeText(envelope, violations = []) {
+  /**
+   * #5：`kind:'error'` 的信封**不是**一份可交付的结论（截断/失败/取消）。
+   * 此前无论 kind 都渲染「契约 v1（信封即全部结论）」—— 这句话把半截报告说成了完整交付，
+   * 正是「信任放大」。错误信封只声明「这不是结论」并指向失败原因，不给合规引导语。
+   */
+  const isError = !!(envelope && envelope.kind === 'error');
   const head = violations.length
     ? '[子代理结果] 下列 JSON 信封有 ' + violations.length + ' 项**契约违约** → 本结果不得作为结论证据（不要引用它的结论；可让子代理按契约重做或由你直接完成）。交付仍需要原始内容时用 get_subagent_task(taskId=…)。'
-    : '[子代理结果] 契约 v' + ENVELOPE_VERSION + '（信封即全部结论）。' +
-      '核验方式：get_subagent_task(taskId=…) 会**重算**产物哈希与画布快照并返回 verification（valid/stale/invalid）——' +
-      'invalid 的结果不得作为结论证据，stale 说明报告之后世界又变过、需按最新状态核对。';
+    : isError
+      ? '[子代理结果] 契约 v' + ENVELOPE_VERSION + ' 的 kind=error：子代理**未自然完成**（payload.stopReason=' +
+        String((envelope.payload && envelope.payload.stopReason) || (envelope.payload && envelope.payload.status) || '未标注') +
+        '）→ 这不是结论，**半截内容不得当完整结论使用**；失败原因见 payload.error，处置方式见工具结果末尾。'
+      : '[子代理结果] 契约 v' + ENVELOPE_VERSION + '（信封即全部结论）。' +
+        '核验方式：get_subagent_task(taskId=…) 会**重算**产物哈希与画布快照并返回 verification（valid/stale/invalid）——' +
+        'invalid 的结果不得作为结论证据，stale 说明报告之后世界又变过、需按最新状态核对。';
   // 有损必须**显式**说出来，不能让人以为读到的是全文
   const lossyNote =
     envelope && envelope.lossy && envelope.lossy.isLossy

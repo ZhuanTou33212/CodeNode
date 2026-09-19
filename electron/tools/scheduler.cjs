@@ -33,11 +33,18 @@ function clampConcurrency(value) {
 
 /**
  * 把父 signal 的 abort 转发到子 controller（取消贯穿）。
+ *
+ * #24：句柄必须能摘掉。旧实现用匿名闭包 `addEventListener('abort', () => controller.abort())`
+ * 且不留引用 —— 而 `prime()` 每预启动一个只读调用就挂一次，父 signal 是**整轮复用**的，
+ * 于是一个 Run 内监听数随预启动次数单调增长（>10 次即刷 MaxListenersExceededWarning，
+ * 告警被淹没、内存随 run 内调用数增长）。可选 `detachers` 收集摘除函数，由调用方在 promise
+ * 结算时执行。
  * @param {any} parent
  * @param {AbortController|null} controller
+ * @param {Function[]} [detachers] 摘除函数收集器
  * @returns {any} 子 signal（没有 controller 时原样返回父 signal）
  */
-function linkAbort(parent, controller) {
+function linkAbort(parent, controller, detachers) {
   if (!controller) return parent || null;
   const child = controller.signal;
   if (!parent) return child;
@@ -47,12 +54,20 @@ function linkAbort(parent, controller) {
     } catch {}
     return child;
   }
+  const onAbort = () => {
+    try {
+      controller.abort();
+    } catch {}
+  };
   try {
-    parent.addEventListener('abort', () => {
-      try {
-        controller.abort();
-      } catch {}
-    }, { once: true });
+    parent.addEventListener('abort', onAbort, { once: true });
+    if (Array.isArray(detachers)) {
+      detachers.push(() => {
+        try {
+          parent.removeEventListener('abort', onAbort);
+        } catch {}
+      });
+    }
   } catch {}
   return child;
 }
@@ -176,13 +191,17 @@ class ToolScheduler {
       }
       started += 1;
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
-      const childSignal = linkAbort(d.signal, controller);
+      // #24：摘除函数随每个预启动一起收集，promise 结算（含超时/取消）后立刻摘掉父 signal 上的监听
+      const detachers = [];
+      const childSignal = linkAbort(d.signal, controller, detachers);
       const limit = descriptor.timeoutMs == null ? 0 : descriptor.timeoutMs;
       const promise = withTimeout(
         () => d.execute(item, { turnId: d.turnId, toolCallId: callId, attemptId: callId + '#1', signal: childSignal, scheduler: 'parallel-readonly' }),
         limit,
         { tool: item.name, toolCallId: callId, signal: childSignal, onTimeout: () => controller && controller.abort() },
-      );
+      ).finally(() => {
+        for (const detach of detachers) detach();
+      });
       promises.set(callId, promise);
       planned.push(Object.assign(base, { started: true, reason: '只读并行', parallel: true, timeoutMs: limit }));
     }

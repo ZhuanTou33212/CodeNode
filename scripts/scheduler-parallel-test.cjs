@@ -6,7 +6,9 @@
  *   A/B/C 纯函数层：并发归一、withTimeout（超时/正常/onTimeout/不限时）、取消贯穿链；
  *   D/E  计划层：只读轮才并行、写操作整轮独占、并发上限、调用额度、malformed 跳过、事件带三个 id；
  *   F/G  主循环层：脚本化模型 + 真实 registry —— 串行基线耗时、并行加速、写独占（并发峰值）、
- *        顺序不变（tool 消息与 assistant 声明配对）、取消贯穿（父 abort → 子 signal abort 且立即返回）。
+ *        顺序不变（tool 消息与 assistant 声明配对）、取消贯穿（父 abort → 子 signal abort 且立即返回）；
+ *   J    #24：预启动挂在父 signal 上的 abort 监听必须在结算后摘掉（父 signal 整轮复用，
+ *        只增不减会让一个 Run 内的监听数随预启动次数增长）。
  */
 'use strict';
 
@@ -252,6 +254,37 @@ ok('A 并发数归一（1–' + schedulerLib.MAX_CONCURRENCY + '，非法值回�
   assert.strictEqual(cancelled.lastSignal && cancelled.lastSignal.aborted, true, '取消必须贯穿到传给工具执行的 signal');
   assert.ok(cancelled.elapsedMs < SLOW_MS + 60, '取消应立即返回（实际 ' + cancelled.elapsedMs + 'ms）');
   ok('I 取消贯穿（父 abort → 子 signal abort → 立即返回，' + cancelled.elapsedMs + 'ms）');
+
+  // J. #24 预启动对父 signal 挂的 abort 监听必须在结算后摘掉
+  // （父 signal 是整轮复用的：只增不减时一个 Run 内监听数随预启动次数增长 → MaxListenersExceededWarning 刷屏）
+  {
+    const { getEventListeners } = require('events');
+    const parent = new AbortController();
+    const pending = [];
+    let inFlightPeak = 0;
+    const deps = {
+      descriptorOf: () => ({ readOnly: true, mutatesWorkspace: false, timeoutMs: 0 }),
+      execute: () => new Promise((resolve) => {
+        pending.push(() => resolve(AgentToolResult.ok('done')));
+        inFlightPeak = Math.max(inFlightPeak, getEventListeners(parent.signal, 'abort').length);
+      }),
+      signal: parent.signal,
+    };
+    const scheduler = new schedulerLib.ToolScheduler({ enabled: true, concurrency: 4 });
+    for (let round = 0; round < 5; round++) {
+      const roundItems = [0, 1, 2, 3].map((i) => ({ callId: 'r' + round + '_' + i, name: 'read_a' }));
+      const plan = scheduler.prime(roundItems, deps);
+      // withTimeout 在 microtask 里才真正调用 execute —— 先让监听挂上，再放行这一轮
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.strictEqual(pending.length, 4, '第 ' + round + ' 轮应有 4 个在飞（取消贯穿所必需的监听）');
+      pending.splice(0).forEach((release) => release());
+      await Promise.all([...plan.promises.values()]);
+      assert.strictEqual(getEventListeners(parent.signal, 'abort').length, 0,
+        '第 ' + round + ' 轮结算后父 signal 上的 abort 监听必须清零（#24：句柄要能摘掉）');
+    }
+    ok('#24 在飞时确实挂了监听（取消贯穿没被打断），结算后监听数为 0（5 轮 × 4 次预启动后 peak=' + inFlightPeak + '，剩 ' + getEventListeners(parent.signal, 'abort').length + '）');
+    assert.strictEqual(inFlightPeak, 4, '#24 在飞时每个预启动都应挂着监听（取消贯穿的载体）');
+  }
 
   fs.rmSync(root, { recursive: true, force: true });
   console.log('scheduler parallel ok');

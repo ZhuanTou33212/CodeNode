@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { formatResumePlanNotice, type ResumePlanLike } from '../lib/resumePlan';
 
 /** 左侧侧栏的标签页：Agent 对话 / 节点属性 / 项目树 / 文件预览 */
 export type SideTab = 'agent' | 'node' | 'project' | 'preview';
@@ -24,6 +25,11 @@ interface UiState {
   dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
   /** 启动引导是否完成（恢复上次工程结束）。false 时先显示启动占位，避免门禁页闪现 */
   booted: boolean;
+  /**
+   * 需要人工复核的续跑计划（#21）：后端回传的 `plan` 不再被丢掉，在这里留存，
+   * 由 AgentPanel 的确认条与 RunsPanel 一起消费 —— 「要求用户复核」必须同时告诉他复核什么。
+   */
+  resumePlanNotice: { plan: ResumePlanLike; prompt?: string; at: number } | null;
 
   toggleSide: () => void;
   setSideOpen: (v: boolean) => void;
@@ -43,6 +49,8 @@ interface UiState {
   closeDock: () => void;
   setDockTab: (tab: UiState['dockTab']) => void;
   setBooted: (v: boolean) => void;
+  /** 记录「需要人工复核」的续跑计划（同时给 toast/aria-live 一句含工具名的人话提示） */
+  setResumePlanNotice: (plan: ResumePlanLike | null, prompt?: string) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -61,6 +69,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   dockOpen: false,
   dockTab: 'editor',
   booted: false,
+  resumePlanNotice: null,
 
   toggleSide: () => set((s) => ({ sideOpen: !s.sideOpen })),
   setSideOpen: (v) => set({ sideOpen: v }),
@@ -87,4 +96,15 @@ export const useUiStore = create<UiState>((set, get) => ({
   closeDock: () => set({ dockOpen: false }),
   setDockTab: (tab) => set({ dockOpen: true, dockTab: tab }),
   setBooted: (v) => set({ booted: v }),
+  setResumePlanNotice: (plan, prompt) => {
+    if (!plan) {
+      set({ resumePlanNotice: null });
+      return;
+    }
+    // `plan` 原样留存 —— 界面要显示 reason / warning / unknownEffects / pendingSteps（#21）
+    const notice = { plan, prompt, at: Date.now() };
+    set({ resumePlanNotice: notice });
+    // 提示里必须带未知副作用的**工具名**，否则「需要人工复核」这句话没有任何可执行信息
+    useUiStore.getState().setToast(formatResumePlanNotice(notice.plan));
+  },
 }));

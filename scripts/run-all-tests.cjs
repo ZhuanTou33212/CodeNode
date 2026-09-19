@@ -86,6 +86,19 @@ const CORE = [
   'test:resume',
   'test:cost',
   'test:eval',
+  // 前端增量修复（#7 并发竞态 / #21 plan 与 delta 分支 / #25 错误可见性与 a11y）：
+  // 纯 node + react-dom/server 渲染，不需要窗口，所以留在核心组
+  'test:frontend-incremental',
+  // 流内异常必须被消费（#12）：自带 fetch stub，离线确定性
+  'test:stream-anomaly',
+  // 工具审批/边界加固（#8 确认判据归一化 / #10 确认信息面 / #19 shell 输出上限 / #20 前台进程树：
+  // 纯 Node 断言 + 静态门禁，离线确定性）
+  'test:shell-hardening',
+  'test:confirm-payload',
+  // 存储加固（#14 日志与恢复只读首尾 / #16 memory 损坏拒绝写 / #15 脱敏 / #13 合并落盘）：
+  // 纯 Node 断言；scale 会写约 45MB 临时文件、2-4s
+  'test:run-store-scale',
+  'test:storage-hardening',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。

@@ -399,6 +399,46 @@ function parseContextConfig(cfg) {
  * 所以真被拒过一次之后，就把该模型的**保守窗口下限**记在进程内（不写用户配置），
  * 让压缩线立刻变得可信；同时本轮的请求压一次再重发，尽量把这次对话救回来。
  */
+/**
+ * 从供应商的超窗报错里抠出**真实数字**（拿不到就是 0）。
+ *
+ * 为什么必须优先用它：这里原先只用我们自己的启发式估算（`estimateTokens × 0.9`）当窗口下限，
+ * 实测会锁到真实窗口的 56%（供应商说 "maximum context length is 1048576"，我们却锁成 590,035），
+ * 而那个值又被预检当成硬门槛 —— 于是一次**与输入无关**的 400（真实成因是「输入 + max_tokens 超窗」）
+ * 会让这份历史在该进程内永久发不出去。供应商的报错里通常直接写着真实窗口，能解析就用它。
+ * @param {string} message
+ * @returns {{ window: number, inputTokens: number }}
+ */
+function parseOverflowNumbers(message) {
+  const text = String(message || '');
+  let window = 0;
+  let inputTokens = 0;
+  const winPatterns = [
+    /maximum\s+context\s+length\s+(?:is|of)\s+(\d{3,9})/i,
+    /maximum\s+context\s+window\s+(?:is|of)\s+(\d{3,9})/i,
+    /context\s+(?:window|length)\s+(?:is|of|:)\s*(\d{3,9})/i,
+    /(?:上下文|模型)(?:长度|窗口)?(?:上限|最大)[^0-9]{0,12}(\d{3,9})/,
+  ];
+  for (const pattern of winPatterns) {
+    const m = text.match(pattern);
+    const value = m ? Number(m[1]) || 0 : 0;
+    if (value > 0) {
+      window = value;
+      break;
+    }
+  }
+  const inMatch =
+    text.match(/\(\s*(\d{3,9})\s*(?:tokens?\s*)?in\s+the\s+messages/i) ||
+    text.match(/(\d{3,9})\s*(?:tokens?\s*)?in\s+the\s+messages/i);
+  if (inMatch) inputTokens = Number(inMatch[1]) || 0;
+  return { window, inputTokens };
+}
+
+/**
+ * 进程内的窗口账本：`key -> { window, source }`。
+ * `source === 'provider'` 表示这个值来自供应商报错里**明确报出的窗口**（可信，可用于预检拒发）；
+ * `source === 'estimated'` 表示只是我们按估算推出来的下界（**只**影响压缩触发线，绝不参与拒发）。
+ */
 const contextWindowOverrides = new Map();
 
 function contextWindowKey(cfg) {
@@ -406,20 +446,50 @@ function contextWindowKey(cfg) {
 }
 
 /**
- * 记下一次「供应商说超窗」→ 该模型的有效窗口下调到 `估算 × 0.9`（保守，宁可早压不可晚压）。
- * 取**历史最小值**：多次被拒说明猜得还不够保守。
- * @returns {number} 记录后的保守窗口
+ * 记下一次「供应商说超窗」。
+ *
+ * 优先采用报错里明确报出的真实窗口；拿不到才退回 `估算 × 0.9` 这个下界。
+ * 同口径取**历史最小值**（多次被拒说明猜得还不够保守）；但估算值**不得覆盖**可信值。
+ * @param {any} cfg
+ * @param {number|{tokens?: number, providerMessage?: string, message?: string}} tokensOrInfo
+ * @returns {number} 记录后的窗口
  */
-function noteContextOverflow(cfg, tokens) {
+function noteContextOverflow(cfg, tokensOrInfo) {
+  /** @type {{tokens?: number, providerMessage?: string, message?: string}} */
+  const info = tokensOrInfo && typeof tokensOrInfo === 'object' ? tokensOrInfo : { tokens: Number(tokensOrInfo) };
   const key = contextWindowKey(cfg);
-  const guess = Math.max(1024, Math.floor((Number(tokens) || 0) * 0.9));
+  const parsed = parseOverflowNumbers(info.providerMessage || info.message || '');
+  const candidate =
+    parsed.window > 0
+      ? { window: Math.max(1024, parsed.window), source: 'provider' }
+      : { window: Math.max(1024, Math.floor((Number(info.tokens) || 0) * 0.9)), source: 'estimated' };
   const prev = contextWindowOverrides.get(key);
-  if (prev === undefined || guess < prev) contextWindowOverrides.set(key, guess);
-  return contextWindowOverrides.get(key);
+  if (!prev) {
+    contextWindowOverrides.set(key, candidate);
+    return candidate.window;
+  }
+  // 可信口径优先于估算口径；估算值永远不能把可信值改小
+  if (candidate.source === 'provider' && prev.source !== 'provider') {
+    contextWindowOverrides.set(key, candidate);
+    return candidate.window;
+  }
+  if (candidate.source === 'estimated' && prev.source === 'provider') return prev.window;
+  if (candidate.window < prev.window) {
+    contextWindowOverrides.set(key, candidate);
+    return candidate.window;
+  }
+  return prev.window;
 }
 
 function getContextWindowOverride(cfg) {
-  return contextWindowOverrides.get(contextWindowKey(cfg)) || 0;
+  const entry = contextWindowOverrides.get(contextWindowKey(cfg));
+  return entry ? entry.window : 0;
+}
+
+/** 该窗口是否来自供应商明确报出的值（只有它才允许参与预检拒发）。 */
+function isContextWindowOverrideAuthoritative(cfg) {
+  const entry = contextWindowOverrides.get(contextWindowKey(cfg));
+  return !!entry && entry.source === 'provider';
 }
 
 /** 用例/自检用：清空窗口降级账本 */
@@ -1337,12 +1407,29 @@ async function compressToolContent(cfg, toolName, text, signal, options) {
     const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
     recordCost(cfg, { kind: 'compression', model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName } });
     const out = String(res.content || '').trim();
-    if (!out) return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
+    if (!out) return degradedOriginalText(text, '模型返回空摘要');
     if (cache) cache.set(key, out, toolName);
     return out;
-  } catch {
-    return String(text).slice(0, budget) + '…（子代理压缩失败，已截断）';
+  } catch (error) {
+    return degradedOriginalText(text, (error && error.message) || error);
   }
+}
+
+/**
+ * 压缩失败时的降级交付：**保留原文**，只加一行「未压缩」标注。
+ *
+ * 此前的做法是 `String(text).slice(0, budget)`（budget 默认 1500），上层却仍把它标成
+ * 「已压缩」—— 一份最长 12 万字符的工具结果会被砍掉 98.7%，而模型只看到一句
+ * 「子代理压缩失败，已截断」，于是它在一份**看起来正常**的结果上做出错误判断
+ * （代码读了一半、JSON 被砍断）。原文本身已受过 dataTruncateCap 约束，保留它不会撑爆上下文。
+ *
+ * 注意：必须保留「子代理压缩失败」这几个字 —— 压缩缓存的 degraded 判定依赖它。
+ * @param {any} text
+ * @param {any} reason
+ * @returns {string}
+ */
+function degradedOriginalText(text, reason) {
+  return '【未压缩】子代理压缩失败（' + String(reason || '未知原因') + '），以下为工具返回的完整原文：\n' + String(text);
 }
 
 /**
@@ -1631,12 +1718,26 @@ function safeLog(s) {
   });
 }
 
+/**
+ * 累加两份 usage。
+ *
+ * 必须**深度**累加嵌套对象：此前只对顶层数字求和，`prompt_tokens_details` 这类嵌套字段
+ * 只会保留第一轮的值（第二轮起被忽略）→ 子代理的缓存命中数被系统性低估，
+ * 而命中率与「命中感知计费」直接依赖它。
+ * @param {any} previous
+ * @param {any} next
+ */
 function mergeUsage(previous, next) {
   if (!next || typeof next !== 'object') return previous || null;
   const merged = { ...(previous || {}) };
   for (const [key, value] of Object.entries(next)) {
-    if (typeof value === 'number' && Number.isFinite(value)) merged[key] = (Number(merged[key]) || 0) + value;
-    else if (merged[key] == null) merged[key] = value;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      merged[key] = (Number(merged[key]) || 0) + value;
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      merged[key] = mergeUsage(merged[key] && typeof merged[key] === 'object' ? merged[key] : {}, value);
+    } else if (merged[key] == null) {
+      merged[key] = value;
+    }
   }
   return merged;
 }
@@ -1788,16 +1889,31 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const compactionEnabled = compactionCfg.enabled === true;
   /** 模型管理里声明的窗口（0 = 没声明） */
   const declaredWindow = Number(cfg && cfg.contextWindow) > 0 ? Number(cfg.contextWindow) : 0;
-  /** 供应商**真报过**超窗 → 进程内记下的保守窗口下限（比声明值可信） */
+  const configuredWindow = Number(compactionCfg.contextWindow) > 0 ? Number(compactionCfg.contextWindow) : 0;
+  /** 供应商**真报过**超窗 → 进程内记下的窗口（报错里带了真实窗口才可信，否则只是估算下界） */
   const overflowWindow = getContextWindowOverride(cfg);
+  /** 该值是否来自供应商明确报出的窗口（只有可信值才允许参与「预检拒发」） */
+  const overflowTrusted = isContextWindowOverrideAuthoritative(cfg);
   const fallbackWindow = Number(compactionCfg.fallbackWindow) > 0 ? Number(compactionCfg.fallbackWindow) : 0;
-  const compactionWindow =
-    overflowWindow || declaredWindow || (Number(compactionCfg.contextWindow) > 0 ? Number(compactionCfg.contextWindow) : 0) || fallbackWindow;
   /**
-   * 窗口是否**已知**：只有「被供应商拒过 / 模型管理声明过 / 覆盖配置」才算知道。
-   * 只剩兜底值时**不做超窗预检** —— 兜底值是猜的，拿它拒发会误伤大窗口模型（宁可发出去被拒）。
+   * 有效窗口 = 所有**已知**窗口里最保守（最小）的那个：供应商实测 / 用户声明 / 覆盖配置。
+   *
+   * 取最小而不是「供应商优先」：用户把窗口填小是想更早压缩（质量与成本取舍），
+   * 不该被一次供应商实测值悄悄放宽；反过来，供应商实测比声明值小也必须立刻生效。
+   * 只有全都没有时才退回兜底值（兜底值是猜的，只用来决定压缩时机，不参与拒发）。
    */
-  const windowKnown = overflowWindow > 0 || declaredWindow > 0 || Number(compactionCfg.contextWindow) > 0;
+  const knownWindows = [overflowWindow, declaredWindow, configuredWindow].filter((value) => value > 0);
+  const compactionWindow = knownWindows.length ? Math.min(...knownWindows) : fallbackWindow;
+  /**
+   * **预检拒发**只认可信窗口：用户声明/配置的，或供应商报错里**明确报出**的，同样取最小。
+   * 由估算推导出来的下界绝不参与拒发 —— 实测它会锁到真实窗口的 56%（见 parseOverflowNumbers），
+   * 一次与输入无关的 400 就会把这份历史在该进程内永久挡死。
+   * 只剩兜底值时同样不拦：兜底值是猜的，拿它拒发会误伤大窗口模型（宁可发出去让供应商说真话）。
+   */
+  const trustedWindows = [overflowTrusted ? overflowWindow : 0, declaredWindow, configuredWindow].filter((value) => value > 0);
+  const preflightWindow = trustedWindows.length ? Math.min(...trustedWindows) : 0;
+  /** 输出预算收缩：可信窗口或真被拒过才做；纯兜底值不参与。 */
+  const shrinkWindow = overflowWindow > 0 || preflightWindow > 0 ? compactionWindow : 0;
   /** 供应商报超窗 → 自动「降级窗口 + 压一次 + 重发」的次数上限（每个 run 一次就够，避免死循环烧钱） */
   const maxOverflowRecoveries = Number.isFinite(Number(compactionCfg.overflowRecoveries))
     ? Math.max(0, Math.min(3, Number(compactionCfg.overflowRecoveries)))
@@ -2019,26 +2135,29 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         }
       }
       /**
-       * 超窗预检（**只在窗口已知时**生效，见 windowKnown 注释）：
-       *   ① 输入本身就超窗 → 别发出去吃 400，如实报 CONTEXT_OVERFLOW 并给出可执行的出路；
+       * 超窗预检：
+       *   ① 输入本身就超窗 → 别发出去吃 400，如实报 CONTEXT_OVERFLOW 并给出可执行的出路。
+       *      **只认可信窗口**（preflightWindow）：用户声明/配置的，或供应商报错里明确报出的。
+       *      由估算推导出来的下界不参与拒发 —— 它会把本来能发的请求在该进程内永久挡死。
        *   ② 输入能装下、只是把输出预算挤掉了 → **缩小 max_tokens 继续发**（这比拒发好得多：
-       *      用户仍然拿到回答，只是短一点），并把这次收缩如实上报。
+       *      用户仍然拿到回答，只是短一点），并把这次收缩如实上报。收缩可以用更保守的
+       *      shrinkWindow（缩短回答无损），但纯兜底值仍然不参与。
        */
       let turnMaxTokens = Number(cfg.maxTokens) || 0;
-      if (windowKnown && compactionWindow > 0) {
+      if (preflightWindow > 0 || shrinkWindow > 0) {
         const preflightTools = tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null;
         const estimate = compactionLib.estimateTokens(messages, preflightTools);
-        if (estimate > compactionWindow) {
+        if (preflightWindow > 0 && estimate > preflightWindow) {
           const error =
             '上下文超窗：本次请求的输入本身估算 ' +
             estimate +
             ' tokens，已超过模型窗口 ' +
-            compactionWindow +
+            preflightWindow +
             '，直接发送会被供应商拒掉（此前的表现就是「回答写一半就断」）。可执行：' +
             '① 开一个新会话（最快）；② 调小 agent.compact.keep_user_total_chars / keep_user_max_chars，让压缩保留更少；' +
             '③ 若模型管理里的上下文窗口值与供应商实际不符（标称大、实际小），改成真实值；④ 换窗口更大的模型。';
-          emitTrace({ kind: 'context_overflow', turnId: iter, phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: compactionWindow });
-          onDelta && onDelta({ kind: 'context_overflow', phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: compactionWindow });
+          emitTrace({ kind: 'context_overflow', turnId: iter, phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: preflightWindow });
+          onDelta && onDelta({ kind: 'context_overflow', phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: preflightWindow });
           onDelta && onDelta({ kind: 'error', error });
           return {
             content,
@@ -2055,18 +2174,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             overflowRecoveries,
           };
         }
-        if (estimate + turnMaxTokens > compactionWindow) {
-          const capped = Math.max(1024, compactionWindow - estimate - 64);
+        if (shrinkWindow > 0 && estimate + turnMaxTokens > shrinkWindow) {
+          const capped = Math.max(1024, shrinkWindow - estimate - 64);
           emitTrace({
             kind: 'max_tokens_capped',
             turnId: iter,
             from: turnMaxTokens,
             to: capped,
             tokens: estimate,
-            window: compactionWindow,
+            window: shrinkWindow,
           });
           onDelta &&
-            onDelta({ kind: 'max_tokens_capped', from: turnMaxTokens, to: capped, tokens: estimate, window: compactionWindow });
+            onDelta({ kind: 'max_tokens_capped', from: turnMaxTokens, to: capped, tokens: estimate, window: shrinkWindow });
           turnMaxTokens = capped;
         }
       }
@@ -2157,13 +2276,16 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           if (!overflow || !compactionEnabled || overflowRecoveries >= maxOverflowRecoveries) throw error;
           overflowRecoveries += 1;
           const tokens = compactionLib.estimateTokens(messages, payload.tools);
-          const window = noteContextOverflow(cfg, tokens);
+          // 优先采用报错里明确写着的真实窗口（可信、可用于预检）；拿不到才退回估算下界。
+          const window = noteContextOverflow(cfg, { tokens, providerMessage: overflow.message });
+          const windowSource = isContextWindowOverrideAuthoritative(cfg) ? 'provider' : 'estimated';
           emitTrace({
             kind: 'context_overflow',
             turnId: iter,
             phase: 'provider-rejected',
             tokens,
             window,
+            windowSource,
             status: overflow.status,
             maxTokens: turnMaxTokens,
             message: overflow.message.slice(0, 300),
@@ -2193,9 +2315,59 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       // 本轮结束：本轮缓冲交还（content/reasoning 里已经含它，不需要再留着回滚）
       turnContent = '';
       turnReasoning = '';
+      /**
+       * 流内异常必须被消费（#12）。streamAccumulator 早就会把「HTTP 200 的流里下发了 error 对象」
+       * 记成 `in-stream-error`，但主循环此前**从不读** `res.anomalies` —— 于是一个只有半截回答、
+       * 甚至完全空白的「成功」回合会被当 COMPLETED 交付：没有报错、没有落 run 事件、
+       * 用户与排障者都拿不到任何归因线索（正是「回答写一半就断」的残留形态之一）。
+       */
+      const streamAnomalies = Array.isArray(res && res.anomalies) ? res.anomalies : [];
+      if (streamAnomalies.length) {
+        emitTrace({
+          kind: 'stream_anomaly',
+          turnId: iter,
+          count: streamAnomalies.length,
+          types: streamAnomalies.map((a) => String((a && a.type) || '')).slice(0, 8),
+        });
+        const fatal = streamAnomalies.find((a) => a && a.type === 'in-stream-error');
+        const produced =
+          (typeof content === 'string' && content.trim().length > 0) ||
+          (Array.isArray(res.toolCalls) && res.toolCalls.length > 0);
+        if (fatal && !produced) {
+          // 供应商在 200 流里报错、且本轮什么都没产出 → 按失败交付，不伪装成完成。
+          const detail = String((fatal && fatal.detail) || '').slice(0, 200);
+          const error =
+            '模型流内错误：供应商在 HTTP 200 的流里下发了 error，且本轮没有任何产出' + (detail ? '（' + detail + '）' : '');
+          machine.go(classifyOutcome({ error, stopReason: 'stream_error' }), 'stream_error');
+          emitTrace({ kind: 'stream_error', turnId: iter, detail });
+          onDelta && onDelta({ kind: 'error', error });
+          return {
+            content,
+            reasoning,
+            toolCalls: allToolCalls,
+            usage,
+            error,
+            stopReason: 'stream_error',
+            state: machine.state,
+            iterations: modelTurns,
+            contextTrims: contextTrimCount,
+            contextTrimmedChars,
+            compacted: compactionCount,
+            overflowRecoveries,
+          };
+        }
+      }
       if (res.usage) {
         usage = mergeUsage(usage, res.usage);
-        recordCost(cfg, { kind: 'main', model: cfg.model, usage: res.usage, latencyMs: Date.now() - turnStartedAt, runId: cfg.costRunId });
+        // 记账口径由调用方决定：子代理用自己的 costKind='subagent' 逐轮记，
+        // 外层**不再**额外汇总记一次 —— 否则同一个子代理会被记两遍（账本与成本告警约 2 倍失真）。
+        recordCost(cfg, {
+          kind: (cfg && cfg.costKind) || 'main',
+          model: cfg.model,
+          usage: res.usage,
+          latencyMs: Date.now() - turnStartedAt,
+          runId: cfg.costRunId,
+        });
         totalTokens = Number(usage.total_tokens) || totalTokens;
         const maxTotalTokens = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 250000;
         if (totalTokens > maxTotalTokens) {
@@ -2291,7 +2463,14 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           let dedupReason = '';
           if (tools.context && typeof tools.context.beginSideEffect === 'function') {
             try {
-              const guard = await tools.context.beginSideEffect(tc.name, args);
+              // 把「工具自报重复执行安全」带下去：账本对那些**无法核对目标状态**的写
+              // （参数里没有 path，例如 save_project：键恒同、但画布可能早就变了）
+              // 必须真做一次，不能拿「已提交」当成功交付。
+              const descriptor =
+                tools.registry && typeof tools.registry.descriptorOf === 'function' ? tools.registry.descriptorOf(tc.name) : null;
+              const guard = await tools.context.beginSideEffect(tc.name, args, {
+                idempotent: !!(descriptor && descriptor.idempotent === true),
+              });
               if (guard && guard.skip) {
                 deduped = true;
                 sideEffectToken = null;
@@ -2431,6 +2610,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           if (!toolContent) toolContent = result.text || '';
           messages.push({
             role: 'tool',
+            // 带上工具名（#22）：上下文硬裁剪的占位符要写清「原本是哪次调用的结果」。
+            // 此前这里只有 role/tool_call_id/content，占位符只能渲染成「此处原本是 **工具** 的结果」，
+            // 而「请用相同参数重新调用该工具」这句里最有用的恰恰就是工具名。
+            // OpenAI 协议的 tool 消息本就允许 name 字段。
+            name: tc.name,
             tool_call_id: callId,
             content: toolContent,
           });
@@ -2478,7 +2662,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             if (!out) return;
             const msg = messages[entry.messageIndex];
             if (msg && msg.role === 'tool') msg.content = out.text;
-            entry.record.compressed = true;
+            // 降级（压缩失败）时 msg.content 是**未压缩的原文**：不能再标成「已压缩」，
+            // 否则 run 记录与界面都会以为这段已被摘要，而模型实际拿到的是完整原文。
+            entry.record.compressed = out.degraded !== true;
             entry.record.compressionCache = out.cacheHit ? 'hit' : 'miss';
             entry.record.compressionMode = out.batched ? 'batch' : out.degraded ? 'degraded' : 'single';
             entry.record.compressedChars = { from: entry.content.length, to: out.text.length };
@@ -2486,7 +2672,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               const cachedEntry = toolResultCache.get(entry.cacheKey);
               if (cachedEntry) {
                 cachedEntry.content = out.text;
-                cachedEntry.compressed = true;
+                cachedEntry.compressed = out.degraded !== true;
               }
             }
           });
@@ -2672,6 +2858,8 @@ module.exports = {
   parseCompactionConfig,
   classifyContextOverflow,
   noteContextOverflow,
+  parseOverflowNumbers,
+  isContextWindowOverrideAuthoritative,
   getContextWindowOverride,
   resetContextWindowOverrides,
   buildLimitWrapUp,

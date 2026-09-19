@@ -59,6 +59,11 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
       <span className={`cs-msg-label ${msg.status === 'running' ? 'cs-running' : ''}`}>
         CodeNode{msg.status === 'running' ? ' · 思考中…' : ''}
       </span>
+      {/* #25(b)：关键状态不能只靠颜色/图标表达 —— 读屏与键盘用户需要文本层的
+          「已停止 / 已截断 / 失败」，这也让「点停止后界面像没反应」当场可见。 */}
+      {msg.status === 'stopped' ? <div className="cs-msg-state" role="status">已停止（本轮回答可能不完整）</div> : null}
+      {msg.status === 'truncated' ? <div className="cs-msg-state cs-msg-state-warn" role="status">已截断（触到模型长度上限，回复「继续」可接着写）</div> : null}
+      {msg.status === 'failed' ? <div className="cs-msg-state cs-msg-state-error" role="status">本轮失败（详见下方错误说明）</div> : null}
       <div className="cs-msg-text">{msg.content || (msg.status === 'running' ? '…' : '')}</div>
       {grounding && grounding.status !== 'not_required' ? (
         <div

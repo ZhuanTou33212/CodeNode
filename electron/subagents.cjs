@@ -60,6 +60,7 @@ const DEFAULTS = Object.freeze({
 const MAX_SINGLE_TURN_TIMEOUT_MS = 180000;
 const MIN_TOTAL_TIMEOUT_MS = 10000;
 const MAX_TOTAL_TIMEOUT_MS = 3600000;
+
 function makeTaskId() {
   return 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
@@ -144,6 +145,16 @@ class SubagentManager {
     /** 读项目自定义 Skill（kind=skills 的扩展）；可注入，便于用例离线验证 */
     this.readProjectSkills = typeof o.readProjectSkills === 'function' ? o.readProjectSkills : defaultProjectSkills;
     this.tasks = new Map();
+    /**
+     * 本 run **曾进入 running** 的子代理任务数（#18 配额计数）。
+     *
+     * 刻意不用 `this.tasks.size` 当配额：`tasks` 是「taskId → 任务视图」的 Map，
+     * 模型只要复用同一个 `taskId`（例如每轮都写 "task-1"），Map 大小就恒为 1，
+     * `maxTasksPerRun` 永不触发 —— 单 run 的子代理数量与花费失去上界。
+     * 计数器只加不减，与 taskId 是否复用、任务视图是否被覆盖/清理都无关。
+     * @type {number}
+     */
+    this.startedTaskCount = 0;
     /** @type {Record<string, number>} 子代理配置（agent.subagent.*），缺项用默认值 */
     this.subCfg = Object.assign({}, DEFAULTS, (o.cfg && o.cfg.subagent) || {});
     /**
@@ -287,13 +298,31 @@ class SubagentManager {
         if (this.onDelta) {
           this.onDelta({ kind: 'subagent_merge', digest: merged.digest, counts: merged.counts });
         }
-        return AgentToolResult.ok(
-          results.map((result) => result.text).join('\n') + '\n\n' + mergeLib.renderMergeReport(merged),
-          {
-            results: results.map((result) => taskView(result.data)),
-            merged: { digest: merged.digest, counts: merged.counts, conflicts: merged.conflicts },
-          }
-        );
+        /**
+         * #5（同类未单列）：单条 `delegate_task` 在失败/违约时返回 `error`，而这里此前**无条件**
+         * 用 `AgentToolResult.ok` 汇总 —— 把 8 个「违约不得采信」的子结果包装成一次成功调用，
+         * 主代理据此把半截/失败报告当证据。只要有任一子结果 `ok !== true`，整批就是失败的调用。
+         */
+        const failedResults = results.filter((result) => !result || result.ok !== true);
+        const body = results.map((result) => (result && result.text) || '').join('\n') + '\n\n' + mergeLib.renderMergeReport(merged);
+        const data = {
+          results: results.map((result) => taskView((result && result.data) || {})),
+          merged: { digest: merged.digest, counts: merged.counts, conflicts: merged.conflicts },
+          failedCount: failedResults.length,
+        };
+        if (failedResults.length) {
+          return AgentToolResult.error(
+            body +
+              '\n（本批 ' +
+              failedResults.length +
+              '/' +
+              results.length +
+              ' 个子代理任务**未成功**：它们的结论不得作为证据；逐条原因见上面的信封与 payload.error，' +
+              '可按违约项让子代理重做或由主代理直接完成这一步。）',
+            data
+          );
+        }
+        return AgentToolResult.ok(body, data);
       }
     );
 
@@ -343,8 +372,11 @@ class SubagentManager {
 
   async delegate(context, args) {
     if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
-    if (this.tasks.size >= this.subCfg.maxTasksPerRun) {
-      return AgentToolResult.error('本轮最多执行 ' + this.subCfg.maxTasksPerRun + ' 个子代理任务');
+    // #18：配额按「曾进入 running」计数，不按 tasks.size（模型复用同一 taskId 会让后者恒为 1）
+    if (this.startedTaskCount >= this.subCfg.maxTasksPerRun) {
+      return AgentToolResult.error(
+        '本轮最多执行 ' + this.subCfg.maxTasksPerRun + ' 个子代理任务（已启动 ' + this.startedTaskCount + ' 个）'
+      );
     }
     const role = String(args.role || '').trim();
     const objective = String(args.objective || '').trim();
@@ -352,10 +384,24 @@ class SubagentManager {
       return AgentToolResult.error('不支持的子代理角色：' + role + '（可选：' + roles.ROLE_NAMES.join('/') + '）');
     }
     if (!objective) return AgentToolResult.error('缺少子代理 objective');
+    /**
+     * #18：模型自选的 `taskId` 是**任务身份**，不是可以反复使用的标签。
+     * 此前 `String(args.taskId || makeTaskId())` 无条件写入，同 id 会静默**覆盖**已有任务视图：
+     * 旧子代理还在跑却查不到（`get_subagent_task`/`cancel_subagent_task` 只能看到最新的那个），
+     * 旧任务结束时回写又把新任务的视图盖回去。冲突一律显式拒绝，让模型换个 id 或省略由系统生成。
+     */
+    const requestedTaskId = String(args.taskId || '').trim();
+    if (requestedTaskId && this.tasks.has(requestedTaskId)) {
+      return AgentToolResult.error(
+        'taskId 已被占用：' +
+          requestedTaskId +
+          '（每个子代理任务必须有唯一 id，不能复用已有的；省略 taskId 会自动生成一个新的）'
+      );
+    }
 
     const totalMs = clampTotalTimeout(args.timeoutSeconds, this.subCfg.totalTimeoutSeconds);
     const task = {
-      taskId: String(args.taskId || makeTaskId()),
+      taskId: requestedTaskId || makeTaskId(),
       runId: this.runId,
       role,
       objective,
@@ -366,6 +412,9 @@ class SubagentManager {
       status: 'running',
       startedAt: new Date().toISOString(),
     };
+    // 先计数再登记：并发批量（Promise.all）里每个 delegate 在首个 await 前就完成计数，
+    // 配额不会被同一 tick 内的并发调用绕过。
+    this.startedTaskCount += 1;
     this.tasks.set(task.taskId, task);
     context.audit(JSON.stringify({ kind: 'subagent_start', runId: this.runId, taskId: task.taskId, role, totalTimeoutMs: totalMs }));
     await this.updateStage(context, task, 'running', '子代理 ' + role + ' 正在执行');
@@ -406,9 +455,17 @@ class SubagentManager {
       });
       // 独立配额（父子链）：0 = 不设独立配额，直接共享父预算（旧行为）
       const childBudget = createSubagentBudget(this.cfg.requestBudget, this.subCfg.maxTotalTokens);
-      const childCfg = childBudget && childBudget !== this.cfg.requestBudget
-        ? { ...this.cfg, requestBudget: childBudget }
-        : this.cfg;
+      /**
+       * #6（成本双重记账）：子代理的每一轮 `runAgentChat` 都会**自己**记账
+       * （`recordCost` 按 `cfg.costKind` 归因，见 agent.cjs）。所以这里必须显式声明
+       * `costKind:'subagent'`：否则逐轮会被记成 `main`（污染主模型口径），而外层的汇总记一次
+       * 又会把同一笔用量记第二遍 —— 账本 `summary()/today()/byKind` 与 run 成本告警约 2 倍失真。
+       */
+      const childCfg = {
+        ...this.cfg,
+        costKind: 'subagent',
+        ...(childBudget && childBudget !== this.cfg.requestBudget ? { requestBudget: childBudget } : {}),
+      };
       // 子代理的 system prompt：身份 + 工作范围 + **真实注册表里的**可用工具 + 职责技能 + 项目 Skill + 运行规则。
       // 工具清单取自 childRegistry（不是手写名单），永远不会与角色权限裁剪漂移。
       const childTools = childRegistry.listTools().map((spec) => ({ name: spec.name, description: spec.description }));
@@ -432,6 +489,9 @@ class SubagentManager {
       task.grounding = result.grounding || null;
       task.usage = result.usage || null;
       task.summary = String(result.content || '');
+      // #5：把主循环的收尾原因如实带出来 —— 信封据此判定「这是不是完整结论」
+      task.stopReason = result.stopReason || null;
+      task.finishReason = result.finishReason || null;
       if (timedOut) {
         task.status = 'blocked';
         task.error = '子代理任务达到总时长上限（约 ' + Math.round(totalMs / 1000) + 's），已中止';
@@ -447,20 +507,26 @@ class SubagentManager {
           task.status = 'blocked';
           task.error = '子代理被取消（主 Agent 停止或信号中断）';
         }
+      } else if (result.stopReason) {
+        /**
+         * #5（P1 信任放大）：此前这里只看 `timedOut`/`error`/`aborted`，**从不读 `stopReason`**。
+         * 而 `finish_reason=length` 且续写补问用尽时，主循环返回 `{stopReason:'length_truncated'}`
+         * 且**不设 error** —— 于是半截报告被标成 `done`，还产出一个「契约合规」的信封，
+         * 主代理拿它当完整证据。截断/未自然结束 = 未完成：状态必须离开 done，
+         * 信封才会是 `kind:'error'`（见 subagentEnvelope.buildEnvelope）。
+         */
+        task.status = 'failed';
+        task.error =
+          result.stopReason === 'length_truncated'
+            ? '子代理输出被 max_tokens 截断（finish_reason=length，续写补问已用尽），返回的是**半截内容**：' +
+              '不得当作完整结论采信。请缩小 objective 的范围、分段委派，或提高该模型的 max_tokens 后重做。'
+            : '子代理未自然结束（stopReason=' + String(result.stopReason) + '）：结果不完整，不得当作完整结论采信。';
       } else {
         task.status = 'done';
       }
-      // 成本账本：子代理的模型用量计入同一个任务账（跨子代理共享预算，不再各记各的）
-      try {
-        require('./agent.cjs').recordCost(this.cfg, {
-          kind: 'subagent',
-          model: this.cfg.model,
-          usage: result.usage,
-          runId: this.runId,
-          latencyMs: Date.now() - (Date.parse(String(task.startedAt || '')) || Date.now()),
-          meta: { role, taskId: task.taskId },
-        });
-      } catch {}
+      // #6（成本双重记账）：这里**不再**用 result.usage（逐轮 mergeUsage 的累加值）汇总记第二次账 ——
+      // 子代理每一轮已按 childCfg.costKind='subagent' 在 agent.cjs 里如实记过一条，再记一次就是同一笔用量的第二份。
+      // task.usage 仍保留（信封与 taskView 需要它展示真实消耗）。
     } catch (error) {
       task.status = timedOut ? 'blocked' : 'failed';
       task.error = timedOut

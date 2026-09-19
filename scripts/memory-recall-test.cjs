@@ -109,6 +109,92 @@ function entry(id, key, content, tags) {
       fs.existsSync(path.join(root, '.codenode', 'memory.json')), path.join(root, '.codenode', 'memory.json'));
   }
 
+  // ======================= E. #16 记忆库损坏：绝不静默清空 =======================
+  {
+    const memFile = path.join(root, '.codenode', 'memory.json');
+    memory.writeMemory(root, [entry('keep', 'k', '正常内容')]);
+    const good = fs.readFileSync(memFile, 'utf8');
+
+    const missing = memory.readMemory(path.join(root, 'no-such-project'));
+    check('E1 「文件不存在」与「解析失败」必须区分：不存在 = ok/exists=false（全新项目仍可写）',
+      missing.ok === true && missing.exists === false && missing.entries.length === 0,
+      JSON.stringify({ ok: missing.ok, exists: missing.exists }));
+
+    fs.writeFileSync(memFile, '{"version":1,"entries":[ {"id":"x"', 'utf8'); // 被截断的坏文件
+    const corruptText = fs.readFileSync(memFile, 'utf8');
+    const broken = memory.readMemory(root);
+    check('E2 解析失败如实报 ok=false + MEMORY_CORRUPT（不再吞成空记忆库）',
+      broken.ok === false && broken.exists === true && broken.code === 'MEMORY_CORRUPT' && broken.entries.length === 0,
+      JSON.stringify({ ok: broken.ok, code: broken.code }));
+
+    let refused = null;
+    try { memory.writeMemory(root, [entry('new', 'k2', '新内容')]); } catch (error) { refused = error; }
+    check('E3 损坏文件上 writeMemory 必须拒绝写入（抛错，而不是把整库覆盖成 1 条）',
+      !!refused && /拒绝写入/.test(String(refused.message)), refused && refused.message);
+    check('E4 坏文件必须原样保留（一字节都没被覆盖）', fs.readFileSync(memFile, 'utf8') === corruptText);
+
+    const brokenRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false, toolsAllowed: ['remember', 'recall'] });
+    const brokenContext = new AgentToolContext({
+      projectRoot: root,
+      confirm: async () => true,
+      audit: () => {},
+      sandbox: null,
+      signal: new AbortController().signal,
+    });
+    const rememberBroken = await brokenRegistry.execute('remember', { content: '不该写进去' }, brokenContext);
+    check('E5 真实 remember 链路在坏文件上返回失败（不是虚假的成功）',
+      rememberBroken.ok === false && !String(rememberBroken.text).includes('已保存'), JSON.stringify({ ok: rememberBroken.ok, text: String(rememberBroken.text).slice(0, 80) }));
+    check('E6 走完 remember 之后坏文件仍然没被覆盖', fs.readFileSync(memFile, 'utf8') === corruptText);
+
+    fs.writeFileSync(memFile, good, 'utf8');
+    check('E7 修好文件后读取恢复 ok=true，写入恢复正常',
+      memory.readMemory(root).ok === true && memory.writeMemory(root, [entry('after', 'k3', '修复后')]).ok === true);
+  }
+
+  // ======================= F. #15 记忆落盘脱敏 =======================
+  {
+    const memFile = path.join(root, '.codenode', 'memory.json');
+    memory.writeMemory(root, [{
+      id: 'mem-secret',
+      key: 'api-design',
+      tags: ['security'],
+      content: '调用示例：Authorization: Bearer sk-abcdefghijklmnopqrstuvwx 与 api_key=sk-zyxwvutsrqponmlkjihgfe',
+      createdAt: '2026-09-19T00:00:00.000Z',
+    }]);
+    const text = fs.readFileSync(memFile, 'utf8');
+    check('F1 memory.json 落盘不得含明文密钥（#15）',
+      !text.includes('sk-abcdefghijklmnopqrstuvwx') && !text.includes('sk-zyxwvutsrqponmlkjihgfe'), text.slice(0, 140));
+    const back = memory.readMemory(root).entries[0] || {};
+    check('F2 结构/标签字段不被脱敏（id/key/tags/createdAt 原样，检索口径不变）',
+      back.id === 'mem-secret' && back.key === 'api-design' && Array.isArray(back.tags) && back.tags[0] === 'security'
+        && back.createdAt === '2026-09-19T00:00:00.000Z',
+      JSON.stringify({ id: back.id, key: back.key, tags: back.tags }));
+    const scored = memory.selectRelevant(memory.readMemory(root).entries, 'api-design security', { limit: 1 });
+    check('F3 脱敏后仍能按 key/tags 命中（打分不受影响）',
+      scored.matched === true && scored.entries[0].id === 'mem-secret', JSON.stringify(scored.scores));
+  }
+
+  // ======================= G. #16 超上限：显式淘汰 + 审计 =======================
+  {
+    const evictRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-memory-evict-'));
+    try {
+      const many = [];
+      for (let i = 0; i < memory.MAX_MEMORY_ENTRIES + 3; i++) many.push(entry('m-' + i, 'k' + i, '约定 ' + i));
+      const result = memory.writeMemory(evictRoot, many);
+      const data = memory.readMemory(evictRoot);
+      check('G1 超上限显式淘汰最旧（保留最新 200 条）并返回淘汰明细',
+        result.evicted === 3 && result.evictedIds.join(',') === 'm-0,m-1,m-2'
+          && data.entries.length === memory.MAX_MEMORY_ENTRIES && data.entries[0].id === 'm-3',
+        JSON.stringify({ evicted: result.evicted, ids: result.evictedIds, kept: data.entries.length, first: data.entries[0] && data.entries[0].id }));
+      const auditFile = path.join(evictRoot, '.codenode', 'audit.jsonl');
+      const audit = fs.existsSync(auditFile) ? fs.readFileSync(auditFile, 'utf8') : '';
+      check('G2 淘汰必须留审计（audit.jsonl 出现 memory_evicted 与被淘汰 id）',
+        audit.includes('memory_evicted') && audit.includes('m-0'), audit.slice(0, 160));
+    } finally {
+      fs.rmSync(evictRoot, { recursive: true, force: true });
+    }
+  }
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log('MEMORY RECALL TEST: ' + (failures ? 'FAIL' : 'PASS') + (failures ? ' (' + failures + ')' : ''));
   process.exit(failures ? 1 : 0);

@@ -8,7 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
-const { resolveInRoot } = require('./shared.cjs');
+const { resolveInRoot, summarizeContentForConfirm } = require('./shared.cjs');
+const { atomicWriteFile } = require('../../atomicFile.cjs');
 const { nodeToScalarRecords } = require('../../scalars/index.cjs');
 
 function stringArg(args, key, fallback) {
@@ -66,7 +67,8 @@ function register(registry) {
       const relativePath = stringArg(args, 'relativePath', 'analysis/' + Date.now() + '.md');
 
       const what = '写入分析文档 ' + relativePath + '（' + content.length + ' 字符）并创建文件节点';
-      const ok = await context.confirm(ConfirmationLevel.WRITE, what, '将分析内容写入 ' + relativePath + '，并在画布创建引用该文件的节点。');
+      // #10：带上内容摘要 —— 只给字符数时用户看不出写的是什么
+      const ok = await context.confirm(ConfirmationLevel.WRITE, what, '将分析内容写入 ' + relativePath + '，并在画布创建引用该文件的节点。\n' + summarizeContentForConfirm(content));
       if (!ok) return AgentToolResult.error('已取消写入');
 
       const root = path.resolve(context.projectRoot());
@@ -74,7 +76,8 @@ function register(registry) {
       if (!target) return AgentToolResult.error('路径越过项目边界');
       try {
         if (path.dirname(target)) fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, content, 'utf-8');
+        // #23：与 write_file / edit_file 统一走原子替换（临时文件 + fsync + rename）
+        atomicWriteFile(target, content, 'utf-8');
       } catch (e) {
         return AgentToolResult.error('写入失败：' + ((e && e.message) || e));
       }

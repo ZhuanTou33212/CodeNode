@@ -16,6 +16,31 @@ const ALLOWED = new Set([
 ]);
 
 /**
+ * 程序名归一化（#8）：白名单校验与「是否高危」必须**共用同一个结果**。
+ * 旧实现里白名单用归一化后的 basename、高危判据却用 `tokens[0]` 原文，于是同一程序两种写法判定不一致
+ * （`node -e …` 要确认，`/usr/bin/node -e …` 直接放行）。在隔离后端缺失（bwrap / sandbox-exec 不可用）
+ * 的降级路径上，HIGH 确认是任意代码执行的**唯一**闸门 —— 这里的不一致等于给
+ * 「不可信项目 → 任意代码」开了一条静默通道。去后缀是因为 Windows 上同一个入口会写成
+ * node.exe / gradlew.bat / mvnw.cmd。
+ */
+function normalizeProgram(token) {
+  const raw = String(token || '').trim().replace(/\\/g, '/');
+  const name = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
+  return name.toLowerCase().replace(/\.(exe|cmd|bat|ps1|com)$/, '');
+}
+
+/**
+ * 需要 HIGH 确认的程序入口：跑脚本 / 构建 / 包管理 = 任意代码执行面。
+ * 名单口径与 ALLOWED 的 normalizeProgram 保持一致，不再出现「换个写法就免确认」；
+ * gradle / gradlew / nuget 此前只在白名单里、不在高危名单里 —— 白名单通过即等于任意代码，
+ * 所以这里按「白名单入口一律高危」补齐（`git status` 这类只读子命令仍由下面的子命令判据放行）。
+ */
+const SENSITIVE_PROGRAMS = new Set([
+  'powershell', 'pwsh', 'cmd', 'node', 'python', 'python3', 'py', 'npm', 'npx', 'java', 'javac',
+  'mvn', 'mvnw', 'gradle', 'gradlew', 'go', 'nuget', 'dotnet', 'pip', 'pip3', 'pnpm', 'yarn',
+]);
+
+/**
  * 后台任务注册表：execute_shell async=true 启动的长任务，跨 Agent 轮次存活，
  * 由 poll_job 轮询进度/取结果。任务结束后在 poll 时清理；超过 1 小时的陈旧任务自动回收。
  */
@@ -23,6 +48,52 @@ const BACKGROUND_JOBS = new Map(); // jobId -> { projectRoot, command, startedAt
 let jobSeq = 0;
 const JOB_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_OUTPUT_CHARS = 12000;
+/**
+ * 收集侧硬上限（#19）：`outputPage` 的 size 只限制**返回的那一页**，收集侧无界累积则主进程内存
+ * 随命令输出线性增长（`npm test` / 大 `git log -p` / 死循环 Write-Output 都能顶到 OOM，并阻塞所有
+ * 并发 run）。超限后停止累积正文、只保留尾部窗口（失败原因几乎总在最后几行）并如实记录丢弃字符数 ——
+ * 分页协议不变，只是可读范围被上限钉住，且「被丢弃」这件事不会被静默吞掉。
+ */
+const MAX_COLLECT_CHARS = 8 * 1024 * 1024;
+const COLLECT_TAIL_CHARS = 4000;
+
+/** 有界输出收集器：正文（到上限）+ 尾部环形窗口 + 丢弃计数 */
+function makeOutputCollector() {
+  return { output: '', tail: '', droppedChars: 0 };
+}
+
+/** 累积一段输出；超出上限的部分只进尾部窗口 */
+function pushCollected(state, chunk) {
+  const text = String(chunk == null ? '' : chunk);
+  if (!text) return;
+  const room = Math.max(0, MAX_COLLECT_CHARS - state.output.length);
+  if (room > 0) state.output += text.length <= room ? text : text.slice(0, room);
+  if (text.length > room) {
+    state.droppedChars += text.length - room;
+    state.tail = (state.tail + text.slice(room)).slice(-COLLECT_TAIL_CHARS);
+  }
+}
+
+/** 收集器的完整文本（含截断标注）：分页、落盘与返回结果都读它，保证截断可见 */
+function collectedText(state) {
+  if (!state.droppedChars) return state.output;
+  return (
+    state.output +
+    '\n…（输出超过 ' + MAX_COLLECT_CHARS + ' 字符收集上限，中间约 ' + state.droppedChars +
+    ' 字符已丢弃；以下为最后 ' + state.tail.length + ' 字符）\n' + state.tail
+  );
+}
+
+/**
+ * 前台执行的 spawn 选项（#20）：POSIX 上必须 `detached` —— `killProcessTree` 首选
+ * `process.kill(-pid)` 整组终止，而前台不带 detached 时子进程不是进程组长，负 pid 直接 ESRCH，
+ * 退回只杀直接子进程（`npm test` → jest worker 这类再 fork 的子孙会残留，用户以为停了、
+ * 构建仍在继续写工作区）。Windows 走 `taskkill /t` 已有整树语义，detached 反而会另开控制台窗口，
+ * 所以显式 `false`（与省略等价，但让「两种平台语义都想过」在代码里看得见）。
+ */
+function foregroundSpawnOptions(root, env, policy, context) {
+  return { cwd: root, env, policy, context, detached: process.platform !== 'win32' };
+}
 
 /** 隔离策略拒绝执行时的统一错误描述：fail-closed 的拒绝必须让人看得懂，不能被当成普通失败重试。 */
 function describeSpawnError(error) {
@@ -66,7 +137,7 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
   } catch (e) {
     return { jobId: null, error: describeSpawnError(e) };
   }
-  const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', exitCode: null, error: null, child };
+  const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', tail: '', droppedChars: 0, exitCode: null, error: null, child };
   BACKGROUND_JOBS.set(jobId, job);
   const onAbort = () => {
     if (job.status !== 'running') return;
@@ -75,8 +146,9 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
     sandbox.killSandboxed(child);
   };
   signal && signal.addEventListener('abort', onAbort, { once: true });
-  child.stdout.on('data', (d) => { job.output += decodeOutput(d); });
-  child.stderr.on('data', (d) => { job.output += decodeOutput(d); });
+  // #19：后台输出同样有界 —— 它常驻内存至多 1 小时，无界累积会把「一个长任务」变成常驻内存泄漏
+  child.stdout.on('data', (d) => { pushCollected(job, decodeOutput(d)); });
+  child.stderr.on('data', (d) => { pushCollected(job, decodeOutput(d)); });
   const timer = setTimeout(() => {
     if (job.status !== 'running') return;
     sandbox.killSandboxed(child, true);
@@ -181,10 +253,12 @@ function splitCommand(command) {
   return tokens;
 }
 
-function isSensitiveCommand(tokens) {
+function isSensitiveCommand(tokens, normalizedBase) {
   const flags = tokens.map((t) => t.toLowerCase());
-  const base = flags[0] || '';
-  if (['powershell', 'pwsh', 'cmd', 'node', 'python', 'python3', 'py', 'npm', 'npx', 'java', 'javac', 'mvn', 'mvnw', 'go'].includes(base)) {
+  // #8：优先用归一化结果（由调用方用 normalizeProgram 算好并**同时**用于白名单），
+  // 缺省才退回 tokens[0] 原文，保持「不传第二个参数 = 旧行为」的可对照性。
+  const base = normalizedBase || flags[0] || '';
+  if (SENSITIVE_PROGRAMS.has(base)) {
     return true;
   }
   for (const f of flags) {
@@ -270,8 +344,8 @@ function register(registry) {
       if (!command) return AgentToolResult.error('缺少 command');
       const tokens = splitCommand(command);
       if (tokens.length === 0) return AgentToolResult.error('空命令');
-      const base = tokens[0].replace(/\\/g, '/');
-      const normalized = base.includes('/') ? base.slice(base.lastIndexOf('/') + 1) : base;
+      // #8：白名单与「是否高危」共用这一个归一化结果（见 normalizeProgram）
+      const normalized = normalizeProgram(tokens[0]);
       if (!ALLOWED.has(normalized)) return AgentToolResult.error('命令不在白名单：' + tokens[0]);
       const timeoutSeconds = typeof args.timeoutSeconds === 'number' && Number.isFinite(args.timeoutSeconds) ? Math.max(1, Math.floor(args.timeoutSeconds)) : 30;
 
@@ -306,7 +380,7 @@ function register(registry) {
         );
       }
 
-      const sensitive = isSensitiveCommand(tokens);
+      const sensitive = isSensitiveCommand(tokens, normalized);
       if (sensitive) {
         const what = '在项目目录执行命令：' + command;
         const detail = '这是一条' + (isDestructiveCommand(tokens) ? '具有破坏性' : '可能影响系统/仓库状态') + '的命令，执行后可能不可撤销。超时 ' + timeoutSeconds + ' 秒。' +
@@ -329,27 +403,23 @@ function register(registry) {
       }
 
       return new Promise((resolve) => {
-        let output = '';
+        const collected = makeOutputCollector();
         let child;
         let cancelled = false;
         try {
           const env = safeEnvironment({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
           const spec = spawnSpec(normalized, tokens);
-          child = sandbox.guardedSpawn(spec, {
-            cwd: root,
-            env,
-            policy: sandbox.currentPolicy(context),
-            context,
-          });
+          child = sandbox.guardedSpawn(spec, foregroundSpawnOptions(root, env, sandbox.currentPolicy(context), context));
         } catch (e) {
           resolve(AgentToolResult.error('执行失败：' + describeSpawnError(e)));
           return;
         }
+        // #19：收集侧有界（见 MAX_COLLECT_CHARS）—— 分页只限制返回的那一页，不是这里
         child.stdout.on('data', (d) => {
-          output += decodeOutput(d);
+          pushCollected(collected, decodeOutput(d));
         });
         child.stderr.on('data', (d) => {
-          output += decodeOutput(d);
+          pushCollected(collected, decodeOutput(d));
         });
         const onAbort = () => {
           cancelled = true;
@@ -364,7 +434,7 @@ function register(registry) {
             sandbox.killSandboxed(child, true);
           } catch {}
           cleanup();
-          output += '\n…（执行超时，已强制终止）';
+          const output = collectedText(collected) + '\n…（执行超时，已强制终止）';
           context.audit('execute_shell ' + command + ' exit=TIMEOUT');
           // 超时强杀不是成功：ok=true 会让模型把「被杀掉的命令」当作已完成（实测后台 git 超时仍报成功）
           resolve(AgentToolResult.error('执行超时（' + timeoutSeconds + ' 秒），已强制终止\n' + output.trim(), {
@@ -385,17 +455,21 @@ function register(registry) {
           cleanup();
           if (cancelled) {
             context.audit('execute_shell ' + command + ' exit=CANCELLED');
-            resolve(AgentToolResult.error('执行已取消', { exitCode: -1, command, cancelled: true, output: output.slice(0, 4000) }));
+            resolve(AgentToolResult.error('执行已取消', { exitCode: -1, command, cancelled: true, output: collectedText(collected).slice(0, 4000) }));
             return;
           }
           context.audit('execute_shell ' + command + ' exit=' + exitCode);
+          const output = collectedText(collected);
           const page = outputPage(output, args.outputOffset, args.maxOutputChars, false);
           const paged = page.hasMore;
           const jobId = paged ? storeCompletedOutput(root, command, output, exitCode) : null;
           const suffix = paged
             ? '\n输出过长，已返回第 ' + page.offset + '-' + page.nextOffset + '/' + page.totalChars + ' 字符；请使用 poll_job jobId="' + jobId + '" offset=' + page.nextOffset + ' 继续读取。'
             : '';
-          resolve(AgentToolResult.ok('退出码 ' + exitCode + '\n' + page.output.trim() + suffix, {
+          const truncNote = collected.droppedChars
+            ? '\n…（输出超出 ' + MAX_COLLECT_CHARS + ' 字符收集上限，中间约 ' + collected.droppedChars + ' 字符未被保留）'
+            : '';
+          resolve(AgentToolResult.ok('退出码 ' + exitCode + truncNote + '\n' + page.output.trim() + suffix, {
             exitCode,
             command,
             output: page.output,
@@ -404,6 +478,8 @@ function register(registry) {
             totalOutputChars: page.totalChars,
             hasMore: page.hasMore,
             jobId,
+            outputTruncated: collected.droppedChars > 0,
+            droppedOutputChars: collected.droppedChars,
           }));
         });
       });
@@ -454,22 +530,23 @@ function register(registry) {
       }
       context.audit('poll_job jobId=' + jobId + ' status=' + job.status + ' elapsedMs=' + (Date.now() - job.startedAt));
       if (job.status === 'running') {
-        const page = outputPage(job.output, args.offset, args.maxChars, args.tail === true);
+        const live = collectedText(job);
+        const page = outputPage(live, args.offset, args.maxChars, args.tail === true);
         return AgentToolResult.ok(
-          '后台任务仍在运行（elapsed=' + Math.round((Date.now() - job.startedAt) / 1000) + 's，已输出 ' + job.output.length + ' 字符）。可继续 poll_job 或带 waitSeconds 等待。\n' + job.output.slice(-1500),
+          '后台任务仍在运行（elapsed=' + Math.round((Date.now() - job.startedAt) / 1000) + 's，已输出 ' + live.length + ' 字符）。可继续 poll_job 或带 waitSeconds 等待。\n' + live.slice(-1500),
           { jobId, status: 'running', startedAt: job.startedAt, elapsedMs: Date.now() - job.startedAt, ...page }
         );
       }
       if (job.status === 'error') {
         BACKGROUND_JOBS.delete(jobId);
-        return AgentToolResult.error('后台任务执行失败：' + (job.error || '') + '\n' + job.output.trim());
+        return AgentToolResult.error('后台任务执行失败：' + (job.error || '') + '\n' + collectedText(job).trim());
       }
       if (job.status === 'cancelled') {
         BACKGROUND_JOBS.delete(jobId);
-        return AgentToolResult.error('后台任务已取消：' + jobId, { jobId, status: 'cancelled', exitCode: job.exitCode, output: job.output });
+        return AgentToolResult.error('后台任务已取消：' + jobId, { jobId, status: 'cancelled', exitCode: job.exitCode, output: collectedText(job) });
       }
       const done = job.status === 'done';
-      const page = outputPage(job.output, args.offset, args.maxChars, args.tail === true);
+      const page = outputPage(collectedText(job), args.offset, args.maxChars, args.tail === true);
       if (!page.hasMore) BACKGROUND_JOBS.delete(jobId);
       // 后台任务超时被强杀同样不是成功（与前台一致：超时必须让模型知道任务没做完）
       const head = '后台任务' + (done ? '完成：退出码 ' + job.exitCode : '超时被强制终止') + '\n';
@@ -481,4 +558,15 @@ function register(registry) {
   );
 }
 
-module.exports = { register, BACKGROUND_JOBS };
+// 导出收集器与前台 spawn 选项：用例要断言「输出有界」「POSIX 前台 detached」，
+// 直接用生产同一份实现（用例自己重写一遍上限逻辑就等于没有锁住生产行为）。
+module.exports = {
+  register,
+  BACKGROUND_JOBS,
+  foregroundSpawnOptions,
+  makeOutputCollector,
+  pushCollected,
+  collectedText,
+  MAX_COLLECT_CHARS,
+  COLLECT_TAIL_CHARS,
+};

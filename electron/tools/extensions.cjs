@@ -196,7 +196,16 @@ function registerProjectExtensions(registry, projectRoot) {
       for (const tool of extension.tools) {
         if (!tool || !tool.name || registry.contains(String(tool.name))) continue;
         registry.register(String(tool.name), String(tool.description || `${name} MCP 工具`), tool.parameters || { type: 'object', properties: {} }, async (context, args) => {
-          const ok = await context.confirm(ConfirmationLevel.WRITE, `运行扩展 ${name}.${tool.name}`, `来源：${extension.source}`);
+          // #10：MCP 分支此前只给「来源」，连 command 都不给（非 MCP 分支反而给了）——
+          // 对话框是用户唯一的判断依据，这里必须能看到**要跑什么、带什么参数**。
+          const commandLine = String(extension.command || '') +
+            (Array.isArray(extension.args) && extension.args.length ? ' ' + extension.args.map(String).join(' ') : '');
+          const argsJson = JSON.stringify(args || {});
+          const ok = await context.confirm(
+            ConfirmationLevel.WRITE,
+            `运行扩展 ${name}.${tool.name}`,
+            `来源：${extension.source}\n命令：${commandLine}\n参数（JSON）：${argsJson.length > 2000 ? argsJson.slice(0, 2000) + '…（已截断）' : argsJson}`
+          );
           if (!ok) return AgentToolResult.error('已取消扩展执行');
           const before = await runHook(context.projectRoot(), extension.hooks?.before, args, context.signal && context.signal(), extension.envAllowlist, context);
           if (!before.ok) return AgentToolResult.error('前置 Hook 失败：' + before.error);

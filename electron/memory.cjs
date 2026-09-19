@@ -3,24 +3,119 @@
 const fs = require('fs');
 const path = require('path');
 const { atomicWriteFile } = require('./atomicFile.cjs');
+const { redact } = require('./redaction.cjs');
+
+/** 项目记忆条数上限（#16：超出后**显式**淘汰最旧条目并留审计，不再静默 slice） */
+const MAX_MEMORY_ENTRIES = 200;
 
 function memoryPath(projectRoot) {
   return path.join(path.resolve(projectRoot || '.'), '.codenode', 'memory.json');
 }
 
+/**
+ * 读项目记忆（#16）。
+ *
+ * 旧实现把**任何**异常都吞成 `{entries: []}` —— 文件被编辑坏 / 截断之后，下一次
+ * `remember`（读出 + push + 整体覆盖写）会把整个记忆库替换成 1 条，且无提示无审计。
+ *
+ * 现在区分三种状态，`entries` 字段保持向后兼容（始终是数组）：
+ *   - 文件不存在：`ok:true, exists:false` —— 全新项目，允许写入；
+ *   - 可解析：`ok:true, exists:true`；
+ *   - 损坏 / 不可读：`ok:false, code:'MEMORY_CORRUPT'|'MEMORY_READ_FAILED'` —— 调用方
+ *     （writeMemory）据此**拒绝写入**并保留坏文件。
+ */
 function readMemory(projectRoot) {
+  const file = memoryPath(projectRoot);
+  let text;
   try {
-    const parsed = JSON.parse(fs.readFileSync(memoryPath(projectRoot), 'utf8'));
-    return { entries: Array.isArray(parsed.entries) ? parsed.entries : [] };
-  } catch {
-    return { entries: [] };
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { ok: true, exists: false, entries: [], error: null, file };
+    }
+    return {
+      ok: false,
+      exists: true,
+      entries: [],
+      error: '项目记忆读取失败：' + String((error && (error.message || error.code)) || 'unknown'),
+      code: 'MEMORY_READ_FAILED',
+      file,
+    };
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) {
+      throw new Error('缺少 entries 数组');
+    }
+    return { ok: true, exists: true, entries: parsed.entries, error: null, file };
+  } catch (error) {
+    return {
+      ok: false,
+      exists: true,
+      entries: [],
+      error: '项目记忆文件已损坏（memory.json 解析失败，未做任何写入）：' + String((error && error.message) || error),
+      code: 'MEMORY_CORRUPT',
+      file,
+    };
   }
 }
 
+/**
+ * 超上限时淘汰最旧条目并留痕（#16：不再静默丢最旧约定）。
+ * 审计写 `.codenode/audit.jsonl`（与 ipc/project.cjs 的审计同一形状、同一脱敏口径），
+ * 并投一条 `memory_evicted` 到统一事件流；审计是旁路，写不进去也不影响写入结果。
+ */
+function auditMemoryEviction(projectRoot, evicted, remained) {
+  try {
+    const root = path.resolve(projectRoot || '.');
+    const dir = path.join(root, '.codenode');
+    fs.mkdirSync(dir, { recursive: true });
+    const ids = evicted.map((entry) => String((entry && entry.id) || '?'));
+    require('./runStore.cjs').appendJsonl(path.join(dir, 'audit.jsonl'), {
+      ts: new Date().toISOString(),
+      type: 'memory_evicted',
+      entry: '项目记忆超出上限（' + MAX_MEMORY_ENTRIES + '），已淘汰最旧 ' + evicted.length + ' 条，保留最新 ' + remained + ' 条：' + ids.join(', '),
+      evicted: ids,
+    });
+    require('./eventBus.cjs').bridge(projectRoot, 'memory_evicted', {
+      count: evicted.length,
+      remained,
+      limit: MAX_MEMORY_ENTRIES,
+      evicted: ids,
+    });
+  } catch {
+    // 审计失败不能把 remember 打挂
+  }
+}
+
+/**
+ * 写项目记忆（#16 + #15）。三条显式约束：
+ *   1. **写入前复核磁盘**：文件存在但不可解析 → 抛错拒绝，原文件一字节不动（绝不静默清空整库）；
+ *   2. 超出 MAX_MEMORY_ENTRIES → 最旧优先淘汰，淘汰明细随返回值返回 + 写审计 + 事件流；
+ *   3. 落盘前按 `redaction.redact` 脱敏（与 runStore 同一口径）—— `id/key/tags/createdAt`
+ *      等结构与统计字段原样保留，检索打分口径不变。
+ */
 function writeMemory(projectRoot, entries) {
   const file = memoryPath(projectRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  atomicWriteFile(file, JSON.stringify({ version: 1, entries: entries.slice(-200) }, null, 2) + '\n', 'utf8');
+  const current = readMemory(projectRoot);
+  if (current.exists && !current.ok) {
+    throw new Error('拒绝写入项目记忆：' + current.error + '（原文件已保留，请先修复或删除再重试）');
+  }
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry && typeof entry === 'object');
+  const overflow = list.length - MAX_MEMORY_ENTRIES;
+  const evicted = overflow > 0 ? list.slice(0, overflow) : [];
+  const kept = overflow > 0 ? list.slice(overflow) : list;
+  const persisted = kept.map((entry) => redact(entry));
+  atomicWriteFile(file, JSON.stringify({ version: 1, entries: persisted }, null, 2) + '\n', 'utf8');
+  if (evicted.length) auditMemoryEviction(projectRoot, evicted, persisted.length);
+  return {
+    ok: true,
+    file,
+    written: persisted.length,
+    evicted: evicted.length,
+    evictedIds: evicted.map((entry) => (entry && entry.id) || null),
+  };
 }
 
 /**
@@ -96,4 +191,4 @@ function buildMemoryText(entries, query, options = {}) {
   return lines.join('\n');
 }
 
-module.exports = { readMemory, writeMemory, memoryPath, tokenize, scoreEntry, selectRelevant, buildMemoryText };
+module.exports = { readMemory, writeMemory, memoryPath, MAX_MEMORY_ENTRIES, tokenize, scoreEntry, selectRelevant, buildMemoryText };

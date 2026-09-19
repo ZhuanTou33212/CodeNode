@@ -4,16 +4,78 @@ import { useGraphStore } from './graphStore';
 import { useUiStore } from './uiStore';
 import { useSessionStore } from './sessionStore';
 import { useUsageStore, type UsageSnapshot } from './usageStore';
+import { createInflightRegistry } from '../lib/inflight';
+import type { ResumePlanLike } from '../lib/resumePlan';
 import type { AgentAttachment, ToolRecord } from '../types';
 
+/**
+ * #7 并发/竞态发送：`inflight` 是**按 requestId 索引的集合**（修复前是单值
+ * `sending: boolean` + `requestId: string | null`）。
+ *
+ * 单值语义下必然发生三件事：① `RunsPanel` 的续跑绕过输入框守卫再发一次，其 `finally`
+ * 会把 `requestId` 清成 `null`，旧请求的 controller 从此点不到（停止按钮失效）；
+ * ② 全局 `requestId` 错配；③ 两次请求的 delta 都写进「最后一条 assistant」同一气泡。
+ *
+ * 现在：登记表按 id 存 controller，`sending` 由 `inflight.size() > 0` 派生
+ * （见 `useChatStore((s) => s.inflight.size() > 0)`），`finally` 只删自己那一条。
+ */
+const inflight = createInflightRegistry<AbortController>();
+/** 最近一个「已受理」的 requestId：给「停止当前请求」用（不是全局唯一语义，只影响默认指向） */
+let lastRequestId: string | null = null;
+
+/** 输入框 / 续跑按钮共用的忙碌守卫（派生值，不再有单值全局标志可被覆盖） */
+export function isSending(): boolean {
+  return inflight.isSending();
+}
+
+/** 当前在跑请求的 id 列表（界面与测试都从这里取「谁在跑」） */
+export function inflightRequestIds(): string[] {
+  return inflight.ids();
+}
+
+export interface SendGuardInput {
+  /** 当前在跑请求数（`inflight.size()`） */
+  inflightCount: number;
+  hasText: boolean;
+  attachmentCount: number;
+}
+
+export interface SendGuardVerdict {
+  allow: boolean;
+  reason?: 'busy' | 'empty';
+}
+
+/**
+ * `send()` 开头的硬守卫（#7 的判据所在）。
+ *
+ * 修复前 `send()` **没有任何 `if (get().sending) return`**，谁都能再进来一条；
+ * 输入框的 `busy` 只挡得住输入框，挡不住 `RunsPanel` 那条直接调用。
+ * 顺序：**busy 优先**（正在跑时就直说正忙），空消息其次 —— 空消息在 `send()` 里由更早的
+ * `if (!text && !attachments.length) return` 处理（静默返回，保留老行为）；这里同时保留
+ * `empty` 分支是为了让守卫本身可独立断言（否则测试只是在复刻某一处调用点）。
+ */
+export function checkSendGuard(input: SendGuardInput): SendGuardVerdict {
+  if (input.inflightCount > 0) return { allow: false, reason: 'busy' };
+  if (!input.hasText && input.attachmentCount === 0) return { allow: false, reason: 'empty' };
+  return { allow: true };
+}
+
+const GUARD_MESSAGES: Record<string, string> = {
+  busy: '已有 Agent 请求在执行中，请先停止或等它结束',
+  empty: '没有可发送的内容',
+};
+
 interface ChatState {
-  sending: boolean;
-  requestId: string | null;
+  /** 在跑请求的登记表（按 requestId 索引）—— `sending` 的派生来源 */
+  inflight: ReturnType<typeof createInflightRegistry<AbortController>>;
   send: (
     prompt: string,
     options?: { resumeRunId?: string; resumeForce?: boolean; attachments?: AgentAttachment[] }
   ) => Promise<{ reply: string; reasoning: string; tools: ToolRecord[] }>;
-  stop: () => void;
+  /** 停止请求：不传 id 时停「最近一个已受理」的请求；传 id 精确停那一条 */
+  stop: (requestId?: string) => void;
+  /** 全部停止：并发下必须有一个能一次停干净所有 in-flight 的出口 */
+  stopAll: () => string[];
 }
 
 /** 把 DeepSeek usage 归一化为本应用结构 */
@@ -50,15 +112,37 @@ function summarizeDoc(doc: { nodes?: unknown[] } | null | undefined): string {
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  sending: false,
-  requestId: null,
+  // 登记表本身进 state（界面可直接订阅它做派生值）；实例只创建一次。
+  inflight,
 
-  stop: () => {
+  stop: (requestId) => {
     const api = window.codenode;
-    const rid = get().requestId;
-    if (api && api.stopAgent && rid) {
-      void api.stopAgent(rid);
+    // 不传 id = 停「最近一个已受理」的请求；传 id = 精确停那一条。
+    // 无论哪种，都从登记表里**按 id** 摘除并 abort —— 不会再出现「controller 被覆盖后点不到」。
+    const rid = requestId || lastRequestId;
+    if (!rid || !inflight.has(rid)) return;
+    inflight.abort(rid);
+    if (lastRequestId === rid) lastRequestId = null;
+    if (api && api.stopAgent) {
+      const p = api.stopAgent(rid);
+      if (p && typeof (p as Promise<unknown>).catch === 'function') {
+        void (p as Promise<unknown>).catch((e: unknown) => {
+          useUiStore.getState().setToast('停止 Agent 失败：' + String(e));
+        });
+      }
     }
+  },
+
+  stopAll: () => {
+    const ids = inflight.abortAll();
+    lastRequestId = null;
+    for (const rid of ids) {
+      const p = window.codenode?.stopAgent?.(rid);
+      if (p && typeof (p as Promise<unknown>).catch === 'function') {
+        void (p as Promise<unknown>).catch(() => {});
+      }
+    }
+    return ids;
   },
 
   send: async (prompt, options) => {
@@ -70,8 +154,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const text = prompt.trim();
     const attachments = options?.attachments ?? [];
-    // 允许「只有图片、没有文字」的消息
-    if (!text && !attachments.length) return empty;
+    // 允许「只有图片、没有文字」的消息（老行为，保持不变；空消息静默返回）
+    if (!text && !attachments.length) {
+      return empty;
+    }
+    // #7 硬守卫：进来就先看「是不是已经有请求在跑」。修复前这里什么都没有，
+    // 于是 RunsPanel 的续跑可以直接插进第二个请求（它的 finally 会把旧请求的 requestId 清掉）。
+    if (!checkSendGuard({ inflightCount: inflight.size(), hasText: true, attachmentCount: attachments.length }).allow) {
+      useUiStore.getState().setToast(GUARD_MESSAGES.busy);
+      return empty;
+    }
 
     // /compact（照 Codex 的手动压缩命令）：命令本身**不当作对话发出去**，只把 forceCompact
     // 传给主进程立刻压一次；命令后面若还跟了正文，就当作本轮的正式指令。
@@ -106,7 +198,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       : null;
 
     const us = useUsageStore.getState();
-    set({ sending: true, requestId });
+    // 登记：key 是**这次的** requestId，值是**这次的** controller。
+    // `sending` 不再是一个全局布尔（那个东西会被并发覆盖），而是 `inflight.size() > 0` 的派生值。
+    const controller = new AbortController();
+    const accepted = inflight.begin(requestId, controller, userText.slice(0, 80));
+    if (!accepted) {
+      useUiStore.getState().setToast(GUARD_MESSAGES.busy);
+      useSessionStore.getState().stopTurn();
+      return empty;
+    }
+    lastRequestId = requestId;
     try {
       const res = await api.agentChat({
         projectRoot: useProjectStore.getState().root,
@@ -125,10 +226,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // 断点续跑：带上原始 Run 与「是否已人工复核」；主进程按续跑计划决定走 auto 还是 review
         resumeRunId: options?.resumeRunId,
         resumeForce: options?.resumeForce === true ? true : undefined,
+        // #7：把这一条请求自己的中止信号交出去，`stop(id)` / `stopAll()` 才停得准
+        signal: controller.signal,
       });
-      // 需要人工复核的续跑：主进程拒绝自动执行，这里如实提示，不假装跑过
+      // 需要人工复核的续跑：主进程拒绝自动执行 —— #21 的关键点是**不能把 plan 丢掉**。
+      // 后端回传 `{ok:false, needsReview:true, plan}`，plan 里有 reason / warning /
+      // unknownEffects（哪些工具结果不可知）/ pendingSteps（还差哪几步），全部要落到界面上，
+      // 否则用户只被告知「需要复核」却不知道复核什么。
       if (!res.ok && (res as { needsReview?: boolean }).needsReview) {
-        useUiStore.getState().setToast('该运行存在结果未知的副作用，需要人工复核后才能继续');
+        const plan = (res as { plan?: ResumePlanLike | null }).plan || null;
+        useUiStore.getState().setResumePlanNotice(plan, userText);
+        if (!plan) {
+          // 后端没带计划也要说清楚（不能因为字段缺失就什么都不显示）
+          useUiStore.getState().setToast('该运行存在结果未知的副作用，需要人工复核后才能继续');
+        }
         useSessionStore.getState().stopTurn();
         return empty;
       }
@@ -221,7 +332,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return empty;
     } finally {
       if (unsub) unsub();
-      set({ sending: false, requestId: null });
+      // #7 只清自己那一条：修复前这里无条件 `set({ sending:false, requestId:null })`，
+      // 会把**别人的**在跑请求一起标成空闲（旧请求的 controller 也就此失联）。
+      inflight.end(requestId);
+      if (lastRequestId === requestId) lastRequestId = null;
     }
   },
 }));

@@ -3,9 +3,13 @@ import { useChatStore } from '../../store/chatStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useUiStore } from '../../store/uiStore';
 import { useUsageStore, type ReasoningEffort } from '../../store/usageStore';
+import { useSending } from '../../lib/useSending';
+import { formatResumePlanNotice, summarizeResumePlan } from '../../lib/resumePlan';
+import { reportError } from '../../lib/reportError';
 import type { AgentAttachment } from '../../types';
 import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
+import ResumePlanNotice from './ResumePlanNotice';
 import HoverPopover from './HoverPopover';
 
 function fmtTokens(n: number): string {
@@ -121,7 +125,8 @@ function PromptComposer() {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const sending = useChatStore((s) => s.sending);
+  // #7：`sending` 是派生值（inflight.size() > 0），不再是可被并发覆盖的单值全局标志
+  const sending = useSending();
   const streaming = useSessionStore((s) => s.streaming);
   const models = useUsageStore((s) => s.models);
   const modelId = useUsageStore((s) => s.modelId);
@@ -377,7 +382,16 @@ export default function AgentPanel() {
         </div>
       </div>
 
-      <div className="ap-body" ref={bodyRef}>
+      {/* #25(b)：流式正文 / 「思考中」 / 已停止 / 失败原因都发生在这里，必须是 live region，
+          否则键盘/读屏用户完全得不到「正在生成 / 已中断」的播报。 */}
+      <div
+        className="ap-body"
+        ref={bodyRef}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label="Agent 对话记录"
+      >
         {messages.length === 0 && (
           <div className="cs-chat-empty">
             （暂无对话）
@@ -389,6 +403,7 @@ export default function AgentPanel() {
         ))}
       </div>
 
+      <ResumePlanNotice />
       <PromptComposer />
     </div>
   );

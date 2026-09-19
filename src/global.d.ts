@@ -264,6 +264,11 @@ interface CodenodeApi {
     projectFile?: string;
     /** /compact（照 Codex 的手动压缩命令）：无视窗口阈值，立刻做一次上下文压缩 */
     forceCompact?: boolean;
+    /**
+     * #7：本条请求自己的中止信号。并发下「停止」必须能精确到某一条请求，
+     * 而不是靠一个会被覆盖的全局 requestId。
+     */
+    signal?: AbortSignal;
   }) => Promise<{
     ok: boolean;
     aborted?: boolean;
@@ -289,6 +294,29 @@ interface CodenodeApi {
     alerts?: AlertDto[];
     resumedFrom?: string;
     needsReview?: boolean;
+    /**
+     * #21：`needsReview` 时后端**已经**把续跑计划回传了（`electron/ipc/agent.cjs:218-220`
+     * 返回 `{ok:false, needsReview:true, plan}`）。修复前类型里没有这个字段，前端连读都读不到，
+     * 于是 `reason` / `warning` / `unknownEffects` / `pendingSteps` 被整条丢弃 ——
+     * 要求用户「人工复核」却不告诉他复核什么。
+     */
+    plan?: {
+      ok?: boolean;
+      runId?: string;
+      mode?: 'complete' | 'auto' | 'review' | 'unknown' | string;
+      reason?: string | null;
+      warning?: string | null;
+      error?: string | null;
+      requiresReview?: boolean;
+      prompt?: string;
+      /** 结果未知的外部副作用（工具名 + effect），续跑时系统不会自动重放 */
+      unknownEffects?: { tool?: string; effect?: string }[];
+      /** 仍待执行的步骤 */
+      pendingSteps?: { tool?: string; effect?: string; idemKey?: string | null }[];
+      completedSteps?: { tool?: string; idemKey?: string | null; at?: string | null }[];
+      /** 幂等账本判定「已提交、续跑时跳过」的写操作 */
+      skippedByLedger?: { tool?: string; idemKey?: string | null; reason?: string }[];
+    } | null;
     /** 达到迭代/工具调用上限时的结构化收尾（第 2 项）：已完成/失败/涉及文件/是否可续跑 */
     wrapUp?: {
       stopReason?: string;

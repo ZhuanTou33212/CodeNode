@@ -85,21 +85,42 @@ function register(registry) {
       try {
         const read = readTextFile(file);
         if (!read.ok) return AgentToolResult.error(read.error);
-        const content = read.text;
-        if (!content.includes(oldText)) return AgentToolResult.error('文件中未找到目标文本：' + abbreviate(oldText));
+        const initial = read.text;
+        // 确认前的这遍计算只为「注定失败的编辑别打扰用户」；真正写盘用的是确认后的重算结果
+        if (!initial.includes(oldText)) return AgentToolResult.error('文件中未找到目标文本：' + abbreviate(oldText));
+        const initialReplaced = occurrence > 0 ? (indexOfOccurrence(initial, oldText, occurrence) < 0 ? 0 : 1) : countOccurrences(initial, oldText);
+        if (initialReplaced === 0) return AgentToolResult.error('目标文本第 ' + occurrence + ' 次出现不存在');
+        const ok = await context.confirm(ConfirmationLevel.WRITE, '修改文件 ' + relative + '（替换 ' + initialReplaced + ' 处）', '将把 ' + relative + ' 中的目标文本替换为 ' + abbreviate(newText) + '。');
+        if (!ok) return AgentToolResult.error('已取消修改');
+        // #9：确认框可能挂很久，期间文件被外部改过。校验放在 confirm **之后**、写盘之前 ——
+        // 这才是关掉 TOCTOU 窗口的那一次（确认前那次是「不打扰用户」，两次都要留）。
+        if (args.expectedSha256 != null && String(args.expectedSha256).trim()) {
+          const recheck = checkExpectedHash(file, args.expectedSha256);
+          if (!recheck.ok) {
+            return AgentToolResult.failure(
+              'CONFLICT_STALE',
+              '确认期间文件已被改动（' + recheck.reason + '）：' + relative + '。已放弃写入，请重新读回最新内容，基于它重做。',
+              { path: relative, expected: String(args.expectedSha256), actual: recheck.actual }
+            );
+          }
+        }
+        // 写盘前重读并重算替换处数：确认框里的「替换 N 处」是确认前那一刻的快照，
+        // 直接用旧快照写会把确认期间的外部改动一起覆盖掉。
+        const fresh = readTextFile(file);
+        if (!fresh.ok) return AgentToolResult.error(fresh.error);
+        const content = fresh.text;
+        if (!content.includes(oldText)) return AgentToolResult.error('确认期间文件已被改动，目标文本不存在了：' + relative);
         let updated;
         let replaced;
         if (occurrence > 0) {
           const index = indexOfOccurrence(content, oldText, occurrence);
-          if (index < 0) return AgentToolResult.error('目标文本第 ' + occurrence + ' 次出现不存在');
+          if (index < 0) return AgentToolResult.error('确认期间文件已被改动：目标文本第 ' + occurrence + ' 次出现不存在');
           updated = content.slice(0, index) + newText + content.slice(index + oldText.length);
           replaced = 1;
         } else {
           updated = content.split(oldText).join(newText);
           replaced = countOccurrences(content, oldText);
         }
-        const ok = await context.confirm(ConfirmationLevel.WRITE, '修改文件 ' + relative + '（替换 ' + replaced + ' 处）', '将把 ' + relative + ' 中的目标文本替换为 ' + abbreviate(newText) + '。');
-        if (!ok) return AgentToolResult.error('已取消修改');
         fs.copyFileSync(file, file + '.bak');
         atomicWriteFile(file, updated, 'utf-8');
         context.audit('edit_file ' + relative + ' replaced=' + replaced);

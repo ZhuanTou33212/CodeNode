@@ -104,7 +104,13 @@
     "icons:build": "electron scripts/build-icon-v3.cjs",
     "postbuild": "npm run icons:build",
     "test:tool-descriptor": "node scripts/tool-descriptor-test.cjs",
-    "test:context-capability": "node scripts/context-capability-test.cjs"
+    "test:context-capability": "node scripts/context-capability-test.cjs",
+    "test:frontend-incremental": "node scripts/frontend-incremental-test.cjs",
+    "test:stream-anomaly": "node scripts/stream-anomaly-test.cjs",
+    "test:shell-hardening": "node scripts/shell-hardening-test.cjs",
+    "test:confirm-payload": "node scripts/confirm-payload-test.cjs",
+    "test:run-store-scale": "node scripts/run-store-scale-test.cjs",
+    "test:storage-hardening": "node scripts/storage-hardening-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useGraphStore } from './graphStore';
 import { useProjectStore } from './projectStore';
 import { useUiStore } from './uiStore';
+import { applyStreamDelta, warnUnknownDelta } from '../lib/sessionDelta';
 import type { RagGrounding, SessionCanvas, SessionDoc, SessionMsg, ToolRecord } from '../types';
 
 const uid = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
@@ -327,23 +328,44 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const msgs = s.messages.map((m) => ({ ...m }));
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== 'assistant') return;
-    if (d.kind === 'reasoning' && d.text) last.reasoning = (last.reasoning || '') + d.text;
-    else if (d.kind === 'content' && d.text) last.content += d.text;
-    else if (d.kind === 'content_reset') {
+    // 「已保存」是副作用提示，不改气泡内容；未知 kind 兜底时不吞掉它
+    if (d.kind === 'saved') {
+      if (d.saved && d.saved.filePath) {
+        useProjectStore.getState().setProjectFile(d.saved.filePath);
+        useUiStore.getState().setToast('Agent 已保存：' + d.saved.filePath);
+      }
+      return;
+    }
+    // 气泡的 kind → 状态判断收在 `src/lib/sessionDelta.ts` 的纯函数里：那里认识 truncated / stopped，
+    // 也对**未知 kind 显式兜底告警**（修复前这两类增量在这里没有任何分支，被静默丢弃；
+    // 而且下次后端再加 kind 还会同样静默漂移）。
+    const outcome = applyStreamDelta(last, d);
+    if (!outcome.recognized) {
+      warnUnknownDelta(d.kind);
+      return;
+    }
+    if (!outcome.changed) return;
+    if (outcome.appendText) {
+      if (d.kind === 'reasoning') last.reasoning = (last.reasoning || '') + outcome.appendText;
+      else last.content = (last.content || '') + outcome.appendText;
+    }
+    if (outcome.resetContent) {
       // 流中途断线 → 主进程整轮重发：已流出的半截内容作废，否则重发的完整回答
       // 会接在半截后面，用户看到两遍开头。
       last.content = '';
       last.reasoning = '';
       last.tools = [];
-    } else if (d.kind === 'tool' && d.toolCalls) {
-      const list = (d.toolCalls as { id?: string; name?: string; args?: unknown }[]).map((t) => ({
+    }
+    if (outcome.toolCalls) {
+      const list = (outcome.toolCalls as { id?: string; name?: string; args?: unknown }[]).map((t) => ({
         id: t.id,
         name: t.name || 'tool',
         args: t.args,
       }));
       last.tools = mergeTools(last.tools || [], list);
-    } else if (d.kind === 'tool_result' && d.toolCalls) {
-      const list = (d.toolCalls as ToolRecord[]).map((t) => ({
+    }
+    if (outcome.toolResult) {
+      const list = (outcome.toolResult as ToolRecord[]).map((t) => ({
         name: t.name,
         args: t.args,
         result: t.result,
@@ -351,9 +373,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         data: t.data,
       }));
       last.tools = mergeTools(last.tools || [], list);
-    } else if (d.kind === 'saved' && d.saved && d.saved.filePath) {
-      useProjectStore.getState().setProjectFile(d.saved.filePath);
-      useUiStore.getState().setToast('Agent 已保存：' + d.saved.filePath);
+    }
+    if (outcome.status) {
+      // truncated：「正在续写」不再是看不见的状态；stopped：点停止后气泡立刻变「已停止」，
+      // 不再等 finally（那个窗口里界面看起来像没反应）。同时把 streaming 收掉，
+      // 避免「已停止」的气泡旁边还挂着「思考中…」。
+      last.status = outcome.status;
+      if (outcome.status !== 'done') set({ messages: msgs, streaming: false });
+      else set({ messages: msgs });
+      return;
     }
     set({ messages: msgs });
   },
@@ -416,6 +444,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (last && last.role === 'assistant') {
       last.status = 'stopped';
     }
+    // 停止 → 流式立刻结束。修复前 `streaming` 与单值 `sending` 不同步，存在
+    // 「UI 已显示空闲、旧请求尚未收尾」的窗口；现在 `sending` 是派生的 inflight 计数，窗口消失。
     set({ messages: msgs, streaming: false });
   },
 

@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { atomicWriteFile } = require('./atomicFile.cjs');
+const { redact } = require('./redaction.cjs');
 
 /** 只读工具：可安全重复执行（结果相同，不产生副作用） */
 const READ_TOOLS = new Set([
@@ -93,6 +94,23 @@ function idempotencyKey(scopeRunId, toolName, args) {
   return digest(String(scopeRunId || '') + '\u0000' + String(toolName || '') + '\u0000' + canonicalArgsText(args));
 }
 
+/**
+ * 目标文件的**状态指纹**：`f:<mtime 毫秒>:<size>`，不存在则 `absent`。
+ * 用 mtime+size 而不是内容哈希：一次 `stat` 就够，且足以发现「两次调用之间目标被改过」——
+ * 正是这种「参数没变、前置状态变了」让幂等去重变成**虚假成功**。
+ * @param {any} projectRoot
+ * @param {string} relPath
+ * @returns {string}
+ */
+function fileStateDigest(projectRoot, relPath) {
+  try {
+    const stat = fs.statSync(path.resolve(projectRoot || '.', String(relPath)));
+    return 'f:' + Math.floor(stat.mtimeMs) + ':' + stat.size;
+  } catch {
+    return 'absent';
+  }
+}
+
 function ledgerPath(projectRoot, scopeRunId) {
   const safe = String(scopeRunId || 'unscoped').replace(/[^A-Za-z0-9._-]/g, '_');
   return path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs', safe + '.side-effects.json');
@@ -139,8 +157,21 @@ class SideEffectLedger {
     }
   }
 
-  _persist() {
+  /**
+   * 落盘。`effect` 为 `'read'` 时**直接跳过**（见下）。
+   *
+   * 为什么需要（#13）：`begin()`/`commit()`/`fail()` 对**每个**工具调用都会调这里，而它每次都把
+   * 整本账本 JSON 化 + `fsync` + rename —— 单次 Run 累计 n 次全量重写，写出的字节数约 **O(n²)**，
+   * 且全在 Electron 主进程的**同步**路径上（100 次调用就是数百毫秒到秒级的可感知卡顿，
+   * UI 与所有并发 run 一起被挡住）。
+   * 只读工具既不产生副作用、也不参与续跑去重（`begin` 的跳过分支要求 `effect === 'write'`），
+   * 它们的记录**没有崩溃恢复价值**：留在内存里供 review()/planResume 视图使用即可，
+   * 不必为此付一次 fsync。写与「结果未知」的副作用照旧同步落盘（那才是崩溃恢复要用的）。
+   * @param {'read'|'write'|'unknown'|undefined} effect
+   */
+  _persist(effect) {
     if (!this.file) return;
+    if (effect === 'read') return;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const records = [...this.records.values()];
@@ -172,33 +203,47 @@ class SideEffectLedger {
    * @param {{taskId?: string, role?: string}} [actor] 行为者（S9）：主代理或子代理任务。
    *   只影响归因记录与文案，幂等作用域不变。
    */
-  begin(toolName, args, actor) {
+  begin(toolName, args, actor, options = {}) {
     const effect = classify(toolName);
     const key = idempotencyKey(this.scopeRunId, toolName, args);
     const existing = this.records.get(key);
     const who = actorLabel(actor);
+    // 目标文件的**当前**状态指纹（只有带 path 的写操作才有）。
+    // 幂等键刻意**不含**它（改动键会让已落盘的账本对不上，续跑去重直接失效）；
+    // 它只用来回答一个问题：「现在跳过，还与当初提交时的世界一致吗？」
+    const statePath = args && typeof args.path === 'string' && args.path ? String(args.path) : '';
+    const currentDigest = statePath ? fileStateDigest(this.projectRoot, statePath) : '';
     if (existing && existing.phase === 'committed' && effect === 'write') {
-      // 保持 committed 语义不变（只累计意图次数）：一旦降级回 pending，review()/planResume
-      // 就看不到「这条写已完成」，续跑只能整轮人工复核。去重路径不会再调用 commit()，
-      // 所以这里必须自己保住状态。
-      existing.intents = (existing.intents || 0) + 1;
-      existing.lastIntentAt = this.clock();
-      existing.lastActor = who;
-      this.records.set(key, existing);
-      this._persist();
-      const prior = existing.actor || 'unknown';
-      return {
-        skip: true,
-        effect,
-        idemKey: key,
-        actor: who,
-        prior,
-        priorRecord: existing,
-        reason:
-          '该写操作在本次运行中已提交（幂等去重）—— 提交者 ' + prior + '，本次不再重复执行（请求方：' + who + '）',
-      };
+      // 目标不可核对（参数里没有 path）而工具又声明「重复执行安全」→ 宁可真的再做一次。
+      // save_project 正是这一类：参数为空（键恒同），但画布/文件早就变了，
+      // 跳过它只会让用户看到「已保存」而磁盘停在旧版本。
+      const cannotVerify = !statePath && options.idempotent === true;
+      // 提交后记下的状态与现在不一致 → 期间被别人改过 → 跳过不安全（会覆盖/丢失那次改动）。
+      const targetChanged = !!statePath && !!existing.postStateDigest && currentDigest !== existing.postStateDigest;
+      if (!cannotVerify && !targetChanged) {
+        // 保持 committed 语义不变（只累计意图次数）：一旦降级回 pending，review()/planResume
+        // 就看不到「这条写已完成」，续跑只能整轮人工复核。去重路径不会再调用 commit()，
+        // 所以这里必须自己保住状态。
+        existing.intents = (existing.intents || 0) + 1;
+        existing.lastIntentAt = this.clock();
+        existing.lastActor = who;
+        this.records.set(key, existing);
+        this._persist(effect);
+        const prior = existing.actor || 'unknown';
+        return {
+          skip: true,
+          effect,
+          idemKey: key,
+          actor: who,
+          prior,
+          priorRecord: existing,
+          reason:
+            '该写操作在本次运行中已提交（幂等去重）—— 提交者 ' + prior + '，本次不再重复执行（请求方：' + who + '）',
+        };
+      }
     }
     const record = existing || { idemKey: key, tool: String(toolName), effect, argsDigest: digest(args), phase: 'pending', intents: 0 };
+    if (statePath) record.statePath = statePath;
     record.phase = 'pending';
     record.intents = (record.intents || 0) + 1;
     record.lastIntentAt = this.clock();
@@ -207,7 +252,7 @@ class SideEffectLedger {
     if (!Array.isArray(record.actors)) record.actors = [];
     if (!record.actors.includes(who) && record.actors.length < 5) record.actors.push(who);
     this.records.set(key, record);
-    this._persist();
+    this._persist(effect);
     return { skip: false, effect, idemKey: key, tool: String(toolName), actor: who, record };
   }
 
@@ -220,8 +265,11 @@ class SideEffectLedger {
     record.digest = digest(info.resultDigest != null ? info.resultDigest : info.result || '');
     if (token.actor) record.committedBy = token.actor;
     if (info.reversible === true) record.reversible = true;
+    // 记下「这次写**之后**目标长什么样」：续跑时拿它与当前状态比对，一致才敢跳过。
+    // 必须取提交后的状态（写操作本身就会改变提交前的状态，拿前者比对必然不等）。
+    if (record.statePath) record.postStateDigest = fileStateDigest(this.projectRoot, record.statePath);
     this.records.set(token.idemKey, record);
-    this._persist();
+    this._persist(record.effect);
     return record;
   }
 
@@ -231,9 +279,12 @@ class SideEffectLedger {
     record.phase = 'failed';
     record.failedAt = this.clock();
     if (token.actor) record.failedBy = token.actor;
-    record.error = String((error && error.message) || error || '').slice(0, 500);
+    // 脱敏（#15）：错误原文可能带凭据（命令回显 token、URL 里带 key 等）。
+    // `.codenode/runs/<run>.side-effects.json` 是要长期留存的，而 runStore 那条路径已经脱敏 ——
+    // 这里漏掉就会让「日志已统一脱敏」的判断失真。统计字段（时长/退出码）不受影响。
+    record.error = redact(String((error && error.message) || error || '')).slice(0, 500);
     this.records.set(token.idemKey, record);
-    this._persist();
+    this._persist(record.effect);
     return record;
   }
 
@@ -252,8 +303,13 @@ class SideEffectLedger {
         actor: record.actor || null,
         lastActor: record.lastActor || null,
       };
-      if (record.phase === 'committed') committed.push(item);
-      else if (record.effect === 'unknown') unknown.push(item);
+      // 先按 effect 分类：unknown（外部副作用，结果不可知）**永远**不算「已提交的写」。
+      // 否则 planResume 会把它塞进 skippable（文案写「续跑时跳过」），而执行期 begin() 的去重
+      // 只对 effect==='write' 生效 —— 结果就是「文案说跳过了、实际又跑了一遍」，
+      // 对 git push / npm publish 这类不可逆外部副作用就是重复执行。
+      // 注意：unknown 项仍带 phase 字段，消费者可区分「已提交的 unknown」与「未提交的 unknown」。
+      if (record.effect === 'unknown') unknown.push(item);
+      else if (record.phase === 'committed') committed.push(item);
       else pending.push(item);
     }
     return { committed, pending, unknown };
@@ -267,7 +323,7 @@ class SideEffectLedger {
 /** 供 AgentToolContext.sideEffectGuard 使用的守卫对象 */
 function createGuard(ledger) {
   return {
-    begin: (toolName, args, actor) => ledger.begin(toolName, args, actor),
+    begin: (toolName, args, actor, options) => ledger.begin(toolName, args, actor, options),
     commit: (token, info) => ledger.commit(token, info),
     fail: (token, error) => ledger.fail(token, error),
     ledger,
@@ -281,6 +337,7 @@ module.exports = {
   digest,
   idempotencyKey,
   canonicalArgsText,
+  fileStateDigest,
   ledgerPath,
   READ_TOOLS,
   WRITE_TOOLS,

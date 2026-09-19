@@ -108,6 +108,13 @@ function register(registry) {
         }
       }
 
+      // #17：敏感判定必须落在 **realpath** 上。resolveInRoot 只保证 realpath 在根内，
+      // 但仓库自带的符号链接（`notes.md -> .env`）在它眼里完全合法；只查模型给的 relative
+      // 等于给凭据开了一条「改个名字就读」的通道，而 read_file 是凭据直接外发进上下文的那条路。
+      if (isSensitivePath(path.relative(fs.realpathSync(root), fs.realpathSync(file)))) {
+        return AgentToolResult.error('出于凭据保护，Agent 不能读取敏感文件：' + relative);
+      }
+
       const analyzeOnly = args.analyze === true;
       const maxLines = typeof args.maxLines === 'number' && Number.isFinite(args.maxLines) ? Math.max(1, Math.floor(args.maxLines)) : 200;
       const offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(1, Math.floor(args.offset)) : 1;

@@ -223,6 +223,63 @@ async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: str
     'mode=' + planD.mode + ' reason=' + planD.reason);
   check('review 计划明确不含自动重放承诺', /不会自动重放|人工核对/.test(String(planD.warning)), String(planD.warning).slice(0, 80));
 
+  // ------------------------------------------- 场景 3b（回归 #1/增补）：shell 已成功提交 + 只剩只读待办
+  // 上一轮审阅的 P0：场景 3 只覆盖了「intent 已记、commit 未落」+ 空账本 —— 那条路径本来就是对的。
+  // 真实形态是 shell **成功返回**（step 已提交、账本里是 committed 的 unknown），此时：
+  //   pendingSteps 只剩只读步骤 → unknownSteps 为空；旧实现又把 committed 的 unknown 从
+  //   unknownFromLedger 里过滤掉 → 判 mode='auto'（文案还写「续跑时跳过」）。
+  // 而执行期 begin() 的去重条件只对 effect==='write' 生效 → 命令会被**真的重跑一遍**。
+  console.log('\n== 场景 3b：shell 已提交 + 只读待办 → 仍必须人工核对（回归 #1） ==');
+  const runH = 'run-resume-shell-committed';
+  runStore.startRun(root, runH, { prompt: '推送并读取状态', model: 'scripted-model' });
+  const shellArgs = { command: 'git push origin main' };
+  const shellIdem = idempotencyKey(runH, 'execute_shell', shellArgs);
+  runCheckpoint.recordIntent(root, runH, {
+    callId: 'h1',
+    tool: 'execute_shell',
+    argsDigest: digest(shellArgs),
+    effect: 'unknown',
+    idemKey: shellIdem,
+  });
+  runCheckpoint.recordCommit(root, runH, {
+    callId: 'h1',
+    tool: 'execute_shell',
+    ok: true,
+    resultDigest: digest('pushed'),
+    error: null,
+    elapsedMs: 12,
+    idemKey: shellIdem,
+    effect: 'unknown',
+  });
+  // 一个只读待办：确保被判 review 的原因**只能**是那条 shell（排除「有未提交写操作」这条路径）
+  const readIdem = idempotencyKey(runH, 'read_file', { path: 'note.txt' });
+  runCheckpoint.recordIntent(root, runH, {
+    callId: 'h2',
+    tool: 'read_file',
+    argsDigest: digest({ path: 'note.txt' }),
+    effect: 'read',
+    idemKey: readIdem,
+  });
+  // 账本按**生产形态**写入：begin → 执行成功 → commit（之后不再 begin，phase 保持 committed）
+  const ledgerH = new SideEffectLedger({ projectRoot: root, scopeRunId: runH });
+  const tokenH = ledgerH.begin('execute_shell', shellArgs);
+  ledgerH.commit(tokenH, { ok: true, result: 'pushed' });
+  const planH = runCheckpoint.planResume(root, runH, {
+    ledger: new SideEffectLedger({ projectRoot: root, scopeRunId: runH }),
+  });
+  check('已提交的 shell 不得被判为可自动续跑', planH.mode !== 'auto', 'mode=' + planH.mode + ' reason=' + planH.reason);
+  check('已提交的 shell 必须要求人工复核', planH.requiresReview === true, 'requiresReview=' + planH.requiresReview);
+  check(
+    '已提交的 shell 出现在 unknownEffects',
+    (planH.unknownEffects || []).some((item) => item.tool === 'execute_shell'),
+    JSON.stringify((planH.unknownEffects || []).map((i) => i.tool))
+  );
+  check(
+    '已提交的 shell 不得出现在 skippedByLedger（否则文案与执行期矛盾地重跑）',
+    !(planH.skippedByLedger || []).some((item) => item.tool === 'execute_shell'),
+    JSON.stringify((planH.skippedByLedger || []).map((i) => i.tool))
+  );
+
   // ---------------------------------------------------------------- 场景 4：已完成 / 无检查点
   console.log('\n== 场景 4：已完成 / 无检查点 ==');
   const runE = 'run-resume-e';
@@ -251,6 +308,119 @@ async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: str
   check('账本落盘后可重新加载（崩溃重启仍能去重）', reloaded.begin('write_file', { path: 'g.txt', content: '1' }).skip === true);
   const readAgain = ledgerG.begin('read_file', { path: 'g.txt' });
   check('只读工具永不被去重跳过（可安全重放）', readAgain.skip === false);
+
+  // ------------------------------------------- 场景 6（回归 #2）：tool_calls ↔ tool_call_id 配对修复
+  // 检查点快照按**位置**切片（slice(-24)），边界不保证落在 assistant/tool 组边界上；
+  // 「达到工具调用上限」的中断路径还会在 break 之前写入「声明了 N 个、只回了 k 个」的残缺报文。
+  // 两者被 buildResumeMessages 原样当请求报文发出 → 供应商 400，用户只看到「Agent 调用失败」。
+  console.log('\n== 场景 6：续跑检查点的 tool_calls↔tool 配对修复（回归 #2） ==');
+
+  // (a) 纯函数：头部孤儿（其 assistant 被切掉）
+  const headBroken = [
+    { role: 'system', content: 's' },
+    { role: 'user', content: 'u' },
+    { role: 'tool', tool_call_id: 'c1', content: '（assistant 被切掉了）' },
+    { role: 'assistant', content: '', tool_calls: [{ callId: 'c3' }] },
+    { role: 'tool', tool_call_id: 'c3', content: 'ok' },
+  ];
+  const headFixed = runCheckpoint.repairToolPairing(headBroken);
+  check(
+    '头部孤儿 tool 被丢弃',
+    !headFixed.some((m) => m.role === 'tool' && m.tool_call_id === 'c1'),
+    JSON.stringify(headFixed.map((m) => m.role + ':' + (m.tool_call_id || '')))
+  );
+  check('修复后配对合法', runCheckpoint.isToolPairingValid(headFixed));
+  check(
+    '未受影响的配对保持原样（不误删）',
+    headFixed.some((m) => m.role === 'tool' && m.tool_call_id === 'c3'),
+    JSON.stringify(headFixed.map((m) => m.tool_call_id || m.role))
+  );
+
+  // (b) 纯函数：尾部残缺（声明 2 个、只回 1 个）
+  const tailBroken = [
+    { role: 'user', content: 'u' },
+    { role: 'assistant', content: '读两个文件：', tool_calls: [{ callId: 'a1' }, { callId: 'a2' }] },
+    { role: 'tool', tool_call_id: 'a1', content: 'f1' },
+  ];
+  const tailFixed = runCheckpoint.repairToolPairing(tailBroken);
+  check(
+    '未应答的 tool_call 被移除、已应答的保留',
+    tailFixed[1].tool_calls.length === 1 && tailFixed[1].tool_calls[0].callId === 'a1',
+    JSON.stringify(tailFixed[1].tool_calls)
+  );
+  check('尾部残缺修复后配对合法', runCheckpoint.isToolPairingValid(tailFixed));
+  check('已输出的正文不被吞掉', tailFixed[1].content === '读两个文件：', String(tailFixed[1].content));
+
+  // (c) 纯函数：全部未应答且无正文 → 补占位（避免空 assistant 被供应商拒）
+  const onlyCalls = [{ role: 'assistant', content: '', tool_calls: [{ callId: 'z1' }] }];
+  const onlyFixed = runCheckpoint.repairToolPairing(onlyCalls);
+  check(
+    'tool_calls 全被移除且无正文时补占位内容',
+    !onlyFixed[0].tool_calls && typeof onlyFixed[0].content === 'string' && onlyFixed[0].content.length > 0,
+    JSON.stringify(onlyFixed[0])
+  );
+  check('占位后的极小序列配对合法', runCheckpoint.isToolPairingValid(onlyFixed));
+
+  // (d) 合法序列不得被改动（防止「修复」本身制造回归）
+  const goodPairing = [
+    { role: 'system', content: 's' },
+    { role: 'user', content: 'u' },
+    { role: 'assistant', content: '', tool_calls: [{ callId: 'g1' }] },
+    { role: 'tool', tool_call_id: 'g1', content: 'r' },
+  ];
+  check(
+    '合法序列原样通过（不做无谓改动）',
+    runCheckpoint.isToolPairingValid(goodPairing) &&
+      JSON.stringify(runCheckpoint.repairToolPairing(goodPairing)) === JSON.stringify(goodPairing),
+    JSON.stringify(runCheckpoint.repairToolPairing(goodPairing))
+  );
+
+  // (e) 真实入口：saveMessages 落盘前修复（用「assistant + 6 tool」组，使 slice(-24) 恰好切断配对）
+  const longRun = [{ role: 'system', content: 'sys' }, { role: 'user', content: 'go' }];
+  for (let g = 0; g < 4; g++) {
+    longRun.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: Array.from({ length: 6 }, (_, k) => ({ callId: 'g' + g + '-t' + k })),
+    });
+    for (let k = 0; k < 6; k++) longRun.push({ role: 'tool', tool_call_id: 'g' + g + '-t' + k, content: 'x'.repeat(64) });
+  }
+  const rawSliced = longRun.slice(-24);
+  check(
+    '（前置事实）未修复的切片确实含孤儿 tool —— 否则本用例是空转',
+    !runCheckpoint.isToolPairingValid(rawSliced),
+    'isToolPairingValid(rawSliced)=' + runCheckpoint.isToolPairingValid(rawSliced)
+  );
+  const pairingRun = 'run-resume-pairing';
+  runStore.startRun(root, pairingRun, { prompt: '多工具长任务', model: 'scripted-model' });
+  runCheckpoint.saveMessages(root, pairingRun, longRun, { reason: 'round_end' });
+  const savedMessages = runCheckpoint.lastMessages(runCheckpoint.readCheckpoints(root, pairingRun));
+  check(
+    'saveMessages 落盘的检查点配对合法（切片切断后仍合法）',
+    runCheckpoint.isToolPairingValid(savedMessages),
+    'count=' + savedMessages.length
+  );
+
+  // (f) 真实入口：buildResumeMessages 对「磁盘上已有的坏检查点」也做修复（防御历史数据）
+  const resumeFromBroken = runCheckpoint.buildResumeMessages(
+    {
+      ok: true,
+      mode: 'review',
+      prompt: '继续',
+      completedSteps: [],
+      pendingSteps: [],
+      failedSteps: [],
+      skippedByLedger: [],
+      messages: rawSliced,
+      unknownEffects: [],
+    },
+    { systemPrompt: 'SYS' }
+  );
+  check(
+    'buildResumeMessages 对坏 plan.messages 也做修复（旧检查点不再让续跑 400）',
+    runCheckpoint.isToolPairingValid(resumeFromBroken),
+    'count=' + resumeFromBroken.length
+  );
 
   // 清理
   cleanup(root);

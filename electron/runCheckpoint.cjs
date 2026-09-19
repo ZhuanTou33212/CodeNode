@@ -83,6 +83,107 @@ function recordCommit(projectRoot, runId, { callId, tool, ok, resultDigest, erro
   });
 }
 
+/** tool_call 的稳定调用 id：agent.assignCallIds 写在 `callId`，供应商原始值在 `id`；tool 消息的
+ *  `tool_call_id` 用的是 callId —— 三处必须同一口径，否则修配对会修错。 */
+function callIdOf(toolCall) {
+  return String((toolCall && (toolCall.callId || toolCall.id)) || '');
+}
+
+/**
+ * 修复 `tool_calls ↔ tool_call_id` 配对（纯函数，不改入参）。
+ *
+ * 为什么需要：检查点快照是按**位置**切片的（`slice(-MAX_CHECKPOINT_MESSAGES)`），
+ * 切片边界不保证落在 assistant/tool 组边界上；而「达到工具调用上限」的中断路径还会在
+ * `break` 之前写入「声明了 N 个 tool_calls、只回了 k 个」的残缺报文。两种形态都会被
+ * `buildResumeMessages` 原样当作请求报文发出，OpenAI 兼容接口对孤立 tool 消息会返回 400
+ * —— 表现就是「点续跑就报错，且看不出是检查点坏了」。
+ *
+ * 规则（与供应商的实际要求一致）：
+ *   - 每条 `tool` 消息必须由**紧邻其前**的 assistant 块声明，否则丢弃（孤儿）；
+ *   - 每条 assistant 声明的 tool_call 必须在同一块内被应答，否则从 tool_calls 里移除；
+ *   - 移除后若 assistant 既无 tool_calls 又无正文，补一句占位说明（避免空消息被拒）。
+ * @param {Array<any>} messages
+ * @returns {Array<any>} 新的消息数组
+ */
+function repairToolPairing(messages) {
+  const list = (Array.isArray(messages) ? messages : []).filter((message) => message && message.role);
+  const out = [];
+  /** 当前打开的 assistant 配对块 */
+  let open = null;
+
+  const settle = () => {
+    if (!open) return;
+    const { at, calls, answered } = open;
+    open = null;
+    if (answered.size === calls.length) return;
+    const kept = calls.filter((tc) => answered.has(callIdOf(tc)));
+    const copy = { ...out[at] };
+    if (kept.length) {
+      copy.tool_calls = kept;
+    } else {
+      delete copy.tool_calls;
+      if (!copy.content || !String(copy.content).trim()) {
+        copy.content = '（上一轮的工具调用因中断未完成，已从续跑上下文丢弃）';
+      }
+    }
+    out[at] = copy;
+  };
+
+  for (const message of list) {
+    if (message.role === 'assistant') {
+      settle();
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls.filter((tc) => callIdOf(tc)) : [];
+      out.push(message);
+      if (calls.length) open = { at: out.length - 1, calls, answered: new Set() };
+      continue;
+    }
+    if (message.role === 'tool') {
+      const id = message.tool_call_id ? String(message.tool_call_id) : '';
+      // 孤儿：没有前驱 assistant，或前驱没声明这个 id
+      if (!open || !id || !open.calls.some((tc) => callIdOf(tc) === id)) continue;
+      open.answered.add(id);
+      out.push(message);
+      continue;
+    }
+    settle();
+    out.push(message);
+  }
+  settle();
+  return out;
+}
+
+/**
+ * 配对是否合法（严格口径：tool 必须紧跟声明它的 assistant 块，且声明必须全部被应答）。
+ * 供测试断言与运行期自检使用 —— 判据只看结构，不看模型自述。
+ * @param {Array<any>} messages
+ * @returns {boolean}
+ */
+function isToolPairingValid(messages) {
+  let open = null;
+  const flush = () => {
+    if (open && open.answered.size !== open.declared.size) return false;
+    open = null;
+    return true;
+  };
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message || !message.role) return false;
+    if (message.role === 'assistant') {
+      if (!flush()) return false;
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      open = { declared: new Set(calls.map(callIdOf).filter(Boolean)), answered: new Set() };
+      continue;
+    }
+    if (message.role === 'tool') {
+      const id = message.tool_call_id ? String(message.tool_call_id) : '';
+      if (!open || !id || !open.declared.has(id)) return false;
+      open.answered.add(id);
+      continue;
+    }
+    if (!flush()) return false;
+  }
+  return flush();
+}
+
 /**
  * 保存对话快照：续跑时重建上下文用（裁剪 + 截断，只保留可恢复所需的最小信息）
  * @param {any} projectRoot
@@ -101,11 +202,13 @@ function saveMessages(projectRoot, runId, messages, { reason } = {}) {
       tool_calls: message.tool_calls || undefined,
       tool_call_id: message.tool_call_id || undefined,
     }));
+  // 先切片、再修配对：顺序反过来的话切片仍会切断配对（这正是原来漏掉的一步）
+  const repaired = repairToolPairing(trimmed);
   return appendCheckpoint(projectRoot, runId, {
     type: 'messages',
     reason: reason || 'round',
-    count: trimmed.length,
-    messages: trimmed,
+    count: repaired.length,
+    messages: repaired,
   });
 }
 
@@ -214,7 +317,11 @@ function planResume(projectRoot, runId, options = {}) {
   const skippable = [];
   for (const step of pendingSteps) {
     const effect = step.effect || classify(step.tool);
-    const committedInLedger = step.idemKey && ledgerReview.committed.some((item) => item.idemKey === step.idemKey);
+    // 只有写操作（effect==='write'）才可能被幂等账本「真的跳过」—— 执行期 begin() 的去重条件
+    // 就是 phase==='committed' && effect==='write'。unknown 类即使已提交也不能进 skippable，
+    // 否则会出现「文案说跳过、执行期照样重跑」的重复副作用。
+    const committedInLedger =
+      effect === 'write' && step.idemKey && ledgerReview.committed.some((item) => item.idemKey === step.idemKey);
     if (committedInLedger) {
       skippable.push({ tool: step.tool, idemKey: step.idemKey, reason: '幂等账本显示该写操作已提交，续跑时跳过' });
       continue;
@@ -222,7 +329,9 @@ function planResume(projectRoot, runId, options = {}) {
     if (effect === 'write') uncommittedWrites.push({ tool: step.tool, argsDigest: step.argsDigest, effect });
     else if (effect === 'unknown') unknownSteps.push({ tool: step.tool, argsDigest: step.argsDigest, effect });
   }
-  const unknownFromLedger = ledgerReview.unknown.filter((item) => item.phase !== 'committed');
+  // 已提交的 unknown 同样是「做了但结果不可知」（例如成功返回的 execute_shell）：
+  // 不能因为 phase 是 committed 就放过 —— 那恰恰是最危险的一类（副作用可能已经生效）。
+  const unknownFromLedger = ledgerReview.unknown;
 
   const base = {
     ok: true,
@@ -292,7 +401,11 @@ function planResume(projectRoot, runId, options = {}) {
 function buildResumeMessages(plan, { systemPrompt } = {}) {
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-  const history = Array.isArray(plan.messages) ? plan.messages.filter((message) => message.role !== 'system') : [];
+  // 防御：磁盘上可能已经有**旧版本**写入的坏检查点（没经过 saveMessages 的修复），
+  // 读出来再修一次 —— 否则历史 Run 的「续跑」会一直报 400，而用户看不出是检查点坏了。
+  const history = repairToolPairing(
+    Array.isArray(plan.messages) ? plan.messages.filter((message) => message.role !== 'system') : []
+  );
   for (const message of history) {
     const entry = { role: message.role, content: message.content || '' };
     if (message.tool_calls) entry.tool_calls = message.tool_calls;
@@ -338,6 +451,8 @@ module.exports = {
   recordIntent,
   recordCommit,
   saveMessages,
+  repairToolPairing,
+  isToolPairingValid,
   readCheckpoints,
   stepsOf,
   lastMessages,

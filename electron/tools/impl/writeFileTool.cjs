@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
-const { resolveInRoot, checkExpectedHash, sha256OfFile } = require('./shared.cjs');
+const { resolveInRoot, checkExpectedHash, sha256OfFile, summarizeContentForConfirm } = require('./shared.cjs');
 const { atomicWriteFile } = require('../../atomicFile.cjs');
 
 function register(registry) {
@@ -49,17 +49,36 @@ function register(registry) {
       }
       const existed = fs.existsSync(target);
       const what = '写入文件 ' + relative + (existed ? '（覆盖已有文件）' : '（新建文件）');
-      const ok = await context.confirm(ConfirmationLevel.WRITE, what, '将 ' + content.length + ' 字节内容写入 ' + relative + '。');
+      // #10：确认框必须给出**内容摘要**（只给字节数等于让「确认」退化成无条件放行）
+      const ok = await context.confirm(
+        ConfirmationLevel.WRITE,
+        what,
+        '将 ' + content.length + ' 字节内容写入 ' + relative + '。\n' + summarizeContentForConfirm(content)
+      );
       if (!ok) return AgentToolResult.error('已取消写入');
+      // #9：确认框挂着的时候目标文件可能被外部改动（TOCTOU）。确认前那次校验只是「注定失败的写
+      // 别打扰用户」，**关掉 TOCTOU 窗口的是这一次**：确认已过、写入之前再校验一遍，不一致就拒写。
+      if (args.expectedSha256 != null && String(args.expectedSha256).trim()) {
+        const recheck = checkExpectedHash(target, args.expectedSha256);
+        if (!recheck.ok) {
+          return AgentToolResult.failure(
+            'CONFLICT_STALE',
+            '确认期间文件已被改动（' + recheck.reason + '）：' + relative + '。已放弃写入，请重新读回最新内容，基于它重做再写。',
+            { path: relative, expected: String(args.expectedSha256), actual: recheck.actual }
+          );
+        }
+      }
+      // 备份/新建的判定要在确认之后重算：确认期间文件可能刚被建出来或被删掉
+      const existedNow = fs.existsSync(target);
       const backup = args.backup !== false;
       try {
-        if (existed && backup) {
+        if (existedNow && backup) {
           fs.copyFileSync(target, target + '.bak');
         }
         if (path.dirname(target)) fs.mkdirSync(path.dirname(target), { recursive: true });
         atomicWriteFile(target, content, 'utf-8');
         context.audit('write_file ' + relative + ' bytes=' + content.length);
-        context.notifyFileChange(relative, existed ? 'modify' : 'create', content.length + ' 字节');
+        context.notifyFileChange(relative, existedNow ? 'modify' : 'create', content.length + ' 字节');
         return AgentToolResult.ok('已写入 ' + relative + '（' + content.length + ' 字节）', {
           path: relative,
           bytes: content.length,

@@ -3178,6 +3178,18 @@ textarea:focus-visible {
 .dock-metrics-alert{color:#e0a45e}
 .dock-recovery-meta{color:var(--text-dim,#8b8f98);font-size:11px;margin-bottom:4px}
 .dock-recovery-meta strong{color:inherit}
+/* #21：需要人工复核时，把「复核什么」摆出来（未知副作用的工具名 / 待办），并给两个出口 */
+.dock-recovery-warning{color:#fde68a;font-size:11px;margin-bottom:6px}
+.dock-recovery-review{margin:6px 0;padding:7px;border:1px solid rgba(224,164,94,.45);background:rgba(224,164,94,.08);font-size:11px;color:#e8d3a8;display:flex;flex-direction:column;gap:4px}
+.dock-recovery-review strong{color:#fca5a5}
+.dock-recovery-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+/* #21：Agent 面板里的续跑复核条（与 RunsPanel 同一份计划，两条入口都能看到复核依据） */
+.ap-resume-review{margin:0 10px 8px;padding:8px 10px;border:1px solid rgba(224,164,94,.45);background:rgba(224,164,94,.08);color:#e8d3a8;font-size:11px;display:flex;flex-direction:column;gap:4px}
+.ap-resume-review-reason{color:#fde68a}
+.ap-resume-review-warning{color:#fca5a5}
+.ap-resume-review-unknown strong{color:#fca5a5}
+.ap-resume-review-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
 
 /* ==================== 启动门禁页（参考 svgVideoMaker 的 ProjectGate） ==================== */
 .gate {

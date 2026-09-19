@@ -6,6 +6,9 @@ import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
 import { saveProject } from '../lib/projectActions';
 import { useChatStore } from '../store/chatStore';
+import { useSending } from '../lib/useSending';
+import { fireAndReport, reportError } from '../lib/reportError';
+import { summarizeResumePlan } from '../lib/resumePlan';
 import RunReplayPanel from './RunReplayPanel';
 import type { Node } from '@xyflow/react';
 
@@ -298,6 +301,13 @@ function RunsPanel() {
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [metrics, setMetrics] = useState<{ cost?: MetricsView; sandbox?: { description: string; backend: string; degraded: string[] }; alerts?: AlertDto[] } | null>(null);
   const sendChat = useChatStore((s) => s.send);
+  const stopAll = useChatStore((s) => s.stopAll);
+  // #7：续跑按钮必须和输入框共用同一个忙碌守卫 —— 修复前它绕过 `busy` 直接 `sendChat`，
+  // 于是第二个请求会覆盖 `requestId`（旧请求再也停不掉、两条流写进同一气泡）。
+  const sending = useSending();
+  const busy = sending || recoveryBusy;
+  const report = (message: string) => useUiStore.getState().setToast(message);
+  const view = resumePlan ? summarizeResumePlan(resumePlan, resumePlan.prompt) : null;
 
   useEffect(() => {
     setItems(nodes.map((n) => ({ id: n.id, label: String((n.data as Record<string, unknown>)?.label || n.id), type: n.type || 'task', status: String((n.data as Record<string, unknown>)?.status || 'pending') as RunItem['status'] })));
@@ -341,35 +351,67 @@ function RunsPanel() {
     if (!root || !window.codenode?.agentResumePlan) return;
     setRecoveryBusy(true);
     try { setResumePlan(await window.codenode.agentResumePlan(root, runId)); }
+    catch (e) { reportError('查看恢复计划失败', e, report); }
     finally { setRecoveryBusy(false); }
   };
 
   /** 自动断点续跑：走完整检查点/幂等账本链路（跳过已提交的写操作），不需要用户重述任务 */
-  const autoResume = async () => {
-    if (!resumePlan?.ok || !resumePlan.runId) return;
+  const autoResume = () => {
+    if (busy || !resumePlan?.ok || !resumePlan.runId) return;
     setRecoveryBusy(true);
-    try {
-      await sendChat('（自动断点续跑）' + (resumePlan.prompt || ''), { resumeRunId: resumePlan.runId });
-      setResumePlan(null);
-      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
-    } finally {
-      setRecoveryBusy(false);
-    }
+    // #25(a)：`void asyncFn()` 会把 IPC reject 吞进 devtools —— 统一走 fireAndReport，
+    // 失败一定变成用户可见的提示（含「点了没反应」的那一类）。
+    void fireAndReport(
+      async () => {
+        // #21：后端 needsReview 时回传的 plan 留在这里显示，别把「复核什么」丢掉
+        const res = await sendChat('（自动断点续跑）' + (resumePlan.prompt || ''), { resumeRunId: resumePlan.runId });
+        if (res.reply) setResumePlan(null);
+        if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
+      },
+      '自动续跑失败',
+      report
+    ).finally(() => setRecoveryBusy(false));
   };
 
-  const retryResume = async () => {
-    if (!resumePlan?.ok || !resumePlan.prompt) return;
+  const retryResume = () => {
+    if (busy || !resumePlan?.ok || !resumePlan.prompt) return;
     setRecoveryBusy(true);
-    try {
-      const replacementRunId = 'retry-' + Date.now().toString(36);
-      const marked = root && window.codenode?.agentResumeStart
-        ? await window.codenode.agentResumeStart(root, resumePlan.runId || '', replacementRunId)
-        : { ok: false, error: '恢复接口不可用' };
-      if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
-      await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
-      setResumePlan(null);
-      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
-    } finally { setRecoveryBusy(false); }
+    void fireAndReport(
+      async () => {
+        const replacementRunId = 'retry-' + Date.now().toString(36);
+        const marked = root && window.codenode?.agentResumeStart
+          ? await window.codenode.agentResumeStart(root, resumePlan.runId || '', replacementRunId)
+          : { ok: false, error: '恢复接口不可用' };
+        if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
+        await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
+        setResumePlan(null);
+        if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
+      },
+      '按当前状态重试失败',
+      report
+    ).finally(() => setRecoveryBusy(false));
+  };
+
+  /** 了解风险后强制续跑（#21 的出口①）：带 resumeForce，主进程不再拦 needsReview */
+  const forceResume = () => {
+    if (busy || !resumePlan || !resumePlan.runId) return;
+    setRecoveryBusy(true);
+    void fireAndReport(
+      async () => {
+        useUiStore.getState().setResumePlanNotice(null);
+        await sendChat(view ? view.forceResumePrompt : '（已阅风险，强制续跑）', { resumeRunId: resumePlan.runId, resumeForce: true });
+        setResumePlan(null);
+        if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
+      },
+      '强制续跑失败',
+      report
+    ).finally(() => setRecoveryBusy(false));
+  };
+
+  /** 立即停掉所有在跑的 Agent 请求（#7：「全部停止」出口） */
+  const stopEverything = () => {
+    const ids = stopAll();
+    if (!ids.length) report('当前没有正在运行的 Agent 请求');
   };
 
   const start = async () => {
@@ -437,7 +479,10 @@ function RunsPanel() {
 
   return (
     <div className="dock-runs">
-      <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button><button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
+      <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button>
+      {/* #7：「全部停止」出口 —— 并发下必须能一次停干净所有在跑的请求（含被覆盖的那条控制权） */}
+      <button className="dock-danger" onClick={stopEverything} disabled={!sending}>全部停止 Agent</button>
+      <button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
         <strong>可续跑的 Agent 运行（中断 / 达到步数上限）</strong>
@@ -445,19 +490,38 @@ function RunsPanel() {
           <span>{run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
           <button onClick={() => run.runId && void inspectResume(run.runId)} disabled={recoveryBusy}>查看恢复计划</button>
         </div>)}
-        {resumePlan && <div className="dock-recovery-plan">
+        {resumePlan && view && <div className="dock-recovery-plan">
           <div className="dock-recovery-meta">
-            恢复级别：<strong>{resumePlan.mode || 'unknown'}</strong>
-            {resumePlan.reason ? ' · ' + resumePlan.reason : ''}
+            恢复级别：<strong>{view.modeLabel}</strong>
+            {' · ' + view.reason}
             {resumePlan.completedSteps?.length ? ' · 已完成 ' + resumePlan.completedSteps.length + ' 步' : ''}
-            {resumePlan.skippedByLedger?.length ? ' · 幂等跳过 ' + resumePlan.skippedByLedger.length + ' 步' : ''}
+            {view.skippedCount ? ' · 幂等跳过 ' + view.skippedCount + ' 步' : ''}
           </div>
-          <pre>{resumePlan.warning || resumePlan.error || '无恢复计划'}</pre>
+          {view.warning ? <div className="dock-recovery-warning" role="alert">{view.warning}</div> : null}
+          {/* #21：后端明确要求人工复核时，必须把**复核什么**摆出来，
+              并给出两个出口（了解风险强制续跑 / 按当前状态重试）。 */}
+          {view.requiresReview ? (
+            <div className="dock-recovery-review" role="alertdialog" aria-label="续跑需要人工复核">
+              <div>需要人工复核，系统不会自动重放下面这些步骤：</div>
+              {view.unknownTools.length ? (
+                <div>
+                  结果不可知的工具：
+                  <strong data-testid="dock-resume-unknown-tools">{view.unknownTools.join('、')}</strong>
+                </div>
+              ) : null}
+              {view.pendingLabels.length ? <div>待办 {view.pendingLabels.length} 步：{view.pendingLabels.slice(0, 8).join('、')}</div> : null}
+              <div className="dock-recovery-actions">
+                <button className="dock-danger" onClick={forceResume} disabled={busy} title={view.forceResumePrompt}>了解风险，强制续跑</button>
+                <button onClick={retryResume} disabled={busy} title={view.retryPrompt}>按当前状态重试</button>
+              </div>
+            </div>
+          ) : null}
+          <pre>{view.warning || view.reason || resumePlan.error || '无恢复计划'}</pre>
           {resumePlan.ok && resumePlan.mode === 'auto' && (
-            <button className="dock-primary" onClick={() => void autoResume()} disabled={recoveryBusy}>自动续跑（跳过已提交的写操作）</button>
+            <button className="dock-primary" onClick={autoResume} disabled={busy}>自动续跑（跳过已提交的写操作）</button>
           )}
-          {resumePlan.ok && resumePlan.mode !== 'auto' && (
-            <button className="dock-primary" onClick={() => void retryResume()} disabled={recoveryBusy}>按当前状态重试（人工确认）</button>
+          {resumePlan.ok && resumePlan.mode !== 'auto' && !view.requiresReview && (
+            <button className="dock-primary" onClick={retryResume} disabled={busy}>按当前状态重试（人工确认）</button>
           )}
         </div>}
       </div>}
