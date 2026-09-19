@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+### 修复（harness 短板收尾：请求形状可关 / 交互输入不进缓存 / 进度检查层；2026-09-19）
+
+对照 `AGENT_TOOL_ARCH_REVIEW_2026-09-15` 与探针审计的短板表，逐条核对后修掉仍成立的三条：
+
+- **`reasoning_effort` 与 `stream_options` 现在可以关掉**：此前 `cfg.reasoning_effort || 'medium'` 让「留空」
+  也回落到 medium，且 `stream_options.include_usage` 无条件下发 —— 对不接受这两个字段的 OpenAI 兼容网关，
+  每次请求都是 400。现在：键不写 = 出厂默认 medium；显式留空或 none/off/false/no/-/null/disabled =
+  **请求体里不带该字段**；`agent.send_stream_options=false` = 不带 stream_options。
+  判据 `test:agent-request-shape`（断言**真实请求体**的字段有无，含「关掉必须消失」与「默认仍下发」）。
+- **`ask_user` 退出只读缓存白名单**：它是交互输入不是幂等读，此前同一 run 内同问第二次会复用旧答案
+  （用户看不到第二次提问）。负向判据同时锁住「其他只读工具照旧缓存」。
+- **新增进度检查层**（对齐 Java 版「每 3 步注入任务清单」）：`agent.progress_every`（出厂 3，0=关）每 N 轮
+  注入一条只讲事实的清单（轮次 / 已用工具调用数 / 已改动文件 / 失败次数与最近错误码 / 用量），并要求下一步
+  先交代「目标 / 已完成 / 下一步」。注入点在压缩与硬裁剪**之后**（否则会被本次压缩丢掉）、同一时刻只保留
+  一条（原地替换，不动消息下标）。判据 `test:agent-progress`（正反两向 + 出厂默认 + 接线在 limits 段）。
+- 顺带把「已改动文件」的口径抽成唯一实现 `electron/tools/fileChanges.cjs`（子代理信封与进度层共用；
+  修掉此前子代理那份漏算 `bulk_edit` 的 edits[] 路径的问题）。
+
 ### 新增（多 Agent 信息完整性 P5：确定性合并 + 冲突裁决；2026-09-17）
 
 `docs/multi-agent-info-integrity-2026-09-17.md` §12；实现 `electron/tools/merge.cjs`；

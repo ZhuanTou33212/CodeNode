@@ -8,6 +8,18 @@ model=deepseek-v4-flash
 max_tokens=32768
 # 推理强度：low / medium / high
 # reasoning_effort=high
+# 推理强度**可以关掉**：键不写 = 出厂默认 medium；写空值或 none/off/false/no/-/null/disabled = 请求体里
+# **不带这个字段**（给不认 reasoning_effort 的 OpenAI 兼容网关用）。
+# reasoning_effort=
+# 同理，stream_options.include_usage 默认随流式请求下发（DeepSeek 用它报用量）；不认这个字段的网关写 false：
+# agent.send_stream_options=false
+#
+# 进度检查层（对齐 Java 版「每 3 步注入任务清单」）：每 N 轮注入一条只讲事实的进度清单
+# （轮次 / 已用工具调用数 / 已改动文件 / 失败次数与最近错误码 / 用量），并要求下一步先交代
+# 「目标 / 已完成 / 下一步」—— 长任务里能显著减少空转与目标漂移。0 = 关闭。
+# agent.progress_every=3
+#
+# 只读结果缓存白名单里**没有** ask_user：它是交互输入，同一 run 内同问必须再问一次（不复用旧答案）。
 # 瞬时网络错误重试（408/425/429/5xx 与连接失败），不会重试用户取消/超时
 # agent.request_max_attempts=3
 # agent.retry_base_ms=400
