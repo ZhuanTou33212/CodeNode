@@ -182,7 +182,7 @@
     "cross-env": "^7.0.3",
     "electron": "^44.0.0",
     "electron-builder": "^24.13.3",
-    "typescript": "^5.7.2",
+    "typescript": "^7.0.2",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
   }
