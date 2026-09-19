@@ -92,7 +92,7 @@ jobs:
         run: npm test
       - name: 上传评测报告（三平台各一份，含失败与跳过清单）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-${{ runner.os }}
           path: docs/eval-reports/
@@ -120,7 +120,7 @@ jobs:
           CODENODE_EVAL_MODEL: ${{ vars.CODENODE_EVAL_MODEL }}
       - name: 上传真实模型评测报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-model
           path: docs/eval-reports/
