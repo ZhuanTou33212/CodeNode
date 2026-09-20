@@ -5,6 +5,7 @@ import { useUiStore } from './uiStore';
 import { useSessionStore } from './sessionStore';
 import { useUsageStore, type UsageSnapshot } from './usageStore';
 import { createInflightRegistry } from '../lib/inflight';
+import { describeFailure } from '../lib/reportError';
 import type { ResumePlanLike } from '../lib/resumePlan';
 import type { AgentAttachment, ToolRecord } from '../types';
 
@@ -76,6 +77,11 @@ interface ChatState {
   stop: (requestId?: string) => void;
   /** 全部停止：并发下必须有一个能一次停干净所有 in-flight 的出口 */
   stopAll: () => string[];
+  /**
+   * §4.2 运行中插话（steering）：把一句话插进正在跑的 run，下一轮进请求体。
+   * 没有在跑的请求 / run 已结束时返回 `accepted:false` + 原因（界面据此如实提示，不静默）。
+   */
+  steer: (text: string) => Promise<{ accepted: boolean; reason?: string; pending?: number; error?: string }>;
 }
 
 /** 把 DeepSeek usage 归一化为本应用结构 */
@@ -143,6 +149,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }
     return ids;
+  },
+
+  steer: async (text) => {
+    const target = lastRequestId || inflight.ids()[inflight.ids().length - 1] || null;
+    if (!target) return { accepted: false, reason: 'no-active-run', error: '当前没有正在运行的 Agent 请求' };
+    const api = window.codenode;
+    if (!api?.steerAgent) return { accepted: false, reason: 'unsupported', error: '当前环境不支持插话' };
+    try {
+      const result = await api.steerAgent(target, text);
+      return result || { accepted: false, reason: 'unknown', error: '插话未生效' };
+    } catch (error) {
+      return { accepted: false, reason: 'failed', error: describeFailure(error) };
+    }
   },
 
   send: async (prompt, options) => {

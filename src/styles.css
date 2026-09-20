@@ -2652,6 +2652,50 @@ textarea:focus-visible {
   border-color: rgba(255, 125, 148, 0.32);
 }
 
+/* §4.2 运行中插话：占用「发送」的位置，不新增一行、不抢注意力 */
+.pp-steer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pp-steer-input {
+  flex: none;
+  width: 220px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: rgba(12, 20, 34, 0.72);
+  border: 1px solid rgba(137, 181, 255, 0.24);
+  color: #e6ecf6;
+  font: inherit;
+  font-size: 12px;
+}
+
+.pp-steer-input:focus {
+  outline: none;
+  border-color: rgba(137, 181, 255, 0.55);
+}
+
+.pp-steer-send {
+  flex: none;
+  min-height: 30px;
+  padding: 5px 12px;
+  border-radius: 9px;
+  background: rgba(137, 181, 255, 0.14);
+  border: 1px solid rgba(137, 181, 255, 0.34);
+  color: #d9e6ff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pp-steer-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* ---- 小标题 / 路径行 ---- */
 .sp-subhead {
   flex: none;
@@ -3181,6 +3225,17 @@ textarea:focus-visible {
 /* #21：需要人工复核时，把「复核什么」摆出来（未知副作用的工具名 / 待办），并给两个出口 */
 .dock-recovery-warning{color:#fde68a;font-size:11px;margin-bottom:6px}
 .dock-recovery-review{margin:6px 0;padding:7px;border:1px solid rgba(224,164,94,.45);background:rgba(224,164,94,.08);font-size:11px;color:#e8d3a8;display:flex;flex-direction:column;gap:4px}
+/* §4.2 Run 级文件回滚：沿用 dock-recovery 的视觉语言（11px / 暗色 / 等宽路径） */
+.dock-rollback-items{display:flex;flex-direction:column;gap:2px;margin:6px 0;max-height:180px;overflow:auto}
+.dock-rollback-item{display:flex;align-items:baseline;gap:8px;font-size:11px;color:var(--text-dim,#8b8f98)}
+.dock-rollback-path{font:11px/1.45 Consolas,monospace;color:#cfd3dc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
+.dock-rollback-act{flex:0 0 auto;color:#9aa1ad}
+.dock-rollback-item[data-action="restore"] .dock-rollback-act{color:#8ab4f8}
+.dock-rollback-item[data-action="delete"] .dock-rollback-act{color:#e0a45e}
+.dock-rollback-item[data-action="skip"] .dock-rollback-act{color:#8b8f98}
+.dock-rollback-why{flex:0 0 auto;color:#e0a45e;font-size:10px}
+.dock-rollback-force{display:flex;align-items:center;gap:6px;margin:6px 0;font-size:11px;color:#e8d3a8;cursor:pointer}
+.dock-rollback-force input{accent-color:#e0a45e}
 .dock-recovery-review strong{color:#fca5a5}
 .dock-recovery-actions{display:flex;gap:6px;flex-wrap:wrap}
 

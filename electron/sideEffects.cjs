@@ -116,6 +116,57 @@ function ledgerPath(projectRoot, scopeRunId) {
   return path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs', safe + '.side-effects.json');
 }
 
+/** 前像正文的上限（超过就只记哈希，标记不可回滚 —— 宁可如实说「撤不了」，也不留半个文件） */
+const BEFORE_IMAGE_CAP = 262144;
+
+/** 前像 blob 目录（内容寻址：同一份内容只存一次，账本本体因此不会膨胀） */
+function beforeImageDir(projectRoot, scopeRunId) {
+  const safe = String(scopeRunId || 'unscoped').replace(/[^A-Za-z0-9._-]/g, '_');
+  return path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs', safe + '.before-images');
+}
+
+/**
+ * 抓写操作执行**之前**的文件状态（Run 级回滚的依据）。
+ *
+ * 语义（判据见 scripts/run-rollback-test.cjs）：
+ *   - 文件当时不存在 → `{ existed:false, restorable:true, delete:true }`（回滚 = 删掉它）；
+ *   - 存在且 ≤ 256KB → 正文内容寻址存 blob，`{ existed:true, restorable:true, sha256, blob }`；
+ *   - 存在但过大/不可读/不是普通文件 → `restorable:false` + 原因（**不假装能回滚**）。
+ * @param {any} projectRoot
+ * @param {string} scopeRunId
+ * @param {string} relPath
+ * @returns {any}
+ */
+function captureBeforeImage(projectRoot, scopeRunId, relPath) {
+  const target = path.resolve(projectRoot || '.', String(relPath));
+  try {
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) return { path: relPath, existed: true, restorable: false, reason: 'not-a-file' };
+    if (stat.size > BEFORE_IMAGE_CAP) {
+      return { path: relPath, existed: true, restorable: false, reason: 'too-large', bytes: stat.size };
+    }
+    const content = fs.readFileSync(target, 'utf8');
+    const sha256 = digest(content);
+    const dir = beforeImageDir(projectRoot, scopeRunId);
+    fs.mkdirSync(dir, { recursive: true });
+    const blob = path.join(dir, sha256 + '.txt');
+    if (!fs.existsSync(blob)) {
+      const tmp = blob + '.' + process.pid + '.tmp';
+      fs.writeFileSync(tmp, content);
+      fs.renameSync(tmp, blob);
+    }
+    return { path: relPath, existed: true, restorable: true, bytes: Buffer.byteLength(content), sha256, blob: sha256 + '.txt' };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { path: relPath, existed: false, restorable: true };
+    return {
+      path: relPath,
+      existed: true,
+      restorable: false,
+      reason: 'unreadable:' + String((error && error.code) || (error && error.message) || 'unknown'),
+    };
+  }
+}
+
 /**
  * 行为者标签（S9）：`supervisor`（主代理）或 `task-xxx(role)`（子代理）。
  * 只做归因展示，**不参与幂等键** —— 幂等域仍然是 run，续跑的「已提交就跳过」语义必须保持。
@@ -141,6 +192,8 @@ class SideEffectLedger {
     this.projectRoot = options.projectRoot || null;
     this.scopeRunId = String(options.scopeRunId || 'unscoped');
     this.file = options.file || (this.projectRoot ? ledgerPath(this.projectRoot, this.scopeRunId) : null);
+    /** @type {Map<string, any>} 按**路径**存的写前像（Run 级回滚用；见 begin/captureBeforeImage） */
+    this.beforeImages = new Map();
     this.clock = options.clock || (() => new Date().toISOString());
     this.records = new Map(); // idemKey -> record
     this._load();
@@ -151,6 +204,11 @@ class SideEffectLedger {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       for (const record of parsed.records || []) this.records.set(record.idemKey, record);
+      // 前像是**按路径**存的（不是按记录）：同一路径被写多次时，回滚要回到「Run 开始前」那一份，
+      // 而记录是按 (工具,参数) 分键的 —— 存进记录里会被后续不同参数的写各存一份、互相覆盖。
+      for (const [relPath, image] of Object.entries(parsed.beforeImages || {})) {
+        this.beforeImages.set(relPath, image);
+      }
     } catch {
       // 账本损坏：保留文件内容供人工排查，从空账本开始（宁可少去重，也不能伪造去重）
       this.loadError = '账本解析失败，已忽略旧内容';
@@ -175,7 +233,8 @@ class SideEffectLedger {
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const records = [...this.records.values()];
-      atomicWriteFile(this.file, JSON.stringify({ scopeRunId: this.scopeRunId, updatedAt: this.clock(), records }, null, 2));
+      const beforeImages = Object.fromEntries(this.beforeImages);
+      atomicWriteFile(this.file, JSON.stringify({ scopeRunId: this.scopeRunId, updatedAt: this.clock(), records, beforeImages }, null, 2));
       // S8：账本变化也投递一条事件 —— 只报事实（条数 + 最新一条的相位），不搬整份账本进事件流
       const latest = records.length ? records[records.length - 1] : null;
       if (this.projectRoot) {
@@ -247,6 +306,12 @@ class SideEffectLedger {
     record.phase = 'pending';
     record.intents = (record.intents || 0) + 1;
     record.lastIntentAt = this.clock();
+    if (!record.firstIntentAt) record.firstIntentAt = record.lastIntentAt;
+    // Run 级回滚的依据：写操作**第一次触碰该路径之前**抓一次前像，按**路径**保存 ——
+    // 回滚要回到「本次 Run 开始前」，而不是「上一次写之前」。判据见 scripts/run-rollback-test.cjs。
+    if (effect === 'write' && statePath && !this.beforeImages.has(statePath)) {
+      this.beforeImages.set(statePath, captureBeforeImage(this.projectRoot, this.scopeRunId, statePath));
+    }
     record.actor = record.actor || who;
     record.lastActor = who;
     if (!Array.isArray(record.actors)) record.actors = [];
@@ -315,6 +380,29 @@ class SideEffectLedger {
     return { committed, pending, unknown };
   }
 
+  /**
+   * 供「Run 级回滚」使用：列出本次 Run 里**带 path 的写操作**及其前像，按**首次意图时间**排序。
+   * 只读记录（effect!=='write'）与没有 path 的写（如 save_project）不参与回滚。
+   * @returns {Array<any>}
+   */
+  recordsForRollback() {
+    const out = [];
+    for (const record of this.records.values()) {
+      if (record.effect !== 'write' || !record.statePath) continue;
+      out.push({
+        path: record.statePath,
+        tool: record.tool,
+        phase: record.phase,
+        actor: record.actor || null,
+        firstIntentAt: record.firstIntentAt || record.lastIntentAt || record.committedAt || null,
+        postStateDigest: record.postStateDigest || null,
+        // 前像按路径取（同一路径的多次写共用**最早**那一份）
+        beforeImage: this.beforeImages.get(record.statePath) || null,
+      });
+    }
+    return out.sort((a, b) => String(a.firstIntentAt || '').localeCompare(String(b.firstIntentAt || '')));
+  }
+
   size() {
     return this.records.size;
   }
@@ -339,6 +427,9 @@ module.exports = {
   canonicalArgsText,
   fileStateDigest,
   ledgerPath,
+  captureBeforeImage,
+  beforeImageDir,
+  BEFORE_IMAGE_CAP,
   READ_TOOLS,
   WRITE_TOOLS,
   UNKNOWN_TOOLS,

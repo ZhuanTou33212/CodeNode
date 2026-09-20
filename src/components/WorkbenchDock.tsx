@@ -15,6 +15,29 @@ import type { Node } from '@xyflow/react';
 type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
 type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
 type AgentRun = { runId: string | null; status: string; state?: string | null; startedAt: string | null; eventCount: number };
+/** §4.2 回滚计划（与 electron/runRollback.cjs 的 planRollback 返回形状一致） */
+type RollbackPlan = {
+  ok: boolean;
+  error?: string;
+  runId: string;
+  items: { path: string; tools: string[]; action: 'restore' | 'delete' | 'skip'; restorable: boolean; reason?: string; conflict: boolean; bytes?: number | null }[];
+  summary: { restore: number; delete: number; skip: number; conflict: number };
+};
+type RollbackReport = {
+  ok: boolean;
+  runId: string;
+  applied: { path: string; action: string; verified?: boolean }[];
+  refused: { path: string; reason: string }[];
+  skipped: { path: string; reason: string }[];
+  summary: { applied: number; refused: number; skipped: number; conflicts: number };
+  error?: string;
+};
+/** §4.2 子代理任务视图（落盘可查，跨 run） */
+type SubagentRunView = {
+  runId: string;
+  updatedAt: string | null;
+  tasks: { taskId: string; role: string | null; objective: string; status: string | null; summary: string; error: string | null; finishedAt: string | null }[];
+};
 /**
  * 哪些 Run 值得出现在「可续跑」列表里（第 2 项缺陷）：
  *   - `interrupted`：进程/连接中断，本来就在列；
@@ -299,6 +322,14 @@ function RunsPanel() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [resumePlan, setResumePlan] = useState<ResumePlan | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  // §4.2：Run 级文件回滚
+  const [rollbackRuns, setRollbackRuns] = useState<AgentRun[]>([]);
+  const [rollbackPlan, setRollbackPlan] = useState<RollbackPlan | null>(null);
+  const [rollbackResult, setRollbackResult] = useState<RollbackReport | null>(null);
+  const [rollbackForce, setRollbackForce] = useState(false);
+  const [rollbackBusy, setRollbackBusy] = useState(false);
+  // §4.2：子代理任务视图（跨 run，落盘可查）
+  const [subagentRuns, setSubagentRuns] = useState<SubagentRunView[]>([]);
   const [metrics, setMetrics] = useState<{ cost?: MetricsView; sandbox?: { description: string; backend: string; degraded: string[] }; alerts?: AlertDto[] } | null>(null);
   const sendChat = useChatStore((s) => s.send);
   const stopAll = useChatStore((s) => s.stopAll);
@@ -318,8 +349,11 @@ function RunsPanel() {
     let alive = true;
     if (!root || !window.codenode?.agentRuns) { setAgentRuns([]); return () => { alive = false; }; }
     void window.codenode.agentRuns(root).then((runs) => {
-      if (alive) setAgentRuns(runs.filter(isResumableRun));
-    }).catch(() => { if (alive) setAgentRuns([]); });
+      if (!alive) return;
+      setAgentRuns(runs.filter(isResumableRun));
+      // 回滚列表要的是「跑过、可能改过文件」的 Run（已完成/失败/中断都算），取最近 10 个
+      setRollbackRuns(runs.slice(0, 10));
+    }).catch(() => { if (alive) { setAgentRuns([]); setRollbackRuns([]); } });
     return () => { alive = false; };
   }, [root]);
 
@@ -346,6 +380,58 @@ function RunsPanel() {
       off?.();
     };
   }, [root]);
+
+  // §4.2：子代理任务视图（落盘可查，跨 run）—— 请求结束后仍能看到「派了谁、结论是什么」
+  const loadSubagentViews = () => {
+    if (!root || !window.codenode?.subagentViews) {
+      setSubagentRuns([]);
+      return;
+    }
+    void window.codenode
+      .subagentViews(root, { maxRuns: 3, maxTasksPerRun: 8 })
+      .then((res) => setSubagentRuns(res?.ok ? res.runs : []))
+      .catch(() => setSubagentRuns([]));
+  };
+  useEffect(loadSubagentViews, [root]);
+
+  // §4.2：Run 级文件回滚 —— 先只读计划（用户看过再动手），执行后把结果如实展示
+  const inspectRollback = async (runId: string) => {
+    if (!root || !window.codenode?.rollbackPlan) return;
+    setRollbackBusy(true);
+    setRollbackResult(null);
+    try {
+      const plan = await window.codenode.rollbackPlan(root, runId);
+      setRollbackPlan(plan);
+      setRollbackForce(false);
+      if (!plan.ok) report('读取回滚计划失败：' + String(plan.error || '未知原因'));
+    } catch (error) {
+      reportError('读取回滚计划失败', error, report);
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
+
+  const runRollback = async () => {
+    if (!root || !rollbackPlan?.runId || !window.codenode?.rollbackApply) return;
+    setRollbackBusy(true);
+    try {
+      const result = await window.codenode.rollbackApply(root, rollbackPlan.runId, { force: rollbackForce });
+      setRollbackResult(result);
+      // 冲突项被拒时如实说清「为什么没撤」——不能只说「完成」
+      const refused = result.refused?.length || 0;
+      const applied = result.applied?.length || 0;
+      report(
+        result.ok
+          ? '已撤销 ' + applied + ' 个文件的改动'
+          : '回滚完成但有 ' + refused + ' 项被拒（' + (result.refused?.[0]?.reason || '见面板') + '），另有 ' + (result.skipped?.length || 0) + ' 项无法回滚'
+      );
+      if (result.applied?.length) void inspectRollback(rollbackPlan.runId);
+    } catch (error) {
+      reportError('执行回滚失败', error, report);
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
 
   const inspectResume = async (runId: string) => {
     if (!root || !window.codenode?.agentResumePlan) return;
@@ -523,6 +609,72 @@ function RunsPanel() {
           {resumePlan.ok && resumePlan.mode !== 'auto' && !view.requiresReview && (
             <button className="dock-primary" onClick={retryResume} disabled={busy}>按当前状态重试（人工确认）</button>
           )}
+        </div>}
+      </div>}
+      {/* §4.2：子代理任务视图 —— 落盘可查，跨 run（此前只有进程内 Map，刷新即失忆） */}
+      {subagentRuns.length > 0 && <div className="dock-agent-recovery" data-testid="dock-subagents">
+        <strong>子代理任务（跨运行留存，最近 3 个运行）</strong>
+        {subagentRuns.map((run) => <div key={run.runId} className="dock-subagent-run">
+          <div className="dock-recovery-meta">
+            {run.runId} · {run.updatedAt ? new Date(run.updatedAt).toLocaleString() : '未知时间'} · {run.tasks.length} 个任务
+          </div>
+          {run.tasks.map((task) => (
+            <div className="dock-rollback-item" key={task.taskId} data-action={task.status === 'done' ? 'restore' : 'skip'}>
+              <span className="dock-rollback-path" title={task.objective}>{task.objective || task.taskId}</span>
+              <span className="dock-rollback-act">{task.role || '未知角色'} · {task.status || '未知'}</span>
+              {task.error ? <span className="dock-rollback-why" title={task.error}>未完成</span> : null}
+            </div>
+          ))}
+        </div>)}
+        <div className="dock-recovery-actions">
+          <button onClick={() => loadSubagentViews()} data-testid="dock-subagents-refresh">刷新</button>
+        </div>
+      </div>}
+      {/* §4.2：Run 级文件回滚 —— 让「跑偏了」有出口，而不是逐个文件手动还原 */}
+      {rollbackRuns.length > 0 && <div className="dock-agent-recovery" data-testid="dock-rollback">
+        <strong>撤销本次 Run 的文件改动（回到该 Run 开始之前）</strong>
+        {rollbackRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
+          <span>{run.runId} · {run.status} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
+          <button onClick={() => run.runId && void inspectRollback(run.runId)} disabled={rollbackBusy || !run.runId}>查看可撤销的文件</button>
+        </div>)}
+        {rollbackPlan?.ok && <div className="dock-recovery-plan" data-testid="dock-rollback-plan">
+          <div className="dock-recovery-meta">
+            将还原 <strong>{rollbackPlan.summary.restore}</strong> 个文件
+            {' · 删除 '}<strong>{rollbackPlan.summary.delete}</strong>
+            {rollbackPlan.summary.skip ? ' · 无法回滚 ' + rollbackPlan.summary.skip + ' 项（见面板说明）' : ''}
+            {rollbackPlan.summary.conflict ? ' · 有 ' + rollbackPlan.summary.conflict + ' 项在本 Run 之后被外部改过' : ''}
+          </div>
+          {rollbackPlan.items.length === 0
+            ? <div className="dock-recovery-meta">这个 Run 没有改动任何文件（或没有记录到前像）。</div>
+            : <div className="dock-rollback-items">
+              {rollbackPlan.items.slice(0, 12).map((item) => (
+                <div className="dock-rollback-item" key={item.path} data-action={item.action}>
+                  <span className="dock-rollback-path">{item.path}</span>
+                  <span className="dock-rollback-act">{item.action === 'restore' ? '还原' : item.action === 'delete' ? '删除' : '跳过'}</span>
+                  {item.action === 'skip' ? <span className="dock-rollback-why">{item.reason}</span> : null}
+                  {item.conflict ? <span className="dock-rollback-why">本 Run 之后被改过</span> : null}
+                </div>
+              ))}
+              {rollbackPlan.items.length > 12 ? <div className="dock-recovery-meta">…还有 {rollbackPlan.items.length - 12} 项</div> : null}
+            </div>}
+          {rollbackPlan.summary.conflict ? (
+            <label className="dock-rollback-force">
+              <input type="checkbox" checked={rollbackForce} onChange={(event) => setRollbackForce(event.target.checked)} />
+              我确认要覆盖「本 Run 之后被外部改过」的文件
+            </label>
+          ) : null}
+          <div className="dock-recovery-actions">
+            <button className="dock-danger" onClick={() => void runRollback()} disabled={rollbackBusy || (rollbackPlan.summary.restore + rollbackPlan.summary.delete === 0)} data-testid="dock-rollback-apply">
+              回滚这些文件
+            </button>
+            <button onClick={() => { setRollbackPlan(null); setRollbackResult(null); }} disabled={rollbackBusy}>收起</button>
+          </div>
+          {rollbackResult ? (
+            <div className="dock-recovery-meta" data-testid="dock-rollback-result">
+              结果：已处理 {rollbackResult.applied.length} · 被拒 {rollbackResult.refused.length} · 跳过 {rollbackResult.skipped.length}
+              {rollbackResult.refused.length ? '（' + rollbackResult.refused.map((item) => item.path + '：' + item.reason).slice(0, 3).join('；') + '）' : ''}
+            </div>
+          ) : null}
         </div>}
       </div>}
       {metrics && <div className="dock-metrics">

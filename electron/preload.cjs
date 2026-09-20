@@ -6,6 +6,13 @@ contextBridge.exposeInMainWorld('codenode', {
   chooseProject: () => ipcRenderer.invoke('project:choose'),
   // S8：统一事件流的按 run 回放（时间线 + 摘要）
   replayEvents: (root, options) => ipcRenderer.invoke('agent:events', root, options),
+  // §4.2：Run 级文件回滚 —— 先取只读计划（逐项 restore/delete/skip + 原因），确认后再执行
+  rollbackPlan: (root, runId) => ipcRenderer.invoke('agent:rollback-plan', root, runId),
+  rollbackApply: (root, runId, options) => ipcRenderer.invoke('agent:rollback-apply', root, runId, options),
+  // §4.2：子代理任务视图（跨 run 可查）
+  subagentViews: (root, options) => ipcRenderer.invoke('agent:subagents', root, options),
+  // §4.2：运行中插话（steering）—— 长任务跑偏时不用整停
+  steerAgent: (requestId, text) => ipcRenderer.invoke('agent:steer', requestId, text),
   createProject: () => ipcRenderer.invoke('project:create'),
   listProject: (root) => ipcRenderer.invoke('project:list', root),
   readProjectFile: (root, relPath, options) => ipcRenderer.invoke('project:read', root, relPath, options),

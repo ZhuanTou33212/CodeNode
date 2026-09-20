@@ -28,6 +28,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       mode: ${{ steps.mode.outputs.mode }}
+      has_key: ${{ steps.key.outputs.has_key }}
     steps:
       - name: 解析本次运行模式
         id: mode
@@ -59,6 +60,19 @@ jobs:
             exit 1
           fi
           echo "发布凭据齐全：评测 Key 与 Windows 签名证书均已配置"
+
+      - name: 评测 Key 是否配置（决定 PR 上的真机子集是否运行）
+        id: key
+        env:
+          CODENODE_EVAL_API_KEY: ${{ secrets.CODENODE_EVAL_API_KEY }}
+        run: |
+          if [ -n "${CODENODE_EVAL_API_KEY}" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+            echo "已配置 CODENODE_EVAL_API_KEY：PR/push 将运行真机子集（--subset=pr，3 个便宜任务）"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "未配置 CODENODE_EVAL_API_KEY：不运行 PR 真机子集（fork PR 拿不到 secrets，属预期；离线门禁照常）"
+          fi
 
   gate:
     name: Gate (${{ matrix.os }})
@@ -95,6 +109,37 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-eval-report-${{ runner.os }}
+          path: docs/eval-reports/
+          if-no-files-found: warn
+
+  # 真机回归挂 PR：仓库里配了评测 Key 就在 PR/push 上跑**便宜子集**（--subset=pr，3 个任务）。
+  # 动机：真机评测此前只在手动 release 模式跑 → electron/** 的改动要等到发布前才第一次见真机，
+  # 而历史上有两类缺陷（真实流分片把参数切碎、窗口口径）**只在真机上暴露、离线永远全绿**。
+  # fork PR 拿不到 secrets → has_key=false → 本 job 不出现（属预期，不是静默放行：离线门禁照常跑）。
+  model-eval-pr:
+    name: 真实模型回归（PR 子集，fail-closed）
+    needs: credentials
+    if: needs.credentials.outputs.mode == 'gate' && needs.credentials.outputs.has_key == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: 真机子集评测（--subset=pr --require-model：无 Key 直接非 0 退出）
+        run: npm run test:eval:model:pr
+        env:
+          CODENODE_EVAL_API_KEY: ${{ secrets.CODENODE_EVAL_API_KEY }}
+          CODENODE_EVAL_BASE_URL: ${{ vars.CODENODE_EVAL_BASE_URL }}
+          CODENODE_EVAL_MODEL: ${{ vars.CODENODE_EVAL_MODEL }}
+      - name: 上传真机子集评测报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-eval-report-model-pr
           path: docs/eval-reports/
           if-no-files-found: warn
 

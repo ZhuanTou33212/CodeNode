@@ -206,6 +206,68 @@ interface CodenodeApi {
     };
     runs?: unknown[];
   }>;
+  /** §4.2：Run 级文件回滚 —— 只读计划（逐项 restore/delete/skip + 原因 + 冲突标记）。 */
+  rollbackPlan: (
+    root: string | null,
+    runId: string,
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    runId: string;
+    items: {
+      path: string;
+      tools: string[];
+      action: 'restore' | 'delete' | 'skip';
+      restorable: boolean;
+      reason?: string;
+      conflict: boolean;
+      bytes?: number | null;
+    }[];
+    summary: { restore: number; delete: number; skip: number; conflict: number };
+  }>;
+  /** §4.2：执行回滚（force=true 才会覆盖「本 Run 之后被外部改过」的文件）。 */
+  rollbackApply: (
+    root: string | null,
+    runId: string,
+    options?: { force?: boolean },
+  ) => Promise<{
+    ok: boolean;
+    runId: string;
+    applied: { path: string; action: string; verified?: boolean }[];
+    refused: { path: string; reason: string }[];
+    skipped: { path: string; reason: string }[];
+    summary: { applied: number; refused: number; skipped: number; conflicts: number };
+    error?: string;
+  }>;
+  /** §4.2：子代理任务视图（跨 run 可查；重启后仍在）。 */
+  subagentViews: (
+    root: string | null,
+    options?: { maxRuns?: number; maxTasksPerRun?: number },
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    runs: {
+      runId: string;
+      updatedAt: string | null;
+      ok: boolean;
+      error: string | null;
+      tasks: {
+        taskId: string;
+        role: string | null;
+        objective: string;
+        status: string | null;
+        summary: string;
+        error: string | null;
+        startedAt: string | null;
+        finishedAt: string | null;
+      }[];
+    }[];
+  }>;
+  /** §4.2：运行中插话（steering）—— 成功才会进请求体；已结束的 run 会被明确拒绝。 */
+  steerAgent: (
+    requestId: string,
+    text: string,
+  ) => Promise<{ accepted: boolean; reason?: string; pending?: number; error?: string }>;
   /** S8：按 run 回放统一事件流（时间线 + 摘要）。 */
   replayEvents: (
     root: string | null,

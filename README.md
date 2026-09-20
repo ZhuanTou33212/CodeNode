@@ -11,7 +11,7 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](docs/release-process.md)
-[![Gates](https://img.shields.io/badge/gates-43%20core%20%2B%203%20display-brightgreen.svg)](scripts/run-all-tests.cjs)
+[![Gates](https://img.shields.io/badge/gates-79%20core%20%2B%205%20display-brightgreen.svg)](scripts/run-all-tests.cjs)
 
 ![CodeNode 工作台：Agent 真实跑一轮（读文件 → 读画布 → 改画布），左侧是完整对话与工具调用，右侧画布随之更新](docs/screenshots/agent-chat.png)
 
@@ -240,7 +240,7 @@ scripts/            门禁与测试套件（43 项核心 + 3 项显示）/ 打�
 统一入口（推荐；CI 也走这里，门禁清单只在 `scripts/run-all-tests.cjs` 维护一处）：
 
 ```powershell
-npm run verify         # 提交前必跑：build + check:js + core 套件（43 项）
+npm run verify         # 提交前必跑：build + check:js + core 套件（79 项）
 npm test               # core 套件：无显示环境 / 无网络 / 确定性
 npm run test:display   # 需要窗口或本机浏览器的用例（smoke / RAG UI / 矢量画布）
 npm run test:list      # 打印套件清单

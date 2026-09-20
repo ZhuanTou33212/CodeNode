@@ -201,6 +201,10 @@ function saveMessages(projectRoot, runId, messages, { reason } = {}) {
       content: String(message.content == null ? '' : message.content).slice(0, MAX_MESSAGE_CHARS),
       tool_calls: message.tool_calls || undefined,
       tool_call_id: message.tool_call_id || undefined,
+      // `name` 也必须落盘：主循环 push 的 tool 消息带工具名，检查点快照若只留 4 个字段，
+      // 续跑重建后 tool 消息就比生产少一个字段 —— 硬裁剪的占位符随即退化成「此处原本是**工具**的结果」。
+      // 判据：scripts/fixture-shape-test.cjs 的 B 段（snapshot → planResume → buildResumeMessages 逐字段对齐）。
+      name: message.name || undefined,
     }));
   // 先切片、再修配对：顺序反过来的话切片仍会切断配对（这正是原来漏掉的一步）
   const repaired = repairToolPairing(trimmed);
@@ -410,6 +414,10 @@ function buildResumeMessages(plan, { systemPrompt } = {}) {
     const entry = { role: message.role, content: message.content || '' };
     if (message.tool_calls) entry.tool_calls = message.tool_calls;
     if (message.tool_call_id) entry.tool_call_id = message.tool_call_id;
+    // 工具名必须一起带回来：主循环 push 的 tool 消息带 `name`，续跑重建时若丢掉，
+    // 同一份历史在两条路径上形状不同 —— 硬裁剪的占位符会退化成「此处原本是**工具**的结果」，
+    // 模型拿不到「该用哪个工具重取」。判据见 scripts/fixture-shape-test.cjs 的 B 段。
+    if (message.name) entry.name = message.name;
     messages.push(entry);
   }
   const lines = [

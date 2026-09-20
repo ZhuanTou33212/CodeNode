@@ -39,7 +39,7 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
 const { GraphModel } = require('../electron/tools/GraphModel.cjs');
 const { getScalarStore } = require('../electron/scalars/index.cjs');
-const { datasetVersion, tasks: TASKS } = require('./agent-eval-tasks.cjs');
+const { datasetVersion, tasks: TASKS, modelSubsets } = require('./agent-eval-tasks.cjs');
 
 const EXIT_OK = 0;
 const EXIT_TASK_FAIL = 1;
@@ -52,7 +52,7 @@ const REPORT_DIR_REL = path.join('docs', 'eval-reports');
 /* ------------------------------- 参数解析 ------------------------------- */
 
 function parseArgs(argv) {
-  const opts = { mode: 'offline', requireModel: false, allowModelSkip: false, keep: false, tasks: [], json: false, reportDir: null };
+  const opts = { mode: 'offline', requireModel: false, allowModelSkip: false, keep: false, tasks: [], subsets: [], json: false, reportDir: null };
   for (const raw of argv) {
     const arg = String(raw);
     if (arg === '--mode=offline') opts.mode = 'offline';
@@ -64,6 +64,7 @@ function parseArgs(argv) {
     else if (arg === '--json') opts.json = true;
     else if (arg === '--list') opts.list = true;
     else if (arg.startsWith('--task=')) opts.tasks.push(arg.slice('--task='.length));
+    else if (arg.startsWith('--subset=')) opts.subsets.push(arg.slice('--subset='.length));
     else if (arg.startsWith('--report-dir=')) opts.reportDir = arg.slice('--report-dir='.length);
     else throw new Error('未知参数：' + arg);
   }
@@ -454,9 +455,35 @@ function writeFixtures(workspace, fixture) {
   }
 }
 
-function buildConfig(task, workspace, mode, modelCfg) {
+/**
+ * 真机模式下的「等效预算 / 配置覆盖 / 判据」。
+ *
+ * 同一个任务在两种模式下模型行为不同，所以允许任务用 `modelBudget` / `modelCfgOverride` /
+ * `modelChecks` 声明一套**真机专用**的值（例：真机下把工具调用上限调小、把硬上限从 12 降到 3
+ * 才能在有限花费内命中）。这些字段**只在 mode==='model' 时生效** —— 离线语义逐字节不变。
+ */
+function effectiveBudget(task, mode) {
+  const base = task.budget || {};
+  return mode === 'model' && task.modelBudget ? { ...base, ...task.modelBudget } : base;
+}
+
+function effectiveChecks(task, mode) {
+  return mode === 'model' && Array.isArray(task.modelChecks) ? task.modelChecks : task.checks || [];
+}
+
+function effectiveOverride(task, mode) {
+  const base = task.cfgOverride || {};
+  if (mode !== 'model' || !task.modelCfgOverride) return base;
+  const extra = task.modelCfgOverride;
+  return { ...base, ...extra, limits: { ...(base.limits || {}), ...(extra.limits || {}) } };
+}
+
+function buildConfig(task, workspace, opts) {
+  const mode = opts.mode;
+  const modelCfg = opts.modelCfg;
   const cfg = agent.loadConfig(workspace);
-  const override = task.cfgOverride || {};
+  const override = effectiveOverride(task, mode);
+  const budget = effectiveBudget(task, mode);
   cfg.apiBase = mode === 'model' ? modelCfg.apiBase : 'https://scripted.eval.local/v1';
   cfg.apiKey = mode === 'model' ? modelCfg.apiKey : 'scripted-eval-key';
   cfg.model = mode === 'model' ? modelCfg.model : 'scripted-eval/' + task.id;
@@ -469,16 +496,18 @@ function buildConfig(task, workspace, mode, modelCfg) {
   // 打乱 `steps-at-most` 与脚本轮次的对齐）。压缩本身由 scripts/compaction-test.cjs 单独锁。
   cfg.compaction = { ...agent.loadConfig(null).compaction, enabled: false };
   if (override.compression) cfg.compression = { ...cfg.compression, ...override.compression };
-  if (task.budget && task.budget.maxTotalTokens) {
-    cfg.limits = { ...cfg.limits, maxTotalTokens: task.budget.maxTotalTokens };
+  if (override.limits) cfg.limits = { ...cfg.limits, ...override.limits };
+  if (budget && budget.maxTotalTokens) {
+    cfg.limits = { ...cfg.limits, maxTotalTokens: budget.maxTotalTokens };
   }
   const RequestBudget = require('../electron/requestBudget.cjs').RequestBudget;
-  cfg.requestBudget = new RequestBudget(task.requestBudgetTokens || cfg.limits.maxTotalTokens);
+  cfg.requestBudget = new RequestBudget(task.requestBudgetTokens || (budget && budget.maxTotalTokens) || cfg.limits.maxTotalTokens);
   return cfg;
 }
 
 async function runTask(task, opts) {
   const started = Date.now();
+  const budget = effectiveBudget(task, opts.mode);
   const record = {
     id: task.id,
     title: task.title,
@@ -487,7 +516,7 @@ async function runTask(task, opts) {
     status: 'fail',
     reason: null,
     allowTools: task.allowTools,
-    budget: task.budget,
+    budget,
     durationMs: 0,
     modelSteps: 0,
     toolCalls: 0,
@@ -497,7 +526,10 @@ async function runTask(task, opts) {
 
   if (opts.mode === 'model' && task.realModel !== true) {
     record.status = 'skipped';
-    record.reason = '该任务依赖脚本化模型（确定性注入/预算/取消/崩溃），真实模型模式不适用';
+    // 逐任务给出**具体**的跳过理由（`modelSkipReason`）；没写就退回通用说明。
+    // 「为什么这个任务不能真机跑」必须是任务自己声明的事实，而不是一句模板 ——
+    // 否则下一个人只能靠猜，也就无从判断它该不该补上真机覆盖。
+    record.reason = task.modelSkipReason || '该任务依赖脚本化模型（确定性注入/预算/取消/崩溃），真实模型模式不适用';
     record.durationMs = Date.now() - started;
     return record;
   }
@@ -507,7 +539,7 @@ async function runTask(task, opts) {
   writeFixtures(workspace, task.fixture);
   const before = snapshotWorkspace(workspace);
 
-  const cfg = buildConfig(task, workspace, opts.mode, opts.modelCfg);
+  const cfg = buildConfig(task, workspace, opts);
   const registry = toolkit.buildDefaultRegistryWithConfig({
     toolsEnabled: true,
     toolsAllowed: task.allowTools,
@@ -594,7 +626,7 @@ async function runTask(task, opts) {
   agent.logConversation(workspace, { ts: nowIso(), role: 'user', content: task.prompt, nodeId: null });
 
   let watchdogFired = false;
-  const watchdogMs = (task.budget && task.budget.timeoutMs ? task.budget.timeoutMs : 60000) + 20000;
+  const watchdogMs = (budget && budget.timeoutMs ? budget.timeoutMs : 60000) + 20000;
   const runPromise = agent
     .runAgentChat({
       cfg,
@@ -602,7 +634,7 @@ async function runTask(task, opts) {
       onDelta,
       tools: { registry, context },
       signal: controller.signal,
-      timeoutMs: task.budget && task.budget.timeoutMs ? task.budget.timeoutMs : 60000,
+      timeoutMs: budget && budget.timeoutMs ? budget.timeoutMs : 60000,
     })
     .catch((error) => ({ error: String((error && error.message) || error), toolCalls: [], aborted: controller.signal.aborted }));
 
@@ -660,7 +692,7 @@ async function runTask(task, opts) {
   };
 
   const checkers = buildChecks(ctx);
-  for (const check of task.checks || []) {
+  for (const check of effectiveChecks(task, opts.mode)) {
     const fn = checkers[check.type];
     const name =
       check.type +
@@ -736,8 +768,18 @@ async function main() {
     return EXIT_OK;
   }
 
-  const selected = opts.tasks.length ? TASKS.filter((t) => opts.tasks.includes(t.id)) : TASKS;
-  const unknown = opts.tasks.filter((id) => !TASKS.some((t) => t.id === id));
+  // `--subset=<名字>`：解析成任务集里声明的集合（真机 PR 只跑便宜子集，见 agent-eval-tasks.cjs 的 modelSubsets）
+  const subsetIds = [];
+  for (const name of opts.subsets) {
+    const ids = modelSubsets && modelSubsets[name];
+    if (!ids) {
+      throw new Error('未知 subset：' + name + '（可选：' + Object.keys(modelSubsets || {}).join(', ') + '）');
+    }
+    subsetIds.push(...ids);
+  }
+  const wanted = [...new Set([...opts.tasks, ...subsetIds])];
+  const selected = wanted.length ? TASKS.filter((t) => wanted.includes(t.id)) : TASKS;
+  const unknown = wanted.filter((id) => !TASKS.some((t) => t.id === id));
   if (unknown.length) throw new Error('未知任务 id：' + unknown.join(', '));
 
   const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-eval-'));
@@ -880,7 +922,10 @@ function finalize(report, started, opts) {
   report.failures = tasks
     .filter((t) => t.status === 'fail')
     .map((t) => ({ id: t.id, title: t.title, required: t.required, failed: t.failed }));
-  report.params.taskTimeouts = tasks.map((t) => ({ id: t.id, timeoutMs: t.budget ? t.budget.timeoutMs : null, maxSteps: t.budget ? t.budget.maxSteps : null }));
+  report.params.taskTimeouts = tasks.map((t) => {
+    const b = effectiveBudget(t, opts.mode);
+    return { id: t.id, timeoutMs: b.timeoutMs || null, maxSteps: b.maxSteps || null };
+  });
   report.exitCode = report.totals.requiredFailed > 0 || !report.harness.selfChecks.every((c) => c.pass) ? EXIT_TASK_FAIL : EXIT_OK;
   report.taskSet = TASKS.map((t) => ({
     id: t.id,

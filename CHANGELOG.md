@@ -4,6 +4,35 @@
 
 ## [未发布]
 
+### 新增（四类结构性问题一起做掉：真机回归挂 PR / 运行中控制手段 / 每轮固定开销分层 / 用例同形门禁；2026-09-20）
+
+对照 `docs/agent-incremental-review-2026-09-19.md` §4（落地记录见该文档 §4.5）：
+
+- **真机回归挂 PR（§4.1）**：6 个此前在真机模式被跳过的任务里，4 个改为真机可跑
+  （`long-context-compression` / `crash-recovery-run-events` / `budget-token-cap` / `iteration-cap-stop`，
+  各自声明真机专用 `modelBudget` 与 `modelCfgOverride`），另外 2 个保留脚本化模型并**逐条写明**
+  `modelSkipReason`；runner 新增 `--subset=`；`production-gate.yml` 的 credentials 暴露 `has_key`，
+  新增 `model-eval-pr` job（`mode == 'gate' && has_key == 'true'` → `npm run test:eval:model:pr`
+  = `--mode=model --subset=pr --require-model`）。判据 `test:real-model-pr`（含无 Key fail-closed，
+  以及用**独立进程** mock 服务器跑真 HTTP + 真 SSE + 真预算判定的模型管线）。
+- **Run 级文件回滚（§4.2）**：写操作第一次触碰路径前抓前像（内容寻址 blob，≤256KB，过大/不可读如实
+  标注不可回滚）；`electron/runRollback.cjs` 的 `planRollback`（只读）+ `applyRollback`
+  （越界拒绝 / blob 哈希校验 / 写后读回校验 / 有跳过或拒绝就不报 ok）；IPC + 工作台面板入口。
+  判据 `test:run-rollback`（含真跑主循环写盘 → 回滚 → 逐字节还原的端到端）。
+- **子代理任务视图跨 run 留存（§4.2）**：`.codenode/runs/<run>.subagents.json`（按 taskId 覆盖更新、
+  上限 50、坏文件如实 `ok:false`）+ IPC `agent:subagents` + 面板。判据 `test:subagent-view`
+  （核心断言是「新实例读得到」—— 此前只有进程内 Map）。
+- **运行中插话（§4.2）**：`electron/steerQueue.cjs` + 主循环在压缩/硬裁剪之后、超窗预检之前每轮 drain
+  一次，作为 `【用户插话】…` 的 user 消息进请求体；run 结束后 push 明确拒绝（`run-ended`）；
+  IPC `agent:steer` + 对话体入口。判据 `test:agent-steering`（恰好注入一次 + 不插话零痕迹）。
+- **每轮固定开销分层（§4.3）**：画布建模规则抽成**按需注入的层**
+  （`agent.prompt_canvas_rules = auto|always|never`，auto 下「不确定就注入」）；实测 system 提示词
+  4,601 → 3,172 字符。判据 `test:prompt-layers`（判定表 + 字节级等价 + loader 出口读回 + **开销上界**）。
+- **「用例输入与生产同形」门禁（§4.4）**：`test:fixture-shape` 从真实请求体抓生产 tool 消息字段集，
+  要求主循环 push、续跑重建、用例 fixture 三者逐字段对齐 —— 当场抓出并修掉
+  `runCheckpoint.saveMessages` / `buildResumeMessages` **丢 `name`**（续跑后硬裁剪占位符退化）。
+- core 套件 73 → **79**，变异规格 5 份 26 条（全部有判别力）。
+
 ### 修复（harness 短板收尾：请求形状可关 / 交互输入不进缓存 / 进度检查层；2026-09-19）
 
 对照 `AGENT_TOOL_ARCH_REVIEW_2026-09-15` 与探针审计的短板表，逐条核对后修掉仍成立的三条：

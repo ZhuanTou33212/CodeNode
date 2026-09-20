@@ -137,6 +137,28 @@ function PromptComposer() {
   const busy = sending || streaming;
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // §4.2：运行中插话（steering）—— 长任务跑偏时不用整停，这句话会在下一轮进请求体
+  const [steerText, setSteerText] = useState('');
+  const [steering, setSteering] = useState(false);
+  const steer = async () => {
+    const value = steerText.trim();
+    if (!value) return;
+    setSteering(true);
+    try {
+      const result = await useChatStore.getState().steer(value);
+      if (result?.accepted) {
+        setSteerText('');
+        useUiStore.getState().setToast('已插话：下一轮生效');
+      } else {
+        // 没插上就直说（不静默）——运行可能刚好结束
+        useUiStore.getState().setToast(String(result?.error || '插话未生效'));
+      }
+    } catch (error) {
+      reportError('插话失败', error, (message) => useUiStore.getState().setToast(message));
+    } finally {
+      setSteering(false);
+    }
+  };
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
   const canVision = model?.vision === true;
@@ -325,9 +347,28 @@ function PromptComposer() {
         </button>
 
         {busy ? (
-          <button className="pp-send pp-stop" onClick={() => useChatStore.getState().stop()} title="停止思考">
-            停止
-          </button>
+          <div className="pp-steer" title="运行中插话：这句话会在下一轮送进模型，不中断当前运行">
+            <input
+              className="pp-steer-input"
+              value={steerText}
+              placeholder="插话纠偏…（如：别改 utils，只改 api 层）"
+              onChange={(e) => setSteerText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void steer();
+                }
+              }}
+              disabled={steering}
+              data-testid="pp-steer-input"
+            />
+            <button className="pp-steer-send" onClick={() => void steer()} disabled={steering || !steerText.trim()} data-testid="pp-steer-send">
+              插话
+            </button>
+            <button className="pp-send pp-stop" onClick={() => useChatStore.getState().stop()} title="停止思考">
+              停止
+            </button>
+          </div>
         ) : (
           <button
             className="pp-send"

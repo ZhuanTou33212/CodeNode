@@ -23,6 +23,8 @@ const modelStore = require('../modelStore.cjs');
 const runStore = require('../runStore.cjs');
 const eventBus = require('../eventBus.cjs');
 const runCheckpoint = require('../runCheckpoint.cjs');
+const runRollback = require('../runRollback.cjs');
+const { createSteerQueue } = require('../steerQueue.cjs');
 const { SideEffectLedger, createGuard } = require('../sideEffects.cjs');
 const agentState = require('../agentState.cjs');
 const descriptorLib = require('../tools/descriptor.cjs');
@@ -56,7 +58,8 @@ function bumpCanvasRevision(model) {
 
 const { AgentToolContext } = require('../tools/context.cjs');
 const { makeBridge } = require('../tools/bridge.cjs');
-const { SubagentManager } = require('../subagents.cjs');
+const subagents = require('../subagents.cjs');
+const { SubagentManager } = subagents;
 const { atomicWriteFile } = require('../atomicFile.cjs');
 const cnode = require('../cnode.cjs');
 const { resolveInRoot } = require('../tools/impl/shared.cjs');
@@ -64,6 +67,13 @@ const { auditLog } = require('./project.cjs');
 
 /** 正在运行的 Agent 请求：requestId/runId → AbortController（「停止思考」与中断恢复判定都用它） */
 const activeRequests = new Map();
+
+/**
+ * 用户插话（steering）队列 —— 实现搬到 `electron/steerQueue.cjs`（独立模块，用例可直接驱动，
+ * 不需要起 Electron）。此处只保留 runId → 队列的登记表。
+ */
+/** runId → 插话队列（随 run 生命周期创建/销毁） */
+const steeringQueues = new Map();
 
 /** 保存文档到工程文件（save_project 工具用）。 */
 function saveDoc(projectRoot, projectFile, model) {
@@ -171,6 +181,56 @@ function register(ctx) {
   ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
     if (!projectRoot) return { ok: false, error: '未选择项目' };
     return runStore.markRetry(projectRoot, runId, replacementRunId);
+  });
+
+  // Run 级文件回滚（§4.2）：先给**只读计划**，用户看过再执行。计划里逐项写明
+  // restore / delete / skip 与原因（前像缺失、过大、别人改过），不猜、不静默。
+  ipcMain.handle('agent:rollback-plan', async (_event, projectRoot, runId) => {
+    if (!projectRoot) return { ok: false, error: '未选择项目' };
+    if (!runId) return { ok: false, error: '缺少 runId' };
+    return runRollback.planRollback(projectRoot, runId);
+  });
+
+  ipcMain.handle('agent:rollback-apply', async (_event, projectRoot, runId, options) => {
+    if (!projectRoot) return { ok: false, error: '未选择项目' };
+    if (!runId) return { ok: false, error: '缺少 runId' };
+    // force 只影响「本 Run 之后该文件被外部改过」的项：默认拒绝覆盖，UI 需显式勾选才传 true。
+    const report = runRollback.applyRollback(projectRoot, runId, {
+      force: !!(options && options.force),
+      audit: (kind, payload) => auditLog(projectRoot, { kind, ...payload }),
+    });
+    return report;
+  });
+
+  // 用户插话（§4.2）：运行中的 run 可以边跑边纠偏。找不到 run（已结束/不存在）→ 明确拒绝，
+  // 让界面能如实提示「这条没插上」，而不是发出去了却没有任何效果。
+  ipcMain.handle('agent:steer', async (_event, requestId, text) => {
+    if (!requestId) return { accepted: false, reason: 'missing-request', error: '缺少 requestId' };
+    const key = activeRequests.has(requestId) ? requestId : runStore.normalizeRunId(requestId);
+    const queueEntry = steeringQueues.get(requestId) || steeringQueues.get(key);
+    if (!queueEntry) {
+      return {
+        accepted: false,
+        reason: steeringQueues.size ? 'run-not-found' : 'no-active-run',
+        error: '该运行已结束或不存在，插话未生效（可在下一轮对话里直接说）',
+      };
+    }
+    const result = queueEntry.queue.push(text);
+    if (result.accepted) {
+      // 留痕：插话是用户对运行中任务的干预，事后复盘要能看到「什么时候插了什么」
+      try {
+        runStore.appendEvent(queueEntry.projectRoot, key, 'steer_queued', { chars: String(text || '').length });
+      } catch {
+        /* 事件只是留痕，失败不影响插话本身 */
+      }
+    }
+    return result;
+  });
+
+  // 子代理任务视图（§4.2）：跨 run 可查 —— 此前只有进程内 Map，请求一结束就查不到了
+  ipcMain.handle('agent:subagents', async (_event, projectRoot, options) => {
+    if (!projectRoot) return { ok: false, error: '未选择项目', runs: [] };
+    return subagents.listTaskViews(projectRoot, options || {});
   });
 
   ipcMain.handle('agent:chat', async (event, payload) => {
@@ -392,7 +452,12 @@ function register(ctx) {
       const memoryText = memoryStore.buildMemoryText(memory.entries, prompt, { limit: 30 });
       const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
       const skillsText = skills.map((item) => `- ${item.name}: ${item.instructions || item.description || '按项目扩展定义执行'}`).join('\n');
-      const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText);
+      // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
+      // 判定在 agent.resolvePromptLayers 里（纯函数，用例锁）；这里只负责把当轮事实传进去。
+      const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, {
+        prompt,
+        canvasMode: cfg.prompt && cfg.prompt.canvasRules,
+      });
       const messages = resumePlan
         ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })
         : [{ role: 'system', content: systemContent }];
@@ -490,6 +555,10 @@ function register(ctx) {
       }
 
       sendDelta({ kind: 'start' });
+      // 用户插话（§4.2）：运行中的 run 有一条插话队列，agent:steer 按 runId 找到它。
+      // 队列随 run 生命周期存在 —— run 结束后再插话会被拒绝（不能静默丢弃）。
+      const steerQueue = createSteerQueue();
+      steeringQueues.set(runId, { queue: steerQueue, projectRoot });
       activeRequests.set(runId, controller);
       let result;
       try {
@@ -501,8 +570,12 @@ function register(ctx) {
           signal: controller.signal,
           // /compact（照 Codex 的手动压缩命令）：无视阈值立刻压一次
           forceCompaction: forceCompact === true,
+          // 主循环每轮 drain 一次；插话作为 user 消息进请求体（见 agent.cjs 的注入点注释）
+          steering: steerQueue,
         });
       } finally {
+        steerQueue.close();
+        steeringQueues.delete(runId);
         // run 收尾：释放主代理持有的全部资源租约（子代理的在各自任务结束时已释放）
         if (leases) {
           try {

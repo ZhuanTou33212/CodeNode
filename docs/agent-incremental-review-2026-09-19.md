@@ -525,3 +525,82 @@ controller 再也点不到**，停止按钮不生效，旧 Run 继续真实调�
 > 其余大部分是「不影响正确性但影响可信度/性能/可维护性」的债。第 5 节列出的那些**确实做对的边界**
 > 同样是结论的一部分 —— 尤其是 `publicHttp` 的 IP 绑定、审批链的不可伪造、`resolveInRoot` 的路径边界，
 > 这三处的实现质量明显高于同类项目。
+
+---
+
+## 4.5 四类结构性问题的落地记录（2026-09-20）
+
+> 口径：只写**已取证**的事实。数字来自本机实跑（`npm run build` / `npm run test` / 变异校验），
+> 未能取证的一项在第 ① 条末尾如实单列。
+
+### ① 真机回归与代码演进脱节 —— 已修
+
+- 6 个此前被跳过的任务：**4 个改为真机可跑**（`long-context-compression`、`crash-recovery-run-events`、
+  `budget-token-cap`、`iteration-cap-stop`），各自声明真机专用预算 `modelBudget` 与
+  `modelCfgOverride`（把迭代硬上限 12 降到 3，才可能在有限花费内命中）；
+  剩下 2 个（注入对抗、工具调用上限 100 次）保留脚本化模型，并**逐条写明** `modelSkipReason`
+  —— 不是「依赖脚本化模型」这种模板文案。
+- runner 新增 `--subset=`；`agent-eval-tasks.cjs` 的 `modelSubsets.pr` 声明 3 个便宜任务
+  （预算判定看供应商回传的 usage、崩溃点由评测自己注入、长上下文只需一读一压）。
+- CI：`production-gate.yml` 的 credentials job 新增 `has_key` 输出；新增 **`model-eval-pr`** job
+  （`mode == 'gate' && has_key == 'true'`，跑 `npm run test:eval:model:pr`，即
+  `--mode=model --subset=pr --require-model`）。fork PR 拿不到 secrets → 该 job 不出现
+  （与 provider-smoke 同款口径，不是静默跳过）。
+- 新门禁 `test:real-model-pr`：任务声明完整性 / 子集体检 / workflow 接线 /
+  **无 Key fail-closed（exit 2，报告里全部任务标 skipped）** /
+  用**独立进程** mock OpenAI 兼容服务器跑一遍「真 HTTP + 真 SSE 解析 + 真预算判定 + 真报告落盘」的
+  模型管线（本机可复现，不需要 Key）。
+- **未取证项**：本机没有 `CODENODE_EVAL_API_KEY`（`config/agent.properties` 的 `api_key` 为空），
+  真机子集要在 CI（仓库 secret）或用户提供 Key 之后才会真正跑一次；因此「真机 9/11 通过」
+  这类数字**本轮没有**，不在这里编。
+
+### ② 运行中对 Agent 的控制手段 —— 三件事都做了
+
+1. **Run 级文件回滚**：写操作**第一次触碰该路径之前**抓前像（内容寻址 blob，≤256KB；
+   过大/不可读 → `restorable:false` 如实标注）；账本按**路径**保存前像（同一路径多次写共用最早那份，
+   回滚回到「Run 开始之前」而不是「上一次写之前」）。`electron/runRollback.cjs` 提供
+   `planRollback`（**只读**，逐项 restore / delete / skip + 原因 + 冲突标记）与 `applyRollback`
+   （越界路径拒绝、blob 哈希校验、写后读回校验；**有 refused/skipped 时不报 ok**）。
+   IPC `agent:rollback-plan` / `agent:rollback-apply`，界面在「工作流运行」面板给出计划与执行入口
+   （本 Run 之后被外部改过的文件默认不动，需显式勾选 force）。
+   用例 `test:run-rollback`：含**端到端**（真跑主循环 → 写盘 → 回滚 → 逐字节还原 / 删除新建文件）
+   与三条负向（越界不写根外、blob 损坏不写盘、只读 Run 无可回滚项）。
+2. **子代理任务视图跨 run 留存**：落盘 `.codenode/runs/<run>.subagents.json`
+   （按 taskId 覆盖更新、上限 50 条、损坏文件如实 `ok:false`）；IPC `agent:subagents`；
+   界面新增「子代理任务（跨运行留存）」。用例 `test:subagent-view` 里**「新实例读得到」**这条
+   才是缺口本身（此前只有进程内 Map）。
+3. **运行中插话（steering）**：`electron/steerQueue.cjs` + 主循环在**压缩/硬裁剪之后、超窗预检之前**
+   每轮 drain 一次，作为 `【用户插话】…` 的 user 消息进请求体；run 结束后 push **明确拒绝**
+   （`reason:'run-ended'`，不静默丢弃）；IPC `agent:steer`；对话体在运行中出现「插话」输入。
+   用例 `test:agent-steering`：恰好注入一次（0→1→1）、**不插话时请求体与基线逐字节相同**。
+
+### ③ 每轮固定开销 —— 已分层，并且有了上界
+
+- 实测（本机）：system 提示词 4,601 → **3,172 字符**（纯代码任务省 1,429），
+  工具 schema 13,825 字符（22 个工具），纯代码任务合计 ≈ **17.0k 字符/轮**。
+- 画布建模规则（运行规则 14 的 a–h）抽成**按需注入的层**：
+  `agent.prompt_canvas_rules = auto（默认）| always | never`；auto 下
+  **只要不确定就注入**（画布非空 / 提问含画布词），只有「画布为空 + 提问不含画布词」才省。
+  层开启时提示词与分层前**逐字节相同**（用例断言 `always.replace(CANVAS_RULES, STUB) === 省层结果`）。
+- 门禁 `test:prompt-layers`：判定表驱动 + 字节级等价 + 配置键从 **loader 出口**读回
+  （防 S18 那类接线漂移）+ ipc 接线静态断言 + **开销上界**（system ≤4,000 / schema ≤16,000 /
+  合计 ≤18,000 字符）—— 以后涨上去就红。
+
+### ④ 「用例输入与生产同形」的门禁 —— 已加，并当场抓出两个真缺陷
+
+- 新门禁 `test:fixture-shape`：从**真实请求体**抓生产 tool 消息的权威字段集
+  `[content, name, role, tool_call_id]`，要求
+  ① 主循环 push 的 tool 消息、② 续跑重建路径（`saveMessages` → `planResume` → `buildResumeMessages`）、
+  ③ 用例里手写的 tool fixture 三者**逐字段对齐**（fixture 只允许是子集，且不许出现生产没有的字段）。
+- 当场抓出两处**真缺陷**：`runCheckpoint.saveMessages` 的字段白名单只留 4 个字段、**丢掉 `name`**；
+  `buildResumeMessages` 重建时同样丢 —— 后果是续跑后触发硬裁剪时，占位符退化成
+  「此处原本是**工具**的结果」（与第 22 项同类，此前只修了主循环那条路径）。两处都已修。
+- 本轮新增 6 个用例全部进 CORE（core 73 → **79**，README 徽章与「core 套件（79 项）」已同步）：
+  `test:fixture-shape`、`test:real-model-pr`、`test:prompt-layers`、`test:run-rollback`、
+  `test:agent-steering`、`test:subagent-view`。
+- 变异校验：新增 5 份规格共 26 条变异（fixture-shape 4 / prompt-layers 4 / run-rollback 5 /
+  agent-steering 4 / subagent-view 5 / real-model-pr 4），全部有判别力（去掉实现即红在预期断言上）。
+
+**仍然存在的（本轮未动，判断不变）**：跨项目用户级记忆在 Electron 版仍缺失（Java 版有
+`UserMemoryStore`）、无仓库级限流、MCP 每次调用重 spawn（≈70ms）、单文件同步 fs 不可取消（后两条
+此前判定为有意取舍）。

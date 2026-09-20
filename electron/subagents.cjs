@@ -29,6 +29,106 @@ const subagentEnvelope = require('./subagentEnvelope.cjs');
 const roles = require('./tools/roles.cjs');
 const subagentPrompt = require('./subagentPrompt.cjs');
 const { createSubagentBudget } = require('./requestBudget.cjs');
+const fs = require('fs');
+const path = require('path');
+const { atomicWriteFile } = require('./atomicFile.cjs');
+
+/**
+ * 子代理任务视图的**持久化**（§4.2 的第一件事）。
+ *
+ * 缺口：`this.tasks` 只是**进程内**的 Map —— 请求一结束、界面一刷新，子代理干过什么就只剩下
+ * 事件流里的两行 delta；「这次到底派了谁、做到哪一步、结论是什么」没有任何可查的地方，
+ * 跨 run 更查不到（重启即失忆）。
+ *
+ * 落盘口径：`.codenode/runs/<runId>.subagents.json`，每条任务一行视图（按 taskId 合并更新），
+ * 只保留结论所需字段（信封可能很大，不入盘）。
+ */
+const MAX_PERSISTED_TASKS = 50;
+
+/** @param {any} projectRoot @param {any} runId */
+function subagentViewFile(projectRoot, runId) {
+  const safe = String(runId || 'unscoped').replace(/[^A-Za-z0-9._-]/g, '_');
+  return path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs', safe + '.subagents.json');
+}
+
+/**
+ * 落盘一条任务视图（同一 taskId 覆盖更新；按 taskId 去重，不会因复用 id 而膨胀）。
+ * @param {any} projectRoot @param {any} runId @param {any} view
+ */
+function persistTaskView(projectRoot, runId, view) {
+  if (!projectRoot || !view || !view.taskId) return null;
+  const file = subagentViewFile(projectRoot, runId);
+  /** @type {any[]} */
+  let list = [];
+  try {
+    if (fs.existsSync(file)) {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (Array.isArray(parsed.tasks)) list = parsed.tasks;
+    }
+  } catch {
+    // 旧文件损坏：以本次记录重写（不让它挡住写入），但**不删**别的 run 的文件
+  }
+  const record = {
+    taskId: view.taskId,
+    runId: view.runId || runId || null,
+    role: view.role || null,
+    objective: view.objective || '',
+    stageNodeId: view.stageNodeId || null,
+    status: view.status || null,
+    summary: typeof view.summary === 'string' ? view.summary.slice(0, 2000) : '',
+    error: view.error || null,
+    usage: view.usage || null,
+    toolCalls: Array.isArray(view.toolCalls) ? view.toolCalls.length : undefined,
+    startedAt: view.startedAt || null,
+    finishedAt: view.finishedAt || null,
+  };
+  const index = list.findIndex((item) => item && item.taskId === record.taskId);
+  if (index >= 0) list[index] = { ...list[index], ...record };
+  else list.push(record);
+  if (list.length > MAX_PERSISTED_TASKS) list = list.slice(list.length - MAX_PERSISTED_TASKS);
+  atomicWriteFile(file, JSON.stringify({ runId: String(runId || ''), updatedAt: new Date().toISOString(), tasks: list }, null, 2));
+  return record;
+}
+
+/**
+ * 读某个 run 的落盘任务视图（跨进程/跨会话可查）。
+ * @param {any} projectRoot @param {any} runId
+ */
+function readTaskViews(projectRoot, runId) {
+  const file = subagentViewFile(projectRoot, runId);
+  try {
+    if (!fs.existsSync(file)) return { ok: true, runId: String(runId || ''), updatedAt: null, tasks: [] };
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { ok: true, runId: String(runId || ''), updatedAt: parsed.updatedAt || null, tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [] };
+  } catch (error) {
+    return { ok: false, runId: String(runId || ''), updatedAt: null, tasks: [], error: '任务视图损坏：' + String((error && error.message) || error) };
+  }
+}
+
+/**
+ * 列出最近的若干个 run 的子代理任务视图（界面用；按 updatedAt 倒序）。
+ * @param {any} projectRoot @param {{maxRuns?: number, maxTasksPerRun?: number}} [options]
+ */
+function listTaskViews(projectRoot, options = {}) {
+  const dir = path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs');
+  const maxRuns = Number(options.maxRuns) > 0 ? Number(options.maxRuns) : 5;
+  const maxTasks = Number(options.maxTasksPerRun) > 0 ? Number(options.maxTasksPerRun) : 20;
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((name) => name.endsWith('.subagents.json'));
+  } catch {
+    return { ok: true, runs: [] };
+  }
+  const runs = [];
+  for (const name of files) {
+    const runId = name.replace(/\.subagents\.json$/, '');
+    const view = readTaskViews(projectRoot, runId);
+    if (!view.tasks.length) continue;
+    runs.push({ runId, updatedAt: view.updatedAt, ok: view.ok, error: view.error || null, tasks: view.tasks.slice(-maxTasks) });
+  }
+  runs.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return { ok: true, runs: runs.slice(0, maxRuns) };
+}
 
 /** 只读角色（来自角色契约，不再各留一份名单） */
 const READ_ONLY_ROLES = new Set(roles.ROLE_NAMES.filter((name) => roles.isReadOnlyRole(name)));
@@ -260,6 +360,12 @@ class SubagentManager {
         if (task.controller && !task.controller.signal.aborted) task.controller.abort();
         context.audit(JSON.stringify({ kind: 'subagent_cancel', runId: this.runId, taskId, role: task.role, reason: task.cancelReason }));
         if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId, role: task.role, status: 'cancelling', summary: task.cancelReason });
+        // §4.2：取消也落盘（否则「派了谁、为什么没做完」在盘上查不到）
+        try {
+          persistTaskView(context.projectRoot(), this.runId, taskView(task));
+        } catch {
+          /* 落盘失败不影响取消本身 */
+        }
         return AgentToolResult.ok('已取消子代理任务 ' + taskId + '（' + task.role + '）', { taskId, role: task.role, status: 'cancelling' });
       }
     );
@@ -568,6 +674,12 @@ class SubagentManager {
     task.envelope = built.envelope;
     // view 必须在信封建好之后再取：view.envelope 要带上它（回放不改哈希）
     const view = taskView(task);
+    // §4.2：任务结束即落盘（跨 run 可查）—— 此前只有进程内 Map + 两行 delta，重启即失忆
+    try {
+      persistTaskView(context.projectRoot(), this.runId, view);
+    } catch (error) {
+      context.audit(JSON.stringify({ kind: 'subagent_view_persist_failed', taskId: task.taskId, error: String((error && error.message) || error) }));
+    }
     const text = subagentEnvelope.renderEnvelopeText(built.envelope, built.violations);
     await this.updateStage(context, task, task.status, text.slice(0, 4000));
     context.audit(JSON.stringify({ kind: 'subagent_end', runId: this.runId, taskId: task.taskId, role, status: task.status }));
@@ -632,4 +744,4 @@ class SubagentManager {
   }
 }
 
-module.exports = { SubagentManager, READ_ONLY_ROLES, ROLE_PROMPTS, changedFiles, taskView, clampTotalTimeout, DEFAULTS };
+module.exports = { SubagentManager, READ_ONLY_ROLES, ROLE_PROMPTS, changedFiles, taskView, clampTotalTimeout, DEFAULTS, persistTaskView, readTaskViews, listTaskViews, subagentViewFile };

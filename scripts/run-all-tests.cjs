@@ -99,6 +99,20 @@ const CORE = [
   // 纯 Node 断言；scale 会写约 45MB 临时文件、2-4s
   'test:run-store-scale',
   'test:storage-hardening',
+  // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
+  // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
+  'test:fixture-shape',
+  // 真机回归挂 PR（增量审查 §4.1）：任务声明完整性 + --subset=pr 体检 + CI 接线 +
+  // 无 Key fail-closed + 用独立进程 mock 服务器跑一遍真 HTTP 真机管线（离线确定性）
+  'test:real-model-pr',
+  // 每轮固定开销分层（增量审查 §4.3）：画布规则按需注入 + 开销上界门禁
+  'test:prompt-layers',
+  // Run 级文件回滚（增量审查 §4.2）：前像抓取 / 只读计划 / 执行与校验 / 越界与冲突的拒绝对待
+  'test:run-rollback',
+  // 运行中插话（§4.2）：队列语义 / 恰好插入一次 / 不插话零痕迹 / 接线
+  'test:agent-steering',
+  // 子代理任务视图跨 run 留存（§4.2）：落盘 / 跨实例可读 / 覆盖与上限 / 坏文件如实报告
+  'test:subagent-view',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
