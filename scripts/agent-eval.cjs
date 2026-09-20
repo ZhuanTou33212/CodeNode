@@ -373,12 +373,27 @@ function buildChecks(ctx) {
       const hit = byTool(check.tool).filter((r) => r.compressedChars && r.compressedChars.from > 0);
       if (!hit.length) return { pass: false, detail: `${check.tool} 没有压缩记录` };
       const worst = Math.max(...hit.map((r) => r.compressedChars.to / r.compressedChars.from));
-      return { pass: worst <= check.maxRatio, detail: `压缩后/前 最大比 ${worst.toFixed(3)}（期望 ≤${check.maxRatio}）` };
+      // 判据自带证据：只报「最大比 0.692」看不出是「原文太小导致比值天然偏高」还是「模型没守字符预算」。
+      const rows = hit
+        .map((r) => ({ from: r.compressedChars.from, to: r.compressedChars.to, ratio: r.compressedChars.to / r.compressedChars.from }))
+        .sort((a, b) => b.ratio - a.ratio)
+        .slice(0, 3)
+        .map((r) => `${r.from}→${r.to}(${r.ratio.toFixed(3)})`);
+      return {
+        pass: worst <= check.maxRatio,
+        detail: `压缩后/前 最大比 ${worst.toFixed(3)}（期望 ≤${check.maxRatio}）；压缩记录 ${hit.length} 条，最大的几条：${rows.join(' / ')}`,
+      };
     },
     'context-bounded': (check) => {
       const nonSystem = ctx.messages.filter((m) => m.role !== 'system');
       const longest = nonSystem.reduce((max, m) => Math.max(max, String(m.content || '').length), 0);
-      return { pass: longest <= check.maxChars, detail: `上下文中最长非 system 消息 ${longest} 字符（上限 ${check.maxChars}）` };
+      // 判据必须自带证据：只报「最长 9099 字符」没法定位是**工具结果**没被压缩、还是模型自己回了长文
+      // （前者是 harness 缺陷，后者只是模型啰嗦 —— 处理方式完全不同）。所以把角色 + 片段一起报出来。
+      const worst = nonSystem
+        .map((m) => ({ role: String(m.role || '?'), len: String(m.content || '').length, name: m.name || m.tool_call_id || '', head: String(m.content || '').slice(0, 60).replace(/\s+/g, ' ') }))
+        .sort((a, b) => b.len - a.len)[0];
+      const where = worst ? `；最长者为 role=${worst.role}${worst.name ? '(' + worst.name + ')' : ''}，开头「${worst.head}」` : '';
+      return { pass: longest <= check.maxChars, detail: `上下文中最长非 system 消息 ${longest} 字符（上限 ${check.maxChars}）${where}` };
     },
     'citation-source': (check) => {
       const pattern = new RegExp(check.pattern);
@@ -455,28 +470,10 @@ function writeFixtures(workspace, fixture) {
   }
 }
 
-/**
- * 真机模式下的「等效预算 / 配置覆盖 / 判据」。
- *
- * 同一个任务在两种模式下模型行为不同，所以允许任务用 `modelBudget` / `modelCfgOverride` /
- * `modelChecks` 声明一套**真机专用**的值（例：真机下把工具调用上限调小、把硬上限从 12 降到 3
- * 才能在有限花费内命中）。这些字段**只在 mode==='model' 时生效** —— 离线语义逐字节不变。
- */
-function effectiveBudget(task, mode) {
-  const base = task.budget || {};
-  return mode === 'model' && task.modelBudget ? { ...base, ...task.modelBudget } : base;
-}
-
-function effectiveChecks(task, mode) {
-  return mode === 'model' && Array.isArray(task.modelChecks) ? task.modelChecks : task.checks || [];
-}
-
-function effectiveOverride(task, mode) {
-  const base = task.cfgOverride || {};
-  if (mode !== 'model' || !task.modelCfgOverride) return base;
-  const extra = task.modelCfgOverride;
-  return { ...base, ...extra, limits: { ...(base.limits || {}), ...(extra.limits || {}) } };
-}
+// 真机/离线两套口径（预算 / 配置覆盖 / 判据）住在 scripts/lib/eval-limits.cjs ——
+// 抽出去是为了能**离线单测**（不需要真机 Key），并且让「只许放宽 steps-at-most」的白名单在
+// **运行时**也生效（写错的人另有 scripts/real-model-pr-test.cjs 直接判红）。
+const { effectiveBudget, effectiveOverride, effectiveChecks } = require('./lib/eval-limits.cjs');
 
 function buildConfig(task, workspace, opts) {
   const mode = opts.mode;

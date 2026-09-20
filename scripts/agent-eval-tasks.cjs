@@ -53,6 +53,9 @@ const TASKS = [
       '改完后重新读取该文件确认改动确实生效，然后简短说明你调用了哪些工具。',
     allowTools: ['read_file', 'edit_file', 'search_files', 'list_directory', 'find_files'],
     budget: { maxSteps: 6, timeoutMs: 60000, maxToolCalls: 8 },
+    // 真机适配（2026-09-20 实测 3.4s 通过）：真机下模型会先 list/find 再读，多一两次调用 →
+    // 单独声明真机预算（离线语义不受影响），并让它成为 PR 子集的成员（判据只看文件字节，模型无关）。
+    modelBudget: { maxSteps: 8, timeoutMs: 90000, maxToolCalls: 12 },
     fixture: {
       'src/config.cjs':
         "'use strict';\n\n// 应用配置\nconst VERSION = '1.0.0';\nconst NAME = 'codenode-demo';\n\nmodule.exports = { VERSION, NAME };\n",
@@ -164,11 +167,25 @@ const TASKS = [
     realModel: true,
     // 真机适配：真机的压缩是一次**真实**的摘要调用（比脚本慢），且模型可能多读一次确认统计 → 放宽单轮时长。
     modelBudget: { maxSteps: 6, timeoutMs: 150000, maxToolCalls: 6 },
+    // 真机实测（2026-09-20，5 次）：
+    //   ① 模型读法在「一次大读」与「分批带 offset 读」之间变化（1~6 次读）→ 步数、上下文长度、
+    //      压缩比三条判据随之波动（见过 5≤4 / 7250>4000 / 0.692>0.5 三种红、也见过整条 PASS）；
+    //   ② 根因是**夹具口径照脚本化模型调的**：`compression.maxCalls: 1` 只够压一次，分批读时
+    //      第 2 份起就原样留在上下文 → 见下面的 modelCfgOverride；
+    //   ③ 结论：本任务保留真机可跑（发布模式全量真机里跑、红了如实报），但**不进 PR 子集** ——
+    //      它的判据受模型啰嗦程度影响，红了分不清是 harness 问题还是模型行为。
+    modelCheckOverrides: { 'steps-at-most': { max: 6 } },
     prompt: '读取 data/large.txt，统计里面出现最多的模块编号，并说明你读到的总行数。',
     allowTools: ['read_file', 'list_directory'],
     budget: { maxSteps: 4, timeoutMs: 60000, maxToolCalls: 4 },
     // 收紧压缩阈值，让判据在固定数据上必然命中（默认阈值 2400 字符）
     cfgOverride: { compression: { thresholdChars: 500, budgetChars: 120, maxCalls: 1 } },
+    // 真机适配（2026-09-20 实测）：`maxCalls: 1` 是照脚本化模型「一次大读 → 压一次」调的口径，
+    // 真机模型会**分批带 offset** 读同一个大文件（3~6 次读），第 2 份起就超了压缩配额 →
+    // 未压缩的大结果原样留在上下文，`context-bounded ≤4000` 判红（7,250 / 9,099 字符实测）。
+    // 处理方式：真机下放宽**压缩配额**（成本旋钮），4,000 字符这条**实质不变式**保持不放宽 ——
+    // 每份大结果都必须真的被压缩过（同时也让真机覆盖到「同一轮多份结果」的压缩路径）。
+    modelCfgOverride: { compression: { maxCalls: 6 } },
     fixture: { 'data/large.txt': buildLargeText(160), 'README.md': '# 长上下文压缩评测\n' },
     script: [
       { tool: 'read_file', args: { path: 'data/large.txt', maxLines: 200 } },
@@ -393,6 +410,12 @@ const TASKS = [
     // 真机下若模型提前收尾只记账不判红（见 notes）。
     modelCfgOverride: { limits: { maxToolIterations: 3 } },
     modelBudget: { maxSteps: 5, timeoutMs: 120000, maxToolCalls: 8 },
+    // 真机实测（2026-09-20）：模型**直接回答了、一次工具都没调**（steps=1 tools=0）→ 硬上限根本没机会命中，
+    // 判据红。这不是 harness 的问题，而是「模型肯不肯一直循环」本来就不可控 —— 所以：
+    //   ① 本任务保持 required:false（真机红了也不挡门禁，事实照报）；
+    //   ② **不进 PR 子集**（子集只收判据与模型行为无关的任务）；
+    //   ③ 「迭代上限」这条硬上限仍由离线脚本化模型确定性命中（script 21 轮）。
+    modelNote: '真机下模型可能提前收尾 → 只作记录，不作门禁；硬上限覆盖以离线脚本化模型为准。',
     prompt: '持续读取文件直到我说停。',
     allowTools: ['read_file'],
     budget: { maxSteps: 12, timeoutMs: 120000, maxToolCalls: 20 },
@@ -423,7 +446,17 @@ const TASKS = [
  *   发布模式不写在这里 —— 它跑全部 realModel 任务。
  */
 const MODEL_SUBSETS = {
-  pr: ['budget-token-cap', 'crash-recovery-run-events', 'long-context-compression'],
+  /**
+   * PR/push 上跑的真机**便宜子集**。入选标准（2026-09-20 真机实测后重定）：
+   *   - 判据**与模型行为无关**（预算判定看供应商回传的 usage；崩溃点由评测自己按 tool_result 计数注入；
+   *     文件字节判据只要求模型照 prompt 调工具）—— 这样它红了就真的是 harness/契约出了问题；
+   *   - 便宜（合计只花十几次真实调用、单任务 ≤90s）。
+   *
+   * 被移出的：`long-context-compression`（真机抖动：模型读法在「一次大读」与「分批带 offset 读」
+   * 之间变化，压缩比与上下文长度随之波动 → 判据在测模型的啰嗦程度）。它仍保留 `realModel: true`，
+   * 在发布模式的全量真机里跑，红了如实报但不挡 PR。
+   */
+  pr: ['multi-step-read-edit-verify', 'crash-recovery-run-events', 'budget-token-cap'],
 };
 
 module.exports = {

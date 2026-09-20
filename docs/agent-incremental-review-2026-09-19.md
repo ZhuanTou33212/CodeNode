@@ -550,9 +550,15 @@ controller 再也点不到**，停止按钮不生效，旧 Run 继续真实调�
   **无 Key fail-closed（exit 2，报告里全部任务标 skipped）** /
   用**独立进程** mock OpenAI 兼容服务器跑一遍「真 HTTP + 真 SSE 解析 + 真预算判定 + 真报告落盘」的
   模型管线（本机可复现，不需要 Key）。
-- **未取证项**：本机没有 `CODENODE_EVAL_API_KEY`（`config/agent.properties` 的 `api_key` 为空），
-  真机子集要在 CI（仓库 secret）或用户提供 Key 之后才会真正跑一次；因此「真机 9/11 通过」
-  这类数字**本轮没有**，不在这里编。
+- **未取证项 → 已取证（2026-09-20 补）**：本机原先没有 `CODENODE_EVAL_API_KEY`（`config/agent.properties`
+  的 `api_key` 为空），所以上面这套只在 mock 管线上验证过。后来用真 Key 跑通了：
+  **全量真机 8/9 通过（必需失败 0、跳过 2 各自带理由）**、**PR 子集 3/3 连续三次稳定通过**。
+  真机顺带抓出两处「夹具口径照脚本化模型调」的问题（压缩配额 `maxCalls: 1` 不够真机分批读、
+  `steps-at-most: 4` 比真机少一步）与一处判据抖动（该任务读法 1~6 次变化 → 移出 PR 子集，
+  并把「子集判据不得依赖模型措辞」写成门禁）。
+  仓库 secret 仍是 0（`gh api .../actions/secrets` = total_count 0），所以 CI 上那个 job 现在依然是
+  skipped —— 想让 CI 每次 push 都跑真机子集，把 `CODENODE_EVAL_API_KEY` 配成 repository secret 即可
+  （可选再配 `CODENODE_EVAL_BASE_URL` / `CODENODE_EVAL_MODEL` 两个 variable）。
 
 ### ② 运行中对 Agent 的控制手段 —— 三件事都做了
 
@@ -598,8 +604,10 @@ controller 再也点不到**，停止按钮不生效，旧 Run 继续真实调�
 - 本轮新增 6 个用例全部进 CORE（core 73 → **79**，README 徽章与「core 套件（79 项）」已同步）：
   `test:fixture-shape`、`test:real-model-pr`、`test:prompt-layers`、`test:run-rollback`、
   `test:agent-steering`、`test:subagent-view`。
-- 变异校验：新增 5 份规格共 26 条变异（fixture-shape 4 / prompt-layers 4 / run-rollback 5 /
-  agent-steering 4 / subagent-view 5 / real-model-pr 4），全部有判别力（去掉实现即红在预期断言上）。
+- 变异校验：新增 6 份规格共 **30 条**变异（fixture-shape 4 / prompt-layers 4 / run-rollback 5 /
+  agent-steering 4 / subagent-view 5 / real-model-pr 8），全部有判别力、0 跳过（去掉实现即红在预期断言上）。
+  其中 real-model-pr 的后 4 条是**真机取证轮**补的护栏（离线不得被真机配置放宽、白名单不放实质判据、
+  放宽幅度 ≤2×、子集不得收「判据依赖模型措辞」的任务）。
 
 **仍然存在的（本轮未动，判断不变）**：跨项目用户级记忆在 Electron 版仍缺失（Java 版有
 `UserMemoryStore`）、无仓库级限流、MCP 每次调用重 spawn（≈70ms）、单文件同步 fs 不可取消（后两条

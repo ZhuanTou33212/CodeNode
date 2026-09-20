@@ -85,6 +85,56 @@ try {
   check('[B] 子集任务都声明了便宜化 modelBudget（含 timeoutMs，防挂）', noBudget.length === 0, noBudget.join(', ') || 'ok');
   const injectionInSubset = subsetTasks.filter((t) => t.category === 'injection').map((t) => t.id);
   check('[B] 子集里不含 injection 类任务（那类判据要求模型「愿意照做」，真机会退化成测模型）', injectionInSubset.length === 0, injectionInSubset.join(', ') || 'ok');
+  /**
+   * 真机实测教训（2026-09-20）：子集里放过一个「判据依赖模型措辞」的任务（compressed-ratio /
+   * context-bounded），真机 5 次里红 3 次、每次红的判据还不一样 —— 这种红分不清是 harness 坏了
+   * 还是模型啰嗦，等于把噪声引进入口门禁。所以把「判据类型」也列入入选标准：
+   * 只看**世界状态**（文件字节 / 工具返回 / Run 事件 / 退出码 / 供应商 usage），不看模型怎么说话。
+   */
+  const PROSE_SENSITIVE_CHECKS = new Set(['compressed-ratio', 'context-bounded', 'citation-source', 'grounding-status']);
+  const proseSensitive = [];
+  for (const task of subsetTasks) {
+    for (const check of task.checks || []) {
+      if (PROSE_SENSITIVE_CHECKS.has(check.type)) proseSensitive.push(task.id + ':' + check.type);
+    }
+  }
+  check('[B] 子集任务不使用「依赖模型措辞」的判据（压缩比 / 上下文长度 / 引用状态）', proseSensitive.length === 0, proseSensitive.join(', ') || 'ok');
+
+  // ============================ B2. 真机判据微调的护栏 ============================
+  console.log('\n== B2. modelCheckOverrides：只许放宽步数，实质判据永不放宽 ==');
+  const limits = require('../scripts/lib/eval-limits.cjs');
+  const sampleTask = {
+    checks: [
+      { type: 'steps-at-most', max: 4 },
+      // 注意：这里刻意带上 `max: 1` —— 不带数值上限的判据本来就无法被 override 改动，
+      // 那样写会让「白名单」这条断言失去判别力（变异加白名单也照样绿，实测踩到）。
+      { type: 'compressed', tool: 'read_file', max: 1 },
+    ],
+    modelCheckOverrides: { 'steps-at-most': { max: 6 }, compressed: { max: 99 } },
+  };
+  const offlineChecks = limits.effectiveChecks(sampleTask, 'offline');
+  const modelChecks = limits.effectiveChecks(sampleTask, 'model');
+  check('[B2] 离线判据完全不受 modelCheckOverrides 影响（仍按原 max=4 判）', offlineChecks.find((c) => c.type === 'steps-at-most').max === 4);
+  check('[B2] 真机下步数上限按声明放宽到 6', modelChecks.find((c) => c.type === 'steps-at-most').max === 6);
+  check('[B2] 实质判据（compressed）即使被写进 modelCheckOverrides 也不放宽', modelChecks.find((c) => c.type === 'compressed').max === 1, JSON.stringify(modelChecks.find((c) => c.type === 'compressed')));
+  check('[B2] 只许放宽、不许更严（声明更小 → 忽略）', limits.effectiveChecks({ checks: [{ type: 'steps-at-most', max: 4 }], modelCheckOverrides: { 'steps-at-most': { max: 2 } } }, 'model')[0].max === 4);
+  check('[B2] 放宽幅度硬上限 2 倍（声明 100 → 封顶 8）', limits.effectiveChecks({ checks: [{ type: 'steps-at-most', max: 4 }], modelCheckOverrides: { 'steps-at-most': { max: 100 } } }, 'model')[0].max === 8);
+  check('[B2] modelChecks（整套判据）只在真机模式生效', (() => {
+    const task = { checks: [{ type: 'steps-at-most', max: 4 }], modelChecks: [{ type: 'steps-at-most', max: 9 }] };
+    return limits.effectiveChecks(task, 'offline')[0].max === 4 && limits.effectiveChecks(task, 'model')[0].max === 9;
+  })());
+  // 死配置：任务里声明了 modelCheckOverrides 的键，但 checks 里没有这个类型 → 判红（不许静默留着）
+  const dead = [];
+  for (const task of TASKS) {
+    if (!task.modelCheckOverrides) continue;
+    const types = new Set((task.checks || []).map((c) => c.type));
+    for (const key of Object.keys(task.modelCheckOverrides)) {
+      if (!types.has(key)) dead.push(task.id + ':' + key);
+    }
+  }
+  check('[B2] 没有「死配置」（override 的键必须存在于该任务的 checks 里）', dead.length === 0, dead.join(','));
+  const overriddenTasks = TASKS.filter((t) => t.modelCheckOverrides).map((t) => t.id + '→' + Object.keys(t.modelCheckOverrides).join('/'));
+  check('[B2] 有真机判据微调的任务都如实登记（便于复核）', overriddenTasks.length >= 1, overriddenTasks.join(' | '));
 
   // ============================ C. CI 接线 ============================
   console.log('\n== C. CI 接线（production-gate.yml + package.json） ==');

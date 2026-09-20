@@ -31,7 +31,22 @@
 - **「用例输入与生产同形」门禁（§4.4）**：`test:fixture-shape` 从真实请求体抓生产 tool 消息字段集，
   要求主循环 push、续跑重建、用例 fixture 三者逐字段对齐 —— 当场抓出并修掉
   `runCheckpoint.saveMessages` / `buildResumeMessages` **丢 `name`**（续跑后硬裁剪占位符退化）。
-- core 套件 73 → **79**，变异规格 5 份 26 条（全部有判别力）。
+- **真机取证（2026-09-20，首次用真 Key 跑通）**：
+  - 全量真机（9 个 `realModel: true` 任务）：**8/9 通过，必需失败 0**，跳过 2（各自带理由），19 次工具调用、34.2s；
+  - PR 子集（`--subset=pr`）：**3/3 通过，连续 3 次**（5.9s / 6.1s / 7.9s，工具调用 5、模型步数 7 稳定）；
+  - 真机抓出两处**夹具口径照脚本化模型调**的问题：`long-context-compression` 的 `compression.maxCalls: 1`
+    只够压一次（真机分批读 → 第 2 份大结果原样留在上下文，实测 7,250 / 9,099 字符 > 4,000 上限）、
+    以及 `steps-at-most: 4` 比真机少一步（5≤4 红）。处理：真机下放宽**压缩配额**（成本旋钮，4,000 字符的
+    实质不变式不放宽）+ 新增 `modelCheckOverrides`（只允许放宽白名单内的 `steps-at-most`，只许放宽不许更严、
+    幅度硬上限 2 倍、离线完全不受影响、白名单在**运行时**也生效、死配置判红）；
+  - 该任务真机 5 次实测判据抖动（模型读法在 1~6 次之间变化）→ **移出 PR 子集**，并把
+    「子集判据不得依赖模型措辞（压缩比 / 上下文长度 / 引用状态）」写成子集入选标准门禁；
+  - `iteration-cap-stop` 真机模型直接回答、不循环（steps=1 tools=0）→ 保持 `required:false`、不进 PR 子集，
+    硬上限覆盖以离线脚本化模型为准确性命中，事实如实记录；
+  - 判据可读性：`context-bounded` / `compressed-ratio` 的失败信息现在带**证据**（最长消息的角色 + 片段、
+    每份压缩的 from→to(ratio)）—— 否则「9099 字符」看不出是 harness 没压还是模型啰嗦。
+- core 套件 73 → **79**；新增 6 份变异规格共 **30 条**（fixture-shape 4 / prompt-layers 4 / run-rollback 5 /
+  agent-steering 4 / subagent-view 5 / real-model-pr 8），全部有判别力、0 跳过。
 
 ### 修复（harness 短板收尾：请求形状可关 / 交互输入不进缓存 / 进度检查层；2026-09-19）
 
