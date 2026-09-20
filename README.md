@@ -20,7 +20,7 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 | 维度 | 现状 |
 | --- | --- |
 | 代码规模 | TypeScript / Node 约 39k 行（渲染层 12.6k、Electron 主进程 15.3k、门禁与工具脚本 11k） |
-| 门禁 | `npm run verify` = 构建 + `check:js`（主进程/脚本 checkJs）+ **43 项核心套件 + 3 项显示环境套件**；清单唯一来源 `scripts/run-all-tests.cjs` |
+| 门禁 | `npm run verify` = 构建 + `check:js`（主进程/脚本 checkJs）+ **79 项核心套件 + 5 项显示环境套件**；清单唯一来源 `scripts/run-all-tests.cjs` |
 | CI | Windows / macOS / Linux 三平台矩阵：构建 → 静态检查 → 全量门禁 → 打包 → 评测；Agent 评测报告按 commit 归档为 artifact |
 | Agent 评测 | 11 个多步任务离线确定性评测（多步读写、改完跑测试、引用、长上下文压缩、提示注入、取消、崩溃恢复、预算上限），最近一次 **11/11 通过 / 127 次工具调用** |
 | 分发 | electron-builder 打包 portable exe / dmg / AppImage，附 sha256/sha512 清单、签名与升级回滚判据（`docs/release-process.md`） |
@@ -232,7 +232,7 @@ src/
   resources/schemas/.cnode 格式 JSON Schema
   store/            zustand：图模型 / 项目 / UI 状态
   types.ts          节点数据类型
-scripts/            门禁与测试套件（43 项核心 + 3 项显示）/ 打包 / 发布 / 评测
+scripts/            门禁与测试套件（79 项核心 + 5 项显示）/ 打包 / 发布 / 评测
 ```
 
 ## 测试

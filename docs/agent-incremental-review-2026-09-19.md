@@ -25,7 +25,7 @@
 > 真机 job 只在手动 release 模式跑）②用户对运行中的 Agent 没有控制手段
 > （无 steering/排队消息；子代理任务视图仅内存 `Map`、无 UI；无 Run 级文件改动回滚、幂等账本无 before-image）
 > ③每轮固定开销 ≈8k tokens 未审计、无按任务分层注入 ④缺「用例输入与生产同形」的门禁。
-> 另：`README.md` 徽章仍写 `gates-43 core + 3 display`，实际 **73 核心 + 5 显示**
+> 另：`README.md` 徽章仍写 `gates-43 core + 3 display`，实际 **73 核心 + 5 显示**（2026-09-20 已随 §4.5 一起修正为 79 核心 + 5 显示）
 > （`node scripts/run-all-tests.cjs --list`）。
 >
 > **两处「待核实」已在本次实施中被反向证实**：#1 的触发链（§6.5 建议的复现已写成用例
