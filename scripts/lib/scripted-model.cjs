@@ -66,7 +66,7 @@ function buildStream(turn) {
 
 /**
  * 安装脚本化模型。
- * @returns {{ calls: number, seen: Array<any>, restore: Function, state: any }}
+ * @returns {{ calls: number, intentCalls: number, seen: Array<any>, restore: Function, state: any }}
  */
 function installScriptedModel(script, options = {}) {
   const originalFetch = global.fetch;
