@@ -243,6 +243,70 @@ async function main() {
     const huge = intent.buildClassifierMessages({ prompt: 'x'.repeat(9000) });
     check('[D] 超长用户消息被截断（分类不需要全文）', huge[1].content.length < 9000, String(huge[1].content.length));
     check('[D] 同内容 → 同一缓存指纹', intent.buildClassifierMessages({ prompt: 'x' })[1].content === intent.buildClassifierMessages({ prompt: 'x' })[1].content);
+
+    /**
+     * 取消信号**透传**（2026-09-21）：
+     * 此前 `callModel` 的 JSDoc 写了 `signal` 但实现没传 —— 取消靠调用方闭包捕获 `controller`，
+     * 那一跳**没有被任何用例锁住**（谁把闭包改成别的东西都不会红）。改成透传之后：
+     * 接口显式、可注入假 signal 直锁；并且「已取消」时连请求都不发起。
+     */
+    const liveController = new AbortController();
+    /** @type {any} 初值是字符串哨兵、之后是 callModel 收到的 signal 对象（null 或 AbortSignal） */
+    let passedSignal = 'unset';
+    const c1 = intent.createIntentClassifier({
+      cfg: intent.parseIntentConfig({ 'agent.intent_recognition': 'always' }),
+      signal: liveController.signal,
+      callModel: async (req) => {
+        passedSignal = req.signal;
+        return '{"intent":"code","risk":"low","authorization":"high","confidence":0.9,"reason":"x"}';
+      },
+    });
+    const liveVerdict = await c1.classify({ prompt: '改代码', history: [], canvasSummary: '[]' });
+    check('[D] classifier 把 signal 透传给 callModel（同一个 AbortSignal 对象）', passedSignal === liveController.signal, String(passedSignal === liveController.signal));
+    check('[D] 透传后判定照常可用', liveVerdict.source === 'model' && liveVerdict.intent === 'code', JSON.stringify({ source: liveVerdict.source, intent: liveVerdict.intent }));
+
+    const c2 = intent.createIntentClassifier({
+      cfg: intent.parseIntentConfig({}),
+      callModel: async (req) => {
+        passedSignal = req.signal;
+        return '{"intent":"chat","risk":"low","authorization":"high","confidence":0.9}';
+      },
+    });
+    await c2.classify({ prompt: '你好', history: [], canvasSummary: '[]' });
+    check('[D] 没传 signal → 透传 null（接口形状稳定，不是 undefined）', passedSignal === null, String(passedSignal));
+
+    const abortedController = new AbortController();
+    abortedController.abort();
+    let abortedCalls = 0;
+    const c3 = intent.createIntentClassifier({
+      cfg: intent.parseIntentConfig({}),
+      signal: abortedController.signal,
+      callModel: async () => {
+        abortedCalls += 1;
+        return '{}';
+      },
+    });
+    const abortedVerdict = await c3.classify({ prompt: '已经点了停止', history: [], canvasSummary: '[]' });
+    check('[D] signal 已 aborted → 连请求都不发起，且判「没有信号」', abortedCalls === 0 && abortedVerdict.source === 'unavailable', JSON.stringify({ calls: abortedCalls, source: abortedVerdict.source }));
+
+    // 取消之后**即使缓存里有结果也不使用**（否则「停止」之后还会被旧的判定影响）
+    const cacheController = new AbortController();
+    let cacheCalls = 0;
+    const c4 = intent.createIntentClassifier({
+      cfg: intent.parseIntentConfig({}),
+      signal: cacheController.signal,
+      callModel: async () => {
+        cacheCalls += 1;
+        return '{"intent":"code","risk":"low","authorization":"high","confidence":0.9}';
+      },
+    });
+    const beforeCancel = await c4.classify({ prompt: '同一条消息', history: [], canvasSummary: '[]' });
+    cacheController.abort();
+    const afterCancel = await c4.classify({ prompt: '同一条消息', history: [], canvasSummary: '[]' });
+    check('[D] 取消后即使缓存里有结果也不使用（不走缓存 → unavailable）',
+      beforeCancel.source === 'model' && afterCancel.source === 'unavailable' && cacheCalls === 1 && c4.stats().cachedHits === 0,
+      JSON.stringify({ before: beforeCancel.source, after: afterCancel.source, calls: cacheCalls, cachedHits: c4.stats().cachedHits }));
+    check('[D] 已取消 → 收紧条件一条都不成立（逐字节回到旧行为）', intent.createIntentPolicy(afterCancel).tighten === false && afterCancel.risk === 'unknown', JSON.stringify(afterCancel));
   }
 
   // ============================ E. 提示词路由（只增不减）============================

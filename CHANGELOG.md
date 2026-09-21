@@ -11,8 +11,13 @@
 用户会看到「点了没反应」）。把 controller 与 activeRequests 登记**提前到分类之前**，并给分类调用带上
 `signal`；abort 后分类器按「没有信号」处理（不收紧、不阻断），run 立即返回取消终态。
 判据 `test:agent-state` 的 B6（5 条：分类请求发出过 / **abort 真的传到请求层** / 主循环 0 请求 /
-取消语义与 B4 同口径 / 终态 CANCELLED）；变异 **18/18 → 19/19**。明细见
+取消语义与 B4 同口径 / 终态 CANCELLED）；变异 **18/18 → 21/21**。明细见
 `docs/intent-recognition-2026-09-21.md` §11。
+
+同一批把取消信号改成**透传**（§11.1）：`createIntentClassifier({cfg, callModel, trace, signal})` 把 `signal`
+传给 `callModel`（此前 JSDoc 写了但实现靠调用方闭包捕获，那一跳无用例锁住），并让**已 aborted 的 signal
+直接短路**（不判定、不读缓存、连请求都不发起）。`test:intent` 111 → **117** 条断言（新增 6 条：透传同一
+AbortSignal 对象 / 缺省为 null / 已取消 0 请求 / 取消后不吃缓存 / 取消后不收窄）。
 
 ### 新增（意图识别的界面展示；2026-09-21）
 

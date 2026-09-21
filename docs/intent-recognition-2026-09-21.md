@@ -77,8 +77,8 @@
 | 分类输出上限 | 1024 tokens（`agent.intent_max_tokens`，**真机取证后从 256 抬高**，见 §9） | `parseIntentConfig` 默认值 |
 | 单 run 分类次数上限 | 5（`auto` 下画布非空时 0 次） | `shouldClassify` + `createIntentClassifier.stats()` |
 | 端到端链路 | 本机真起 HTTP 端点，分类请求真的发出去 **1 次**，`/chat/completions`，Bearer 头，`used=760` 记账，`entries=['intent']` | `test:intent` H 块 |
-| 断言总数 | **111** 条（8 组） | `node scripts/intent-test.cjs \| grep -c '^PASS'` |
-| 变异校验 | **16/16** 有判别力 | `node out/mutation-check.cjs --spec out/mutation-spec-intent.json` |
+| 断言总数 | **117** 条（8 组） | `node scripts/intent-test.cjs \| grep -c '^PASS'` |
+| 变异校验 | **21/21** 有判别力 | `node out/mutation-check.cjs --spec out/mutation-spec-intent.json` |
 
 `auto` 模式的成本边界（默认）：**只在画布为空时**分类一次 —— 那是提示词层唯一可能误判的分支；
 画布非空时画布层必然注入，分类改不了路由决策，不值当多花一次请求。风险信号想要更全就设 `always`。
@@ -239,4 +239,26 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
 | B6.4 `ok=true && aborted=true` | 取消语义与 B4 同口径（不是异常） |
 | B6.5 终态 `CANCELLED` | run 记录如实落终态 |
 
-变异校验：把 `signal: controller.signal` 去掉 → **B6.2 必红**（`out/mutation-spec-intent.json`）。本轮 **19/19**。
+变异校验：把 `signal: controller.signal` 去掉 → **B6.2 必红**（`out/mutation-spec-intent.json`）。
+
+### 11.1 取消信号改成**透传**（接口显式，2026-09-21 同日）
+
+上面第一版把取消做成「`callModel` 闭包捕获 ipc 那边的 `controller`」—— 功能是对的，但 `createIntentClassifier`
+的 JSDoc 写着 `callModel({..., signal, ...})` 而实现**没往下传**，等于注释比实现多说一个参数；
+更要紧的是**那一跳没有任何用例锁住**（谁把闭包换成别的东西都不会红）。
+
+改法（`electron/intent.cjs`）：
+
+- `createIntentClassifier({cfg, callModel, trace, signal})` 接受 `signal` 并**透传给 `callModel`**（没传则 `null`，
+  接口形状稳定）—— ipc 那边改成用**入参** `signal`，不再闭包捕获；
+- **已 aborted 的 signal 直接短路**：不判定、**不读缓存**、**连请求都不发起**（取消之后再花一次调用没有意义），
+  返回 `unavailableVerdict('aborted')` → 收紧条件一条都不成立。
+
+判据（`test:intent` D 组新增 6 条）：透传的是**同一个 AbortSignal 对象** / 不传时为 `null` /
+已 aborted 时 `callModel` 调用数 = 0 且 `source='unavailable'` / **取消后即使缓存里有结果也不使用**
+（先成功分类写缓存、再 abort、同一条消息再判 → 仍 `unavailable` 且 `cachedHits === 0`）/ 取消后 `tighten === false`。
+
+变异新增 2 条：去掉透传、短路失效 → 各自对应用例必红。另有一条旧变异（ipc 的 `signal` 传参）
+因为这次改了那一行而**锚点失配被静默跳过**（`[skip] 锚点出现 0 次`），已同步更新锚点 ——
+**教训：改了被变异锚定的代码行，要跟着改 spec，否则变异会静默不执行**（汇总里只是 20/21，不会明说哪条跳了，
+要 `grep '\[skip\]'` 才看得到）。本轮 **21/21、0 skip**。

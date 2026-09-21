@@ -482,12 +482,18 @@ function shouldClassify(cfg, canvasSummary) {
  *
  * 任何异常都被吞成 `unavailableVerdict` —— 意图识别**永远不能**成为主流程的故障点。
  *
- * @param {{cfg?: any, callModel?: Function|null, trace?: Function|null}} [options]
+ * `signal`（可选）：run 的取消信号，**透传给 `callModel`** —— 用户点「停止」时分类请求要能立刻中断。
+ * 已经 aborted 的 signal 直接判「没有信号」且**连请求都不发起**（取消之后再花一次调用没有意义）。
+ * 透传而不是让调用方闭包捕获，是为了让这一跳可被用例直接锁：注入一个假 signal 就能断言
+ * 「请求层真的拿到了取消通道」。
+ *
+ * @param {{cfg?: any, callModel?: Function|null, trace?: Function|null, signal?: any}} [options]
  */
 function createIntentClassifier(options = {}) {
   const cfg = options.cfg || {};
   const callModel = typeof options.callModel === 'function' ? options.callModel : null;
   const trace = typeof options.trace === 'function' ? options.trace : null;
+  const signal = options.signal || null;
   const maxCalls = Number.isFinite(Number(cfg.maxCallsPerRun)) ? Number(cfg.maxCallsPerRun) : DEFAULT_MAX_CALLS_PER_RUN;
   const cache = new Map();
   let calls = 0;
@@ -510,6 +516,11 @@ function createIntentClassifier(options = {}) {
         return unavailableVerdict('no-call-channel');
       }
       const key = digestInput(input);
+      // 已取消：不判定、不读缓存、不发请求 —— 取消之后这一轮不该再有任何意图信号
+      if (signal && signal.aborted) {
+        emit('intent_unavailable', { reason: 'aborted' });
+        return unavailableVerdict('aborted');
+      }
       if (cache.has(key)) {
         cachedHits += 1;
         const hit = cache.get(key);
@@ -527,6 +538,7 @@ function createIntentClassifier(options = {}) {
           model: cfg.model || null,
           maxTokens: cfg.maxTokens || DEFAULT_MAX_TOKENS,
           timeoutMs: cfg.timeoutMs || DEFAULT_TIMEOUT_MS,
+          signal,
         });
         const verdict = parseIntentOutput(text);
         cache.set(key, verdict);

@@ -554,13 +554,16 @@ function register(ctx) {
           if (intentLib.shouldClassify(intentCfg, canvasSummary)) {
             const classifier = intentLib.createIntentClassifier({
               cfg: intentCfg,
+              // 取消信号由分类器**透传**给 callModel（见 intent.cjs 的接口注释）：
+              // 分类请求要能随「停止」立刻中断，且「已取消」时连请求都不发起
+              signal: controller.signal,
               // 走主通道（modelQueue + requestBudget + 重试 + 成本账本），不另开一条绕过预算的路
-              callModel: async ({ messages: classifierMessages, model, maxTokens, timeoutMs }) => {
+              callModel: async ({ messages: classifierMessages, model, maxTokens, timeoutMs, signal }) => {
                 const callCfg = Object.assign({}, cfg, { maxTokens: maxTokens || cfg.maxTokens });
                 if (model) callCfg.model = model;
                 const startedAt = Date.now();
-                // 带上 run 的取消信号：用户点「停止」时分类请求立刻中断（abort → 分类器按「没有信号」处理）
-                const res = await agent.chatCompletion(callCfg, classifierMessages, { timeoutMs, signal: controller.signal });
+                // signal 来自分类器透传（不是这里闭包捕获）：接口显式，用例注入假 signal 即可锁这一跳
+                const res = await agent.chatCompletion(callCfg, classifierMessages, { timeoutMs, signal });
                 // 记账口径与 compaction 一致：chatCompletion 自己不入账，由**调用方按用途**记账
                 // （kind='intent'，所以「意图识别花了多少」在成本面板里单独可查，不混进主对话）
                 agent.recordCost(cfg, {
