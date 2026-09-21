@@ -189,16 +189,24 @@ async function runShell(policy, command, confirm) {
     check('[D] strict 下不弹确认（直接拒，不问）', confirm.calls.length === 0, 'confirmCalls=' + confirm.calls.length);
   }
 
-  // 真实风险演示：变量写目标批准后确实能写到项目外 —— 所以「默认放行」是漏洞，「按用户决定」才是当前边界
+  /**
+   * 真实风险演示：变量写目标被批准后，**这条路径到底靠什么兜住**取决于平台 ——
+   *   - Windows（windows-job 只隔离进程/资源）：越界写**真的会发生** ⇒ 防护是「人」（文案必须说清）；
+   *   - macOS（sandbox-exec）/ 装了 bwrap 的 Linux：内核按 writeRoots 直接拦下 ⇒ 防护是内核。
+   * 所以断言按**策略自报的能力**分支，而不是写死某一个平台的结论
+   * （第一版写死 exists===true，在 macOS CI 上当场假红 —— CI 三平台里只有它带内核文件系统隔离）。
+   */
   {
+    const policy = makePolicy();
+    const fsIsolated = !!(policy && policy.capabilities && policy.capabilities.isolation && policy.capabilities.isolation.filesystem);
     const riskCmd = 'node -e "const fs=require(\'fs\');const p=\'' + slash(outside) + '\';fs.writeFileSync(p,\'x\')"';
     const confirm = makeConfirm(true);
-    const res = await runShell(makePolicy(), riskCmd, confirm);
+    const res = await runShell(policy, riskCmd, confirm);
     check('[D] 演示前置：该命令确实被静态审计记为未解析写目标', /变量或通配/.test(String(confirm.calls[0] && confirm.calls[0].detail || '')), String(confirm.calls[0] && confirm.calls[0].detail || '').slice(0, 120));
     check(
-      '[D] 用户批准后越界写会真的发生（这条路径的防护是「人」，不是内核 —— 文案必须说清）',
-      res.ok === true && fs.existsSync(outside) === true,
-      JSON.stringify({ ok: res.ok, exists: fs.existsSync(outside) })
+      '[D] 批准后越界写的结局与平台能力一致（内核隔离在 → 拦下；只有进程隔离 → 真的写出去）',
+      fsIsolated ? fs.existsSync(outside) === false : res.ok === true && fs.existsSync(outside) === true,
+      JSON.stringify({ ok: res.ok, exists: fs.existsSync(outside), filesystemIsolation: fsIsolated })
     );
     try {
       fs.rmSync(outsideDir, { recursive: true, force: true });

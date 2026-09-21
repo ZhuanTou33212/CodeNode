@@ -71,6 +71,12 @@ Codex CLI / Claude Code，其中两条最值得先做：
   未解析写目标回到静默放行、`detectNetwork` 不剥目录、主循环不注入计划、去掉「最多一个 in_progress」、
   不落盘/不写事件、把 `update_plan` 声明成改工作区 —— 每条都让对应用例**非零退出且红在预期断言上**，
   结束后文件 sha256 与改前一致。
+**平台差异本身就是判据（CI 三平台实测，2026-09-21）**：同一条「变量写目标被批准后越界写」的演示 ——
+Windows（windows-job 只隔离进程/资源）**真的写出去**（这条路径的防护是「人」，所以确认文案必须写明判不出来）；
+macOS（sandbox-exec 可按 writeRoots 拦内核级写）**被拦下**（防护是内核）；ubuntu 上 bwrap 缺席 → 与 Windows 同。
+用例因此按策略自报的 `capabilities.isolation.filesystem` 分支断言，而不是写死某一个平台的结论
+（第一版写死 `exists === true`，在 macOS CI 上当场红 —— 这是一次真实的「判据与平台耦合」教训）。
+
 - 负向判据（防过度修复）：明文写目标落在项目内不额外要求确认；`git status` 这类只读命令不受影响；
   显式越界写仍硬拒且不落盘；没写过计划时提示里不出现「计划」段、也不凭空造出 plan 文件；
   `sandbox.network=inherit` 仍是可配置的（不是写死）。
