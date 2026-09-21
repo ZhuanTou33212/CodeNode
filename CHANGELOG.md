@@ -4,6 +4,29 @@
 
 ## [未发布]
 
+### 新增（控制面补齐·第二batch：MCP HTTP / web_search / worktree 隔离 / 计划卡；2026-09-21）
+
+延续同一天的上一批，把对照文档 §5 里剩下的四项做掉（落地记录见 `docs/agent-control-plane-2026-09-21.md` §8–§11）。
+核心套件 **88 → 92**（+mcp-http / web-search / worktree / subagent-worktree），显示环境 **5 → 6**（+plan-ui）。
+
+- **MCP streamable HTTP transport（`electron/tools/mcpHttpTransport.cjs`）**：POST JSON-RPC；应答按
+  content-type 分流（JSON / `text/event-stream` 按 **id** 取帧）；`mcp-session-id` 会话头；
+  `sandbox.network=deny` 时拒绝并说明怎么放开（拒绝时一个请求都不发）。`publicHttp` 新增通用
+  `request()`（method/headers/body + `allowPrivateHosts`，不自动跟随重定向）。判据 `test:mcp-http`。
+- **`web_search`（`electron/tools/impl/webSearchTool.cjs`）**：可配置后端（searxng / custom），
+  **不配就不注册**（零上下文成本）；空结果如实说「没有结果」，绝不编造；`api_key` → Bearer 头。
+  判据 `test:web-search`。
+- **git 工作树隔离**：`electron/worktree.cjs` + `worktree` 工具（list/create/remove）；只在
+  `.codenode/worktrees/` 下动手（受管目录之外 `NOT_MANAGED`）、上限 5、有未提交改动默认拒删（`DIRTY`）；
+  子代理 `delegate_task(isolation:'worktree')` 真的切 `projectRoot` 到独立检出，结果写明「改动不在主工作树里」，
+  **建不出来就中止任务**（绝不静默降级）。判据 `test:worktree` / `test:subagent-worktree`。
+- **计划卡（对话区 UI）**：主进程计划一变就发 `kind:'plan'` 增量（与进度注入解耦，`progressEvery=0` 也发）；
+  前端 `PlanCard` 渲染状态色阶/进度条/完成态，没有计划时不留空壳。判据 `test:plan-ui`（显示环境）
+  + `test:agent-plan` 的 E 段。
+
+变异校验本批 **6/6** 条有判别力（`out/mutation-spec-control-plane2.json`）。
+仍未做：`PreToolUse` 钩子、Windows 内核级隔离、MCP 服务端推送（理由见落地文档 §12）。
+
 ### 新增（控制面补齐：钩子 / 用户级记忆 / 非交互入口 / 审批规则 / 技能渐进披露 / 看图；2026-09-21）
 
 对照 `docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 的 #3 / #4 / #6 / #7，
@@ -28,11 +51,11 @@ worktree 隔离、计划卡（对话区 UI）—— 逐条理由在该文档末�
 - **看图（`view_image`）**：模型可读项目内图片（png/jpeg/webp/gif、≤4MB、路径在项目根内），
   主循环把图作为一条多模态 user 消息附在工具结果之后；附不上时如实回执。判据 `test:view-image`。
 
-- **MCP 会话复用 + `tools/list` 缓存（`electron/tools/mcpClient.cjs`）**：每个 (项目, 扩展) 一条常驻 stdio 会话，
-  握手一次、清单问一次，调用复用通道；空闲 120s 自动关闭、server 崩溃下次重拉、run 结束 `closeAll()`；
-  仍走 `guardedMcpSpawn`、仍有 1MiB 响应上限、握手失败文案不变。判据 `test:mcp-session`。
-  **仍未做**：HTTP/SSE transport（只支持 stdio）。
-
+- **MCP 会话复用 + `tools/list` 缓存（`electron/tools/mcpClient.cjs`）**：每个 (项目, 扩展) 一条常驻 stdio 会话，
+  握手一次、清单问一次，调用复用通道；空闲 120s 自动关闭、server 崩溃下次重拉、run 结束 `closeAll()`；
+  仍走 `guardedMcpSpawn`、仍有 1MiB 响应上限、握手失败文案不变。判据 `test:mcp-session`。
+  **仍未做**：HTTP/SSE transport（只支持 stdio）。
+
 核心套件 **81 → 87**；变异校验本轮 5 + 11 + 3 = **19/19** 条有判别力（`out/mutation-spec-control-plane.json`、
 `out/mutation-spec-hooks.json`）。
 

@@ -71,7 +71,7 @@
 - 附不上（校验失败）时如实回执「不要假设你看到了画面」，不静默吞掉。
 - 判据：`test:view-image`（18 条断言，含端到端「第二次请求里真的出现 image_url」与「没调用时零痕迹」）。
 
-## 8. MCP 会话复用 + `tools/list` 缓存（对照文档 §5 #5）
+## 7. MCP 会话复用 + `tools/list` 缓存（对照文档 §5 #5）
 
 - 落点：新模块 `electron/tools/mcpClient.cjs`，`extensions.runMcpTool` 变成它的薄封装（返回形状不变）。
 - 变化：每个 (项目, 扩展) 一条**常驻 stdio 会话** —— spawn 一次、`initialize` 一次、`tools/list` 一次（缓存），
@@ -86,13 +86,54 @@
 `C:\Program Files\nodejs\node.exe` 拆成 `C:\Program` → ENOENT；所以 mcpClient 复用了 `extensions.splitCommand`，
 而不是自己写一套分词。
 
-## 7. 仍未做（如实列出，逐条给出理由）
+## 8. MCP streamable HTTP transport（§5 #5 剩余项）
+
+- 落点：`electron/tools/mcpHttpTransport.cjs` + `mcpClient` 改成 transport 无关。
+- 能力：`POST` JSON-RPC；应答按 content-type 分流（JSON 直解 / `text/event-stream` 逐帧找**同 id** 的那条）；
+  记住并回传 `mcp-session-id`；非 2xx / 空应答 / 非 JSON / 找不到同 id 各自如实报错。
+- 出网受策略约束：`sandbox.network=deny`（出厂默认）时拒绝并说明怎么放开；拒绝时**一个请求都不发**。
+- `publicHttp` 新增通用 `request()`：method/headers/body + `allowPrivateHosts`（本地/内网 MCP 是用户自己配的端点），
+  仍做地址解析与连接固定、仍有字节上限、**不自动跟随重定向**（POST 语义各家不同，静默跟随容易发到没预期的地址）。
+- 判据：`test:mcp-http`（29 条断言，进程内 mock HTTP MCP server 记请求取证）。**实测坑**：`http.request`
+  只设 `content-length` 而 `req.end()` 不带 body，服务端会一直等那些字节 → 客户端直到超时才 abort，
+  症状是「The operation was aborted」且服务端一条请求都没收到 —— 排查方向全错。
+
+## 9. `web_search` 联网搜索（§5 #7）
+
+- 落点：`electron/tools/impl/webSearchTool.cjs`；**不写死服务商**：后端由 `web_search.*` 配置
+  （`searxng` 自建实例无需 Key / `custom` 通用 JSON），**不配 = 工具根本不注册**（零上下文成本）。
+- 归一化：`{results:[…]}` / `{items:[…]}` / 裸数组；`api_key` → `Authorization: Bearer`；`{query}` 模板替换。
+- **绝不编造**：空结果如实说「没有结果」；HTTP 500 / 非 JSON / 形状不对各自如实报错。
+- 判据：`test:web-search`（32 条断言）。**实测坑**：抓取路径不能用只允许公网地址的 `fetchPublicText`
+  （自建 SearxNG 十有八九在 `127.0.0.1` → 必被 SSRF 判据拦下）；且注册表层已有一道联网门禁，
+  工具自身那道纵深防御要靠「绕过注册表直调 handler」才测得到（变异测试抓出的空判据）。
+
+## 10. git 工作树隔离（§5 #7）
+
+- 落点：`electron/worktree.cjs` + `electron/tools/impl/worktreeTool.cjs`（list/create/remove）。
+- 安全边界：只在 `.codenode/worktrees/<slug>` 下建/删（受管目录之外一律 `NOT_MANAGED`）；数量上限 5；
+  删有未提交改动的工作树默认拒绝（`DIRTY`，必须显式 `force`）；git 命令走 `sandbox.guardedSpawn`、
+  60s 超时、`GIT_TERMINAL_PROMPT=0`（绝不因为等凭据输入而挂住）。
+- 子代理隔离：`delegate_task(isolation:'worktree')` → 子代理的 `projectRoot` 真的切到工作树，
+  结果给出路径/分支/改动清单并写明「这些改动**不在**主工作树里」+ 合并/丢弃方式（**不自动合并**）；
+  **建不出来就中止任务**，绝不静默降级成共享工作树。
+- 判据：`test:worktree`（22 条，真临时 git 仓库，终端判据是磁盘状态：worktree 里改文件后主工作树的
+  README 逐字节不变）+ `test:subagent-worktree`（21 条）。
+
+## 11. 计划卡（§5 #2 的 UI 可见性）
+
+- 主进程：计划一变就发 `kind:'plan'` 增量（与进度提示注入**解耦** —— `progressEvery=0` 时界面照样看得到）。
+- 前端：`sessionStore` 存 run 级计划字段（不塞进气泡，否则压缩/续跑时会跟着折叠或错位）；
+  `PlanCard` 渲染状态色阶、进度条、完成态、无障碍标注；没有计划时返回 `null`（不留空壳）。
+- 判据：`test:agent-plan` 的 E 段 + `test:plan-ui`（显示环境，22 条：DOM、样式生效、色阶变化、脏输入容错、reset 清空）。
+
+## 12. 仍未做（如实列出，逐条给出理由）
 
 | 项 | 为什么没做 |
 |---|---|
-| **MCP HTTP/SSE transport**（会话复用 + `tools/list` 已在本轮补上，见节 8） | 加 transport 要同时定义「连接生命周期 / 认证 / 断线重连 / 与 sandbox 的关系」，是**独立一轮**的量级；只做一半会让「支持 HTTP」变成假象。建议单开一轮。 |
-| **`web_search`** | 需要一个搜索后端（SearxNG / Bing / 自建）。没有可用的公开假设，做成「可配置端点 + 默认关闭」只是把接口摆出来，价值有限；建议等用户明确用哪个后端（或在 `config/agent.properties` 里给出 `web_search.endpoint` 模板）再做。 |
-| **worktree 隔离** | 真正有价值的是「子代理在独立 worktree 里改代码、主代理再合并」——那要动子代理的 `projectRoot` 与合并/冲突语义（仓库已有 `merge.cjs` 的确定性合并，但那是**结果合并**不是**工作树合并**）。属于设计问题，需要一轮专门设计而不是顺手加个工具。 |
-| **对话区的「计划卡」UI** | 计划目前通过 ① 工具结果 ② 进度提示 ③ run 事件回放时间线三处可见；独立卡片要新增 delta kind + 前端渲染 + 显示环境用例。属独立一轮（`docs/agent-boundary-and-plan-2026-09-21.md` §6 已记过）。 |
-| **`PreToolUse` 钩子** | 拦截型钩子要先定义「钩子拒绝时算谁的错、怎么回灌、能不能改参数」，Claude Code 用 exit code 2 + stdout 表达；不猜语义，先只做 PostToolUse / SessionStart / Stop。 |
-| **Windows 内核级隔离** | 仍无受限令牌 / AppContainer 方案；边界依旧是「静态审计 + 确认 + 受保护路径」（见前一份文档 §2）。 |
+| **`PreToolUse`（拦截型钩子）** | 要先定义「钩子拒绝时算谁的错、怎么回灌、能不能改参数」（Claude Code 用 exit code 2 + stdout 表达）；不猜语义，本轮只做 `PostToolUse` / `SessionStart` / `Stop`。 |
+| **Windows 内核级隔离（受限令牌 / AppContainer）** | 仍无可行方案；边界依旧是「静态审计 + 确认 + 受保护路径 + 工作树隔离」（见 §2 与前一份文档）。 |
+| **MCP 订阅/通知流（server→client 推送）** | 当前按「请求-应答」处理，通知帧只忽略；要做真推送需要长连与事件分发，属独立一轮。 |
+
+> 原先 §7 列的 4 项（MCP 会话复用 + `tools/list`、MCP HTTP、`web_search`、worktree、计划卡）**已全部落地**，
+> 分别见 §7–§11。
