@@ -131,6 +131,8 @@ const CORE = [
   'test:view-image',
   // MCP 会话复用 + tools/list 缓存（§5 #5）：spawn 次数 / 握手次数 / 清单只问一次 / 崩溃重拉 / 空闲回收
   'test:mcp-session',
+  // MCP streamable HTTP transport（§5 #5 剩余项）：JSON/SSE 应答 / 会话头 / 出网策略 / 错误语义
+  'test:mcp-http',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。

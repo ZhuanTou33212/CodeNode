@@ -143,7 +143,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       source: 'test',
     };
     const res = await mcpClient.callTool(root, ext, { name: 'echo' }, { text: 'x' }, null, undefined);
-    check('[E] 握手失败 → 明确报「握手失败 + 可能不是 MCP stdio server」', res.ok === false && /握手失败/.test(String(res.error)) && /MCP stdio server/.test(String(res.error)), String(res.error).slice(0, 80));
+    check('[E] 握手失败 → 明确报「握手失败 + 可能不是 MCP server」', res.ok === false && /握手失败/.test(String(res.error)) && /可能不是 MCP server/.test(String(res.error)), String(res.error).slice(0, 80));
     check('[E] 失败后不留会话', mcpClient.activeKeys().includes(mcpClient.sessionKey(root, ext)) === false, JSON.stringify(mcpClient.activeKeys().length));
   }
 
