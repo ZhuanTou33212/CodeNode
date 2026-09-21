@@ -17,6 +17,23 @@ export interface PlanItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+/**
+ * 意图识别的一轮判定（主进程 electron/intent.cjs；两个维度照 Codex guardian 分类器）。
+ *
+ * 界面只显示主进程给的判定，不本地推算；`source` 要一起留着 —— 用户得能区分
+ * 「模型真判了」与「这次没有信号（没跑 / 超时 / 关闭）」，后者不该显示成任何结论。
+ */
+export interface IntentVerdict {
+  intent: string;
+  risk: string;
+  authorization: string;
+  confidence: number;
+  source: string;
+  tighten: boolean;
+  /** 判定依据摘要（主进程给的，界面只做 tooltip，不解析） */
+  reason?: string;
+}
+
 export interface ProgressState {
   edgeIds: string[];
   index: number;
@@ -53,6 +70,14 @@ interface SessionState {
     toolCalls?: unknown;
     saved?: { filePath?: string };
     error?: string;
+    /** kind==='intent'：意图识别的轮级判定（主进程 electron/intent.cjs 的 createIntentPolicy 结果） */
+    intent?: string;
+    risk?: string;
+    authorization?: string;
+    confidence?: number;
+    source?: string;
+    routeHint?: string | null;
+    tighten?: boolean;
     /** kind==='compacted'：压缩结果与给模型的信封 */
     ok?: boolean;
     envelope?: string;
@@ -100,6 +125,13 @@ interface SessionState {
   plan: PlanItem[] | null;
   planUpdatedAt: string | null;
   planRunId: string | null;
+  /**
+   * 意图识别的最近一次判定（`kind:'intent'` 增量）：run 级状态，写独立字段。
+   * `null` = 这次 run 没有判定（功能关闭 / 未触发 / 分类失败），界面据此**不显示任何结论**。
+   */
+  intentVerdict: IntentVerdict | null;
+  intentUpdatedAt: string | null;
+  intentRunId: string | null;
   reset: () => void;
 }
 
@@ -130,6 +162,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   plan: null,
   planUpdatedAt: null,
   planRunId: null,
+  intentVerdict: null,
+  intentUpdatedAt: null,
+  intentRunId: null,
 
   current: () => {
     const s = get();
@@ -308,6 +343,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : 'pending') as PlanItem['status'],
       }));
       set({ plan: items, planUpdatedAt: d.updatedAt ? String(d.updatedAt) : null, planRunId: d.runId ? String(d.runId) : null });
+      return;
+    }
+    /**
+     * 意图识别：与计划卡同款处理 —— 写独立字段（run 级状态），不塞进气泡。
+     * 只认主进程给的判定，`source` 一起留着：界面要能区分「模型真判了」（model/partial/invalid）
+     * 与「这次没有信号」（unavailable —— 没跑 / 超时 / 关闭），后者不显示任何结论。
+     */
+    if (d.kind === 'intent') {
+      set({
+        intentVerdict: {
+          intent: String(d.intent || 'unknown'),
+          risk: String(d.risk || 'unknown'),
+          authorization: String(d.authorization || 'unknown'),
+          confidence: Number.isFinite(Number(d.confidence)) ? Number(d.confidence) : 0,
+          source: String(d.source || 'unavailable'),
+          tighten: d.tighten === true,
+          reason: d.reason ? String(d.reason).slice(0, 200) : '',
+        },
+        intentUpdatedAt: new Date().toISOString(),
+        intentRunId: d.runId ? String(d.runId) : null,
+      });
       return;
     }
     // 上下文压缩（照 Codex）：把已有消息折叠掉、换成一张交接摘要卡。必须在「最后一条是 assistant」
@@ -537,7 +593,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearProgress: () => set({ progress: null }),
 
-  reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null }),
+  reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, intentUpdatedAt: null, intentRunId: null }),
 }));
 
 /** 合并工具记录：流式增量按 id 去重（同一调用多次 chunk 只算一条）；最终结果按 name+args 回填到未定结果条目，保留每次真实调度 */

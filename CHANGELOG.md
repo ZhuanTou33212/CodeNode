@@ -4,6 +4,16 @@
 
 ## [未发布]
 
+### 新增（意图识别的界面展示；2026-09-21）
+
+- **`IntentBadge`（`src/components/IntentBadge.tsx`）+ store 消费 `kind:'intent'`**：一行紧凑标显示
+  意图 / 风险 / 授权 / 置信度；收紧态（`is-tighten` +「审批收紧」）与「输出不完整」（`partial`）各有显式标注，
+  判定依据进 tooltip；**没有信号（`unavailable`）时不显示任何结论**（返回 null，不留空壳、不假装未判定）。
+  挂载在 `AgentPanel` 里紧挨计划卡，样式沿用 `.ap-plan` 的亮度分层与语义色。
+- 判据 `test:intent-ui`（**DISPLAY 组**，18 条断言，offscreen 真实渲染）：空壳、中文文案、风险色阶
+  （高低风险计算色值必须不同）、位置、11px 密度、tooltip 判据、unavailable 不留结论、partial 显式标注、reset。
+  显示组 **6 → 7**；变异校验本轮 **18/18**（新增 2 条 UI 条目）。
+
 ### 修复（意图识别的两个真机缺陷；2026-09-21）
 
 拿到 key 后跑真机探针（`out/probe-intent-real.cjs`，6 场景）**当场红了 3/5** —— 这是该功能的第一次真实运行，

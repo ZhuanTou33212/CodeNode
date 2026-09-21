@@ -582,6 +582,7 @@ function register(ctx) {
             });
             sendDelta({
               kind: 'intent',
+              runId,
               intent: verdict.intent,
               risk: verdict.risk,
               authorization: verdict.authorization,
@@ -589,6 +590,8 @@ function register(ctx) {
               source: verdict.source,
               routeHint: intentPolicy.routeHint,
               tighten: intentPolicy.tighten,
+              // 判据摘要（截断）：界面用它做 tooltip —— 用户要能看到「凭什么这么判」
+              reason: String(verdict.reason || '').slice(0, 120),
             });
           }
         } catch (error) {

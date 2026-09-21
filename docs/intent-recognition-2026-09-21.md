@@ -129,8 +129,8 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
    （思考链吃光输出额度导致正文为空、输出被截断成非法 JSON），都已修；探针 `out/probe-intent-real.cjs`
    （6 个场景，含提示注入与「assistant 旁白越权」）。
 
-5. **UI 未展示**：run 事件 `intent`、审计事件 `approval_risk_gate`、成本项 `kind='intent'`
-   已经有数据，前端还没有对应的展示块（回放面板里能看到原始事件）。
+5. ~~**UI 未展示**~~ → **已完成（2026-09-21，见 §10）**：`IntentBadge` 一行紧凑标（意图/风险/授权/置信度，
+   收紧态与「输出不完整」各有显式标注，判据进 tooltip），判据 `test:intent-ui`（18 条断言，真实渲染进程）。
 
 ## 9. 真机取证与修复（2026-09-21，真实 DeepSeek）
 
@@ -195,3 +195,22 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
 
 脚本化模型（`scripts/lib/scripted-model.cjs`）永远给不出这些形状 —— 所以**真机探针是这个功能的必跑项**，
 `I4` 不变量就是这么来的。
+
+## 10. 界面展示（消费端，2026-09-21）
+
+数据早就有了（run 事件 `intent`、增量 `kind:'intent'`、成本项 `kind='intent'`），缺的只是消费端。
+本批补上：
+
+- **`src/store/sessionStore.ts`**：`intentVerdict` / `intentUpdatedAt` / `intentRunId` 三个**独立字段**
+  （与计划卡同款：run 级状态不塞进气泡，否则压缩/续跑会把它折叠或错位）+ `streamDelta` 的
+  `kind:'intent'` 分支 + `reset` 清空。
+- **`src/components/IntentBadge.tsx`**：**一行**紧凑标（意图中文语义 / 风险徽标 / 授权徽标 / 置信度）；
+  收紧态加 `is-tighten` 类与「审批收紧」文字；`source='partial'` 加「输出不完整」标；
+  判据与来源说明进 tooltip；**`unavailable` 直接返回 `null`** —— 不留空壳、也不假装成「未判定」。
+- **挂载**：`AgentPanel` 里紧挨 `PlanCard`（同一「run 级信息」区），排在消息列表之前。
+- **样式**：`src/styles.css` 的 `.ap-intent*`，沿用 `.ap-plan` 的亮度分层与语义色
+  （低风险绿 `#6ed2a0` / 中风险蓝 `#78a7ff` / 高风险橙 `#ff9e6a`），不引新 accent。
+- **判据** `scripts/intent-ui-test.cjs`（进 DISPLAY 组，**18 条断言**，真实渲染进程）：空壳、中文文案、
+  色阶（高风险与低风险的**计算色值必须不同**）、位置（面板内且在消息列表之前）、11px 密度、
+  tooltip 里的判据、`unavailable` 不留结论、`partial` 显式标注、`reset` 清空。
+- 显示组 **6 → 7**；变异校验新增 2 条 UI 条目（store 不再消费 / unavailable 也渲染结论），本轮 **18/18**。

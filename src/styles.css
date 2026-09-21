@@ -2427,6 +2427,68 @@ textarea:focus-visible {
   color: #5f708a;
 }
 
+/**
+ * 意图识别标（照 Codex guardian 分类器的轮级判定）。
+ * 一行紧凑标而不是卡片：它每轮都会变，做成卡片会让对话区反复跳动。
+ * 亮度分层：标签（最弱）→ 判定值（最强）→ 置信度（弱）；风险/授权只用语义色，不引新 accent。
+ */
+.ap-intent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 2px 0;
+  padding: 4px 8px;
+  border: 1px solid rgba(120, 167, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(120, 167, 255, 0.04);
+  font-size: 11px;
+  line-height: 16px;
+  color: #cfe0ff;
+}
+
+/* 收紧态：本轮命中的免打扰规则不生效 —— 用边框/底色提示，不额外加图标噪声 */
+.ap-intent.is-tighten {
+  border-color: rgba(255, 158, 106, 0.34);
+  background: rgba(255, 158, 106, 0.07);
+}
+
+.ap-intent-title {
+  color: #6b7d99;
+  letter-spacing: 0.02em;
+}
+
+.ap-intent-value {
+  font-weight: 600;
+}
+
+.ap-intent-chip {
+  padding: 0 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  font-size: 10px;
+  color: #9fb6d8;
+}
+
+.ap-intent-chip.r-low { color: #6ed2a0; border-color: rgba(110, 210, 160, 0.3); }
+.ap-intent-chip.r-medium { color: #78a7ff; border-color: rgba(120, 167, 255, 0.3); }
+.ap-intent-chip.r-high,
+.ap-intent-chip.r-critical { color: #ff9e6a; border-color: rgba(255, 158, 106, 0.34); }
+.ap-intent-chip.r-unknown { color: #6b7d99; }
+.ap-intent-chip.a-high { color: #6ed2a0; }
+.ap-intent-chip.a-medium { color: #9fb6d8; }
+.ap-intent-chip.a-low,
+.ap-intent-chip.a-unknown { color: #ff9e6a; }
+.ap-intent-chip.is-partial { color: #d8c07a; border-color: rgba(216, 192, 122, 0.3); }
+
+.ap-intent-tighten { color: #ff9e6a; }
+
+.ap-intent-conf {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: #5f708a;
+}
+
 .ap-body {
   flex: 1;
   min-height: 0;
