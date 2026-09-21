@@ -188,6 +188,21 @@ function registry(enabled, config) {
     // 但都必须点名 sandbox.network=deny 与 web_search（否则用户不知道是谁拦的）
     check('[F] network=deny → 拒绝且点名原因与工具', res.ok === false && /sandbox\.network=deny/.test(String(res.text)) && /web_search/.test(String(res.text)), String(res.text).slice(0, 90));
     check('[F] 拒绝时不发任何请求（mock 一条都没收到）', mock.seen.length === 0, 'seen=' + mock.seen.length);
+
+    /**
+     * 纵深防御：注册表层还有一道「联网门禁」，平时会在工具执行前就拒掉 ——
+     * 于是工具**自身**的判据永远不会被触发，判据也就锁不住它（变异测试当场抓出：把这条
+     * 内层判据删掉，用例照样绿）。这里绕过注册表直接调 handler，专门验内层那道。
+     */
+    let handler = null;
+    webSearch.register({ register: (_name, _desc, _schema, fn) => { handler = fn; } });
+    const inner = await handler(contextFor(config, policyDeny), { query: 'x' });
+    check('[F] 工具自身也拦（纵深防御：注册表门禁之外的第二道）', inner.ok === false && /sandbox\.network=deny/.test(String(inner.text)), String(inner.text).slice(0, 80));
+    check('[F] 内层拒绝同样不发请求', mock.seen.length === 0, 'seen=' + mock.seen.length);
+
+    // 反向：放开策略后 handler 真的会发请求（证明上面不是「无论如何都拒」）
+    const allowed = await handler(contextFor(config, policyAllow), { query: 'electron' });
+    check('[F] 同一 handler 在允许出网时正常发请求（不是一律拒绝）', allowed.ok === true && mock.seen.length === 1, JSON.stringify({ ok: allowed.ok, seen: mock.seen.length }));
     await mock.stop();
   }
 

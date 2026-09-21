@@ -175,6 +175,8 @@ function registry(opts) {
   // ==================== D. 端到端（真实循环 + 脚本化模型）====================
   console.log('\n== D. 端到端：计划立刻回灌、只留一条、不堆叠 ==');
   let lastSeen = [];
+  /** 本轮的流式增量（计划卡判据用：主进程要发 kind:'plan' 才能让界面看到计划） */
+  let lastDeltas = [];
   async function runTurn(script, cfgOverrides = /** @type {any} */ ({})) {
     /** @type {any} */
     const { limits: limitsOverride, ...rest } = cfgOverrides || {};
@@ -182,6 +184,7 @@ function registry(opts) {
     const runId = (rest && rest.costRunId) || 'run-plan-e2e';
     const context = contextWith(runId);
     const stub = installScriptedModel(script, { loopLast: false });
+    lastDeltas = [];
     try {
       const result = await agent.runAgentChat({
         cfg: Object.assign(
@@ -205,6 +208,9 @@ function registry(opts) {
           { role: 'user', content: '请完成测试任务' },
         ],
         tools: { registry: registry({ toolsAllowed: ['update_plan', 'read_file'] }), context },
+        onDelta: (d) => {
+          if (d && d.kind) lastDeltas.push(d);
+        },
         signal: controller.signal,
         timeoutMs: 20000,
       });
@@ -272,7 +278,48 @@ function registry(opts) {
     check('[D] 也不该凭空造出 plan 文件', fs.existsSync(planLib.planFile(root, 'run-plan-noplan')) === false);
   }
 
-  // ==================== E. 接线 ====================
+  // ==================== E. 计划卡（界面可见性）====================
+  console.log('\n== E. 计划卡增量（界面据此渲染）==');
+  {
+    await runTurn(
+      [
+        { toolCalls: [{ id: 'k1', name: 'update_plan', args: { items: [{ step: '第一步', status: 'in_progress' }, { step: '第二步', status: 'pending' }] } }] },
+        { content: '好' },
+      ],
+      { costRunId: 'run-plan-ui', limits: { progressEvery: 3 } }
+    );
+    const plans = lastDeltas.filter((d) => d.kind === 'plan');
+    check('[E] 计划一变就发 kind=plan 增量（不必等满 progressEvery 轮）', plans.length === 1, 'plans=' + plans.length + ' deltas=' + lastDeltas.map((d) => d.kind).join(','));
+    check('[E] 增量里带结构化清单（界面不用去解析文本）', plans[0] && plans[0].items.length === 2 && plans[0].items[0].step === '第一步' && plans[0].items[0].status === 'in_progress', JSON.stringify(plans[0] && plans[0].items));
+    check('[E] 增量里带 updatedAt 与 runId（界面能判断是不是同一份）', !!(plans[0] && plans[0].updatedAt) && plans[0].runId === 'run-plan-ui', JSON.stringify({ updatedAt: plans[0] && plans[0].updatedAt, runId: plans[0] && plans[0].runId }));
+    check('[E] 同一次运行里不会重复发同一份计划', new Set(plans.map((d) => d.updatedAt)).size === plans.length);
+  }
+  {
+    // 关键解耦：progressEvery=0（完全不注入进度提示）时，计划卡也必须照发
+    await runTurn(
+      [
+        { toolCalls: [{ id: 'k2', name: 'update_plan', args: { items: [{ step: '只有一步', status: 'in_progress' }] } }] },
+        { content: '好' },
+      ],
+      { costRunId: 'run-plan-ui-zero', limits: { progressEvery: 0 } }
+    );
+    const plans = lastDeltas.filter((d) => d.kind === 'plan');
+    check('[E] progressEvery=0 时进度提示一条都没有（前置事实）', notesIn(lastSeen[1] || { messages: [] }).length === 0);
+    check('[E] 但计划卡照样发（与进度注入解耦）', plans.length === 1 && plans[0].items.length === 1, 'plans=' + plans.length);
+  }
+  {
+    // 负向：没有计划就没有 plan 增量
+    await runTurn(
+      [
+        { toolCalls: [{ id: 'k3', name: 'read_file', args: { path: 'work/a.txt' } }] },
+        { content: '好' },
+      ],
+      { costRunId: 'run-plan-ui-none', limits: { progressEvery: 1 } }
+    );
+    check('[E] 没写过计划 → 一条 plan 增量都没有（零痕迹）', lastDeltas.filter((d) => d.kind === 'plan').length === 0, JSON.stringify(lastDeltas.map((d) => d.kind)));
+  }
+
+  // ==================== F. 接线 ====================
   console.log('\n== E. 接线 ==');
   {
     const names = registry().listTools().map((t) => t.name);

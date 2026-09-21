@@ -37,6 +37,8 @@ export const CONTROL_DELTA_KINDS = [
   'subagent_merge',
   'max_tokens_capped',
   'saved',
+  // 计划卡（update_plan）：计划是 run 级状态，写进 store 的独立字段，不改气泡
+  'plan',
 ] as const;
 
 /** 会直接改写最后一条 assistant 气泡的 kind */

@@ -2050,6 +2050,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
    * 否则「模型刚写完计划、之后几轮都看不到它」。
    */
   let lastPlanStamp = '';
+  // 计划卡（UI）用的独立游标：即使 progressEvery=0（不回灌进度提示），计划变化也要发给界面
+  let lastPlanUiStamp = '';
   // 钩子（PostToolUse）：每 run 执行次数上限 + 最近几条结果（注入消息只保留最近几条，避免越积越长）
   const hooksCfg = hooksLib.parseHooksConfig(cfg);
   let hooksRunCount = 0;
@@ -2367,6 +2369,24 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         if (planChanged) lastPlanStamp = planStamp;
         emitTrace({ kind: 'progress_check', turnId: iter, iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length, planItems: planForNote && Array.isArray(planForNote.items) ? planForNote.items.length : 0 });
         onDelta && onDelta({ kind: 'progress_check', iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
+      }
+
+      /**
+       * 计划卡（对照文档 §5 #2 的「UI 可见」）：计划一变就把**结构化计划**发给界面。
+       * 与进度提示的注入解耦 —— progressEvery=0（不注入进度提示）时界面照样能看到计划。
+       */
+      const planForUi = readRunPlan(traceProjectRoot(), cfg);
+      const planUiStamp = planForUi && planForUi.updatedAt ? String(planForUi.updatedAt) : '';
+      if (planUiStamp && planUiStamp !== lastPlanUiStamp) {
+        lastPlanUiStamp = planUiStamp;
+        emitTrace({ kind: 'plan_card', turnId: iter, items: Array.isArray(planForUi.items) ? planForUi.items.length : 0, updatedAt: planUiStamp });
+        onDelta &&
+          onDelta({
+            kind: 'plan',
+            runId: (cfg && cfg.costRunId) || null,
+            updatedAt: planUiStamp,
+            items: Array.isArray(planForUi.items) ? planForUi.items : [],
+          });
       }
       const payload = {
         model: cfg.model,

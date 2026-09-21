@@ -9,6 +9,7 @@ import { reportError } from '../../lib/reportError';
 import type { AgentAttachment } from '../../types';
 import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
+import { PlanCard } from '../PlanCard';
 import ResumePlanNotice from './ResumePlanNotice';
 import HoverPopover from './HoverPopover';
 
@@ -422,6 +423,10 @@ export default function AgentPanel() {
           <UsageMeter />
         </div>
       </div>
+
+      {/* 计划卡：任务清单来自主进程的 kind:'plan' 增量（update_plan 工具）。
+          没有计划时它自己返回 null —— 不占位、不留空壳。 */}
+      <PlanCard />
 
       {/* #25(b)：流式正文 / 「思考中」 / 已停止 / 失败原因都发生在这里，必须是 live region，
           否则键盘/读屏用户完全得不到「正在生成 / 已中断」的播报。 */}

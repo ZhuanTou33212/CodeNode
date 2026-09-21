@@ -11,6 +11,12 @@ function emptyDoc(): SessionDoc {
   return { root: { nodes: [], edges: [] } };
 }
 
+/** 计划卡里的一步（与主进程 electron/plan.cjs 的 PLAN_STATUSES 同口径） */
+export interface PlanItem {
+  step: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
 export interface ProgressState {
   edgeIds: string[];
   index: number;
@@ -68,6 +74,10 @@ interface SessionState {
     digest?: string;
     counts?: Record<string, number>;
     providerMessage?: string;
+    /** kind==='plan'：任务清单（update_plan）的最新一份 */
+    items?: { step?: string; status?: string }[];
+    updatedAt?: string;
+    runId?: string | null;
   }) => void;
   /**
    * 上下文压缩（照 Codex CLI）：把当前对话折叠成一张交接摘要卡 —— 旧消息标记 `compacted`
@@ -83,6 +93,13 @@ interface SessionState {
 
   setProgressIndex: (i: number) => void;
   clearProgress: () => void;
+  /**
+   * 任务清单（`update_plan` 的计划卡）：由主进程的 `kind:'plan'` 增量更新。
+   * 只认主进程给的「最新一份」，不做本地推算（本地推算会与模型看到的计划漂移）。
+   */
+  plan: PlanItem[] | null;
+  planUpdatedAt: string | null;
+  planRunId: string | null;
   reset: () => void;
 }
 
@@ -110,6 +127,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   streaming: false,
   messages: [],
   progress: null,
+  plan: null,
+  planUpdatedAt: null,
+  planRunId: null,
 
   current: () => {
     const s = get();
@@ -275,6 +295,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    /**
+     * 计划卡：写**独立字段**而不是塞进某条消息 —— 计划是 run 级状态，
+     * 塞进气泡会在压缩/续跑时跟着消息一起被折叠或错位。
+     * 未知状态按 pending 处理（界面上不出现空白步骤）。
+     */
+    if (d.kind === 'plan') {
+      const items = (Array.isArray(d.items) ? d.items : []).slice(0, 20).map((i) => ({
+        step: String((i && i.step) || '').slice(0, 300),
+        status: (['pending', 'in_progress', 'completed'].includes(String((i && i.status) || ''))
+          ? String(i && i.status)
+          : 'pending') as PlanItem['status'],
+      }));
+      set({ plan: items, planUpdatedAt: d.updatedAt ? String(d.updatedAt) : null, planRunId: d.runId ? String(d.runId) : null });
+      return;
+    }
     // 上下文压缩（照 Codex）：把已有消息折叠掉、换成一张交接摘要卡。必须在「最后一条是 assistant」
     // 的守卫之前处理 —— 压缩发生在模型轮次之间，那时气泡状态不该影响它。
     if (d.kind === 'compacted' && d.ok !== false) {
@@ -502,7 +537,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearProgress: () => set({ progress: null }),
 
-  reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null }),
+  reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null }),
 }));
 
 /** 合并工具记录：流式增量按 id 去重（同一调用多次 chunk 只算一条）；最终结果按 name+args 回填到未定结果条目，保留每次真实调度 */
