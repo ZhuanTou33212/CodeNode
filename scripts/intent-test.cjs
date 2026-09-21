@@ -92,11 +92,41 @@ async function main() {
     const notJson = intent.parseIntentOutput('我觉得这轮还行吧');
     check('[A] 不是 JSON → source=invalid + 保守判高', notJson.source === 'invalid' && notJson.risk === 'high', JSON.stringify(notJson));
 
+    /**
+     * 这条在 2026-09-21 真机取证后**改判**：截断不再一律判 invalid（真机上 256 额度被思考链吃光时
+     * 会出现「前半段完整、尾部截断」的输出，把它一律当高风险会让每次截断都强制弹确认）。
+     * 改判的同时把**边界**锁住：只认得「完整闭合」的字段，缺的字段仍走保守默认（见下方 cutEarly）。
+     */
     const truncated = intent.parseIntentOutput('{"intent":"code","risk":"low"');
-    check('[A] JSON 被截断 → invalid（不半信半疑地当成 low）', truncated.source === 'invalid' && truncated.risk === 'high');
+    check('[A] 截断在完整字段之后 → 前半段可用（partial），缺字段仍保守', truncated.source === 'partial' && truncated.intent === 'code' && truncated.risk === 'low' && truncated.authorization === 'unknown', JSON.stringify(truncated));
+    check('[A] 截断输出仍然不给 routeHint（partial 不参与提示词路由）', intent.decideRouteHint(truncated) === null);
 
     check('[A] 取值域来自 schema：risk 只有 low/medium/high/critical', JSON.stringify(intent.RISK_LEVELS) === JSON.stringify(['low', 'medium', 'high', 'critical']));
     check('[A] 取值域来自 schema：authorization 只有 unknown/low/medium/high', JSON.stringify(intent.AUTHORIZATION_LEVELS) === JSON.stringify(['unknown', 'low', 'medium', 'high']));
+
+    // ---- 残缺 JSON 逐字段自救（fixture 是 2026-09-21 真机实测抓到的截断形状）----
+    const TRUNCATED_REAL = '{"intent":"canvas","risk":"low","authorization":"high","confidence":0.6,"reason":"用户描述下单到发货的流程链路，画布';
+    const partial = intent.parseIntentOutput(TRUNCATED_REAL);
+    check(
+      '[A] 真机截断形状（前半段完整）→ source=partial 且三个字段都救回',
+      partial.source === 'partial' && partial.intent === 'canvas' && partial.risk === 'low' && partial.authorization === 'high' && partial.confidence === 0.6,
+      JSON.stringify(partial),
+    );
+    check('[A] 自救留痕（reason 说明「输出不完整」）', /输出不完整，已按字段自救/.test(partial.reason), partial.reason.slice(0, 60));
+
+    const cutAuth = intent.parseIntentOutput('{"intent":"code","risk":"low","authorization":"');
+    check('[A] 截断在字段值中间 → 该字段救不回、走保守默认（authorization=unknown）', cutAuth.source === 'partial' && cutAuth.intent === 'code' && cutAuth.risk === 'low' && cutAuth.authorization === 'unknown', JSON.stringify(cutAuth));
+    check('[A] 只救回一半 → reason 标明缺哪个字段', /缺:authorization/.test(cutAuth.reason), cutAuth.reason.slice(0, 80));
+
+    const cutEarly = intent.parseIntentOutput('{"intent":"ops"');
+    check('[A] 只救回 intent → risk 保守判高（缺字段绝不给低风险）', cutEarly.source === 'partial' && cutEarly.intent === 'ops' && cutEarly.risk === 'high' && cutEarly.authorization === 'unknown', JSON.stringify(cutEarly));
+
+    const badEnumPartial = intent.parseIntentOutput('{"intent":"canvas","risk":"很危险"');
+    check('[A] 救回的非法枚举值不认（该字段仍走保守默认）', badEnumPartial.source === 'partial' && badEnumPartial.intent === 'canvas' && badEnumPartial.risk === 'high', JSON.stringify(badEnumPartial));
+
+    const plainText2 = intent.parseIntentOutput('这轮看起来没问题');
+    check('[A] 一个字段都抽不到 → 仍然是 invalid（自救不等于放水）', plainText2.source === 'invalid' && plainText2.risk === 'high');
+    check('[A] salvageFields 对没有可抽字段的输入返回 null', intent.salvageFields('') === null && intent.salvageFields('{}') === null && intent.salvageFields('{"other":1}') === null);
   }
 
   // ============================ B. 只收紧（I1）============================
@@ -148,6 +178,10 @@ async function main() {
 
     check('[C] invalid 即使自称 intent=canvas 也不给 routeHint（不可用信号不能改路由）', intent.createIntentPolicy({ source: 'invalid', intent: 'canvas', risk: 'high' }).routeHint === null);
 
+    const partialVerdict = intent.parseIntentOutput('{"intent":"canvas","risk":"low","authorization":"high","confidence":0.9,"reason":"画布');
+    check('[C] partial（残缺自救）不给 routeHint（提示词路由只认完整输出）', partialVerdict.source === 'partial' && intent.createIntentPolicy(partialVerdict).routeHint === null, JSON.stringify(partialVerdict));
+    check('[C] partial 照常参与收紧（截断不该让审批变宽松）', intent.createIntentPolicy(intent.parseIntentOutput('{"intent":"code"')).tighten === true);
+
     const nullP = intent.nullPolicy();
     check('[C] nullPolicy（未启用/未接线）与 unavailable 等价', nullP.tighten === false && nullP.routeHint === null && nullP.verdict.source === 'unavailable');
 
@@ -159,7 +193,7 @@ async function main() {
   console.log('\n== D. createIntentClassifier：缓存 / 上限 / 失败不阻断 ==');
   {
     const cfg = intent.parseIntentConfig({});
-    check('[D] 出厂默认：auto + 8000ms + 256 tokens + 单 run 5 次', cfg.mode === 'auto' && cfg.timeoutMs === 8000 && cfg.maxTokens === 256 && cfg.maxCallsPerRun === 5, JSON.stringify(cfg));
+    check('[D] 出厂默认：auto + 8000ms + 1024 tokens + 单 run 5 次（1024 是真机取证的结果：256 会被思考链吃光）', cfg.mode === 'auto' && cfg.timeoutMs === 8000 && cfg.maxTokens === 1024 && cfg.maxCallsPerRun === 5, JSON.stringify(cfg));
     check('[D] 非法配置回落默认（不炸）', intent.parseIntentConfig({ 'agent.intent_recognition': '乱写', 'agent.intent_timeout_ms': '-5', 'agent.intent_max_calls_per_run': 'x' }).mode === 'auto');
     check('[D] max_calls_per_run=0 表示不限制（显式语义）', intent.parseIntentConfig({ 'agent.intent_max_calls_per_run': '0' }).maxCallsPerRun === 0);
     check('[D] intent_model 未配置 → null（用主模型）', intent.parseIntentConfig({}).model === null);

@@ -45,7 +45,8 @@ max_tokens=32768
 # agent.intent_recognition=auto     # auto（默认：只在画布为空时分类一次）| always（每轮）| never（关闭）
 # agent.intent_model=               # 分类用的模型（留空 = 与主模型相同）
 # agent.intent_timeout_ms=8000      # 单次分类超时（超时 = 没有信号，不阻断对话）
-# agent.intent_max_tokens=256       # 分类输出上限（结论本身很短）
+# agent.intent_max_tokens=1024       # 分类输出上限。别往下调：供应商的思考链与正文共用这笔额度且关不掉，
+#                                    # 真机实测 256 会被思考吃光（正文为空 / JSON 被截断），1024 有余量
 # agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不限制）
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md

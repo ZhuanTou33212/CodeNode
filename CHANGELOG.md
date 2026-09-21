@@ -4,6 +4,20 @@
 
 ## [未发布]
 
+### 修复（意图识别的两个真机缺陷；2026-09-21）
+
+拿到 key 后跑真机探针（`out/probe-intent-real.cjs`，6 场景）**当场红了 3/5** —— 这是该功能的第一次真实运行，
+暴露两个脚本化测试**看不见**的缺陷（明细见 `docs/intent-recognition-2026-09-21.md` §9）：
+
+- **思考链吃光输出额度**：供应商的思考链与正文共用 `max_tokens`，而且**关不掉**（不下发 `reasoning_effort`
+  照样思考）。实测 `intent_max_tokens=256` → `reasoning_tokens=256`、**正文为空**（1 个场景）或
+  JSON 被截断（2 个场景）。出厂值 **256 → 1024**（对照实验：`low`+256 勉强够、`1024` 稳）。
+- **截断输出被整体判 invalid**：截断的前半段字段其实完整，一律判 invalid 等于把「我们额度不够」记成
+  「模型判定可疑」→ 每次截断都强制弹确认。新增 `salvageFields` 逐字段自救（`source='partial'`：
+  只抽**完整闭合**字段、仍过枚举校验、缺字段保守回落、**不给 routeHint** 但照常参与收紧）。
+  修复后同一探针 **6/6 解析成功**，含「提示注入被抗住」与「assistant 旁白越权 → authorization=unknown → 收紧」。
+- 判据：`test:intent` 100 → **111** 条断言（新增真机截断 fixture + partial 边界），变异 **12/12 → 16/16**。
+
 ### 新增（意图识别 / 授权判定，照 Codex 的 guardian 分类器；2026-09-21）
 
 落地记录见 `docs/intent-recognition-2026-09-21.md`。核心套件 **92 → 93**（+intent）。

@@ -30,7 +30,12 @@
  *      此时既不收紧也不放宽，行为与「没有这个功能」逐字节一致（既有静态规则照旧生效）。
  *      「模型跑通了但输出不可用」是另一回事 → `source === 'invalid'`，按 Codex 口径保守判高。
  *   I3 **判据可复现**：模型只负责产出一段文本；文本 → 决策的每一跳都是纯函数
- *      （`parseIntentOutput` / `createIntentPolicy` / `decideRouteHint`），表驱动可直锁。
+ *      （`parseIntentOutput` / `createIntentPolicy` / `decideRouteHint` / `shouldClassify`），表驱动可直锁。
+ *   I4 **真机形状优先于假想**（2026-09-21 真实 DeepSeek 取证，`out/probe-intent-real.cjs`）：
+ *      输出额度会被供应商的**思考链吃掉、而且关不掉**（同一份分类请求：`max_tokens=256` →
+ *      `reasoning_tokens=256`、正文为空；`1024` → 思考 160 + 正文 120）→ 额度提到 1024；
+ *      截断产生「前半段完整」的 JSON 走 `salvageFields` 逐字段自救（`source='partial'`）。
+ *      **脚本化模型永远看不到这一类形状**，所以真机探针是必跑项，不是可选项。
  */
 'use strict';
 
@@ -51,8 +56,16 @@ const AUTHORIZATION_LEVELS = ['unknown', 'low', 'medium', 'high'];
  */
 const CONFIDENCE_CONSERVATIVE_BELOW = 0.5;
 
-/** 单轮分类请求输出上限（分类结论本身很短；给足 JSON 余量即可） */
-const DEFAULT_MAX_TOKENS = 256;
+/**
+ * 单轮分类请求输出上限。
+ *
+ * **真机数据（2026-09-21，deepseek-chat，`out/probe-intent-reasoning.cjs`）**：供应商的思考链会与正文
+ * 共用这笔额度，而且**关不掉**（不下发 `reasoning_effort` 照样思考）：同一份分类请求的实测是
+ * `max_tokens=256` → `reasoning_tokens=256`、**正文为空**、解析失败；`reasoning_effort=low` + 256 →
+ * 思考 201 + 正文 112（勉强够）；`max_tokens=1024` → 思考 160 + 正文 120（稳）。
+ * 结论：结论本身只要 ~120 tokens，但**必须留出思考的余量** —— 256 会在某些输入上被吃光。
+ */
+const DEFAULT_MAX_TOKENS = 1024;
 
 /** 单轮分类请求超时（毫秒）。超时 → unavailable，不阻断主流程 */
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -201,6 +214,59 @@ function pickConfidence(value) {
 }
 
 /**
+ * 「残缺 JSON 逐字段自救」（纯函数）。
+ *
+ * 为什么需要它（真机取证，2026-09-21）：供应商的思考链会吃输出额度，实测出现过
+ * `{"intent":"canvas","risk":"low","authorization":"high","confidence":0.6,"reason":"用户描述下单到发货的流程链路，画布`
+ * 这种**前半段完整、尾部被截断**的输出 —— 整体 `JSON.parse` 失败，但三个判定字段其实都在。
+ * 一律按 `source='invalid'` 处理会把它当成「模型跑通但输出不可用」保守判高（每次截断都强制弹确认），
+ * 那是把**我们额度不够**误记成**模型判定可疑**。
+ *
+ * 为什么这样抽不会放宽任何东西（安全边界）：
+ *   - 只抽**完整闭合**的字符串值（要求右侧有闭合引号）：截断在字符串中间的残片（`"authorization":"`）
+ *     抽不到 → 该字段走保守默认；
+ *   - 抽到的值仍要过枚举校验（非法值不认）；
+ *   - 抽不到的字段按各自保守默认回落（risk→high / authorization→unknown），
+ *     所以「只救回一半」的结果天然触发收紧；
+ *   - `source='partial'` **不给 routeHint**（提示词路由只认完整输出，见 decideRouteHint）。
+ *
+ * @returns {any|null} source='partial' 的 verdict；一个字段都没抽到则返回 null
+ */
+function salvageFields(text) {
+  const s = String(text == null ? '' : text);
+  const grab = (re) => {
+    const m = s.match(re);
+    return m ? m[1] : undefined;
+  };
+  const rawIntent = grab(/"intent"\s*:\s*"([A-Za-z]+)"/);
+  const rawRisk = grab(/"risk"\s*:\s*"([A-Za-z]+)"/);
+  const rawAuthorization = grab(/"authorization"\s*:\s*"([A-Za-z]+)"/);
+  const rawConfidence = grab(/"confidence"\s*:\s*(-?\d+(?:\.\d+)?)/);
+  const rawReason = grab(/"reason"\s*:\s*"([^"\\]*)"/);
+  const found = [];
+  if (rawIntent !== undefined) found.push('intent');
+  if (rawRisk !== undefined) found.push('risk');
+  if (rawAuthorization !== undefined) found.push('authorization');
+  if (rawConfidence !== undefined) found.push('confidence');
+  if (rawReason !== undefined) found.push('reason');
+  if (!found.length) return null;
+  const missing = ['intent', 'risk', 'authorization'].filter((k) => found.indexOf(k) < 0);
+  return {
+    intent: pickEnum(rawIntent, INTENTS, 'unknown'),
+    risk: pickEnum(rawRisk, RISK_LEVELS, 'high'),
+    authorization: pickEnum(rawAuthorization, AUTHORIZATION_LEVELS, 'unknown'),
+    confidence: pickConfidence(rawConfidence),
+    reason:
+      '（输出不完整，已按字段自救：' +
+      found.join(',') +
+      (missing.length ? '，缺:' + missing.join(',') : '') +
+      '）' +
+      String(rawReason == null ? '' : rawReason).slice(0, 120),
+    source: 'partial',
+  };
+}
+
+/**
  * 「模型跑通了但输出不可用」→ 按 Codex 口径**保守判高**，并在 reason 里留下判据。
  * 注意与 `unavailableVerdict` 的区别：这里有信号（只是信号不可用），所以要收紧。
  */
@@ -231,9 +297,10 @@ function unavailableVerdict(reason) {
 }
 
 /**
- * 解析分类器输出（纯函数）。三种结果：
- *   - 正常：source='model'，各字段按取值域归一（非法字段各自回落）；
- *   - 有输出但不可用（空串 / 不是 JSON）：source='invalid' + 保守判高；
+ * 解析分类器输出（纯函数）。四种结果：
+ *   - 完整 JSON：source='model'，各字段按取值域归一（非法字段各自回落）；
+ *   - **残缺 JSON**：source='partial' —— 逐字段自救（见 `salvageFields`）；
+ *   - 有输出但一个字段都救不回（乱文本）：source='invalid' + 保守判高；
  *   - 不适用：调用方应直接用 `unavailableVerdict`（本函数不产生 unavailable）。
  *
  * @param {any} text 模型原始输出
@@ -243,7 +310,12 @@ function parseIntentOutput(text) {
   const raw = String(text == null ? '' : text).trim();
   if (!raw) return conservativeVerdict('分类输出为空');
   const obj = extractJsonObject(raw);
-  if (!obj) return conservativeVerdict('分类输出不是 JSON');
+  if (!obj) {
+    // 整体不是 JSON：可能是被截断的前半段（真机常见）—— 先试逐字段自救
+    const salvaged = salvageFields(raw);
+    if (salvaged) return salvaged;
+    return conservativeVerdict('分类输出不是 JSON');
+  }
   const missing = ['intent', 'risk', 'authorization'].filter((k) => obj[k] == null);
   const verdict = {
     // 单字段缺失按各自保守默认回落（intent 没有「保守方向」，缺了就是 unknown）
@@ -275,10 +347,12 @@ const TIGHTEN_TRIGGERS = [
 /** 归一任意 verdict 形状（外部传进来的东西也要能安全吃下） */
 function normalizeVerdict(input) {
   const v = input && typeof input === 'object' ? input : {};
-  const source = ['model', 'invalid', 'unavailable'].includes(String(v.source)) ? String(v.source) : 'unavailable';
+  const source = ['model', 'partial', 'invalid', 'unavailable'].includes(String(v.source)) ? String(v.source) : 'unavailable';
+  // 「有信号」（model / partial / invalid）时非法 risk 保守判高；「没有信号」时是 unknown（不使用）
+  const informational = source !== 'unavailable';
   return {
     intent: pickEnum(v.intent, INTENTS, 'unknown'),
-    risk: pickEnum(v.risk, RISK_LEVELS, source === 'model' ? 'low' : 'unknown'),
+    risk: pickEnum(v.risk, RISK_LEVELS, informational ? 'high' : 'unknown'),
     authorization: pickEnum(v.authorization, AUTHORIZATION_LEVELS, 'unknown'),
     confidence: pickConfidence(v.confidence),
     reason: String(v.reason == null ? '' : v.reason).slice(0, 200),
@@ -287,8 +361,13 @@ function normalizeVerdict(input) {
 }
 
 /**
- * 提示词路由信号：只有「模型明确说是画布任务」才给 hint。
+ * 提示词路由信号：只有「完整跑通的模型判定且明确说是画布任务」才给 hint。
  * 只增不减 —— 消费侧（`resolvePromptLayers`）只在**本来会省层**的分支上用它。
+ *
+ * `source='partial'`（残缺输出自救）**刻意不给 hint**：它救回的字段虽然过了枚举校验，
+ * 但「输出被截断」本身就是一次需要留意的异常；提示词路由是「多注入一层」的决策，
+ * 不值得拿残缺信号去改（漏了这一层还有下一轮的关键词/画布变化兜底）。
+ * 收紧方向相反：partial 会照常参与收紧判定（截断不该让审批变宽松）。
  * @returns {'canvas'|null}
  */
 function decideRouteHint(verdict) {
@@ -480,6 +559,7 @@ module.exports = {
   buildClassifierMessages,
   extractJsonObject,
   parseIntentOutput,
+  salvageFields,
   conservativeVerdict,
   unavailableVerdict,
   normalizeVerdict,
