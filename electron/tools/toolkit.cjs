@@ -45,6 +45,10 @@ const BUILTINS = [
   // 任务清单（对照 Codex 的 update_plan）：模型自己写下「分几步、现在在哪一步」。
   // 它不是工作区写操作（mutatesWorkspace=false），但也不是只读缓存项 —— 见 impl/updatePlanTool.cjs。
   require('./impl/updatePlanTool.cjs'),
+  // Skill 正文按需读取（渐进披露）：system prompt 只放索引，正文由模型自己调这个工具取
+  require('./impl/readSkillTool.cjs'),
+  // 看图（对照 Codex 的 view_image）：把项目内的图片附到对话里，让模型真的看到画面
+  require('./impl/viewImageTool.cjs'),
 ];
 
 function buildDefaultRegistry() {

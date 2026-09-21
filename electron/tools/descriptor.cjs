@@ -23,7 +23,7 @@
 const READ_ONLY_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
   'find_files', 'search_files', 'list_directory', 'code_review', 'ask_user',
-  'retrieve_context',
+  'retrieve_context', 'read_skill', 'view_image',
   // 语义上只读，但**故意不进缓存白名单**：画布/标量是权威读源，变更后必须立刻读到最新状态
   'get_workbench_model', 'query_scalars', 'poll_job', 'recall', 'get_subagent_task',
   // 取消子任务（第 6 项）：只 abort 一个子代理，不改工作区；与 get_subagent_task 同类
@@ -45,6 +45,9 @@ const READ_ONLY_TOOLS = new Set([
 const CACHEABLE_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
   'find_files', 'search_files', 'list_directory', 'code_review',
+  // 技能正文也是「同一 run 内不会变」的只读内容 → 同参重复读走缓存（不刷新别的缓存）
+  'read_skill',
+  'view_image',
 ]);
 
 /** 会改变画布模型 / 文件 / 工程状态的工具（语义清单，供文档与并行冲突判定引用） */
@@ -86,6 +89,8 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   get_workbench_model: 'workspace.read',
   query_scalars: 'workspace.read',
   retrieve_context: 'workspace.read',
+  read_skill: 'workspace.read',
+  view_image: 'workspace.read',
   // scan_project 默认只读，但带 applyToWorkbench 参数时会写画布 → 能力上按写处理（fail-closed）
   scan_project: 'workspace.write',
   recall: 'workspace.read',

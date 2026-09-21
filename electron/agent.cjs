@@ -2756,6 +2756,37 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             tool_call_id: callId,
             content: toolContent,
           });
+          /**
+           * 图片类工具结果（view_image）：把图**作为一条 user 消息**附在工具结果之后。
+           * OpenAI 兼容接口只在 user 消息里带 image_url 才可靠（tool 消息里带图会被部分供应商拒绝，
+           * 口径见 electron/attachments.cjs 顶部注释）；上限与用户附件同一套（4MB/张），不另立一套。
+           */
+          const imageData = result && result.data && result.data.image;
+          if (result.ok && imageData && imageData.dataUrl) {
+            try {
+              const attachmentLib = require('./attachments.cjs');
+              const checked = attachmentLib.normalizeAttachments([{ dataUrl: imageData.dataUrl, name: imageData.path, bytes: imageData.bytes }]);
+              if (checked.ok && checked.attachments.length) {
+                messages.push(
+                  attachmentLib.buildUserMessage(
+                    '（上面这次工具调用读取的图片，请直接依据画面内容继续：' + String(imageData.path || '') + '）',
+                    checked.attachments
+                  )
+                );
+                emitTrace({ kind: 'image_attached', turnId: iter, toolCallId: callId, name: tc.name, path: imageData.path || null, bytes: imageData.bytes || null });
+                onDelta && onDelta({ kind: 'image_attached', tool: tc.name, path: imageData.path || null, bytes: imageData.bytes || null });
+              } else {
+                // 附不上去必须如实说，别让模型以为「我看过了」
+                messages.push({
+                  role: 'user',
+                  content: '【系统提示】上一张图片未能附上（' + String(checked.error || '附件校验未通过') + '）：请改用其它方式获取信息，不要假设你看到了画面。',
+                });
+                emitTrace({ kind: 'image_attach_failed', turnId: iter, toolCallId: callId, reason: String(checked.error || '') });
+              }
+            } catch (error) {
+              emitTrace({ kind: 'image_attach_failed', turnId: iter, toolCallId: callId, reason: String((error && error.message) || error) });
+            }
+          }
           onDelta && onDelta({ kind: 'tool_result', toolCalls: [record] });
           emitTrace({
             kind: 'tool',

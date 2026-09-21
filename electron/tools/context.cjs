@@ -32,6 +32,8 @@ class AgentToolContext {
     // S7：审批服务（懒创建）。显式注入时优先用注入实例（便于同一 run 内共享令牌表）
     this.approvalServiceValue = o.approvalService || null;
     this.approvalTtlMsValue = o.approvalTtlMs || null;
+    /** read_skill 的正文上限（0/未给 = 用工具内默认值）；放在上下文里以便配置与测试注入 */
+    this.skillMaxCharsValue = Number(o.skillMaxChars) > 0 ? Math.floor(Number(o.skillMaxChars)) : 0;
     this.auditLogger = o.audit || null;
     this.workbenchMutator = o.mutateWorkbench || null;
     this.saveAction = o.saveProject || null;
@@ -76,6 +78,9 @@ class AgentToolContext {
   taskId() { return this.taskIdValue; }
   role() { return this.roleValue; }
   readOnly() { return this.readOnlyValue; }
+
+  /** read_skill 的正文上限（0 = 用默认值） */
+  skillMaxChars() { return this.skillMaxCharsValue; }
   signal() { return this.signalValue; }
   cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
 

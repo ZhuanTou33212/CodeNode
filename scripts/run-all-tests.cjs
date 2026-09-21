@@ -125,6 +125,10 @@ const CORE = [
   'test:user-memory',
   // 持久化审批规则（对照 Claude Code 的 allow 规则）：命中免打扰 + 留痕 / 受保护路径写不进 / 界面接线
   'test:approval-rules',
+  // 技能渐进披露（§4 固定开销）：prompt 只放索引 / read_skill 按需读正文 / 上限截断
+  'test:skill-index',
+  // 看图（对照 Codex 的 view_image）：格式与上限校验 / 多模态消息真的进了下一次请求 / 零痕迹
+  'test:view-image',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。

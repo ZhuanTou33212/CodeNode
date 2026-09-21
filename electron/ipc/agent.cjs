@@ -500,7 +500,14 @@ function register(ctx) {
       // 用户级（跨项目）记忆：与项目记忆同口径（按提问打分），但**分开注入**成独立段落
       const userMemoryText = userMemoryStore.buildUserMemoryText(prompt, { limit: 20 });
       const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
-      const skillsText = skills.map((item) => `- ${item.name}: ${item.instructions || item.description || '按项目扩展定义执行'}`).join('\n');
+      /**
+       * 渐进披露（对照 Claude Code 的 Agent Skills）：prompt 里**只放索引**（名字 + 一句话），
+       * 正文等模型真需要时用 `read_skill` 去读。此前是把 instructions 整段常驻注入 ——
+       * 无论本次任务用不用得上都在付固定开销（每轮都发）。
+       */
+      const skillsText = skills.length
+        ? skills.map((item) => `- ${item.name}: ${item.description || '（详见正文，用 read_skill 读取）'}`).join('\n') + '\n（需要某个技能的完整做法时调用 read_skill(name) 读取）'
+        : '';
       // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
       // 判定在 agent.resolvePromptLayers 里（纯函数，用例锁）；这里只负责把当轮事实传进去。
       const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, {

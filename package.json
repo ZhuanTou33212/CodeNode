@@ -121,6 +121,8 @@
     "test:headless": "node scripts/headless-test.cjs",
     "test:user-memory": "node scripts/user-memory-test.cjs",
     "test:approval-rules": "node scripts/approval-rules-test.cjs",
+    "test:skill-index": "node scripts/skill-index-test.cjs",
+    "test:view-image": "node scripts/view-image-test.cjs",
     "test:frontend-incremental": "node scripts/frontend-incremental-test.cjs",
     "test:stream-anomaly": "node scripts/stream-anomaly-test.cjs",
     "test:shell-hardening": "node scripts/shell-hardening-test.cjs",
