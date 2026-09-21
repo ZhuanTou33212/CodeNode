@@ -59,8 +59,9 @@ function registry(extra) {
   {
     const skills = readSkill.listSkills(root);
     check('[A] 只认出 kind=skills 的条目（mcp 不算）', skills.length === 2 && skills.map((s) => s.name).join(',') === 'verify-before-commit,tiny', JSON.stringify(skills.map((s) => s.name)));
-    const indexText =
-      skills.map((s) => '- ' + s.name + ': ' + (s.description || '（详见正文，用 read_skill 读取）')).join('\n') + '\n（需要某个技能的完整做法时调用 read_skill(name) 读取）';
+    // 断言必须打在**真实代码路径**上（agent.buildSkillsIndex，ipc 用的就是它）——
+    // 在用例里自造一份索引文本等于什么都没锁（第一版就是这样，被变异测试抓出来）
+    const indexText = agent.buildSkillsIndex(skills);
     check('[A] 索引里有名字与描述', /verify-before-commit: 提交前跑门禁/.test(indexText) && /tiny/.test(indexText));
     check('[A] 索引里**没有**正文（渐进披露的关键判据）', !indexText.includes('第一步：先读 docs/README') && !SHORT_BODY.includes('') === false && !/第一步/.test(indexText));
     const prompt = agent.buildSystemPrompt({ raw: '' }, '', [], '', indexText, {});

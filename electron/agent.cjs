@@ -926,6 +926,22 @@ function buildProgressNote(input) {
  * @param {string|null} projectRoot @param {any} cfg
  * @returns {{items: Array<{step: string, status: string}>, updatedAt?: string}|null}
  */
+/**
+ * 项目 Skill 的**索引**（渐进披露）：只给名字 + 一句话，正文由模型调 `read_skill` 去读。
+ * 单独成纯函数是为了让「到底注入了什么」可被判据直接锁住 —— 塞在 ipc 的表达式里时，
+ * 用例只能自造一份索引文本来断言，等于什么都没锁（变异测试当场抓到）。
+ * @param {Array<{name?: string, description?: string, instructions?: string}>} skills
+ * @returns {string}
+ */
+function buildSkillsIndex(skills) {
+  const list = Array.isArray(skills) ? skills.filter((s) => s && s.name) : [];
+  if (!list.length) return '';
+  return (
+    list.map((item) => '- ' + item.name + ': ' + (item.description || '（详见正文，用 read_skill 读取）')).join('\n') +
+    '\n（需要某个技能的完整做法时调用 read_skill(name) 读取）'
+  );
+}
+
 function readRunPlan(projectRoot, cfg) {
   try {
     return planLib.readPlan(projectRoot, (cfg && cfg.costRunId) || '');
@@ -3099,6 +3115,7 @@ module.exports = {
   buildProgressNote,
   PROGRESS_NOTE_PREFIX,
   readRunPlan,
+  buildSkillsIndex,
   parseReasoningEffort,
   parseReliabilityConfig,
   shouldCompress,
