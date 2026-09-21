@@ -15,6 +15,7 @@
  */
 'use strict';
 
+const assert = require('assert');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -194,8 +195,10 @@ function registry(enabled, config) {
      * 于是工具**自身**的判据永远不会被触发，判据也就锁不住它（变异测试当场抓出：把这条
      * 内层判据删掉，用例照样绿）。这里绕过注册表直接调 handler，专门验内层那道。
      */
+    /** @type {any} */
     let handler = null;
     webSearch.register({ register: (_name, _desc, _schema, fn) => { handler = fn; } });
+    assert(typeof handler === 'function', '未能从 register 捕获 handler');
     const inner = await handler(contextFor(config, policyDeny), { query: 'x' });
     check('[F] 工具自身也拦（纵深防御：注册表门禁之外的第二道）', inner.ok === false && /sandbox\.network=deny/.test(String(inner.text)), String(inner.text).slice(0, 80));
     check('[F] 内层拒绝同样不发请求', mock.seen.length === 0, 'seen=' + mock.seen.length);
@@ -225,9 +228,10 @@ function registry(enabled, config) {
     fs.rmSync(root, { recursive: true, force: true });
   } catch {}
   console.log('\n' + (failures === 0 ? 'WEB SEARCH TEST: PASS' : 'WEB SEARCH TEST: FAIL (' + failures + ')'));
-  process.exitCode = failures === 0 ? 0 : 1;
+  // 必须显式 exit：mock server 还开着时事件循环不会自己结束，失败的用例会把进程挂死（实测）
+  process.exit(failures === 0 ? 0 : 1);
 })().catch((error) => {
   console.error('WEB SEARCH TEST: FAIL');
   console.error(error && error.stack ? error.stack : error);
-  process.exitCode = 1;
+  process.exit(1);
 });

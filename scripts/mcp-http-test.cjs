@@ -230,9 +230,10 @@ function httpExtension(port, extra) {
     fs.rmSync(root, { recursive: true, force: true });
   } catch {}
   console.log('\n' + (failures === 0 ? 'MCP HTTP TEST: PASS' : 'MCP HTTP TEST: FAIL (' + failures + ')'));
-  process.exitCode = failures === 0 ? 0 : 1;
+  // 必须显式 exit：mock server 还开着时事件循环不会自己结束（失败路径会把进程挂死）
+  process.exit(failures === 0 ? 0 : 1);
 })().catch((error) => {
   console.error('MCP HTTP TEST: FAIL');
   console.error(error && error.stack ? error.stack : error);
-  process.exitCode = 1;
+  process.exit(1);
 });

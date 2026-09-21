@@ -132,12 +132,19 @@ try {
   /**
    * 上界是**棘轮**：只允许随「有意新增工具」抬高，且必须在这个 check 的文案里注明是哪次新增带来的。
    * 2026-09-21 新增 update_plan（+643 字符，24 → 25 个工具）→ 上界 16,000 → 17,000。
+   * 2026-09-21 同日第二批：新增 read_skill / view_image / web_search / worktree 四个工具
+   *   （25 → 26 个工具①，schema 15,296 → 15,896 字符），system+schema 合计 19,068 → 总上界 19,000 → 19,500。
+   *   为什么值得付这份固定开销：技能渐进披露**省下的是每个 skill 正文**（数百到数千字符/轮，见 §5 #4），
+   *   而 read_skill 的 schema 只有几十字符；view_image / web_search / worktree 是「没有就做不了」的能力。
+   *   schema 本身的上界（17,000）**没有动**。
    * 只靠抬数字放宽是退步：再加工具时请一并给出「为什么值得付这份固定开销」。
+   *
+   * ① web_search 默认不注册（未配置后端时 schema 里没有它），所以这里数到的 26 个不含它。
    */
   check('[D] 工具 schema ≤ 17,000 字符（当前 ' + schemaChars + '，' + tools.length + ' 个工具）', schemaChars <= 17000, 'chars=' + schemaChars);
   check(
-    '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 19,000 字符',
-    systemPure.length + schemaChars <= 19000,
+    '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 19,500 字符',
+    systemPure.length + schemaChars <= 19500,
     'total=' + (systemPure.length + schemaChars)
   );
 
