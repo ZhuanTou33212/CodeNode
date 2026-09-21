@@ -56,6 +56,12 @@ const GATED_METHODS = Object.freeze({
   sandbox: { caps: ['shell.execute'], fallback: null },
   askUser: { caps: ['ui.interact'], fallback: '' },
   fork: { caps: ['subagent.delegate'], fallback: null },
+  /**
+   * 动作级意图复核（A2）：registry 的**门 1.5** 靠它给副作用动作再判一次「有没有授权」。
+   * 只授给「能改动工作区 / 执行命令 / 保存工程」的动作；未授予时 fallback null = 不复核
+   * （只读动作本来就不需要复核，见门 1.5 的 mutatesWorkspace 条件）。
+   */
+  intentReview: { caps: ['workspace.write', 'project.save', 'shell.execute'], fallback: null },
 });
 
 /** 旧方法名与「新面对象」重名的三个：做成可调用对象（旧调用 + `.方法`） */

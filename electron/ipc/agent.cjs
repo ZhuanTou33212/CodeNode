@@ -279,6 +279,21 @@ function register(ctx) {
       } catch {
         /* 事件只是留痕，失败不影响插话本身 */
       }
+      /**
+       * 插话同时喂给意图识别（A1/A2）：
+       *   ① 记进 `steers` —— 下一次**动作级复核**会带上它（可信证据，可提升/收窄授权）；
+       *   ② 触发一次**轮级重判** —— 否则 run 级收紧一旦发生就再也解除不了（用户明确授权也不生效）。
+       * 重判是「尽力而为」：失败/无信号时**保持原判定**（见 refreshIntentPolicy 的安全边界），
+       * 所以这里不 await、也不影响插话本身的返回时延。
+       */
+      try {
+        if (Array.isArray(queueEntry.steers)) queueEntry.steers.push(String(text || ''));
+      } catch {}
+      try {
+        if (typeof queueEntry.refreshIntentPolicy === 'function') {
+          void queueEntry.refreshIntentPolicy('steer');
+        }
+      } catch {}
     }
     return result;
   });
@@ -546,13 +561,26 @@ function register(ctx) {
        * 续跑（resumePlan）不分类：那轮的提示词层要沿原 run 的上下文，不该被新判定改写。
        */
       let intentPolicy = null;
+      /**
+       * 下面这些提到块外，是给**动作级复核**（A2）与**插话后重判**（A1）用的：
+       * 它们必须复用同一个分类器（共享预算与缓存）与同一份配置。
+       *   - `runSteers`：用户在同一轮里的插话（**可信证据**）；
+       *   - `runContext`：run 级工具上下文（装配工具时创建）—— 重判后要能就地换掉它的 policy。
+       */
+      /** @type {any} */
+      let intentCfg = cfg.intent || {};
+      /** @type {any} */
+      let classifier = null;
+      const runSteers = [];
+      /** @type {any} */
+      let runContext = null;
       if (!resumePlan) {
         try {
-          const intentCfg = cfg.intent || {};
+          intentCfg = cfg.intent || {};
           // 「这一轮要不要分类」是纯函数（intentLib.shouldClassify，用例直接锁它）：
           //   never 永不 / always 每轮 / auto 只在画布为空时（提示词层唯一可能误判的那个分支）。
           if (intentLib.shouldClassify(intentCfg, canvasSummary)) {
-            const classifier = intentLib.createIntentClassifier({
+            classifier = intentLib.createIntentClassifier({
               cfg: intentCfg,
               // 取消信号由分类器**透传**给 callModel（见 intent.cjs 的接口注释）：
               // 分类请求要能随「停止」立刻中断，且「已取消」时连请求都不发起
@@ -647,6 +675,86 @@ function register(ctx) {
         nodeId: nodeId || null,
       });
 
+      /**
+       * 动作级复核（A2）的实现：**副作用动作执行前**再判一次「这个动作有没有授权、风险多大」。
+       *
+       * 输入 = 原提问 + 用户的插话（可信证据）+ 即将执行的动作（assistant 提出 → 不可信）。
+       * 语义与轮级完全一致 —— **只收紧**：返回 null / 抛错 / 不收紧都让调用方维持原判定
+       * （registry 只在 `tighten === true` 时把它当成「即使不需要确认也要问」）。
+       */
+      const intentReview = async ({ tool, detail }) => {
+        if (!classifier) return null;
+        if (intentCfg.actionReview === 'off') return null;
+        try {
+          const verdict = await classifier.classify(
+            {
+              prompt,
+              canvasSummary,
+              steers: runSteers.slice(),
+              action: { tool: String(tool || ''), detail: String(detail || '') },
+            },
+            { scope: 'action' },
+          );
+          const policy = intentLib.createIntentPolicy(verdict);
+          runStore.appendEvent(projectRoot, runId, 'intent_action_review', {
+            tool: String(tool || ''),
+            source: verdict.source,
+            risk: verdict.risk,
+            authorization: verdict.authorization,
+            confidence: verdict.confidence,
+            tighten: policy.tighten,
+            signals: policy.signals,
+            reason: verdict.reason,
+          });
+          return policy;
+        } catch {
+          return null;
+        }
+      };
+
+      /**
+       * 插话后重判（A1「授权可提升」）：用户在同一轮里又说了话，就重新判一次 ——
+       * **授权提升的唯一合法来源是用户本人**（不是意图识别自己放宽，也不是 assistant 的自述）。
+       *
+       * 安全边界（关键，别改）：只有拿到**可用信号**时才替换原 policy ——
+       *   - `unavailable`（没通道 / 超时 / 预算用尽 / 已取消）→ **保持原判定不动**，
+       *     否则「重判失败」会被当成「不收紧」而**放宽**掉原本的收紧（违反 I1）；
+       *   - 其余（model / partial / invalid）→ 按新判定替换（invalid 仍保守判高，方向只会更严）。
+       */
+      const refreshIntentPolicy = async (reason) => {
+        if (!classifier) return null;
+        try {
+          const verdict = await classifier.classify({
+            prompt,
+            history: history || [],
+            canvasSummary,
+            projectNotes: soul.raw,
+            steers: runSteers.slice(),
+          });
+          if (!intentLib.canReplacePolicy(verdict)) {
+            // 没有信号 → **保持原判定**（此时替换会变成放宽，违反 I1）
+            runStore.appendEvent(projectRoot, runId, 'intent_refresh', { reason, refreshed: false, source: verdict.source });
+            return null;
+          }
+          const next = intentLib.createIntentPolicy(verdict);
+          intentPolicy = next;
+          // 审批的 riskGate 每次调用都读 `this.intentPolicyValue`（不是捕获值）→ 就地替换即生效
+          if (runContext) runContext.intentPolicyValue = next;
+          runStore.appendEvent(projectRoot, runId, 'intent_refresh', {
+            reason,
+            refreshed: true,
+            source: verdict.source,
+            risk: verdict.risk,
+            authorization: verdict.authorization,
+            tighten: next.tighten,
+            signals: next.signals,
+          });
+          return next;
+        } catch {
+          return null;
+        }
+      };
+
       // ---- 装配工具 ----
       let tools = null;
       let model = null;
@@ -678,6 +786,8 @@ function register(ctx) {
           checkpoint: checkpointSink,
           // 意图识别的审批门禁（**只收紧**）：高风险/授权 unknown/低置信 → 命中的免打扰规则也失效
           intentPolicy,
+          // 动作级复核（A2）：副作用动作执行前再判一次；只在判定收紧时把「本不需要确认」变成「要确认」
+          intentReview,
           // web_search 后端配置：未启用时工具已被卸载，这里是「配了才用得上」的那份配置
           webSearchConfig: webSearchConfig(cfg),
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
@@ -726,6 +836,8 @@ function register(ctx) {
           },
           ragConfig: cfg.rag,
         });
+        // 记下 run 级上下文：插话后重判（A1）要就地替换它的 intentPolicyValue
+        runContext = context;
         tools = { registry, context };
       }
 
@@ -733,7 +845,7 @@ function register(ctx) {
       // 用户插话（§4.2）：运行中的 run 有一条插话队列，agent:steer 按 runId 找到它。
       // 队列随 run 生命周期存在 —— run 结束后再插话会被拒绝（不能静默丢弃）。
       const steerQueue = createSteerQueue();
-      steeringQueues.set(runId, { queue: steerQueue, projectRoot });
+      steeringQueues.set(runId, { queue: steerQueue, projectRoot, steers: runSteers, refreshIntentPolicy });
       // （`activeRequests.set(runId, controller)` 已提前到意图识别段之前：分类请求也要能取消）
       let result;
       try {

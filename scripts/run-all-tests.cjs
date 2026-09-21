@@ -109,6 +109,7 @@ const CORE = [
   'test:prompt-layers',
   // 意图识别（照 Codex guardian 分类器）：解析与保守回落 / 只收紧不放宽 / 无信号两可 / 提示词路由 / 审批门禁 / 接线
   'test:intent',
+  'test:intent-action',
   // Run 级文件回滚（增量审查 §4.2）：前像抓取 / 只读计划 / 执行与校验 / 越界与冲突的拒绝对待
   'test:run-rollback',
   // 运行中插话（§4.2）：队列语义 / 恰好插入一次 / 不插话零痕迹 / 接线

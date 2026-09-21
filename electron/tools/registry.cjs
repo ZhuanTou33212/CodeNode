@@ -256,6 +256,35 @@ class AgentToolRegistry {
       });
     }
 
+    /**
+     * 门 1.5（A2 意图复核）：副作用动作在**执行前**再判一次「这个动作有没有授权、风险多大」。
+     *
+     * 为什么要有：轮级判定看不到「助手接下来真要做什么」—— 它只看得见用户说了什么、以及 assistant
+     * 自述过什么。真机取证证实了这个盲区：assistant 把越权动作**说**出来能被抓住，**没说出来的**不在输入里。
+     *
+     * **只收紧**：命中高风险 / 授权不明 / 低置信 → 即使这个工具本来不需要审批，也要走下面门 3 问用户。
+     * 未接线 / 复核抛错 / 判定不收紧 → 完全维持原判定（与没有这个功能逐字节一致）。
+     * 频率与预算由注入的实现控制（`agent.intent_action_review` 与 `..._max_calls_per_run`）。
+     */
+    let intentTighten = false;
+    if (
+      descriptor.mutatesWorkspace === true &&
+      descriptor.readOnly !== true &&
+      typeof execContext.intentReview === 'function'
+    ) {
+      const review = await execContext.intentReview({
+        tool: name,
+        detail: (() => {
+          try {
+            return JSON.stringify(args).slice(0, 400);
+          } catch {
+            return '';
+          }
+        })(),
+      });
+      intentTighten = !!(review && review.tighten === true);
+    }
+
     // 门 2：声明需要网络能力的工具，在隔离策略切断网络时直接拒绝（不让它去试一次才发现连不上）
     if (descriptor.requiredCapability === 'network.request') {
       // 注意：策略要从**底层上下文**读，不能走工具的能力面 —— sandbox 属于 shell.execute 能力，
@@ -300,9 +329,11 @@ class AgentToolRegistry {
     // 门 3（S7）：确认类工具必须拿到**服务端签发的令牌**才执行。令牌绑定
     // capability / scope / toolCallId，且有有效期、单次有效 —— 批准一次只够一次调用。
     // 旧 register() 合成的契约（requiresConfirmation=false）不触发，保持既有行为。
+    // 意图复核收紧（A2）优先：即使这个工具本身不需要确认，被判定为「授权不明 / 高风险」时也要问用户
     const requiresApproval =
-      !!descriptor.requiresConfirmation &&
-      (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true);
+      intentTighten === true ||
+      (!!descriptor.requiresConfirmation &&
+        (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true));
     if (requiresApproval) {
       const approval = /** @type {any} */ (execContext.approval);
       // 「没有审批通道」与「用户拒绝」必须分开报（前者是配置/接线问题，后者要劝退重试）

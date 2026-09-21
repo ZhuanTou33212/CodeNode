@@ -48,6 +48,11 @@ max_tokens=32768
 # agent.intent_max_tokens=1024       # 分类输出上限。别往下调：供应商的思考链与正文共用这笔额度且关不掉，
 #                                    # 真机实测 256 会被思考吃光（正文为空 / JSON 被截断），1024 有余量
 # agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不限制）
+# 动作级复核（A2）：副作用动作在**执行前**再判一次「这个动作有没有授权、风险多大」。
+# risky（默认）= 只对会改动工作区/执行命令的动作；every = 每个工具动作都做；off = 关掉（一次调用都不发）。
+# 判定收紧时，**即使该工具本来不需要确认，也会问你一次**（只收紧，不放宽）。
+# agent.intent_action_review=risky
+# agent.intent_action_max_calls_per_run=5  # 动作级上限（与上面的轮级**独立**计数，互不吃掉）
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md
 

@@ -114,6 +114,7 @@
     "test:real-model-pr": "node scripts/real-model-pr-test.cjs",
     "test:prompt-layers": "node scripts/prompt-layers-test.cjs",
     "test:intent": "node scripts/intent-test.cjs",
+    "test:intent-action": "node scripts/intent-action-test.cjs",
     "test:intent-ui": "vite build && node scripts/run-electron.cjs scripts/intent-ui-test.cjs",
     "test:run-rollback": "node scripts/run-rollback-test.cjs",
     "test:agent-steering": "node scripts/agent-steering-test.cjs",

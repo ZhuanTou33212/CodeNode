@@ -70,6 +70,12 @@ class AgentToolContext {
      * null 与「没有这个功能」等价（逐字节不变）。
      */
     this.intentPolicyValue = o.intentPolicy || null;
+    /**
+     * 动作级意图复核（A2）：注入一个 `async ({tool, detail}) => policy|null` 的实现。
+     * 轮级判定看不到「助手接下来真要做什么」，所以副作用动作在**执行前**会再判一次。
+     * 与轮级同语义 —— **只收紧**：返回 null / 抛错 / `tighten !== true` 都不改变原判定。
+     */
+    this.intentReviewer = typeof o.intentReview === 'function' ? o.intentReview : null;
     // 状态上报钩子（由 runAgentChat 注入）：让「等待用户」这类过程状态能被状态机看到
     this.stateNotifier = null;
   }
@@ -104,6 +110,25 @@ class AgentToolContext {
    */
   intentPolicy() {
     return this.intentPolicyValue;
+  }
+
+  /**
+   * 动作级意图复核（A2）：请注入的实现对**即将执行的动作**再判一次
+   * （输入含 `<planned_action>` 与用户的插话）。
+   *
+   * 返回 `policy|null`，调用方**只认 `tighten === true`**（只收紧）。
+   * 未接线 / 抛错 / 返回 null 都等价于「不改变原判定」—— 复核不能成为执行的故障点。
+   *
+   * @param {{tool?: string, detail?: string}} action
+   * @returns {Promise<any|null>}
+   */
+  async intentReview(action) {
+    if (!this.intentReviewer) return null;
+    try {
+      return await this.intentReviewer(action);
+    } catch {
+      return null;
+    }
   }
 
   /**

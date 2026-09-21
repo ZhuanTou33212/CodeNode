@@ -262,3 +262,72 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
 因为这次改了那一行而**锚点失配被静默跳过**（`[skip] 锚点出现 0 次`），已同步更新锚点 ——
 **教训：改了被变异锚定的代码行，要跟着改 spec，否则变异会静默不执行**（汇总里只是 20/21，不会明说哪条跳了，
 要 `grep '\[skip\]'` 才看得到）。本轮 **21/21、0 skip**。
+
+## 12. 动作级复核（A2）+ 插话后重判（A1）（2026-09-21）
+
+§8 里列的两条缺口在这一批落地，落点都选在**已有的门**上，没有改动主循环结构。
+
+### 12.1 A2：副作用动作在执行前再判一次
+
+**缺口**：轮级判定看不到「助手接下来真要做什么」—— 它只看得见用户说了什么 + assistant 自述过什么。
+
+**做法**（改动三处，全部只收紧）：
+
+| 位置 | 改动 |
+|---|---|
+| `electron/intent.cjs` | `buildClassifierMessages` 支持 `<planned_action>`（assistant 提出 → **不可信**）与 `<user_followup>`（用户插话 → **可信**）；`classify(input, {scope:'action'})` 与轮级**独立计数**（`DEFAULT_ACTION_MAX_CALLS_PER_RUN=5`）；`actionReview = off\|risky\|every`（默认 `risky`） |
+| `electron/tools/context.cjs` | 新增 `intentReview(action)`：注入实现的包装，**任何异常/未接线都返回 null**（不改变原判定） |
+| `electron/tools/registry.cjs` | 新增**门 1.5**（在参数校验与只读门之后、网络门之前）：`mutatesWorkspace` 的动作调一次复核，`tighten === true` 时把「本不需要确认」变成**要确认**（并进门 3 的审批通道） |
+| `electron/tools/executionContext.cjs` | `intentReview` 加进 `GATED_METHODS`，只授给写类能力 —— **没写能力的工具连复核都拿不到**（能力面即边界） |
+
+**为什么判据要分两层**：只读工具不触发（`read_file` 走的是同一段代码但 `mutatesWorkspace=false`）；
+假写工具 + 收紧 → `APPROVAL_REQUIRED` 且**工具没有被执行**（审批在副作用之前）。
+
+### 12.2 A1：授权可提升（插话 → 重判）
+
+**缺口**：run 级判定是一次性的 —— 一旦收紧，**用户随后明确授权也不会解除**（说「就这样做」也白说）。
+
+**做法**：`agent:steer` 把插话文本同时做两件事 ——
+① 记进 run 的 `steers`（下一次动作复核会自动带上它，因为它是**可信证据**）；
+② 触发一次轮级重判 `refreshIntentPolicy('steer')`（fire-and-forget，不阻塞插话返回），
+重判后**就地替换** `AgentToolContext.intentPolicyValue`（审批的 `riskGate` 每次调用都读它 → 立即生效）。
+
+**安全边界（这条是整个 A1 的关键）**：重判结果**只在有信号时才允许替换**（纯函数 `canReplacePolicy`）——
+`unavailable`（没通道/超时/预算耗尽/已取消）时**保持原判定**，否则「重判失败」会变成**放宽**（违反 I1）。
+`invalid` 可以替换：它按保守口径判高，方向只会更严。
+
+### 12.3 真机全链路取证（`out/probe-intent-e2e.cjs`，真实 IPC + 真模型 + 真实工具循环）
+
+这个探针与 §9 的区别：那个直接调 classifier，这个走**真实 `agent:chat` handler**、真实工具循环、
+真实审批通道（自动拒绝每次确认，避免改盘），key 只在内存注入、**不落任何文件**。
+
+**阶段 1**（prompt：把 a.txt 里的 hello 改成 world）：
+
+| 观察点 | 真机结果 |
+|---|---|
+| 工具循环 | `read_file`(只读, 7ms) → `edit_file`(写, 被自动拒绝) —— 真实跑通 |
+| 轮级判定 | `intent=code risk=low authorization=high confidence=0.95 source=model tighten=false routeHint=null` |
+| **动作级复核** | **只在 `edit_file` 上触发**（`read_file` 没有）→ `risk=low authorization=high confidence=0.97 tighten=false` ✓ 与设计意图一致 |
+| 审批 | 1 次 confirm（写工具本来就要确认；探针自动拒绝 → 工具未执行） |
+
+**阶段 2**（prompt 只让读文件，运行中插话「顺便改掉，我授权」）：
+
+```
+插话被接受 {"accepted":true,"pending":1}
+steer_queued：1 条
+intent_refresh：1 条  reason=steer refreshed=true source=model risk=low authorization=high tighten=false
+```
+
+模型随后确实按插话去改文件（`edit_file`）—— **「用户又说了话 → 重新判 → 新判定生效」这条链路真机跑通**。
+
+**探针自己踩的坑（顺带产出一条安全证据）**：`agent:steer` 是 **async handler**，探针一开始没 `await`，
+于是每 300ms 都判不出 `accepted` → **插了 41 次**。结果里出现大量
+`intent_refresh: refreshed=false source=unavailable` —— 因为轮级预算（5 次）被这批重复插话吃光了，
+而 **预算耗尽时重判不会替换原判定**（`canReplacePolicy` 生效）✓ 安全边界在真机异常输入下也成立。
+
+### 12.4 成本与默认口径
+
+- 动作级复核 = 每次**副作用动作**一次分类调用（只读动作 0 次）；默认 `risky`，上限 5 次/run（与轮级独立）。
+- 想彻底关掉：`agent.intent_action_review=off`（一次调用都不发，与没有这个功能逐字节一致）。
+- 判据：`test:intent-action`（**31 条断言**，进核心套件 93 → **94**）；变异 **29/29、0 skip**（新增 8 条覆盖门 1.5 /
+  能力面 / 证据包 / 预算隔离 / 开关 / 重判边界）。
