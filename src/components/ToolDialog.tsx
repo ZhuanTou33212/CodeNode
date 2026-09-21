@@ -94,6 +94,16 @@ export default function ToolDialog() {
               取消
             </button>
             <button
+              className="tool-dialog-btn always"
+              title="把这个工具的允许写进本项目 .codenode/approvals.json，以后同类调用不再询问（命令类审批不记忆）"
+              onClick={() => {
+                respond(current.id, { ok: true, always: 'project' });
+                reset();
+              }}
+            >
+              本项目始终允许
+            </button>
+            <button
               className="tool-dialog-btn allow"
               onClick={() => {
                 respond(current.id, { ok: true });

@@ -3,6 +3,7 @@
  */
 'use strict';
 
+const approvalRules = require('../../approvalRules.cjs');
 const path = require('path');
 const fs = require('fs');
 const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
@@ -21,6 +22,12 @@ function resolveInRoot(root, relative) {
   const resolvedRoot = path.resolve(root);
   const full = path.resolve(resolvedRoot, relative);
   if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
+  /**
+   * 受保护路径（`.codenode/approvals.json` 这类**授权面**文件）：写工具一律拒绝。
+   * 否则提示注入可以让模型自己给自己写白名单 —— 那等于把「人批准」这道门拆掉（2026-09-21）。
+   * 判定放在这一个函数里，所有走 resolveInRoot 的写工具自动继承。
+   */
+  if (approvalRules.isProtectedWriteTarget(resolvedRoot, full)) return null;
   try {
     const realRoot = fs.realpathSync(resolvedRoot);
     let existing = full;

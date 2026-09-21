@@ -18,6 +18,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const approvalRules = require('../approvalRules.cjs');
 
 /** 令牌默认有效期（5 分钟：足够用户点一次确认，也不至于长期悬挂） */
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
@@ -47,7 +48,7 @@ function newTokenId() {
 
 class ApprovalService {
   /**
-   * @param {{confirm?: Function|null, trace?: Function|null, now?: () => number, ttlMs?: number, runId?: string, taskId?: string, role?: string}} [options]
+   * @param {{confirm?: Function|null, trace?: Function|null, now?: () => number, ttlMs?: number, runId?: string, taskId?: string, role?: string, projectRoot?: string|null, rules?: Array<any>}} [options]
    */
   constructor(options) {
     const o = options || {};
@@ -58,8 +59,15 @@ class ApprovalService {
     this.runId = o.runId || '';
     this.taskId = o.taskId || '';
     this.role = o.role || '';
+    this.projectRoot = o.projectRoot || null;
     /** @type {Map<string, any>} 令牌表（仅内存：重启即失效，不落盘、不进上下文） */
     this.tokens = new Map();
+    /**
+     * 持久化审批规则（来自 <project>/.codenode/approvals.json，见 approvalRules.cjs）。
+     * 命中的请求**不再打扰用户**，但一定留一条 approval_rule_hit 审计 —— 授权面必须可回查。
+     * @type {Array<any>}
+     */
+    this.rules = Array.isArray(o.rules) ? o.rules : [];
   }
 
   /** 内部：落一条审批事件（trace + 内存事件流，供测试与审计读取） */
@@ -87,9 +95,33 @@ class ApprovalService {
       this._emit('approval_unavailable', { reason: 'NO_CONFIRM_CHANNEL', tool: r.what || null });
       return null;
     }
+    // 持久化规则优先：命中即免打扰（但仍然签发令牌、仍然留审计）
+    const ruleHit = approvalRules.matchRule(this.rules, {
+      capability: r.capability || null,
+      tool: r.what || null,
+      level: r.level || 'WRITE',
+    });
     let approved = false;
+    if (ruleHit) {
+      approved = true;
+      this._emit('approval_rule_hit', {
+        ruleId: ruleHit.id,
+        tool: r.what || null,
+        capability: ruleHit.capability || null,
+        level: r.level || 'WRITE',
+        toolCallId: r.toolCallId || null,
+      });
+    }
     try {
-      approved = (await this.confirmHandler(r.level || 'WRITE', r.what || '', r.detail || '')) === true;
+      if (!ruleHit) {
+        approved =
+          (await this.confirmHandler(r.level || 'WRITE', r.what || '', r.detail || '', {
+            capability: r.capability || null,
+            tool: r.what || null,
+            level: r.level || 'WRITE',
+            projectRoot: this.projectRoot || null,
+          })) === true;
+      }
     } catch (error) {
       approved = false;
       this._emit('approval_error', { tool: r.what || null, message: String((error && error.message) || error || '') });

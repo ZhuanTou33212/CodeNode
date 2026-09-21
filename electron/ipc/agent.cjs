@@ -534,7 +534,7 @@ function register(ctx) {
       let dirty = false;
       const controller = new AbortController();
       if (registry && registry.listTools().length > 0) {
-        bridge = makeBridge(sender, controller.signal);
+        bridge = makeBridge(sender, controller.signal, { projectRoot });
         model = new GraphModel(document || undefined);
         const scalarStore = cfg.scalars && cfg.scalars.enabled !== false && projectRoot ? getScalarStore(projectRoot) : null;
         const undoStack = [];

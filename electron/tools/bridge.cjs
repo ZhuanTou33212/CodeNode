@@ -9,6 +9,7 @@
 'use strict';
 
 const { ipcMain } = require('electron');
+const approvalRules = require('../approvalRules.cjs');
 
 const TEST_MODE = !!process.env.CODENODE_TEST;
 /** 测试模式下是否也放行 HIGH 级（破坏性）确认；默认不放行 —— 见 confirm() 的说明 */
@@ -19,7 +20,8 @@ let seq = 0;
 /** 测试模式自动答复只提示一次，避免刷屏 */
 let testModeWarned = false;
 
-function makeBridge(sender, signal) {
+function makeBridge(sender, signal, options) {
+  const bridgeOptions = options || {};
   const pending = new Map(); // id -> { resolve, senderId, timer }
   let closed = false;
   function cleanup() {
@@ -80,7 +82,7 @@ function makeBridge(sender, signal) {
    * 注意这里只影响「用户答不答应」，不影响 capability 判定（越界路径、网络策略、
    * 只读上下文这些门都在 registry，与本函数无关）。
    */
-  async function confirm(level, what, detail) {
+  async function confirm(level, what, detail, meta) {
     if (TEST_MODE) {
       const isHigh = String(level || '').toUpperCase() === 'HIGH';
       const approved = isHigh ? TEST_ALLOW_HIGH : true;
@@ -96,6 +98,26 @@ function makeBridge(sender, signal) {
       return approved;
     }
     const r = await request('confirm', { level, what, detail });
+    /**
+     * 「本项目始终允许」：界面按钮回 `{ok:true, always:'project'}`。
+     * 只有**注册表级**审批（`what` 就是工具名）才记忆 —— shell 命令那种「允许一条命令文本」
+     * 很快就会退化成「允许一类命令」，而 Windows 上没有内核兜底，所以那类逐条问、不记忆。
+     * 规则文件本身是受保护路径（写工具写不进去），只能从这里或人手写产生。
+     */
+    if (r && r.always === 'project') {
+      const projectRoot = (meta && meta.projectRoot) || bridgeOptions.projectRoot || null;
+      const tool = (meta && meta.tool) || String(what || '');
+      if (projectRoot && approvalRules.isRememberableTool(tool)) {
+        const added = approvalRules.addRule(projectRoot, { capability: meta && meta.capability, tool, level: (meta && meta.level) || level });
+        try {
+          console.log('[bridge] 审批规则' + (added.ok ? '已写入' : '写入失败') + '：tool=' + tool + (added.ok ? '（以后本项目不再询问）' : ' ' + (added.error || '')));
+        } catch {}
+      } else {
+        try {
+          console.log('[bridge] 这次审批无法被记住（' + (tool || '?') + ' 不是注册表级工具审批）：仅对本次调用有效');
+        } catch {}
+      }
+    }
     return r && r.ok === true;
   }
 

@@ -19,6 +19,7 @@
 
 // S7：审批服务（令牌化）—— 令牌只活在内存里，模型无法自填
 const approvalLib = require('./approval.cjs');
+const ruleLib = require('../approvalRules.cjs');
 
 const ConfirmationLevel = { LOW: 'LOW', WRITE: 'WRITE', HIGH: 'HIGH' };
 
@@ -91,6 +92,10 @@ class AgentToolContext {
         confirm: this.confirmHandler,
         ttlMs: this.approvalTtlMsValue,
         runId: this.runIdValue,
+        // 持久化审批规则：从项目里读一次（`.codenode/approvals.json`），命中就不打扰用户。
+        // 读坏文件=没有规则（偏保守：只会多问一次），不会静默放行。
+        projectRoot: this.projectRootValue,
+        rules: ruleLib.readRules(this.projectRootValue).rules,
         taskId: this.taskIdValue,
         role: this.roleValue,
         trace: (event) => {

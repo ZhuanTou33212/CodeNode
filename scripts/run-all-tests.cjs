@@ -123,6 +123,8 @@ const CORE = [
   'test:headless',
   // 用户级（跨项目）记忆：落盘/去重/上限/按提问打分/scope 读写
   'test:user-memory',
+  // 持久化审批规则（对照 Claude Code 的 allow 规则）：命中免打扰 + 留痕 / 受保护路径写不进 / 界面接线
+  'test:approval-rules',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
