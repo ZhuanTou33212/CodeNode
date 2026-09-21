@@ -48,7 +48,9 @@ const BUILTINS = [
   // Skill 正文按需读取（渐进披露）：system prompt 只放索引，正文由模型自己调这个工具取
   require('./impl/readSkillTool.cjs'),
   // 看图（对照 Codex 的 view_image）：把项目内的图片附到对话里，让模型真的看到画面
-  require('./impl/viewImageTool.cjs'),
+  require('./impl/viewImageTool.cjs'),
+  // 联网搜索（对照 Codex/Claude Code 的 web_search）：后端由配置指定，**不配就不注册**
+  require('./impl/webSearchTool.cjs'),
 ];
 
 function buildDefaultRegistry() {
@@ -94,6 +96,11 @@ function filterByConfig(registry, config) {
   const deny = cfg.toolsDeny || [];
   for (const spec of registry.listTools()) {
     if ((spec.name === 'retrieve_context' || spec.name === 'query_scalars') && cfg.ragEnabled === false) {
+      registry.unregister(spec.name);
+      continue;
+    }
+    // 联网搜索同样是「关掉的能力不占上下文」：未启用就不注册（不留下一个永远报错的工具）
+    if (spec.name === 'web_search' && cfg.webSearchEnabled !== true) {
       registry.unregister(spec.name);
       continue;
     }

@@ -133,6 +133,8 @@ const CORE = [
   'test:mcp-session',
   // MCP streamable HTTP transport（§5 #5 剩余项）：JSON/SSE 应答 / 会话头 / 出网策略 / 错误语义
   'test:mcp-http',
+  // 联网搜索（§5 #7）：可配置后端 + 出厂关闭 / 不编造空结果 / 出网策略 / 条数上界
+  'test:web-search',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。

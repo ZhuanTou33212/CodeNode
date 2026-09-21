@@ -108,6 +108,7 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   save_project: 'project.save',
   execute_shell: 'shell.execute',
   fetch_url: 'network.request',
+  web_search: 'network.request',
   ui_control: 'ui.interact',
   ask_user: 'ui.interact',
   delegate_task: 'subagent.delegate',
@@ -124,6 +125,7 @@ const SELF_TIMED_TOOLS = Object.freeze({
   scan_project: 0,
   analyze_project: 0,
   fetch_url: 0,
+  web_search: 0,
   bulk_edit: 0,
 });
 

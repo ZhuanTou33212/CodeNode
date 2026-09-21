@@ -32,7 +32,7 @@
 const COMMON_METHODS = Object.freeze([
   'projectRoot', 'model', 'runId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
   'confirm', 'notifyState', 'setStateNotifier', 'conversationHistory', 'ragConfig',
-  'checkpointMessages', 'beginSideEffect', 'commitSideEffect', 'failSideEffect', 'skillMaxChars',
+  'checkpointMessages', 'beginSideEffect', 'commitSideEffect', 'failSideEffect', 'skillMaxChars', 'webSearchConfig',
 ]);
 
 /**

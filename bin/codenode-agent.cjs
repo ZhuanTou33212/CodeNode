@@ -36,6 +36,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const agent = require(path.join(ROOT, 'electron', 'agent.cjs'));
+const { parseWebSearchConfig } = require(path.join(ROOT, 'electron', 'tools', 'impl', 'webSearchTool.cjs'));
 const toolkit = require(path.join(ROOT, 'electron', 'tools', 'toolkit.cjs'));
 const sandbox = require(path.join(ROOT, 'electron', 'sandbox.cjs'));
 const runStore = require(path.join(ROOT, 'electron', 'runStore.cjs'));
@@ -169,7 +170,8 @@ async function main() {
     return approved;
   };
 
-  const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot, ragEnabled: !!cfg.rag && cfg.rag.enabled !== false });
+  const ws = parseWebSearchConfig(cfg);
+  const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot, ragEnabled: !!cfg.rag && cfg.rag.enabled !== false, webSearchEnabled: ws.enabled });
   const memory = require(path.join(ROOT, 'electron', 'memory.cjs'));
   const extensions = require(path.join(ROOT, 'electron', 'tools', 'extensions.cjs'));
   const userMemory = require(path.join(ROOT, 'electron', 'userMemory.cjs'));
@@ -187,6 +189,8 @@ async function main() {
       } catch {}
     },
     sandbox: sandboxPolicy,
+    // web_search 后端配置（未启用时工具未注册，这里是「配了才用得上」的那份）
+    webSearchConfig: ws,
     signal: undefined,
   });
 

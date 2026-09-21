@@ -125,6 +125,7 @@
     "test:view-image": "node scripts/view-image-test.cjs",
     "test:mcp-session": "node scripts/mcp-session-test.cjs",
     "test:mcp-http": "node scripts/mcp-http-test.cjs",
+    "test:web-search": "node scripts/web-search-test.cjs",
     "test:frontend-incremental": "node scripts/frontend-incremental-test.cjs",
     "test:stream-anomaly": "node scripts/stream-anomaly-test.cjs",
     "test:shell-hardening": "node scripts/shell-hardening-test.cjs",

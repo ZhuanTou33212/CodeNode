@@ -35,6 +35,20 @@ const { modelQueue } = require('../requestQueue.cjs');
 const { RequestBudget } = require('../requestBudget.cjs');
 const hooksLib = require('../hooks.cjs');
 const userMemoryStore = require('../userMemory.cjs');
+const { parseWebSearchConfig } = require('../tools/impl/webSearchTool.cjs');
+
+/** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
+function webSearchConfig(cfg) {
+  const parsed = parseWebSearchConfig(cfg);
+  if (parsed.problems.length) {
+    // 配了但配错：**不静默当没配** —— 工具不注册，并把原因写进日志（否则用户会以为搜不了是模型的问题）
+    try {
+      console.warn('[web_search] 配置有问题，工具未启用：' + parsed.problems.join('；'));
+    } catch {}
+    return Object.assign({}, parsed, { enabled: false });
+  }
+  return parsed;
+}
 const attachmentSpec = require('../attachments.cjs');
 const memoryStore = require('../memory.cjs');
 const extensionStore = require('../tools/extensions.cjs');
@@ -167,10 +181,10 @@ function register(ctx) {
 
   ipcMain.handle('agent:tools', async (_event, projectRoot) => {
     const cfg = agent.loadConfig(projectRoot);
-    const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot });
+    const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
     const subagentManager = new SubagentManager({ agent, toolkit, cfg, registry });
     subagentManager.register(registry);
-    toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
+    toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
     return {
       enabled: cfg.tools.toolsEnabled,
       tools: registry.listTools().map((spec) => ({
@@ -476,7 +490,7 @@ function register(ctx) {
           enabled: (cfg.subagent && cfg.subagent.leases) !== false,
           ttlMs: (cfg.subagent && cfg.subagent.leaseTtlMs) || 120000,
         });
-        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases });
+        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases, webSearchEnabled: webSearchConfig(cfg).enabled });
       }
       let subagentManager = null;
       if (registry) {
@@ -490,7 +504,7 @@ function register(ctx) {
           onDelta: onAgentDelta,
         });
         subagentManager.register(registry);
-        toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot });
+        toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
       }
       const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
       const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
@@ -561,6 +575,8 @@ function register(ctx) {
           sandbox: sandboxPolicy,
           sideEffectGuard,
           checkpoint: checkpointSink,
+          // web_search 后端配置：未启用时工具已被卸载，这里是「配了才用得上」的那份配置
+          webSearchConfig: webSearchConfig(cfg),
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),

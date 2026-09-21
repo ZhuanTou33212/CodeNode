@@ -20,6 +20,7 @@
 'use strict';
 
 const { AgentToolResult } = require('./tools/result.cjs');
+const { parseWebSearchConfig } = require('./tools/impl/webSearchTool.cjs');
 const { LeaseRegistry } = require('./tools/leases.cjs');
 const { changedFilesFromToolCalls } = require('./tools/fileChanges.cjs');
 // 确定性合并 + 冲突裁决（P5）：合并结果只依赖贡献项自身，不依赖到达顺序
@@ -548,6 +549,8 @@ class SubagentManager {
       const childRegistry = this.toolkit.buildDefaultRegistryWithConfig({
         ...this.cfg.tools,
         ragEnabled: this.cfg.rag.enabled && !!context.projectRoot(),
+        // 子代理与父口径一致：配了 web_search 就一起可用（能力不该在子代理里静默消失）
+        webSearchEnabled: parseWebSearchConfig(this.cfg).enabled,
         role,
         // 与父共享同一份租约账本（跨子代理的「单一写者」就靠它）
         leases: this.leases,

@@ -34,6 +34,8 @@ class AgentToolContext {
     this.approvalTtlMsValue = o.approvalTtlMs || null;
     /** read_skill 的正文上限（0/未给 = 用工具内默认值）；放在上下文里以便配置与测试注入 */
     this.skillMaxCharsValue = Number(o.skillMaxChars) > 0 ? Math.floor(Number(o.skillMaxChars)) : 0;
+    /** web_search 的后端配置（未启用时工具根本不注册，这里是「配了才用得上」的那份配置） */
+    this.webSearchConfigValue = o.webSearchConfig || null;
     this.auditLogger = o.audit || null;
     this.workbenchMutator = o.mutateWorkbench || null;
     this.saveAction = o.saveProject || null;
@@ -81,6 +83,9 @@ class AgentToolContext {
 
   /** read_skill 的正文上限（0 = 用默认值） */
   skillMaxChars() { return this.skillMaxCharsValue; }
+
+  /** web_search 后端配置（null = 未配置） */
+  webSearchConfig() { return this.webSearchConfigValue; }
   signal() { return this.signalValue; }
   cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
 
@@ -361,6 +366,9 @@ class AgentToolContext {
       sandbox: this.sandboxPolicyValue,
       sideEffectGuard: this.sideEffectGuardValue,
       checkpoint: this.checkpointSink,
+      // fork（子代理等）必须继承这两项：否则子代理读不了技能正文、也搜不了网（能力在子代理里静默消失）
+      skillMaxChars: this.skillMaxCharsValue,
+      webSearchConfig: this.webSearchConfigValue,
     });
   }
 }
