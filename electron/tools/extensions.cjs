@@ -5,6 +5,7 @@ const path = require('path');
 const { AgentToolResult } = require('./result.cjs');
 const { ConfirmationLevel } = require('./context.cjs');
 const { safeEnvironment } = require('../envPolicy.cjs');
+const mcpClient = require('./mcpClient.cjs');
 const sandbox = require('../sandbox.cjs');
 
 /**
@@ -99,86 +100,15 @@ function runExternal(root, command, args, extraEnv, signal, allowlist, context) 
   });
 }
 
+/**
+ * 调一次 MCP 工具。
+ *
+ * S22（对照文档 §5 #5）：这里现在只是 `mcpClient` 的薄封装 —— 会话复用 + `tools/list` 缓存都在那边，
+ * 本函数保留原来的返回形状（{ok, output|error, cancelled}），调用方与既有判据不受影响。
+ * 旧实现每次调用 spawn 一个新 server 并立刻杀掉，冷启动与握手开销按调用次数线性叠加。
+ */
 function runMcpTool(root, extension, tool, args, signal, context) {
-  if (signal?.aborted) return Promise.resolve({ ok: false, cancelled: true, error: 'MCP 执行已取消' });
-  const tokens = splitCommand(extension.command);
-  if (!tokens.length) return Promise.resolve({ ok: false, error: 'MCP command 为空' });
-  const callTimeoutMs = Math.max(1000, Number(extension.timeoutMs) || 120000);
-  // 握手单独计时：旧实现把 initialize 和 tools/call 一起发出去、只等 id=2，**从不校验握手结果**
-  // （探针实测：server 对 initialize 完全不回应，工具调用照样成功）—— 于是「不是 MCP server」
-  // 或「server 启动失败」这类问题会被报成 tools/call 层的怪错误，排查方向全错。
-  const handshakeMs = Math.max(500, Math.min(5000, Math.floor(callTimeoutMs / 4)));
-  return new Promise((resolve) => {
-    let child;
-    let buffer = '';
-    let finished = false;
-    let timer;
-    let onAbort = null;
-    let handshaken = false;
-    const finish = (result) => {
-      if (finished) return;
-      finished = true;
-      if (timer) clearTimeout(timer);
-      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
-      sandbox.killSandboxed(child);
-      resolve(result);
-    };
-    try {
-      // MCP 需要双向 stdio，Windows Job 代理不适用 → 走 guardedMcpSpawn（有包装后端则隔离，否则如实降级）
-      child = sandbox.guardedMcpSpawn(
-        { file: tokens[0], args: [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])] },
-        { cwd: root, env: safeEnvironment({ PYTHONUTF8: '1' }, extension.envAllowlist), policy: sandbox.currentPolicy(context), context }
-      );
-    } catch (e) { finish({ ok: false, error: spawnErrorHint(extension.command, e) }); return; }
-    const send = (message) => { try { child.stdin.write(JSON.stringify(message) + '\n'); } catch {} };
-    /** 握手成功后：发 notifications/initialized + tools/call，并开始整体调用计时 */
-    const startCall = () => {
-      handshaken = true;
-      if (timer) clearTimeout(timer);
-      send({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
-      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: args || {} } });
-      timer = setTimeout(() => finish({ ok: false, error: 'MCP 调用超时' }), callTimeoutMs);
-    };
-    const parse = (data) => {
-      buffer += String(data);
-      if (Buffer.byteLength(buffer) > 1024 * 1024) {
-        finish({ ok: false, error: 'MCP response exceeds 1MiB' });
-        return;
-      }
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim().startsWith('{')) continue;
-        try {
-          const message = JSON.parse(line);
-          if (message.id === 1 && !handshaken) {
-            if (message.error) {
-              finish({ ok: false, error: 'MCP 握手失败：' + JSON.stringify(message.error) });
-              return;
-            }
-            startCall();
-            continue;
-          }
-          if (message.id === 2) {
-            if (message.error) finish({ ok: false, error: JSON.stringify(message.error) });
-            else finish({ ok: true, output: JSON.stringify(message.result || {}) });
-          }
-        } catch {}
-      }
-    };
-    child.stdout?.on('data', parse);
-    child.stderr?.on('data', () => {});
-    child.on('error', (e) => finish({ ok: false, error: spawnErrorHint(extension.command, e) }));
-    child.on('close', (code) => { if (!finished) finish({ ok: false, error: `MCP 进程提前退出（${code}）` }); });
-    onAbort = () => finish({ ok: false, error: 'MCP 扩展执行已取消', cancelled: true });
-    signal && signal.addEventListener('abort', onAbort, { once: true });
-    // 先握手，再调用；握手超时/失败都如实报出来
-    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: extension.protocolVersion || '2024-11-05', capabilities: {}, clientInfo: { name: 'CodeNode', version: '0.12.0' } } });
-    timer = setTimeout(
-      () => finish({ ok: false, error: 'MCP 握手超时（' + handshakeMs + 'ms 内未收到 initialize 应答）：server 可能不是 MCP stdio server，或启动被环境/权限拦住' }),
-      handshakeMs,
-    );
-  });
+  return mcpClient.callTool(root, extension, tool, args, signal, context);
 }
 
 async function runHook(root, hook, args, signal, allowlist, context) {
@@ -243,4 +173,4 @@ function registerProjectExtensions(registry, projectRoot) {
   return registry;
 }
 
-module.exports = { registerProjectExtensions, readManifest, safeEnvironment };
+module.exports = { registerProjectExtensions, readManifest, safeEnvironment, splitCommand, spawnErrorHint };

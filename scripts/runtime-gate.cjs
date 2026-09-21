@@ -58,7 +58,10 @@ async function main() {
   const shellTool = read('electron/tools/impl/executeShellTool.cjs');
   assert.ok(/sandbox\.guardedSpawn/.test(shellTool), 'execute_shell 未接入执行隔离层');
   const extensions = read('electron/tools/extensions.cjs');
-  assert.ok(/sandbox\.guardedSpawn/.test(extensions) && /sandbox\.guardedMcpSpawn/.test(extensions), '扩展/MCP 未接入执行隔离层');
+  // MCP 的 spawn 在 2026-09-21 的「会话复用」重构里搬到了 mcpClient.cjs（extensions 只剩薄封装），
+  // 所以「MCP 接线隔离层」这条判据跟着搬到真实位置 —— 判据搬家，不放松要求。
+  const mcpClient = read('electron/tools/mcpClient.cjs');
+  assert.ok(/sandbox\.guardedSpawn/.test(extensions) && /sandbox\.guardedMcpSpawn/.test(mcpClient), '扩展/MCP 未接入执行隔离层');
   const agentSource = read('electron/agent.cjs');
   assert.ok(/beginSideEffect/.test(agentSource) && /recordCost/.test(agentSource), 'Agent 工具循环未接入幂等/成本');
 

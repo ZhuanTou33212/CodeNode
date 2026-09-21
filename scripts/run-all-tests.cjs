@@ -129,6 +129,8 @@ const CORE = [
   'test:skill-index',
   // 看图（对照 Codex 的 view_image）：格式与上限校验 / 多模态消息真的进了下一次请求 / 零痕迹
   'test:view-image',
+  // MCP 会话复用 + tools/list 缓存（§5 #5）：spawn 次数 / 握手次数 / 清单只问一次 / 崩溃重拉 / 空闲回收
+  'test:mcp-session',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。

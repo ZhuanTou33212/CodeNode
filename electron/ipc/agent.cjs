@@ -721,6 +721,10 @@ function register(ctx) {
       return out;
     } catch (e) {
       if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
+      // MCP 会话在 run 结束时统一关闭：会话复用是本轮的优化，但**不能**留下孤儿 server 进程
+      try {
+        require('../tools/mcpClient.cjs').closeAll();
+      } catch {}
       if (hookSessionCtx) {
         await runSessionHook('stop', hookSessionCtx.cfg, hookSessionCtx.projectRoot, hookSessionCtx.runId, hookSessionCtx.sandboxPolicy, null);
       }
