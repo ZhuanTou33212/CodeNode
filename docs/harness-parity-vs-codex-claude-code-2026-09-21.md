@@ -130,8 +130,8 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 
 | # | 级别 | 缺口 | 最小修法 |
 |---|---|---|---|
-| 1 | **P0** | Windows 上无强制隔离；默认 `sandbox.mode=best-effort` + `network=inherit`，静态审计只拦**显式**越界写（变量/通配要 `strict` 才拦） | ① 出厂 `sandbox.network=deny`（或至少对 `curl/wget/ssh/npm install` 类默认需审批）；② `ALLOWED` 收窄成"项目声明的命令清单"，`node -e`/`python -c`/`powershell -c` 一律降级为裸执行需审批；③ 长期：winjob 补受限令牌 / AppContainer |
-| 2 | **P1** | 模型没有任务清单，长任务靠 12 轮上限 + 收尾兜底 | 加 `update_plan` 形态的 todo 工具（`buildProgressNote` 的注入点直接升级成"计划 + 进度"，同一处替换逻辑已在 `agent.cjs:2289`） |
+| 1 | **P0** | ~~Windows 上无强制隔离；默认 `sandbox.mode=best-effort` + `network=inherit`，静态审计只拦**显式**越界写（变量/通配要 `strict` 才拦）~~ **已落地 2026-09-21**：出厂 `network=deny` + 未解析写目标任何模式都要确认（`strict` 仍硬拒）；仍无 Windows 内核级隔离 | ① 出厂 `sandbox.network=deny`（或至少对 `curl/wget/ssh/npm install` 类默认需审批）；② `ALLOWED` 收窄成"项目声明的命令清单"，`node -e`/`python -c`/`powershell -c` 一律降级为裸执行需审批；③ 长期：winjob 补受限令牌 / AppContainer |
+| 2 | **P1** | ~~模型没有任务清单，长任务靠 12 轮上限 + 收尾兜底~~ **已落地 2026-09-21**：新增 `update_plan`（落 run 事件 + run 级文件 + 搭进度提示回灌） | 加 `update_plan` 形态的 todo 工具（`buildProgressNote` 的注入点直接升级成"计划 + 进度"，同一处替换逻辑已在 `agent.cjs:2289`） |
 | 3 | **P1** | 无 hooks（改了代码不会自动 lint/测试；用户无法脚本化） | 最小实现 `PostToolUse`（按工具名匹配 → 跑声明的命令 → 结果作为系统消息回灌）+ `SessionStart`/`Stop` |
 | 4 | **P1** | 技能静态注入 + 工具面常驻 → 7.9k tokens/轮固定税 | 技能改渐进披露（`extensions.json` 只注入索引，正文走一个 `read_skill` 工具）+ 按任务裁剪工具面 |
 | 5 | **P2** | MCP 仅 stdio、每次 spawn、无 `tools/list` | 加 streamable HTTP transport + 启动时 `tools/list` 缓存 + 会话复用 |
@@ -148,6 +148,8 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 - **CodeNode 侧的 24 个工具、7,881 tokens/轮是实测**（探针 + `registry.toOpenAiTools()`），可复跑。
 
 ## 7. 建议的处理顺序
+
+**落地记录**：`docs/agent-boundary-and-plan-2026-09-21.md`（#1 + #2 已做；#3–#7 仍开放）。
 
 1. 第 5 节 #1（安全边界收口）—— 唯一会"丢数据"的口子，且改动集中在 `sandbox.cjs` / `executeShellTool.cjs` / 出厂 properties。
 2. #2（todo/plan 工具）—— 成本最低、对长任务可控性收益最大。

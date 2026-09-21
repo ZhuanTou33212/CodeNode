@@ -4,6 +4,31 @@
 
 ## [未发布]
 
+### 新增（安全边界收口 + 任务清单 update_plan；2026-09-21）
+
+对照 `docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 的 #1 / #2，落地记录见
+`docs/agent-boundary-and-plan-2026-09-21.md`：
+
+- **出厂断网（对齐 Codex 的 workspace-write）**：`sandbox.network` 出厂值由 `inherit` 改为 `deny`
+  （`electron/agent.cjs` 的 `parseSandboxConfig` 与 `electron/sandbox.cjs` 的 `resolvePolicy` 两处同源）。
+  出厂口径下疑似联网的命令**直接拒绝**（`PERMISSION_DENIED`，不弹确认、不试连），拒绝文案给出放行键
+  `sandbox.network=inherit`；显式 `inherit` 时联网命令走 HIGH 审批而不是静默放行。
+- **「写目标判不出来」不再静默放行**：`guard.unresolvedWrites`（写目标是变量/通配，如 `> $OUT`、
+  `writeFileSync(p)`）此前只在 `sandbox.mode=strict` 下被拒，默认 `best-effort` 静默执行 —— 等于
+  「把路径放进变量」即可绕过路径边界（Windows 后端没有内核级文件系统隔离）。现在**任何模式**都要求用户确认，
+  确认文案写明「无法静态判定」，拒绝时返回 `APPROVAL_DENIED`；`strict` 仍是硬拒。
+- **联网判定与白名单/高危判据共用归一化**：`shellGuard.detectNetwork` 此前只用 `tokens[0]` 原文匹配，
+  `C:/tools/nuget.exe restore` 不被判为联网（`nuget restore` 却会）——同一件事两种判定。现在剥目录/扩展名后再匹配。
+- **任务清单 `update_plan`（对照 Codex 的 update_plan / Claude Code 的 TodoWrite）**：新模块
+  `electron/plan.cjs`（校验/渲染/落盘）+ `electron/tools/impl/updatePlanTool.cjs`。计划落 run 事件
+  `plan_updated` 与 `.codenode/runs/<runId>.plan.json`，并**搭进度提示那条注入消息回灌**（同一时刻只留一条、
+  原地替换；计划一变就在下一轮回灌，不必等满 `agent.progress_every`）。契约：不改工作区（`mutatesWorkspace:false`，
+  只读上下文可用）、不进缓存白名单、不弹确认；同一时刻最多一项 `in_progress`（超出按 `ARG_SEMANTIC` 拒）。
+- **判据**：新增 `test:shell-boundary`（38 条断言：出厂口径 / 断网硬拒 / inherit 走审批 / 未解析写必须确认 /
+  strict 硬拒 / 归一化一致性 + 3 条负向防误伤）与 `test:agent-plan`（49 条断言：纯函数 / 契约 / 落盘 + 事件 /
+  端到端回灌与不堆叠 / 负向零痕迹）。核心套件 **79 → 81**；变异校验 8/8 条有判别力
+  （`out/mutation-spec-boundary-plan.json`）。
+
 ### 新增（四类结构性问题一起做掉：真机回归挂 PR / 运行中控制手段 / 每轮固定开销分层 / 用例同形门禁；2026-09-20）
 
 对照 `docs/agent-incremental-review-2026-09-19.md` §4（落地记录见该文档 §4.5）：
