@@ -129,10 +129,15 @@ try {
   const systemAlways = build({ canvasMode: 'always' });
   console.log('   量测：system（省层）=' + systemPure.length + ' 字符；system（含画布层）=' + systemAlways.length + ' 字符；工具 schema=' + schemaChars + ' 字符（' + tools.length + ' 个工具）');
   check('[D] 省层后 system 固定部分 ≤ 4,000 字符（当前 ' + systemPure.length + '）', systemPure.length <= 4000, 'chars=' + systemPure.length);
-  check('[D] 工具 schema ≤ 16,000 字符（当前 ' + schemaChars + '，22 工具）', schemaChars <= 16000, 'chars=' + schemaChars);
+  /**
+   * 上界是**棘轮**：只允许随「有意新增工具」抬高，且必须在这个 check 的文案里注明是哪次新增带来的。
+   * 2026-09-21 新增 update_plan（+643 字符，24 → 25 个工具）→ 上界 16,000 → 17,000。
+   * 只靠抬数字放宽是退步：再加工具时请一并给出「为什么值得付这份固定开销」。
+   */
+  check('[D] 工具 schema ≤ 17,000 字符（当前 ' + schemaChars + '，' + tools.length + ' 个工具）', schemaChars <= 17000, 'chars=' + schemaChars);
   check(
-    '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 18,000 字符',
-    systemPure.length + schemaChars <= 18000,
+    '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 19,000 字符',
+    systemPure.length + schemaChars <= 19000,
     'total=' + (systemPure.length + schemaChars)
   );
 

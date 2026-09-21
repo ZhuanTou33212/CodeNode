@@ -27,6 +27,8 @@ const failures = require('./tools/failures.cjs');
 const { changedFilesFromToolCalls } = require('./tools/fileChanges.cjs');
 // S6：只读并行调度（默认关闭；关闭时行为与串行执行完全一致）
 const schedulerLib = require('./tools/scheduler.cjs');
+// 任务清单（update_plan）：计划随进度提示一起回灌，否则模型几轮后就忘了自己承诺过什么
+const planLib = require('./plan.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
 function loadProperties(file) {
@@ -342,7 +344,10 @@ function parseSandboxConfig(cfg) {
   const requireFilesystem = /^(1|true|yes|on)$/i.test(String(cfg['sandbox.require_filesystem'] || ''));
   return {
     mode: String(cfg['sandbox.mode'] || 'best-effort').trim().toLowerCase(),
-    network: String(cfg['sandbox.network'] || 'inherit').trim().toLowerCase(),
+    // 出厂断网（对齐 Codex 的 workspace-write：默认不给网络）。理由：Windows 后端**不隔离网络**也没有
+    // 文件系统兜底，静态审计是唯一防线；而出厂 allow 等于「默认放行一切联网命令」。要联网显式设
+    // sandbox.network=inherit（Linux bwrap / macOS sandbox-exec 会真的按策略断网，Windows 只做命令级拒绝）。
+    network: String(cfg['sandbox.network'] || 'deny').trim().toLowerCase(),
     requireFilesystem,
     maxProcesses: configInteger(cfg, 'sandbox.max_processes', 0, 0, 4096),
     maxMemoryMB: configInteger(cfg, 'sandbox.max_memory_mb', 0, 0, 1024 * 1024),
@@ -869,7 +874,7 @@ const PROGRESS_NOTE_PREFIX = '【系统提示】进度检查（第 ';
  *
  * @param {{iteration: number, maxIterations: number, toolCallsUsed: number, toolCallBudget: number,
  *          changedFiles?: string[], failures?: Array<{tool: string, code: string}>, tokensUsed?: number,
- *          tokenBudget?: number}} input
+ *          tokenBudget?: number, plan?: {items?: Array<{step: string, status: string}>}|null}} input
  * @returns {string}
  */
 function buildProgressNote(input) {
@@ -882,6 +887,7 @@ function buildProgressNote(input) {
     failures: recentFailures = [],
     tokensUsed = 0,
     tokenBudget = 0,
+    plan = null,
   } = input || {};
   const parts = [
     PROGRESS_NOTE_PREFIX + iteration + '/' + maxIterations + ' 轮）：' +
@@ -890,11 +896,38 @@ function buildProgressNote(input) {
   parts.push('已改动文件 ' + (changedFiles.length ? changedFiles.length + ' 个（' + changedFiles.slice(0, 6).join('、') + '）' : '0 个'));
   parts.push('失败 ' + recentFailures.length + ' 次' + (recentFailures.length ? '（最近：' + recentFailures.slice(0, 3).map((f) => f.tool + (f.code ? '/' + f.code : '')).join('、') + '）' : ''));
   if (tokensUsed > 0) parts.push('用量 ' + tokensUsed + (tokenBudget > 0 ? '/' + tokenBudget : '') + ' tokens');
+  /**
+   * 任务清单（update_plan）与进度统计共用**同一条**注入消息：进度提示是「同一时刻只保留一条、
+   * 原地替换」的，计划若单独注入就会被下一轮的替换顺手删掉（实测过同类失效）。
+   */
+  const planItems = plan && Array.isArray(plan.items) ? plan.items.filter((i) => i && i.step) : [];
+  const planText = planItems.length ? '\n' + planLib.renderPlan(plan) + '\n（如与计划不符，用 update_plan 改正，不要只在回复里说）' : '';
   return (
     parts.join('；') +
-    '。\n下一步先交代清楚三件事：① 当前目标（还在做哪一件事）② 已完成（以产物或命令输出为证）' +
+    '。' +
+    planText +
+    '\n下一步先交代清楚三件事：① 当前目标（还在做哪一件事）② 已完成（以产物或命令输出为证）' +
     '③ 下一步要做的**一个**具体动作。不要重复已经成功过的调用（同参数重复会命中缓存，等于空转）。'
   );
+}
+
+/**
+ * 读取本 run 的任务清单（`update_plan` 落在 `.codenode/runs/<runId>.plan.json`）。
+ *
+ * 为什么走文件而不是共享内存：工具（主进程里的 `registry.execute`）与主循环之间没有现成的
+ * 可变状态通道，而 run 级文件本来就是这个仓库的既定口径（子代理任务视图同款），
+ * 顺带让「删掉进程再续跑」也能把计划带回来。
+ * 读不到（没写过计划 / 文件损坏 / 无 runId）一律返回 null —— 调用方按「没有计划」处理，不抛。
+ *
+ * @param {string|null} projectRoot @param {any} cfg
+ * @returns {{items: Array<{step: string, status: string}>, updatedAt?: string}|null}
+ */
+function readRunPlan(projectRoot, cfg) {
+  try {
+    return planLib.readPlan(projectRoot, (cfg && cfg.costRunId) || '');
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1992,6 +2025,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let totalToolCalls = 0;
   let loopIterations = 0;
   /**
+   * 上次注入进度提示时的计划版本（`update_plan` 写文件时带的 updatedAt）。
+   * 计划一变就立刻刷新那条注入消息 —— 不能只在进度节奏（每 progressEvery 轮）才回灌，
+   * 否则「模型刚写完计划、之后几轮都看不到它」。
+   */
+  let lastPlanStamp = '';
+  /**
    * 真正**成功完成**的模型请求次数（每轮一次 chat completion，含截断补问那轮；
    * 请求失败/还没发出去的不计）。对外通过返回值 `iterations` 上报 —— 评测的
    * `steps-at-most` 判据用它。与 `loopIterations` 的差别：进入循环就被取消 /
@@ -2274,8 +2313,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
        * 「机器注入的 user 消息」从重建后的历史里丢掉，等于白注（模型本轮根本看不到）。
        * 同一时刻只保留一条：旧的那条**原地替换**（不 splice —— 缓存条目里存着消息下标，
        * 挪动下标会让后续的缓存回填改错消息）。
+       *
+       * update_plan（任务清单）搭这条车一起回灌：计划必须被模型**反复**看到，而这条消息同一时刻
+       * 只有一条，单独注入会被下一轮替换掉。触发条件是「到进度节奏」**或**「计划刚变过」——
+       * 后者保证模型写完计划的下一轮就看得见（不必等满 progressEvery 轮）。
        */
-      if (progressEvery > 0 && iter > 0 && iter % progressEvery === 0) {
+      const planForNote = readRunPlan(traceProjectRoot(), cfg);
+      const planStamp = planForNote && planForNote.updatedAt ? String(planForNote.updatedAt) : '';
+      const planChanged = !!planStamp && planStamp !== lastPlanStamp;
+      if (progressEvery > 0 && iter > 0 && (iter % progressEvery === 0 || planChanged)) {
         const note = buildProgressNote({
           iteration: iter + 1,
           maxIterations: maxToolIterations,
@@ -2285,13 +2331,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           failures: allToolCalls.filter((call) => call && call.ok === false).map((call) => ({ tool: call.name, code: (call.failure && call.failure.code) || '' })),
           tokensUsed: totalTokens,
           tokenBudget: progressTokenBudget,
+          plan: planForNote,
         });
         const previous = messages.findIndex(
           (msg) => msg && msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith(PROGRESS_NOTE_PREFIX)
         );
         if (previous >= 0) messages[previous] = { role: 'user', content: note };
         else messages.push({ role: 'user', content: note });
-        emitTrace({ kind: 'progress_check', turnId: iter, iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
+        if (planChanged) lastPlanStamp = planStamp;
+        emitTrace({ kind: 'progress_check', turnId: iter, iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length, planItems: planForNote && Array.isArray(planForNote.items) ? planForNote.items.length : 0 });
         onDelta && onDelta({ kind: 'progress_check', iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
       }
       const payload = {
@@ -2954,6 +3002,7 @@ module.exports = {
   chatBody,
   buildProgressNote,
   PROGRESS_NOTE_PREFIX,
+  readRunPlan,
   parseReasoningEffort,
   parseReliabilityConfig,
   shouldCompress,

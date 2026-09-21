@@ -204,3 +204,17 @@ soul_file=config/soul.md
 #   显式裁决（winnerTaskId 必须是该资源的候选来源，否则裁决被拒且冲突仍在）。
 #   待裁决冲突会以 delta/run 事件 `subagent_merge` 暴露，界面会提示（一致的批次不打扰用户）。
 # 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索
+# ---------- 执行隔离（sandbox）：Windows 无等价内核方案，边界落在工具层 ----------
+# sandbox.mode=off|best-effort|strict        # 默认 best-effort（尽量上隔离，上不了如实降级）
+# sandbox.network=deny|inherit               # **出厂 deny**（对齐 Codex 的 workspace-write：默认不给网络）
+#   deny    = 疑似联网的命令直接拒绝（PERMISSION_DENIED），不弹确认、不试连；
+#             Linux bwrap / macOS sandbox-exec 下还会真的断网（--unshare-net / deny network*）；
+#   inherit = 放行，但联网命令仍要走一次 HIGH 确认（高危判据与白名单共用归一化）。
+#   Agent 需要 `npm install` / `git push` 这类动作时把它设成 inherit。
+# sandbox.require_filesystem=1               # strict 模式下要求真实文件系统隔离（Windows 会因此拒绝执行）
+# sandbox.max_processes / sandbox.max_memory_mb / sandbox.cpu_seconds   # 0 = 不限制
+# sandbox.allow_write=<目录>[;<目录>]        # 额外可写目录（默认：项目根 + tmpdir）
+# 注意：Windows 后端（windows-job）**只隔离进程/资源，不隔离文件系统与网络** —— 越界写的防线是
+#   「工具层静态审计（shellGuard）+ 路径校验（writeRoots）+ 一或两次用户确认」。静态审计判不出的写目标
+#   （变量/通配，如 `> $OUT`）**不再静默放行**：默认模式要求确认，strict 模式直接拒绝。
+

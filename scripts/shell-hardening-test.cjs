@@ -34,7 +34,12 @@ function check(label, condition, detail) {
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-shell-hardening-'));
-const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: root });
+/**
+ * 本节考察的是 #8「sensitive 判据与白名单共用归一化」，所以显式声明 `network: 'inherit'`：
+ * 出厂口径现在是 deny，"不写 network" 会让联网类命令（如 `nuget restore`）先被断网策略硬拒，
+ * 于是本节测的就不再是「敏感判定」了（2026-09-21 出厂口径变更时实测踩到）。
+ */
+const policy = sandbox.resolvePolicy({ mode: 'off', network: 'inherit' }, { projectRoot: root, userDataDir: root });
 sandbox.setDefaultPolicy(policy);
 const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false, toolsAllowed: ['execute_shell'] });
 

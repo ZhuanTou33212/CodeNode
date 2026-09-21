@@ -112,6 +112,8 @@
     "test:run-rollback": "node scripts/run-rollback-test.cjs",
     "test:agent-steering": "node scripts/agent-steering-test.cjs",
     "test:subagent-view": "node scripts/subagent-view-test.cjs",
+    "test:agent-plan": "node scripts/agent-plan-test.cjs",
+    "test:shell-boundary": "node scripts/shell-boundary-test.cjs",
     "test:frontend-incremental": "node scripts/frontend-incremental-test.cjs",
     "test:stream-anomaly": "node scripts/stream-anomaly-test.cjs",
     "test:shell-hardening": "node scripts/shell-hardening-test.cjs",

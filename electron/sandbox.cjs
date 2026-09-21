@@ -232,7 +232,9 @@ function capabilities(options = {}) {
  * 由 config/agent.properties 生成隔离策略。
  * key：
  *   sandbox.mode=off|best-effort|strict（默认 best-effort）
- *   sandbox.network=inherit|deny（默认 inherit）
+ *   sandbox.network=inherit|deny（**出厂 deny**：默认不给网络，对齐 Codex 的 workspace-write；
+ *     要联网请显式设 inherit。注意两个平台语义不同 —— Linux/macOS 真的按策略断网，
+ *     Windows 只做命令级拒绝，见本文件顶部的能力表）
  *   sandbox.max_processes / sandbox.max_memory_mb / sandbox.cpu_seconds（0=不限制）
  *   sandbox.allow_write=额外可写目录（分号/逗号分隔，相对路径按项目根解析）
  *   sandbox.require_filesystem=1 时，strict 模式要求真实文件系统隔离（Windows 会因此拒绝执行）
@@ -242,7 +244,8 @@ function resolvePolicy(rawConfig, options = {}) {
   const projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : null;
   const caps = options.capabilities || capabilities(options);
   const mode = String(cfg.mode || cfg['sandbox.mode'] || 'best-effort').trim().toLowerCase();
-  const network = String(cfg.network || cfg['sandbox.network'] || 'inherit').trim().toLowerCase() === 'deny' ? 'deny' : 'inherit';
+  // 出厂断网：与 agent.cjs 的 parseSandboxConfig 保持同一口径（两处都必须改，用例锁的是出厂值）
+  const network = String(cfg.network || cfg['sandbox.network'] || 'deny').trim().toLowerCase() === 'deny' ? 'deny' : 'inherit';
   const requireFilesystem = truthy(options.requireFilesystem != null ? options.requireFilesystem : cfg.requireFilesystem, false);
   const writeRoots = [];
   const push = (dir) => {

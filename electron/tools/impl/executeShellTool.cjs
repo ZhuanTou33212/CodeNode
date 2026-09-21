@@ -375,18 +375,43 @@ function register(registry) {
       }
       if (policy && policy.network === 'deny' && guard.network.length) {
         return AgentToolResult.error(
-          '拒绝执行：当前隔离策略已切断网络（sandbox.network=deny），而这条命令疑似需要联网（' + guard.network.join('、') + '）。',
+          '拒绝执行：当前隔离策略已切断网络（sandbox.network=deny，**出厂默认**），而这条命令疑似需要联网（' + guard.network.join('、') + '）。' +
+            '要放行联网请在 config/agent.properties（或项目 .codenode/agent.properties）里显式设 sandbox.network=inherit 后重试。',
           { code: 'PERMISSION_DENIED', tool: 'execute_shell', command, network: guard.network, userActionRequired: false },
         );
       }
 
+      /**
+       * 写目标含变量/通配（`writeFileSync(p)`、`> $OUT`）：静态审计判不出是否越界。
+       * strict 模式上面已硬拒；**默认口径（best-effort）此前是静默放行** —— 那等于「把路径放进变量」
+       * 就能绕过路径边界检查，而 Windows 后端没有内核级文件系统兜底。改为交给用户确认：
+       * 判不了就让知道上下文的人决定，而不是替用户默认放行（2026-09-21）。
+       */
+      const unresolvedWrite = guard.unresolvedWrites.length > 0;
       const sensitive = isSensitiveCommand(tokens, normalized);
-      if (sensitive) {
+      if (sensitive || unresolvedWrite) {
         const what = '在项目目录执行命令：' + command;
-        const detail = '这是一条' + (isDestructiveCommand(tokens) ? '具有破坏性' : '可能影响系统/仓库状态') + '的命令，执行后可能不可撤销。超时 ' + timeoutSeconds + ' 秒。' +
+        const detail =
+          (sensitive
+            ? '这是一条' + (isDestructiveCommand(tokens) ? '具有破坏性' : '可能影响系统/仓库状态') + '的命令，执行后可能不可撤销。'
+            : '这条命令会写文件，而静态审计无法判定它的写目标是否在工作区内。') +
+          (unresolvedWrite
+            ? '写目标含变量或通配（' + guard.unresolvedWrites.join(', ') + '），当前平台没有内核级文件系统隔离。'
+            : '') +
+          '超时 ' + timeoutSeconds + ' 秒。' +
           (guard.reasons.length ? '静态审计提示：' + guard.reasons.join('；') + '。' : '');
         const ok = await context.confirm(ConfirmationLevel.HIGH, what, detail);
-        if (!ok) return AgentToolResult.error('已取消执行');
+        if (!ok) {
+          if (unresolvedWrite) {
+            return AgentToolResult.error('已取消执行（写目标含变量/通配，未能确认是否越界）', {
+              code: 'APPROVAL_DENIED',
+              tool: 'execute_shell',
+              command,
+              unresolvedWrites: guard.unresolvedWrites,
+            });
+          }
+          return AgentToolResult.error('已取消执行');
+        }
       }
       // 普通构建/查询命令属于低敏感操作，直接执行，不需要询问用户
 

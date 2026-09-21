@@ -42,6 +42,9 @@ const BUILTINS = [
   require('./impl/retrieveContextTool.cjs'),
   require('./impl/queryScalarsTool.cjs'),
   require('./impl/memoryTool.cjs'),
+  // 任务清单（对照 Codex 的 update_plan）：模型自己写下「分几步、现在在哪一步」。
+  // 它不是工作区写操作（mutatesWorkspace=false），但也不是只读缓存项 —— 见 impl/updatePlanTool.cjs。
+  require('./impl/updatePlanTool.cjs'),
 ];
 
 function buildDefaultRegistry() {

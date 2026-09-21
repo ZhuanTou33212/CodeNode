@@ -113,6 +113,10 @@ const CORE = [
   'test:agent-steering',
   // 子代理任务视图跨 run 留存（§4.2）：落盘 / 跨实例可读 / 覆盖与上限 / 坏文件如实报告
   'test:subagent-view',
+  // 任务清单（对照 Codex 的 update_plan）：schema/校验 / 落盘 + run 事件 / 即时回灌 / 只留一条 / 负向零痕迹
+  'test:agent-plan',
+  // Windows 无内核隔离这条边界的收口：出厂断网 + 「写目标判不出来」不再静默放行（含负向防误伤）
+  'test:shell-boundary',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
