@@ -185,8 +185,11 @@ function buildMemoryText(entries, query, options = {}) {
   if (!picked.entries.length) return '';
   const lines = picked.entries.map((entry) => `- ${entry.key ? '[' + entry.key + '] ' : ''}${entry.content}`);
   if (!picked.matched) {
-    // 没有任何关键词命中：如实说明这是「最近的记忆」，别让模型以为这是检索结果
-    lines.unshift('（以下为此项目最近保存的记忆，未按当前问题检索）');
+    // 没有任何关键词命中：如实说明这是「最近的记忆」，别让模型以为这是检索结果。
+    // `options.label` 让调用方说明范围（项目级 / 用户级跨项目）—— 文案说错范围会误导模型，
+    // 例如把用户级记忆写成「此项目」（2026-09-21 用户级记忆落地时实测踩到）。
+    const label = String(options.label || '此项目');
+    lines.unshift('（以下为' + label + '最近保存的记忆，未按当前问题检索）');
   }
   return lines.join('\n');
 }

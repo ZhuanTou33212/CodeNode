@@ -33,6 +33,8 @@ const { CostLedger } = require('../costLedger.cjs');
 const { AlertDispatcher } = require('../alerts.cjs');
 const { modelQueue } = require('../requestQueue.cjs');
 const { RequestBudget } = require('../requestBudget.cjs');
+const hooksLib = require('../hooks.cjs');
+const userMemoryStore = require('../userMemory.cjs');
 const attachmentSpec = require('../attachments.cjs');
 const memoryStore = require('../memory.cjs');
 const extensionStore = require('../tools/extensions.cjs');
@@ -101,6 +103,44 @@ function saveDoc(projectRoot, projectFile, model) {
  *   userDataDir: () => string,
  * }} ctx
  */
+/**
+ * 会话级钩子（SessionStart / SessionStop）：run 开始前与结束后各跑一条用户声明的命令。
+ * fire-and-forget 语义：**不进模型上下文**（与 PostToolUse 不同），结果只落 run 事件 + 打印，
+ * 失败不影响 run 的结论（否则「钩子坏了」会变成「任务失败」）。
+ */
+async function runSessionHook(kind, cfg, projectRoot, runId, sandboxPolicy, signal) {
+  try {
+    const hooksCfg = hooksLib.parseHooksConfig(cfg);
+    const command = kind === 'start' ? hooksCfg.sessionStart : hooksCfg.sessionStop;
+    if (!hooksCfg.enabled || !command) return null;
+    const outcome = await hooksLib.runHook(
+      { id: 'session_' + kind, command, tools: ['*'], on: 'always', timeoutMs: null, maxOutputChars: null },
+      { projectRoot, policy: sandboxPolicy, signal, defaults: hooksCfg },
+    );
+    if (runId) {
+      try {
+        runStore.appendEvent(projectRoot, runId, kind === 'start' ? 'hook_session_start' : 'hook_session_stop', {
+          command,
+          ok: outcome.ok,
+          skipped: !!outcome.skipped,
+          exitCode: outcome.exitCode,
+          timedOut: !!outcome.timedOut,
+          elapsedMs: outcome.elapsedMs,
+          reason: outcome.reason || null,
+          output: String(outcome.output || '').slice(0, 2000),
+        });
+      } catch {}
+    }
+    return outcome;
+  } catch (error) {
+    // 钩子本身出错绝不能让 run 挂掉（如实记一条即可）
+    try {
+      if (runId) runStore.appendEvent(projectRoot, runId, 'hook_session_error', { kind, error: String((error && error.message) || error) });
+    } catch {}
+    return null;
+  }
+}
+
 function register(ctx) {
   const { ipcMain, userDataDir } = ctx;
 
@@ -237,6 +277,9 @@ function register(ctx) {
     const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
     const sender = event.sender;
     let runId = null;
+    /** SessionStop 钩子需要的上下文：run 过程中可能抛异常，catch 里也要能补跑一次（保持外层可见） */
+    /** @type {{cfg: any, sandboxPolicy: any, runId: string|null, projectRoot: string|null}|null} */
+    let hookSessionCtx = null;
     const sendDelta = (d) => {
       if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
     };
@@ -320,6 +363,10 @@ function register(ctx) {
         onAlert: (alert) => sendDelta({ kind: 'alert', alert }),
       });
 
+      hookSessionCtx = { cfg, sandboxPolicy, runId, projectRoot };
+      // SessionStart 钩子：在 run 开始前跑（用户可用它拉依赖、起服务；失败不阻断 run）
+      // 注意：此刻 controller 还没创建（它在稍后的并发登记处才建），SessionStart 只受自身超时约束
+      await runSessionHook('start', cfg, projectRoot, runId, sandboxPolicy, null);
       runStore.startRun(projectRoot, runId, {
         prompt: String((resumePlan && resumePlan.prompt) || prompt || '').slice(0, 4000),
         model: cfg.model,
@@ -450,6 +497,8 @@ function register(ctx) {
       // 第 5 项：注入按当前提问检索（key/tags/content 打分，均无命中才退回最近的记忆），
       // 不再是 entries.slice(-30) 的纯时间切片。
       const memoryText = memoryStore.buildMemoryText(memory.entries, prompt, { limit: 30 });
+      // 用户级（跨项目）记忆：与项目记忆同口径（按提问打分），但**分开注入**成独立段落
+      const userMemoryText = userMemoryStore.buildUserMemoryText(prompt, { limit: 20 });
       const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
       const skillsText = skills.map((item) => `- ${item.name}: ${item.instructions || item.description || '按项目扩展定义执行'}`).join('\n');
       // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
@@ -457,6 +506,7 @@ function register(ctx) {
       const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
+        userMemoryText,
       });
       const messages = resumePlan
         ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })
@@ -612,6 +662,8 @@ function register(ctx) {
         error: result.error || null,
         streamRestarts: result.streamRestarts || 0,
       });
+      // SessionStop 钩子：run 结束后跑（输出只进 run 事件，不进模型上下文）
+      await runSessionHook('stop', cfg, projectRoot, runId, sandboxPolicy, controller.signal);
       // 续跑成功 → 原 Run 标记为已被取代，避免重复出现在「中断」列表里
       if (resumePlan) {
         try { runStore.markRetry(projectRoot, resumePlan.runId, runId); } catch {}
@@ -663,6 +715,9 @@ function register(ctx) {
       return out;
     } catch (e) {
       if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
+      if (hookSessionCtx) {
+        await runSessionHook('stop', hookSessionCtx.cfg, hookSessionCtx.projectRoot, hookSessionCtx.runId, hookSessionCtx.sandboxPolicy, null);
+      }
       sendDelta({ kind: 'error', error: String((e && e.message) || e) });
       return { ok: false, error: String((e && e.message) || e) };
     }

@@ -44,7 +44,7 @@ const COMPACTION_PROMPT = [
  * CodeNode 自己注入的「机器 user 消息」：这些不是人说的话，压缩时**不保留**（等价于 Codex 丢掉
  * `<codex_internal_context>` / `<turn_aborted>`）。列表改动要同步用例。
  */
-const MACHINE_USER_PREFIXES = ['【系统提示】', '【参数格式错误】', '【工具失败】', 'RAG 来源校验：', '<compaction>'];
+const MACHINE_USER_PREFIXES = ['【系统提示】', '【参数格式错误】', '【工具失败】', 'RAG 来源校验：', '<compaction>', '【系统提示】钩子结果（'];
 
 /**
  * 判断一条 user 消息是否由 harness 注入（而不是人敲的）。

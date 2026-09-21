@@ -117,6 +117,12 @@ const CORE = [
   'test:agent-plan',
   // Windows 无内核隔离这条边界的收口：出厂断网 + 「写目标判不出来」不再静默放行（含负向防误伤）
   'test:shell-boundary',
+  // 钩子（对照 Claude Code 的 hooks）：PostToolUse 回灌 / SessionStart-Stop / 越界写与断网拒绝 / 未配置零痕迹
+  'test:hooks',
+  // 非交互入口（对照 codex exec / claude -p）：参数与凭据 fail-closed / 真 HTTP 一轮 / 写操作确认两向 / run 落盘
+  'test:headless',
+  // 用户级（跨项目）记忆：落盘/去重/上限/按提问打分/scope 读写
+  'test:user-memory',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。

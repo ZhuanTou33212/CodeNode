@@ -6,6 +6,9 @@
   "author": "yimi528 <148250049+yimi528@users.noreply.github.com>",
   "description": "CodeNode Agent 工作台：画布、工具循环与本地 Agentic RAG",
   "main": "electron/main.cjs",
+  "bin": {
+    "codenode-agent": "bin/codenode-agent.cjs"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -114,6 +117,9 @@
     "test:subagent-view": "node scripts/subagent-view-test.cjs",
     "test:agent-plan": "node scripts/agent-plan-test.cjs",
     "test:shell-boundary": "node scripts/shell-boundary-test.cjs",
+    "test:hooks": "node scripts/hooks-test.cjs",
+    "test:headless": "node scripts/headless-test.cjs",
+    "test:user-memory": "node scripts/user-memory-test.cjs",
     "test:frontend-incremental": "node scripts/frontend-incremental-test.cjs",
     "test:stream-anomaly": "node scripts/stream-anomaly-test.cjs",
     "test:shell-hardening": "node scripts/shell-hardening-test.cjs",
