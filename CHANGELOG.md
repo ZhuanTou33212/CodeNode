@@ -28,7 +28,12 @@ worktree 隔离、计划卡（对话区 UI）—— 逐条理由在该文档末�
 - **看图（`view_image`）**：模型可读项目内图片（png/jpeg/webp/gif、≤4MB、路径在项目根内），
   主循环把图作为一条多模态 user 消息附在工具结果之后；附不上时如实回执。判据 `test:view-image`。
 
-核心套件 **81 → 87**；变异校验本轮 11 + 5 = **16/16** 条有判别力（`out/mutation-spec-control-plane.json`、
+- **MCP 会话复用 + `tools/list` 缓存（`electron/tools/mcpClient.cjs`）**：每个 (项目, 扩展) 一条常驻 stdio 会话，
+  握手一次、清单问一次，调用复用通道；空闲 120s 自动关闭、server 崩溃下次重拉、run 结束 `closeAll()`；
+  仍走 `guardedMcpSpawn`、仍有 1MiB 响应上限、握手失败文案不变。判据 `test:mcp-session`。
+  **仍未做**：HTTP/SSE transport（只支持 stdio）。
+
+核心套件 **81 → 87**；变异校验本轮 5 + 11 + 3 = **19/19** 条有判别力（`out/mutation-spec-control-plane.json`、
 `out/mutation-spec-hooks.json`）。
 
 ### 新增（安全边界收口 + 任务清单 update_plan；2026-09-21）

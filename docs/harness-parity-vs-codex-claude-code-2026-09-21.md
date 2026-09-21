@@ -134,7 +134,7 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 | 2 | **P1** | ~~模型没有任务清单，长任务靠 12 轮上限 + 收尾兜底~~ **已落地 2026-09-21**：新增 `update_plan`（落 run 事件 + run 级文件 + 搭进度提示回灌） | 加 `update_plan` 形态的 todo 工具（`buildProgressNote` 的注入点直接升级成"计划 + 进度"，同一处替换逻辑已在 `agent.cjs:2289`） |
 | 3 | ~~P1~~ | ~~无 hooks~~ **已落地 2026-09-21**（`electron/hooks.cjs`，含 PostToolUse / SessionStart / Stop + 三个上限；`PreToolUse` 仍未做） |
 | 4 | ~~P1~~ | ~~技能静态注入~~ **已落地 2026-09-21**（`read_skill` + `agent.buildSkillsIndex`；工具面按任务裁剪**有意不做**——见 S20 的设计取舍记录） |
-| 5 | **P2** | MCP 仅 stdio、每次 spawn、无 `tools/list` | 加 streamable HTTP transport + 启动时 `tools/list` 缓存 + 会话复用 |
+| 5 | **P2** | ~~每次 spawn、无 `tools/list`~~ **部分落地 2026-09-21**（`electron/tools/mcpClient.cjs`：常驻会话 + 握手一次 + `tools/list` 缓存 + 空闲回收 + 崩溃重拉）；**仍未做**：streamable HTTP/SSE transport（只支持 stdio） |
 | 6 | ~~P2~~ | ~~无持久审批规则~~ **已落地 2026-09-21**（`.codenode/approvals.json` + 界面「本项目始终允许」+ 受保护路径；只记忆注册表级审批） |
 | 7 | **P2** | **部分落地 2026-09-21**：用户级跨项目记忆 / `view_image` / headless 入口（`bin/codenode-agent.cjs`）已做；**仍未做**：`web_search`（需要搜索后端决策）、worktree 隔离（要设计工作树合并语义） |
 

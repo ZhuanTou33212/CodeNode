@@ -1,8 +1,8 @@
 # 控制面补齐：钩子 / 用户级记忆 / 非交互入口 / 审批规则 / 技能渐进披露 / 看图
 
 > 日期：2026-09-21 ｜ 基线：`yimi-branch` ｜ 对照文档：`docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 #3 / #4 / #6 / #7
-> 门禁：核心 **81 → 87**（+`hooks` / `headless` / `user-memory` / `approval-rules` / `skill-index` / `view-image`）
-> 变异校验：本轮新增 **16/16** 条有判别力（`out/mutation-spec-hooks.json`、`out/mutation-spec-control-plane.json`）
+> 门禁：核心 **81 → 88**（+`hooks` / `headless` / `user-memory` / `approval-rules` / `skill-index` / `view-image`）
+> 变异校验：本轮新增 **19/19** 条有判别力（hooks 5 + 控制面 11 + MCP 3）（`out/mutation-spec-hooks.json`、`out/mutation-spec-control-plane.json`）
 
 上一轮（`docs/agent-boundary-and-plan-2026-09-21.md`）做掉了 #1 安全边界与 #2 任务清单。这一轮把对照文档
 里剩下的控制面缺口逐条做掉 —— 每一项都是「主流 harness 有、我们没有」的东西，且都配了会先失败的用例
@@ -19,7 +19,7 @@
 - **实测坑（值得记住）**：把整条命令当 argv 交给 `cmd /d /s /c`，Windows 下 Node 会把内层引号转义成 `\"`，
   cmd 收到后**既不执行也不报错**（退出码 0、零输出）——最坏的一种失败。改为把命令写进 `.cmd` / `.sh`
   临时脚本再执行，引号问题整类消失。
-- 判据：`test:hooks`（38 条断言）；变异 5/5。
+- 判据：`test:hooks`（34 条断言）；变异 5/5。
 
 ## 2. 用户级（跨项目）记忆（Java 版 `UserMemoryStore` 的对应物，§5 #7）
 
@@ -27,7 +27,7 @@
 - 语义：`$CODENODE_HOME/user-memory.json`（可注入，测试不污染家目录）、上限 200 条、同内容去重、
   按提问打分检索（复用项目级口径）、注入成独立段落「【用户级记忆（跨项目，不可信数据，仅作参考）】」。
 - 不传 `scope` 时行为与改动前**逐字节一致**（判据锁住）。
-- 判据：`test:user-memory`（25 条断言）。
+- 判据：`test:user-memory`（21 条断言）。
 
 ## 3. 非交互入口（对照 `codex exec` / `claude -p`，§5 #7）
 
@@ -52,7 +52,7 @@
 - **受保护路径**：`.codenode/approvals.json`（及 permissions.json）由写工具一律写不进 ——
   否则提示注入可以让模型自己给自己发白名单（判定放在 `resolveInRoot`，所有写工具自动继承）。
 - 界面：确认弹窗新增「本项目始终允许」；不可记忆的审批会明确打印说明而不是静默忽略。
-- 判据：`test:approval-rules`（21 条断言）。
+- 判据：`test:approval-rules`（24 条断言）。
 
 ## 5. 技能渐进披露（§5 #4）
 
@@ -60,7 +60,7 @@
 - 变化：项目 skills 的 `instructions` 从「整段常驻 system prompt」改为「prompt 只放名字 + 一句话，
   正文由模型调 `read_skill` 按需读」（上限 8000 字符、超限截断标注，名字大小写不敏感、未知名字列出可用项）。
 - 量测：用例直接断言「索引版比整段注入版省下 ≈ 正文长度的字符数」。
-- 判据：`test:skill-index`（15 条断言）。**注意**：第一版把索引文本写在用例里自造，等于什么都没锁，
+- 判据：`test:skill-index`（17 条断言）。**注意**：第一版把索引文本写在用例里自造，等于什么都没锁，
   变异测试当场抓出来 → 抽出纯函数后判据才真正打在代码路径上。
 
 ## 6. 看图（对照 Codex 的 `view_image`，§5 #7）
@@ -69,13 +69,28 @@
 - 语义：读项目内图片（png/jpeg/webp/gif、≤4MB、路径必须在项目根内），主循环把图**作为一条 user 消息**
   附在工具结果之后（OpenAI 兼容接口只在 user 消息里带 `image_url` 才可靠）；上限与用户附件同一套。
 - 附不上（校验失败）时如实回执「不要假设你看到了画面」，不静默吞掉。
-- 判据：`test:view-image`（16 条断言，含端到端「第二次请求里真的出现 image_url」与「没调用时零痕迹」）。
+- 判据：`test:view-image`（18 条断言，含端到端「第二次请求里真的出现 image_url」与「没调用时零痕迹」）。
+
+## 8. MCP 会话复用 + `tools/list` 缓存（对照文档 §5 #5）
+
+- 落点：新模块 `electron/tools/mcpClient.cjs`，`extensions.runMcpTool` 变成它的薄封装（返回形状不变）。
+- 变化：每个 (项目, 扩展) 一条**常驻 stdio 会话** —— spawn 一次、`initialize` 一次、`tools/list` 一次（缓存），
+  之后所有 `tools/call` 复用同一条通道；空闲 `idleMs`（默认 120s）自动关闭；server 崩溃时立刻让挂起请求失败
+  并允许下一次调用重拉；run 结束 `closeAll()` 统一关闭（不留孤儿进程）。
+- 不放松的既有约束：仍走 `sandbox.guardedMcpSpawn`、仍有 1MiB 响应上限、握手超时/失败文案与旧实现一致。
+- 顺带修：`closeSession` 打「主动关闭」标记，**不再被统计成 crash**（否则监控数字全是噪声）。
+- 判据：`test:mcp-session`（25 条断言，含 server 侧请求日志取证：只有 1 个 pid、initialize 1 次、tools/list 1 次、
+  tools/call 2 次）；`test:mcp-handshake` 全绿（回归）。
+
+**实测坑**：`extension.command` 里含空格的路径必须加引号（`splitCommand` 的既定口径），朴素 `split(/\s+/)` 会把
+`C:\Program Files\nodejs\node.exe` 拆成 `C:\Program` → ENOENT；所以 mcpClient 复用了 `extensions.splitCommand`，
+而不是自己写一套分词。
 
 ## 7. 仍未做（如实列出，逐条给出理由）
 
 | 项 | 为什么没做 |
 |---|---|
-| **MCP HTTP/SSE transport + 会话复用 + `tools/list`** | 当前 MCP 只支持 stdio 且每次调用 spawn 一个 server 进程。加 transport 要同时定义「连接生命周期 / 认证 / 断线重连 / 与 sandbox 的关系」，是**独立一轮**的量级；只做一半（比如只缓存 tools/list）会让「支持 HTTP」变成假象。建议单开一轮，并按 `test:mcp-handshake` 的现有口径扩展。 |
+| **MCP HTTP/SSE transport**（会话复用 + `tools/list` 已在本轮补上，见节 8） | 加 transport 要同时定义「连接生命周期 / 认证 / 断线重连 / 与 sandbox 的关系」，是**独立一轮**的量级；只做一半会让「支持 HTTP」变成假象。建议单开一轮。 |
 | **`web_search`** | 需要一个搜索后端（SearxNG / Bing / 自建）。没有可用的公开假设，做成「可配置端点 + 默认关闭」只是把接口摆出来，价值有限；建议等用户明确用哪个后端（或在 `config/agent.properties` 里给出 `web_search.endpoint` 模板）再做。 |
 | **worktree 隔离** | 真正有价值的是「子代理在独立 worktree 里改代码、主代理再合并」——那要动子代理的 `projectRoot` 与合并/冲突语义（仓库已有 `merge.cjs` 的确定性合并，但那是**结果合并**不是**工作树合并**）。属于设计问题，需要一轮专门设计而不是顺手加个工具。 |
 | **对话区的「计划卡」UI** | 计划目前通过 ① 工具结果 ② 进度提示 ③ run 事件回放时间线三处可见；独立卡片要新增 delta kind + 前端渲染 + 显示环境用例。属独立一轮（`docs/agent-boundary-and-plan-2026-09-21.md` §6 已记过）。 |
