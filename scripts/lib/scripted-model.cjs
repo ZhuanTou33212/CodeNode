@@ -66,7 +66,7 @@ function buildStream(turn) {
 
 /**
  * 安装脚本化模型。
- * @returns {{ calls: number, intentCalls: number, seen: Array<any>, restore: Function, state: any }}
+ * @returns {{ calls: number, intentCalls: number, intentAborted: boolean, seen: Array<any>, restore: Function, state: any }}
  */
 function installScriptedModel(script, options = {}) {
   const originalFetch = global.fetch;
@@ -96,6 +96,32 @@ function installScriptedModel(script, options = {}) {
         typeof options.intentVerdict === 'function'
           ? options.intentVerdict(body, state.intentCalls)
           : options.intentVerdict || { intent: 'code', risk: 'low', authorization: 'high', confidence: 0.9, reason: 'scripted' };
+      /**
+       * `intentDelayMs`：把分类应答拖慢（默认 0 = 立刻回），用于测「分类期间点停止」——
+       * 延迟期间**监听 init.signal**，被 abort 就抛 AbortError 并记 `state.intentAborted`，
+       * 这与真实 fetch 在被 abort 时的行为一致（用例据此判断取消真的传到了请求层）。
+       */
+      const delayMs = Number(options.intentDelayMs) || 0;
+      if (delayMs > 0) {
+        const signal = init && init.signal;
+        const aborted = await new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(false), delayMs);
+          if (!signal) return;
+          if (signal.aborted) {
+            clearTimeout(timer);
+            resolve(true);
+            return;
+          }
+          signal.addEventListener('abort', () => {
+            clearTimeout(timer);
+            resolve(true);
+          }, { once: true });
+        });
+        if (aborted) {
+          state.intentAborted = true;
+          throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+        }
+      }
       const intentBody = {
         choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(verdict) }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 90, completion_tokens: 20, total_tokens: 110 },
@@ -195,6 +221,10 @@ function installScriptedModel(script, options = {}) {
     /** 意图识别分类请求的次数（与主循环的 calls 分开计：脚本序号不错位） */
     get intentCalls() {
       return state.intentCalls;
+    },
+    /** 分类请求是否被取消过（abort 传到了请求层）—— 测「分类期间点停止」用 */
+    get intentAborted() {
+      return state.intentAborted === true;
     },
     get seen() {
       return state.seen;

@@ -291,6 +291,35 @@ function statesOf(root, runId) {
       JSON.stringify({ state: summary.state, status: summary.status }));
   }
 
+  /**
+   * ---- B6 意图识别期间点「停止」----
+   *
+   * 分类请求发生在 run 真正开始之前（真机实测 0.9~3.7s，超时上限 8s）。此前 `AbortController` 在
+   * 工具装配处才建、`activeRequests` 更晚才登记 → 这段窗口里点停止**完全无效**。现在控制器提前创建，
+   * 这条用例锁住「取消真的传到了请求层」（脚本化 fetch 在延迟期间监听 signal，被 abort 就抛 AbortError）。
+   */
+  {
+    const root = makeProject('intent-cancel');
+    const h = makeHarness();
+    const stub = installScriptedModel([{ content: '（不该走到这一步：run 在分类阶段就被取消了）' }], { loopLast: false, intentDelayMs: 1500 });
+    let out;
+    try {
+      const chatPromise = h.handlers.get('agent:chat')({ sender: h.sender }, { projectRoot: root, prompt: '读 a.txt', requestId: 'run-intent-cancel' });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      h.handlers.get('agent:stop')({ sender: h.sender }, 'run-intent-cancel');
+      out = await chatPromise;
+    } finally {
+      stub.restore();
+    }
+    const runId = runStore.normalizeRunId('run-intent-cancel');
+    const summary = runStore.summarizeRun(runStore.readRun(root, runId));
+    check('B6.1 分类请求真的发出去过', stub.intentCalls === 1, String(stub.intentCalls));
+    check('B6.2 停止在分类阶段就取消了分类请求（abort 传到请求层）', stub.intentAborted === true);
+    check('B6.3 主循环一次请求都没发（取消发生在分类阶段）', stub.seen.filter((s) => s.kind === 'main').length === 0, JSON.stringify(stub.seen.map((s) => s.kind)));
+    check('B6.4 取消语义与 B4 同口径（ok=true + aborted=true，不是异常）', !!out && out.aborted === true && out.ok === true, JSON.stringify({ ok: out && out.ok, aborted: out && out.aborted }));
+    check('B6.5 终态是 CANCELLED', summary.state === 'CANCELLED', JSON.stringify({ state: summary.state, status: summary.status }));
+  }
+
   console.log(failures === 0 ? 'AGENT STATE TEST: PASS' : 'AGENT STATE TEST: FAIL (' + failures + ')');
   process.exitCode = failures === 0 ? 0 : 1;
 })().catch((error) => {

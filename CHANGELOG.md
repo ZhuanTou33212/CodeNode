@@ -4,6 +4,16 @@
 
 ## [未发布]
 
+### 修复（分类期间点「停止」无效；2026-09-21）
+
+意图识别的分类请求发生在 run 真正开始之前，而 `AbortController` 在后段「装配工具」处才创建、
+`activeRequests` 登记得更晚 → **那 1~4 秒里点「停止」完全无效**（`auto` 模式下纯代码会话每轮都要分类一次，
+用户会看到「点了没反应」）。把 controller 与 activeRequests 登记**提前到分类之前**，并给分类调用带上
+`signal`；abort 后分类器按「没有信号」处理（不收紧、不阻断），run 立即返回取消终态。
+判据 `test:agent-state` 的 B6（5 条：分类请求发出过 / **abort 真的传到请求层** / 主循环 0 请求 /
+取消语义与 B4 同口径 / 终态 CANCELLED）；变异 **18/18 → 19/19**。明细见
+`docs/intent-recognition-2026-09-21.md` §11。
+
 ### 新增（意图识别的界面展示；2026-09-21）
 
 - **`IntentBadge`（`src/components/IntentBadge.tsx`）+ store 消费 `kind:'intent'`**：一行紧凑标显示

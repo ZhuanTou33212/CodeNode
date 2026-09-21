@@ -526,6 +526,18 @@ function register(ctx) {
       // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
       // 判定在 agent.resolvePromptLayers 里（纯函数，用例锁）；这里只负责把当轮事实传进去。
       /**
+       * 执行控制器 + 并发登记**提前到这里**：意图识别的分类请求也要能随「停止」取消。
+       *
+       * 此前 controller 在工具装配处才建（下面 `---- 装配工具 ----`）、`activeRequests` 在
+       * `sendDelta('start')` 之后才登记 —— 而分类发生在两者之前，于是**分类期间用户点停止是无效的**
+       * （真机实测单次分类 0.9~3.7s，超时上限 8s；用户会看到「点了没反应」）。
+       * 声明上移后，`agent:stop` 按 requestId/runId 找到同一个 controller 直接 abort，分类请求被取消 →
+       * 分类器把它当作「没有信号」（`unavailable`），随即回到原来的路径，不阻断也不收紧。
+       */
+      const controller = new AbortController();
+      activeRequests.set(runId, controller);
+
+      /**
        * ---- 意图识别（照 Codex guardian 分类器；见 electron/intent.cjs 顶部注释）----
        *
        * 为什么在这：它的 `routeHint` 决定**这一轮注入哪层提示词**，所以必须赶在 buildSystemPrompt 之前拿到。
@@ -547,7 +559,8 @@ function register(ctx) {
                 const callCfg = Object.assign({}, cfg, { maxTokens: maxTokens || cfg.maxTokens });
                 if (model) callCfg.model = model;
                 const startedAt = Date.now();
-                const res = await agent.chatCompletion(callCfg, classifierMessages, { timeoutMs });
+                // 带上 run 的取消信号：用户点「停止」时分类请求立刻中断（abort → 分类器按「没有信号」处理）
+                const res = await agent.chatCompletion(callCfg, classifierMessages, { timeoutMs, signal: controller.signal });
                 // 记账口径与 compaction 一致：chatCompletion 自己不入账，由**调用方按用途**记账
                 // （kind='intent'，所以「意图识别花了多少」在成本面板里单独可查，不混进主对话）
                 agent.recordCost(cfg, {
@@ -636,7 +649,8 @@ function register(ctx) {
       let model = null;
       let bridge = null;
       let dirty = false;
-      const controller = new AbortController();
+      // 注意：`controller` 与 `activeRequests` 登记已在**意图识别段之前**创建/登记
+      // （这样分类请求也能随「停止」取消，见那里的注释）；这里不再重复声明。
       if (registry && registry.listTools().length > 0) {
         bridge = makeBridge(sender, controller.signal, { projectRoot });
         model = new GraphModel(document || undefined);
@@ -717,7 +731,7 @@ function register(ctx) {
       // 队列随 run 生命周期存在 —— run 结束后再插话会被拒绝（不能静默丢弃）。
       const steerQueue = createSteerQueue();
       steeringQueues.set(runId, { queue: steerQueue, projectRoot });
-      activeRequests.set(runId, controller);
+      // （`activeRequests.set(runId, controller)` 已提前到意图识别段之前：分类请求也要能取消）
       let result;
       try {
         result = await agent.runAgentChat({

@@ -117,10 +117,9 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
 
 ## 8. 取舍与未做（如实列出）
 
-1. **分类是阻塞的**：要赶在 `buildSystemPrompt` 之前拿到 `routeHint`，所以最长阻塞
-   `agent.intent_timeout_ms`（默认 8s；正常 1–3s）。它也不能随「停止」按钮取消 ——
-   该时刻 `activeRequests` / `AbortController` 还没建（在工具装配处）。
-   若要可取消，需要把 controller 的创建提前（会动到 run 收尾的清理路径），本批没做。
+1. **分类是阻塞的（但已可取消）**：要赶在 `buildSystemPrompt` 之前拿到 `routeHint`，所以最长阻塞
+   `agent.intent_timeout_ms`（默认 8s；真机实测 0.9~3.7s）。~~它也不能随「停止」按钮取消~~ →
+   **已修（见 §11）**：`AbortController` 与 `activeRequests` 登记提前到分类之前，点「停止」会真的中断分类请求。
 2. **headless（`bin/codenode-agent.cjs`）不接线**：CLI 没有画布（`canvasSummary=''`）、审批是 fail-closed 拒绝，
    轮级意图信号没有消费方；接了只会给 eval/CI 的请求形状平白加一次调用。要接可复用同一个 `intent.cjs`。
 3. **动作级判定仍归静态审计**：Codex 是对每个动作单独采样，本实现是轮级一把判。
@@ -214,3 +213,30 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
   色阶（高风险与低风险的**计算色值必须不同**）、位置（面板内且在消息列表之前）、11px 密度、
   tooltip 里的判据、`unavailable` 不留结论、`partial` 显式标注、`reset` 清空。
 - 显示组 **6 → 7**；变异校验新增 2 条 UI 条目（store 不再消费 / unavailable 也渲染结论），本轮 **18/18**。
+
+## 11. 分类请求可取消（2026-09-21）
+
+**缺口**：分类发生在 run 真正开始之前，而 `AbortController` 在后面的「装配工具」段才创建、
+`activeRequests` 登记得更晚（`sendDelta('start')` 之后）—— 于是**分类那 1~4 秒里点「停止」是完全无效的**，
+用户会看到「点了没反应」。这在 `auto` 模式下尤其明显（纯代码会话每轮都要分类一次）。
+
+**修法**：把 `const controller = new AbortController()` 与 `activeRequests.set(runId, controller)`
+**提前到意图识别段之前**，并给分类调用带上 `signal: controller.signal`。顺序上的安全性：
+
+- 并发上限检查（`activeRequests.size >= maxConcurrentRuns`）与 `recoverInterrupted` 都在这之前，
+  不受影响；
+- `activeRequests.delete(runId)` 仍在 handler 的 `finally` 里，提前登记不会漏清理；
+- abort 后分类器捕获 `AbortError` → `unavailableVerdict` → **按「没有信号」处理**（不收紧、不阻断），
+  随后 `runAgentChat` 看到已 abort 的信号，立刻返回取消终态。
+
+**判据**（`scripts/agent-state-test.cjs` B6，走真实 IPC handler + 真实 `agent:stop`）：
+
+| 断言 | 锁住什么 |
+|---|---|
+| B6.1 `intentCalls === 1` | 分类请求确实发出去了（不是在别的阶段被取消） |
+| B6.2 `intentAborted === true` | **取消真的传到了请求层**（脚本化 fetch 在延迟期间监听 `init.signal`，被 abort 就抛 AbortError —— 全程 `0` 延迟时这条必红） |
+| B6.3 主循环 `kind='main'` 请求数 = 0 | 取消发生在分类阶段（不是「跑到一半才停」） |
+| B6.4 `ok=true && aborted=true` | 取消语义与 B4 同口径（不是异常） |
+| B6.5 终态 `CANCELLED` | run 记录如实落终态 |
+
+变异校验：把 `signal: controller.signal` 去掉 → **B6.2 必红**（`out/mutation-spec-intent.json`）。本轮 **19/19**。
