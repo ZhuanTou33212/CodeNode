@@ -4,6 +4,33 @@
 
 ## [未发布]
 
+### 新增（控制面补齐：钩子 / 用户级记忆 / 非交互入口 / 审批规则 / 技能渐进披露 / 看图；2026-09-21）
+
+对照 `docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 的 #3 / #4 / #6 / #7，
+落地记录见 `docs/agent-control-plane-2026-09-21.md`。**仍未做**：MCP HTTP transport、web_search、
+worktree 隔离、计划卡（对话区 UI）—— 逐条理由在该文档末节。
+
+- **钩子（`electron/hooks.cjs`）**：`hooks.post_tool_use`（匹配工具执行完跑用户命令，输出作为机器注入的
+  user 消息回灌）/ `hooks.session_start` / `hooks.session_stop`；与 `execute_shell` 同一套安全判据
+  （越界写拒绝、断网时联网命令拒绝、走 sandbox.guardedSpawn）、超时/输出上限/每 run 次数上限；
+  未配置 = 一次 spawn 都不发生。判据 `test:hooks`。
+- **用户级（跨项目）记忆（`electron/userMemory.cjs`）**：`$CODENODE_HOME/user-memory.json`，
+  `remember`/`recall` 新增 `scope=project|user|all`，按提问打分注入 system prompt 的独立段落。
+  判据 `test:user-memory`。
+- **非交互入口（`bin/codenode-agent.cjs`）**：对照 `codex exec` / `claude -p`；退出码 0/1/2/3、
+  缺凭据 fail-closed、`--allow-writes`/`--yes` 分级、`--json` 事件流；`package.json` 增 bin 映射。
+  判据 `test:headless`（真 HTTP + 真 SSE + 真工具调用）。
+- **持久化审批规则（`electron/approvalRules.cjs`）**：`.codenode/approvals.json`（受保护路径，写工具写不进）、
+  命中即免打扰但仍签发一次性令牌并留 `approval_rule_hit`；界面弹窗新增「本项目始终允许」；
+  只记忆注册表级审批（命令类不记忆）。判据 `test:approval-rules`。
+- **技能渐进披露（`read_skill`）**：项目 skills 从「整段常驻 prompt」改为「只注入索引 + 按需读正文」
+  （上限 8000 字符、超限截断标注）。判据 `test:skill-index`。
+- **看图（`view_image`）**：模型可读项目内图片（png/jpeg/webp/gif、≤4MB、路径在项目根内），
+  主循环把图作为一条多模态 user 消息附在工具结果之后；附不上时如实回执。判据 `test:view-image`。
+
+核心套件 **81 → 87**；变异校验本轮 11 + 5 = **16/16** 条有判别力（`out/mutation-spec-control-plane.json`、
+`out/mutation-spec-hooks.json`）。
+
 ### 新增（安全边界收口 + 任务清单 update_plan；2026-09-21）
 
 对照 `docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 的 #1 / #2，落地记录见

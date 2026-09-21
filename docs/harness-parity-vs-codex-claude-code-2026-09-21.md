@@ -132,11 +132,11 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 |---|---|---|---|
 | 1 | **P0** | ~~Windows 上无强制隔离；默认 `sandbox.mode=best-effort` + `network=inherit`，静态审计只拦**显式**越界写（变量/通配要 `strict` 才拦）~~ **已落地 2026-09-21**：出厂 `network=deny` + 未解析写目标任何模式都要确认（`strict` 仍硬拒）；仍无 Windows 内核级隔离 | ① 出厂 `sandbox.network=deny`（或至少对 `curl/wget/ssh/npm install` 类默认需审批）；② `ALLOWED` 收窄成"项目声明的命令清单"，`node -e`/`python -c`/`powershell -c` 一律降级为裸执行需审批；③ 长期：winjob 补受限令牌 / AppContainer |
 | 2 | **P1** | ~~模型没有任务清单，长任务靠 12 轮上限 + 收尾兜底~~ **已落地 2026-09-21**：新增 `update_plan`（落 run 事件 + run 级文件 + 搭进度提示回灌） | 加 `update_plan` 形态的 todo 工具（`buildProgressNote` 的注入点直接升级成"计划 + 进度"，同一处替换逻辑已在 `agent.cjs:2289`） |
-| 3 | **P1** | 无 hooks（改了代码不会自动 lint/测试；用户无法脚本化） | 最小实现 `PostToolUse`（按工具名匹配 → 跑声明的命令 → 结果作为系统消息回灌）+ `SessionStart`/`Stop` |
-| 4 | **P1** | 技能静态注入 + 工具面常驻 → 7.9k tokens/轮固定税 | 技能改渐进披露（`extensions.json` 只注入索引，正文走一个 `read_skill` 工具）+ 按任务裁剪工具面 |
+| 3 | ~~P1~~ | ~~无 hooks~~ **已落地 2026-09-21**（`electron/hooks.cjs`，含 PostToolUse / SessionStart / Stop + 三个上限；`PreToolUse` 仍未做） |
+| 4 | ~~P1~~ | ~~技能静态注入~~ **已落地 2026-09-21**（`read_skill` + `agent.buildSkillsIndex`；工具面按任务裁剪**有意不做**——见 S20 的设计取舍记录） |
 | 5 | **P2** | MCP 仅 stdio、每次 spawn、无 `tools/list` | 加 streamable HTTP transport + 启动时 `tools/list` 缓存 + 会话复用 |
-| 6 | **P2** | 无持久审批规则 / 无项目信任 | 复用 `~/.codenode/` 或项目 `.codenode/` 落一份 allow/deny 规则（按 capability + 工具 + 路径前缀），审批时可"本会话/本项目始终允许" |
-| 7 | **P2** | 无用户级跨项目记忆、无 `web_search`、无 `view_image`、无 worktree 隔离、无 headless 入口 | 各自独立、成本低；`view_image` 可先支持"读项目内图片 → 转 base64 走既有 attachments 通路" |
+| 6 | ~~P2~~ | ~~无持久审批规则~~ **已落地 2026-09-21**（`.codenode/approvals.json` + 界面「本项目始终允许」+ 受保护路径；只记忆注册表级审批） |
+| 7 | **P2** | **部分落地 2026-09-21**：用户级跨项目记忆 / `view_image` / headless 入口（`bin/codenode-agent.cjs`）已做；**仍未做**：`web_search`（需要搜索后端决策）、worktree 隔离（要设计工作树合并语义） |
 
 ## 6. 本文的边界（证据不足或未验证）
 
@@ -149,7 +149,7 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 
 ## 7. 建议的处理顺序
 
-**落地记录**：`docs/agent-boundary-and-plan-2026-09-21.md`（#1 + #2 已做；#3–#7 仍开放）。
+**落地记录**：`docs/agent-boundary-and-plan-2026-09-21.md`（#1 + #2）+ `docs/agent-control-plane-2026-09-21.md`（#3 / #4 / #6 + #7 的三项；MCP / web_search / worktree / 计划卡仍未做，理由见该文末节）。
 
 1. 第 5 节 #1（安全边界收口）—— 唯一会"丢数据"的口子，且改动集中在 `sandbox.cjs` / `executeShellTool.cjs` / 出厂 properties。
 2. #2（todo/plan 工具）—— 成本最低、对长任务可控性收益最大。
