@@ -4,6 +4,32 @@
 
 ## [未发布]
 
+### 新增（意图识别 / 授权判定，照 Codex 的 guardian 分类器；2026-09-21）
+
+落地记录见 `docs/intent-recognition-2026-09-21.md`。核心套件 **92 → 93**（+intent）。
+变异校验本批 **12/12** 条有判别力（`out/mutation-spec-intent.json`）。
+
+- **`electron/intent.cjs`**：一次独立的小请求判定这一轮在做什么（`intent`）、风险（`risk`）、
+  用户授权程度（`authorization`）—— 两个枚举的取值域与 Codex 的 `GuardianRiskLevel` /
+  `GuardianUserAuthorization` **逐字对齐**；证据分层（只有 user 消息与项目约定能确立授权，工具输出、
+  文件内容、assistant 自述一律是不可信证据）、信息缺失/非法值就**保守判高**。
+  两个出口：`routeHint` 把关键词表漏判的建模需求救回画布层；`forceConfirm` 让
+  「高风险 / 授权 unknown|low / 低置信」的轮次**忽略免打扰规则**仍要用户点确认。
+  三条不变量：**只收紧不放宽** / **无信号 ≠ 低风险**（失败、超时、`never` 时逐字节不变）/
+  判定全是纯函数。判据 `test:intent`（8 组 100 条断言，含本机 HTTP 端点端到端）。
+- **审批门禁（`tools/approval.cjs` + `tools/context.cjs`）**：命中 `.codenode/approvals.json` 免打扰规则后
+  仍可能被收紧回「问用户」（事件 `approval_risk_gate` 带 ruleId 归因；门禁自身抛异常则留痕并维持旧行为）。
+  源码级断言 `gated` 不出现在任何放行分支 —— 单向收紧。
+- **提示词路由（`agent.resolvePromptLayers`）**：新增 `intentHint` 分支，只在「画布为空且提问不含画布词」
+  这条**本来要省层**的分支上把画布规则救回来；`mode=never` / 画布非空 / 关键词命中的判定一概不变。
+- **配置**：`agent.intent_recognition = auto（默认，只在画布为空时分类一次）| always | never`，
+  以及 `agent.intent_model` / `intent_timeout_ms`(8000) / `intent_max_tokens`(256) /
+  `intent_max_calls_per_run`(5，0=不限)。分类请求约 1.9k 字符、输出上限 256 tokens，
+  走主通道（并发队列 + 请求预算 + 成本账本，`kind='intent'` 可单独查）。
+- 未做（理由见落地文档 §8）：分类不可取消（run 停止时最长仍等一次 8s 超时）、动作级采样
+  （仍由 shellGuard/令牌审批承担）、真实模型取证（本机无 `api_key`，只有本机 HTTP 端点链路）、
+  前端展示（run 事件/审计/成本数据已有，UI 未加块）。
+
 ### 新增（控制面补齐·第二batch：MCP HTTP / web_search / worktree 隔离 / 计划卡；2026-09-21）
 
 延续同一天的上一批，把对照文档 §5 里剩下的四项做掉（落地记录见 `docs/agent-control-plane-2026-09-21.md` §8–§11）。

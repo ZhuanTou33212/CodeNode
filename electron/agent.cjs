@@ -31,6 +31,8 @@ const schedulerLib = require('./tools/scheduler.cjs');
 const planLib = require('./plan.cjs');
 // 钩子（对照 Claude Code 的 hooks）：工具执行完之后按配置跑用户声明的命令（lint/测试/自定义脚本）
 const hooksLib = require('./hooks.cjs');
+// 意图识别 / 授权判定（照 Codex guardian 分类器，见 electron/intent.cjs 顶部注释）
+const intentLib = require('./intent.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
 
 function loadProperties(file) {
@@ -133,6 +135,7 @@ function loadConfig(projectRoot) {
     rag: parseRagConfig(cfg),
     grounding: parseGroundingConfig(cfg),
     prompt: parsePromptConfig(cfg),
+    intent: intentLib.parseIntentConfig(cfg),
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
     subagent: parseSubagentConfig(cfg),
@@ -681,7 +684,14 @@ const CANVAS_KEYWORDS = /画布|节点|连线|工作流|流程|链路|建模|sco
 
 /**
  * 决定这一轮注入哪一层提示词。
- * @param {{canvasSummary?: any, prompt?: any, mode?: any}} [input]
+ *
+ * 判定顺序（**只增不减**：后面的分支只能把「本来会省层」救回来，不会反过来把层拿掉）：
+ *   mode 强制 → 画布非空 → 关键词命中 → 意图识别的 routeHint → 省层。
+ * `intentHint` 来自 `electron/intent.cjs` 的轮级分类（`createIntentPolicy().routeHint`），
+ * 只在「画布为空 + 提问不含画布词」这条**本来要省层**的分支上起作用 —— 模型说这轮是画布任务
+ * 就把画布建模规则注入回去（救回关键词表漏判），其余情况一律不改变既有判定。
+ *
+ * @param {{canvasSummary?: any, prompt?: any, mode?: any, intentHint?: any}} [input]
  * @returns {{canvas: boolean, reason: string}}
  */
 function resolvePromptLayers(input = {}) {
@@ -693,11 +703,14 @@ function resolvePromptLayers(input = {}) {
   if (CANVAS_KEYWORDS.test(String(input.prompt == null ? '' : input.prompt))) {
     return { canvas: true, reason: 'prompt-mentions-canvas' };
   }
+  if (String(input.intentHint == null ? '' : input.intentHint).trim().toLowerCase() === 'canvas') {
+    return { canvas: true, reason: 'intent-canvas' };
+  }
   return { canvas: false, reason: 'pure-code-task' };
 }
 
 function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, options = {}) {
-  const promptLayers = resolvePromptLayers({ canvasSummary, prompt: options.prompt, mode: options.canvasMode });
+  const promptLayers = resolvePromptLayers({ canvasSummary, prompt: options.prompt, mode: options.canvasMode, intentHint: options.intentHint });
   const canvasRules = promptLayers.canvas ? CANVAS_RULES : CANVAS_RULES_STUB;
   const lines = [];
   lines.push(

@@ -35,6 +35,8 @@ const { modelQueue } = require('../requestQueue.cjs');
 const { RequestBudget } = require('../requestBudget.cjs');
 const hooksLib = require('../hooks.cjs');
 const userMemoryStore = require('../userMemory.cjs');
+// 意图识别 / 授权判定（照 Codex guardian 分类器，见 electron/intent.cjs 顶部注释）
+const intentLib = require('../intent.cjs');
 const { parseWebSearchConfig } = require('../tools/impl/webSearchTool.cjs');
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
@@ -523,10 +525,89 @@ function register(ctx) {
       const skillsText = agent.buildSkillsIndex(skills);
       // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
       // 判定在 agent.resolvePromptLayers 里（纯函数，用例锁）；这里只负责把当轮事实传进去。
+      /**
+       * ---- 意图识别（照 Codex guardian 分类器；见 electron/intent.cjs 顶部注释）----
+       *
+       * 为什么在这：它的 `routeHint` 决定**这一轮注入哪层提示词**，所以必须赶在 buildSystemPrompt 之前拿到。
+       * 三条不变量（intent.cjs）：只收紧不放宽 / 无信号 = 与没有这个功能逐字节一致 / 判定全是纯函数。
+       * 分类失败、超时、没接线都**不阻断 run** —— 最坏情况只是回到原来的关键词快判。
+       * 续跑（resumePlan）不分类：那轮的提示词层要沿原 run 的上下文，不该被新判定改写。
+       */
+      let intentPolicy = null;
+      if (!resumePlan) {
+        try {
+          const intentCfg = cfg.intent || {};
+          // 「这一轮要不要分类」是纯函数（intentLib.shouldClassify，用例直接锁它）：
+          //   never 永不 / always 每轮 / auto 只在画布为空时（提示词层唯一可能误判的那个分支）。
+          if (intentLib.shouldClassify(intentCfg, canvasSummary)) {
+            const classifier = intentLib.createIntentClassifier({
+              cfg: intentCfg,
+              // 走主通道（modelQueue + requestBudget + 重试 + 成本账本），不另开一条绕过预算的路
+              callModel: async ({ messages: classifierMessages, model, maxTokens, timeoutMs }) => {
+                const callCfg = Object.assign({}, cfg, { maxTokens: maxTokens || cfg.maxTokens });
+                if (model) callCfg.model = model;
+                const startedAt = Date.now();
+                const res = await agent.chatCompletion(callCfg, classifierMessages, { timeoutMs });
+                // 记账口径与 compaction 一致：chatCompletion 自己不入账，由**调用方按用途**记账
+                // （kind='intent'，所以「意图识别花了多少」在成本面板里单独可查，不混进主对话）
+                agent.recordCost(cfg, {
+                  kind: 'intent',
+                  model: callCfg.model,
+                  usage: res && res.usage,
+                  latencyMs: Date.now() - startedAt,
+                  runId: cfg.costRunId,
+                });
+                return (res && res.content) || '';
+              },
+              trace: (event, data) => runStore.appendEvent(projectRoot, runId, event, Object.assign({ traceKind: 'intent' }, data || {})),
+            });
+            const verdict = await classifier.classify({
+              prompt,
+              history: history || [],
+              canvasSummary,
+              projectNotes: soul.raw,
+            });
+            intentPolicy = intentLib.createIntentPolicy(verdict);
+            runStore.appendEvent(projectRoot, runId, 'intent', {
+              intent: verdict.intent,
+              risk: verdict.risk,
+              authorization: verdict.authorization,
+              confidence: verdict.confidence,
+              source: verdict.source,
+              routeHint: intentPolicy.routeHint,
+              tighten: intentPolicy.tighten,
+              signals: intentPolicy.signals,
+              reason: verdict.reason,
+              classifyCalls: classifier.stats().calls,
+            });
+            sendDelta({
+              kind: 'intent',
+              intent: verdict.intent,
+              risk: verdict.risk,
+              authorization: verdict.authorization,
+              confidence: verdict.confidence,
+              source: verdict.source,
+              routeHint: intentPolicy.routeHint,
+              tighten: intentPolicy.tighten,
+            });
+          }
+        } catch (error) {
+          // 意图识别永远不能成为 run 的故障点：出错即「没有信号」（既不收紧也不放宽）
+          intentPolicy = null;
+          try {
+            runStore.appendEvent(projectRoot, runId, 'intent', {
+              source: 'unavailable',
+              reason: 'classify-threw:' + String((error && error.message) || error),
+            });
+          } catch {}
+        }
+      }
       const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
         userMemoryText,
+        // 意图识别的提示词路由信号（只在「本来会省画布层」时把层救回来；null = 不改变既有判定）
+        intentHint: intentPolicy ? intentPolicy.routeHint : null,
       });
       const messages = resumePlan
         ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })
@@ -575,6 +656,8 @@ function register(ctx) {
           sandbox: sandboxPolicy,
           sideEffectGuard,
           checkpoint: checkpointSink,
+          // 意图识别的审批门禁（**只收紧**）：高风险/授权 unknown/低置信 → 命中的免打扰规则也失效
+          intentPolicy,
           // web_search 后端配置：未启用时工具已被卸载，这里是「配了才用得上」的那份配置
           webSearchConfig: webSearchConfig(cfg),
           confirm: (level, what, detail) => bridge.confirm(level, what, detail),

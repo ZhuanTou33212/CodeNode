@@ -64,6 +64,12 @@ class AgentToolContext {
     this.sideEffectGuardValue = o.sideEffectGuard || null;
     // 断点检查点写入器（runCheckpoint.cjs）；未注入时为无操作
     this.checkpointSink = o.checkpoint || null;
+    /**
+     * 意图识别策略（electron/intent.cjs 的 createIntentPolicy 结果）；未注入时为 null。
+     * **只用于收紧**：它能让审批在命中免打扰规则时仍然弹窗，绝不可能让任何东西被放行。
+     * null 与「没有这个功能」等价（逐字节不变）。
+     */
+    this.intentPolicyValue = o.intentPolicy || null;
     // 状态上报钩子（由 runAgentChat 注入）：让「等待用户」这类过程状态能被状态机看到
     this.stateNotifier = null;
   }
@@ -93,6 +99,14 @@ class AgentToolContext {
   fsWorkerEnabled() { return this.fsWorkerValue !== false; }
 
   /**
+   * 意图识别策略（electron/intent.cjs）；未注入时返回 null。
+   * 消费侧（审批）只读它的 `forceConfirm()` —— 语义是「收紧」，不是「放行」。
+   */
+  intentPolicy() {
+    return this.intentPolicyValue;
+  }
+
+  /**
    * S7：审批服务 —— 服务端签发/校验令牌（绑定 capability / scope / toolCallId / 有效期，单次有效）。
    * 懒创建；令牌表挂在 run 级上下文上，失败原因落审计（approval_rejected 带 reason）。
    */
@@ -108,6 +122,23 @@ class AgentToolContext {
         rules: ruleLib.readRules(this.projectRootValue).rules,
         taskId: this.taskIdValue,
         role: this.roleValue,
+        /**
+         * 意图识别的风险门禁（**只收紧**）：命中「高风险 / 授权 unknown / 低置信」时，
+         * 免打扰规则被忽略，这次审批仍然要用户点确认。未接线（null）→ 与旧行为逐字节一致。
+         */
+        riskGate: this.intentPolicyValue && typeof this.intentPolicyValue.forceConfirm === 'function'
+          ? () => {
+              try {
+                return this.intentPolicyValue.forceConfirm() === true;
+              } catch {
+                // 门禁自身出错 → 不收紧（等价于没有信号），但留痕，避免「悄悄降级」
+                try {
+                  this.audit(JSON.stringify({ kind: 'intent_risk_gate_error' }));
+                } catch {}
+                return false;
+              }
+            }
+          : null,
         trace: (event) => {
           this.audit(JSON.stringify(event));
           // S8：审批事件也进统一事件流（回放时能看到谁在什么时候批了什么）

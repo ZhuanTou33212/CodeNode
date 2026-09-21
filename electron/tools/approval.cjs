@@ -48,7 +48,7 @@ function newTokenId() {
 
 class ApprovalService {
   /**
-   * @param {{confirm?: Function|null, trace?: Function|null, now?: () => number, ttlMs?: number, runId?: string, taskId?: string, role?: string, projectRoot?: string|null, rules?: Array<any>}} [options]
+   * @param {{confirm?: Function|null, trace?: Function|null, now?: () => number, ttlMs?: number, runId?: string, taskId?: string, role?: string, projectRoot?: string|null, rules?: Array<any>, riskGate?: Function|null}} [options]
    */
   constructor(options) {
     const o = options || {};
@@ -68,6 +68,13 @@ class ApprovalService {
      * @type {Array<any>}
      */
     this.rules = Array.isArray(o.rules) ? o.rules : [];
+    /**
+     * 风险门禁（意图识别用，**只收紧**）：`(req) => boolean`。
+     * 返回 true 表示「这次审批必须问用户」——即使命中免打扰规则也不放行。
+     * 未注入（null）时不存在这条路径，行为与加这个功能前逐字节一致。
+     * @type {Function|null}
+     */
+    this.riskGate = typeof o.riskGate === 'function' ? o.riskGate : null;
   }
 
   /** 内部：落一条审批事件（trace + 内存事件流，供测试与审计读取） */
@@ -102,7 +109,27 @@ class ApprovalService {
       level: r.level || 'WRITE',
     });
     let approved = false;
-    if (ruleHit) {
+    /**
+     * 风险门禁（意图识别）：命中免打扰规则**也可能**被拉回「问用户」。
+     * 这是**单向**的 —— 门禁只能让审批更严，不存在任何让它更容易通过的路径（I1）。
+     */
+    let gated = false;
+    if (ruleHit && this.riskGate) {
+      try {
+        gated =
+          this.riskGate({
+            capability: r.capability || null,
+            tool: r.what || null,
+            level: r.level || 'WRITE',
+            scope,
+            toolCallId: r.toolCallId || null,
+          }) === true;
+      } catch (error) {
+        gated = false;
+        this._emit('approval_risk_gate_error', { tool: r.what || null, message: String((error && error.message) || error || '') });
+      }
+    }
+    if (ruleHit && !gated) {
       approved = true;
       this._emit('approval_rule_hit', {
         ruleId: ruleHit.id,
@@ -111,9 +138,19 @@ class ApprovalService {
         level: r.level || 'WRITE',
         toolCallId: r.toolCallId || null,
       });
+    } else if (gated) {
+      // 本该免打扰却被收紧：必须留痕（否则「规则为什么不生效」事后无从归因）
+      this._emit('approval_risk_gate', {
+        ruleId: ruleHit.id,
+        tool: r.what || null,
+        capability: ruleHit.capability || null,
+        level: r.level || 'WRITE',
+        toolCallId: r.toolCallId || null,
+        scope,
+      });
     }
     try {
-      if (!ruleHit) {
+      if (!ruleHit || gated) {
         approved =
           (await this.confirmHandler(r.level || 'WRITE', r.what || '', r.detail || '', {
             capability: r.capability || null,

@@ -179,6 +179,13 @@ function statesOf(root, runId) {
     const listed = await h.handlers.get('agent:runs')({ sender: h.sender }, root);
     check('B1.4 agent:runs 列出的 Run 带 state 字段', listed.length >= 1 && listed[0].state === 'COMPLETED', JSON.stringify(listed.map((r) => r.state)));
     check('B1.5 工具调用有 state 事件包裹（WAITING_TOOL 出现在 tool_result 之前）', deltasIndex(h.deltas) > -1, JSON.stringify(h.deltas.filter((d) => d.kind === 'state').map((d) => d.state)));
+    /**
+     * 意图识别（`electron/intent.cjs`）：分类请求也走同一条 IPC 链路，但**不占主循环脚本**。
+     * 判据分开两条：请求真的发出去了（intentCalls=1）、主循环的脚本序号没错位（calls 仍是 2）。
+     */
+    check('B1.6 意图识别分类请求真的走了 IPC，且不占用主循环脚本', stub.intentCalls === 1 && stub.calls === 2, JSON.stringify({ intentCalls: stub.intentCalls, calls: stub.calls }));
+    check('B1.7 判定结果落 run 事件 intent（可回放/审计）', runStore.readRun(root, runId).some((e) => e.type === 'intent' && e.intent === 'code'), JSON.stringify(runStore.readRun(root, runId).filter((e) => e.type === 'intent').map((e) => e.intent)));
+    check('B1.8 分类请求与主循环请求在记录里分开（kind=intent / kind=main）', stub.seen.filter((s) => s.kind === 'intent').length === 1 && stub.seen.filter((s) => s.kind === 'main').length === 2, JSON.stringify(stub.seen.map((s) => s.kind)));
   }
 
   // ---- B2 等待用户：write_file 触发确认 → WAITING_USER，用户应答后回到 WAITING_TOOL ----

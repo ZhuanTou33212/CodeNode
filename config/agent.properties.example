@@ -32,6 +32,21 @@ max_tokens=32768
 # 单进程并发与单轮累计 token 上限
 # agent.max_concurrent_runs=2
 # agent.max_total_tokens=250000
+#
+# ── 意图识别 / 授权判定（照 Codex 的 guardian 分类器）───────────────────
+# 一次独立的小请求判定三件事：这一轮在做什么（intent）、风险（risk）、用户授权程度（authorization）。
+# 判定有两个出口：
+#   ① 提示词路由 —— 关键词表漏判的建模需求（画布还空着、话里没提「节点/连线」）由模型救回来，
+#      把画布建模规则注入回去；这只是**多注入**一层，不会把本来要注入的层拿掉。
+#   ② 审批门禁 —— 高风险 / 授权 unknown 或 low / 低置信时，命中 `.codenode/approvals.json`
+#      免打扰规则的审批**也要**再问一次（事件 approval_risk_gate 留痕，可归因）。
+# **只会收紧，不会放宽**：任何判定都不会让审批或操作变得更容易通过；
+# 分类失败/超时/关闭时行为与没有这个功能时逐字节一致（无信号 ≠ 低风险）。
+# agent.intent_recognition=auto     # auto（默认：只在画布为空时分类一次）| always（每轮）| never（关闭）
+# agent.intent_model=               # 分类用的模型（留空 = 与主模型相同）
+# agent.intent_timeout_ms=8000      # 单次分类超时（超时 = 没有信号，不阻断对话）
+# agent.intent_max_tokens=256       # 分类输出上限（结论本身很短）
+# agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不限制）
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md
 

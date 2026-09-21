@@ -10,6 +10,19 @@
  */
 'use strict';
 
+// 意图识别的分类请求必须被**单独识别**：它和主循环共用同一个 fetch，但脚本序号是主循环的
+// 服务对象 —— 若不识别，分类请求会吃掉 script[0]，让「一轮对话」的脚本整体错位（实测：
+// agent-state-test 的 B1/B2/B4 整批红，症状是工具调用凭空消失）。
+const intentLib = require('../../electron/intent.cjs');
+
+/** 这个请求体是不是意图识别的分类请求？（按分类指令逐字比对，不靠启发式） */
+function isIntentClassificationRequest(body) {
+  const messages = body && Array.isArray(body.messages) ? body.messages : null;
+  if (!messages || messages.length !== 2) return false;
+  const system = messages[0];
+  return !!system && system.role === 'system' && system.content === intentLib.CLASSIFIER_INSTRUCTIONS;
+}
+
 function sseChunk(payload) {
   return 'data: ' + JSON.stringify(payload) + '\n\n';
 }
@@ -57,17 +70,50 @@ function buildStream(turn) {
  */
 function installScriptedModel(script, options = {}) {
   const originalFetch = global.fetch;
-  const state = { calls: 0, seen: [], script, loopLast: options.loopLast !== false };
+  const state = { calls: 0, seen: [], script, loopLast: options.loopLast !== false, intentCalls: 0 };
   // @ts-expect-error 评测用脚本化 fetch 只实现被测代码用到的字段，不是完整 Response
   global.fetch = async (url, init) => {
-    state.calls += 1;
     let body = {};
     try {
       body = JSON.parse(String((init && init.body) || '{}'));
     } catch {}
+    /**
+     * 意图识别的分类请求：**不进脚本序号**，按 options.intentVerdict 应答（默认「低风险 + 明确授权」，
+     * 即不收紧、不改提示词层 —— 让既有用例看到的还是原本的脚本行为）。
+     * 仍然记进 `seen`（带 kind='intent'）并单独计数 `intentCalls`，这样「分类到底发没发出去」可判。
+     */
+    if (isIntentClassificationRequest(body)) {
+      state.intentCalls += 1;
+      state.seen.push({
+        url: String(url),
+        kind: 'intent',
+        messages: body.messages || [],
+        maxTokens: body.max_tokens,
+        model: body.model,
+        body,
+      });
+      const verdict =
+        typeof options.intentVerdict === 'function'
+          ? options.intentVerdict(body, state.intentCalls)
+          : options.intentVerdict || { intent: 'code', risk: 'low', authorization: 'high', confidence: 0.9, reason: 'scripted' };
+      const intentBody = {
+        choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(verdict) }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 90, completion_tokens: 20, total_tokens: 110 },
+      };
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => JSON.stringify(intentBody),
+        json: async () => intentBody,
+        body: null,
+      };
+    }
+    state.calls += 1;
     // 记录请求体的关键字段：用例除了 messages 还要断言 max_tokens（超窗收缩）、tools 等
     state.seen.push({
       url: String(url),
+      kind: 'main',
       messages: body.messages || [],
       maxTokens: body.max_tokens,
       hasTools: Array.isArray(body.tools) && body.tools.length > 0,
@@ -145,6 +191,10 @@ function installScriptedModel(script, options = {}) {
   return {
     get calls() {
       return state.calls;
+    },
+    /** 意图识别分类请求的次数（与主循环的 calls 分开计：脚本序号不错位） */
+    get intentCalls() {
+      return state.intentCalls;
     },
     get seen() {
       return state.seen;
