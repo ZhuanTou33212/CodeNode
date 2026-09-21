@@ -48,9 +48,11 @@ const BUILTINS = [
   // Skill 正文按需读取（渐进披露）：system prompt 只放索引，正文由模型自己调这个工具取
   require('./impl/readSkillTool.cjs'),
   // 看图（对照 Codex 的 view_image）：把项目内的图片附到对话里，让模型真的看到画面
-  require('./impl/viewImageTool.cjs'),
-  // 联网搜索（对照 Codex/Claude Code 的 web_search）：后端由配置指定，**不配就不注册**
-  require('./impl/webSearchTool.cjs'),
+  require('./impl/viewImageTool.cjs'),
+  // 联网搜索（对照 Codex/Claude Code 的 web_search）：后端由配置指定，**不配就不注册**
+  require('./impl/webSearchTool.cjs'),
+  // 工作树隔离（对照 Codex/Claude Code）：create/list/remove，只在 .codenode/worktrees/ 下动手
+  require('./impl/worktreeTool.cjs'),
 ];
 
 function buildDefaultRegistry() {

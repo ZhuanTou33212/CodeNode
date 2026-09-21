@@ -21,6 +21,7 @@
 
 const { AgentToolResult } = require('./tools/result.cjs');
 const { parseWebSearchConfig } = require('./tools/impl/webSearchTool.cjs');
+const worktreeLib = require('./worktree.cjs');
 const { LeaseRegistry } = require('./tools/leases.cjs');
 const { changedFilesFromToolCalls } = require('./tools/fileChanges.cjs');
 // 确定性合并 + 冲突裁决（P5）：合并结果只依赖贡献项自身，不依赖到达顺序
@@ -215,6 +216,20 @@ function changedFiles(toolCalls) {
  * 哈希/产物是那一刻的真实值，之后的查询只做回放，不重算（重算会让哈希随世界变化而变化，
  * 反而毁掉「判断报告之后世界是否又变过」的用途）。
  */
+/**
+ * 隔离工作树的结果段落：路径 / 分支 / 改动 / 提交 / 下一步怎么合并或丢弃。
+ * 必须写明「这些改动不在主工作树里」——否则主代理会以为改动已经在主工作树里了。
+ */
+function renderWorktreeSummary(info) {
+  return [
+    '【隔离工作树】' + (info.relativePath || info.path) + '（分支 ' + (info.branch || '-') + '，基线 ' + (info.base || '-') + '）',
+    '- 改动：' + (info.changed && info.changed.length ? info.changed.join('、') : '无未提交改动'),
+    '- 新提交：' + (info.commits || 0) + ' 个',
+    '- 这些改动**不在**主工作树里：要采用就 `git merge ' + (info.branch || '<branch>') + '`（或先在该目录里核对）；' +
+      '不要就 worktree remove（有未提交改动需 force:true）。',
+  ].join('\n');
+}
+
 function taskView(task) {
   return {
     taskId: task.taskId,
@@ -229,6 +244,8 @@ function taskView(task) {
     usage: task.usage || null,
     stageWarning: task.stageWarning || null,
     envelope: task.envelope || null,
+    // 隔离工作树信息（有则给出路径/分支/改动，供主代理决定合并或移除）
+    worktree: task.worktree || null,
     startedAt: task.startedAt,
     finishedAt: task.finishedAt || null,
   };
@@ -285,7 +302,8 @@ class SubagentManager {
     registry.register(
       'delegate_task',
       '创建并执行一个受角色工具权限约束的子代理任务。\n按工作类型选角色：\n' + roleGuide +
-        '\nstageNodeId 可绑定画布 stage 节点；timeoutSeconds 是**任务总时长**（秒，默认 ' + this.subCfg.totalTimeoutSeconds + '）。',
+        '\nstageNodeId 可绑定画布 stage 节点；timeoutSeconds 是**任务总时长**（秒，默认 ' + this.subCfg.totalTimeoutSeconds + '）。' +
+        '\nisolation=worktree 时该子代理在独立的 git 工作树里干活（主工作树逐字节不受影响；建不出来会**中止任务**而不是静默降级）。',
       {
         type: 'object',
         properties: {
@@ -296,6 +314,11 @@ class SubagentManager {
           acceptanceCriteria: { type: 'array', items: { type: 'string' } },
           stageNodeId: { type: 'string' },
           timeoutSeconds: { type: 'integer', description: '任务总时长（秒），超时会被中止' },
+          isolation: {
+            type: 'string',
+            enum: ['none', 'worktree'],
+            description: 'worktree = 给这个子代理单独建一份 git 工作树（独立检出+分支），它改代码不会影响主工作树；改完由你决定合并或移除',
+          },
         },
         required: ['role', 'objective'],
       },
@@ -524,7 +547,37 @@ class SubagentManager {
     this.startedTaskCount += 1;
     this.tasks.set(task.taskId, task);
     context.audit(JSON.stringify({ kind: 'subagent_start', runId: this.runId, taskId: task.taskId, role, totalTimeoutMs: totalMs }));
-    await this.updateStage(context, task, 'running', '子代理 ' + role + ' 正在执行');
+    /**
+     * 工作树隔离（对照文档 §5 #7）：isolation=worktree 时给这个子代理单独建一份 git 工作树，
+     * 它在里面改代码，**主工作树逐字节不受影响**。
+     * 建不出来就**中止任务**——绝不静默降级成「共享工作树」（那是最坏的失败方式：
+     * 用户以为隔离了、实际上两个代理在同一个目录互相踩）。
+     */
+    /** @type {any} */
+    let worktreeInfo = null;
+    if (String(args.isolation || 'none').trim() === 'worktree') {
+      const created = await worktreeLib.createWorktree(
+        context.projectRoot(),
+        { name: task.taskId },
+        { context, policy: typeof context.sandbox === 'function' ? context.sandbox() : null }
+      );
+      if (!created.ok) {
+        task.status = 'failed';
+        task.error = '隔离工作树创建失败（' + created.error + '）：' + created.message;
+        task.finishedAt = new Date().toISOString();
+        context.audit(JSON.stringify({ kind: 'subagent_worktree_failed', taskId: task.taskId, error: created.error }));
+        await this.updateStage(context, task, 'failed', task.error);
+        return AgentToolResult.error(
+          task.error + '\n已中止该子代理任务，未执行任何操作（不会静默降级成非隔离执行）。可以改用 isolation=none 显式共享工作树。',
+          { taskId: task.taskId, isolation: 'worktree', error: created.error }
+        );
+      }
+      worktreeInfo = { path: created.path, relativePath: created.relativePath, branch: created.branch, base: created.base };
+      task.worktree = worktreeInfo;
+      context.audit(JSON.stringify({ kind: 'subagent_worktree', taskId: task.taskId, path: created.relativePath, branch: created.branch, base: created.base }));
+    }
+
+    await this.updateStage(context, task, 'running', '子代理 ' + role + ' 正在执行' + (worktreeInfo ? '（隔离工作树 ' + worktreeInfo.relativePath + '）' : ''));
 
     // 总时长预算：组合父信号 + 自己的定时器。
     // 注意定时器**不能 unref** —— 被 unref 的 timer 不维持事件循环，被测/被中止场景下
@@ -561,6 +614,8 @@ class SubagentManager {
         role,
         readOnly: roles.isReadOnlyRole(role),
         signal: controller.signal,
+        // 隔离：子代理的工具全部以工作树为 projectRoot（读写都落在独立检出里）
+        projectRoot: worktreeInfo ? worktreeInfo.path : undefined,
       });
       // 独立配额（父子链）：0 = 不设独立配额，直接共享父预算（旧行为）
       const childBudget = createSubagentBudget(this.cfg.requestBudget, this.subCfg.maxTotalTokens);
@@ -658,6 +713,21 @@ class SubagentManager {
       }
     }
 
+    /**
+     * 隔离工作树的收尾统计：数出「改了什么、提交了几个」，供主代理决定合并还是移除。
+     * **不自动合并** —— 工作树的价值就是「主代理的工作树不受影响」，合并是主代理看过 diff 之后的决定。
+     */
+    if (worktreeInfo) {
+      const hopts = { context, policy: typeof context.sandbox === 'function' ? context.sandbox() : null };
+      const changedList = await worktreeLib.changedFiles(worktreeInfo.path, hopts);
+      worktreeInfo.changed = changedList.map((c) => c.status + ' ' + c.path);
+      worktreeInfo.commits = await worktreeLib.commitCount(worktreeInfo.path, worktreeInfo.base, hopts);
+      task.worktree = worktreeInfo;
+      context.audit(
+        JSON.stringify({ kind: 'subagent_worktree_summary', taskId: task.taskId, changed: worktreeInfo.changed.length, commits: worktreeInfo.commits })
+      );
+    }
+
     const body = task.status === 'done' ? (task.summary || '（子代理未返回文本）') : (task.error || '子代理任务未完成');
     const cap = this.subCfg.resultMaxChars;
     const clipped = body.length > cap;
@@ -683,7 +753,9 @@ class SubagentManager {
     } catch (error) {
       context.audit(JSON.stringify({ kind: 'subagent_view_persist_failed', taskId: task.taskId, error: String((error && error.message) || error) }));
     }
-    const text = subagentEnvelope.renderEnvelopeText(built.envelope, built.violations);
+    const text =
+      subagentEnvelope.renderEnvelopeText(built.envelope, built.violations) +
+      (worktreeInfo ? '\n\n' + renderWorktreeSummary(worktreeInfo) : '');
     await this.updateStage(context, task, task.status, text.slice(0, 4000));
     context.audit(JSON.stringify({ kind: 'subagent_end', runId: this.runId, taskId: task.taskId, role, status: task.status }));
     if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId: task.taskId, role, status: task.status, summary: summaryText.slice(0, 200) });

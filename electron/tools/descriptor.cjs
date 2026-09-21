@@ -109,6 +109,7 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   execute_shell: 'shell.execute',
   fetch_url: 'network.request',
   web_search: 'network.request',
+  worktree: 'workspace.write',
   ui_control: 'ui.interact',
   ask_user: 'ui.interact',
   delegate_task: 'subagent.delegate',

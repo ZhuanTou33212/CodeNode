@@ -135,6 +135,10 @@ const CORE = [
   'test:mcp-http',
   // 联网搜索（§5 #7）：可配置后端 + 出厂关闭 / 不编造空结果 / 出网策略 / 条数上界
   'test:web-search',
+  // 工作树隔离（§5 #7）：真 git 仓库上验「主工作树逐字节不受影响」+ 受管目录边界 + 删除语义
+  'test:worktree',
+  // 子代理工作树隔离：projectRoot 真切成工作树 / 建不出来就中止（不静默降级）/ 结果与审计诚实
+  'test:subagent-worktree',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
