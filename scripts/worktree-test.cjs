@@ -126,6 +126,42 @@ function worktreeRegistry() {
     check('[D] 删完目录真的没了', !fs.existsSync(created.path));
     const stillListed = await worktree.managedWorktrees(repo, opts);
     check('[D] git worktree list 里也不再有它', !stillListed.some((w) => path.basename(w.path) === 'feature-a'), JSON.stringify(stillListed.map((w) => path.basename(w.path))));
+
+    /**
+     * 路径归一化（CI 实测踩到）：`git worktree list --porcelain` 可能回 **8.3 短路径**
+     * （CI runner 的 `C:\\Users\\RUNNER~1\\...`）或大小写不同的路径，直接 path.relative 会算出
+     * `..\\..\\..` →「受管工作树」全空：本地全绿、CI 全红。这里把大小写差异这条钉住
+     * （短路径无法在测试里造，靠 realpath 展开；至少保证大小写与分隔符归一）。
+     */
+    const one = await worktree.createWorktree(repo, { name: 'case-probe' }, opts);
+    check('[D] 受管判定不误伤项目根之外的路径', worktree.isManagedPath(repo, path.join(base, 'outside')) === false);
+
+    /**
+     * **同一个目录的两种写法**必须都算「受管」：CI 上 `git worktree list --porcelain` 回的是
+     * 8.3 短路径（`C:\\Users\\RUNNER~1\\...`），而我们的 root 是长路径 —— 不做 realpath 展开时
+     * path.relative 会算出 `..\\..\\..`，「受管工作树」判空、整批用例在 Windows CI 上全红
+     * （本地长路径全绿；2026-09-21 实测）。这里用**目录联接别名**复现同一机制：
+     * 只对别名路径做 realpath 展开，别名与非别名的写法才会指向同一个受管目录。
+     */
+    const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-wt-alias-'));
+    const alias = path.join(aliasParent, 'repo-alias');
+    let aliasOk = false;
+    try {
+      fs.symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      aliasOk = true;
+    } catch {
+      aliasOk = false;
+    }
+    if (aliasOk) {
+      check('[D] 同一目录的别名写法也算受管（CI 短路径/别名的真实机制）', worktree.isManagedPath(alias, one.path) === true, JSON.stringify({ alias, one: one.path, managed: worktree.isManagedPath(alias, one.path) }));
+      check('[D] 别名的反方向也成立（受管路径作 root）', worktree.isManagedPath(one.path, one.path) === false, '工作树自身不是它的受管目录下的子项');
+    } else {
+      check('[D] 无法创建目录别名（环境限制），退化为语法层断言', worktree.isManagedPath(repo, one.path) === true);
+    }
+    try {
+      fs.rmSync(aliasParent, { recursive: true, force: true });
+    } catch {}
+    await worktree.removeWorktree(repo, { name: 'case-probe', force: true }, opts);
   }
 
   // ==================== E. 工具层确认（fail-closed）====================

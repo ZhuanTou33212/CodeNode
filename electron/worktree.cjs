@@ -29,6 +29,30 @@ const MAX_WORKTREES = 5;
 const GIT_TIMEOUT_MS = 60000;
 const MAX_OUTPUT_CHARS = 8000;
 
+/**
+ * 路径归一化：realpath 展开 + Windows 大小写归一。
+ *
+ * 为什么必须有：`git worktree list --porcelain` 回的是 **8.3 短路径**（CI 的
+ * `C:\Users\RUNNER~1\AppData\Local\Temp\...`），而我们的 root 是长路径 ——
+ * 直接 `path.relative` 会算出 `..\..\..`，于是「受管工作树」判定全空：
+ * 本地（长路径）全绿、CI 全红（2026-09-21 实测）。realpath 把短名展开成长名，大小写再归一到小写。
+ */
+function normalizePath(target) {
+  let out = path.resolve(String(target || '.'));
+  try {
+    out = fs.realpathSync.native(out);
+  } catch {
+    // 不存在的路径（还没建出来）→ 用 resolve 结果
+  }
+  return process.platform === 'win32' ? out.toLowerCase() : out;
+}
+
+/** target 是否落在受管目录（`.codenode/worktrees/`）之内 */
+function isManagedPath(projectRoot, target) {
+  const rel = path.relative(normalizePath(worktreesRoot(projectRoot)), normalizePath(target));
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 function worktreesRoot(projectRoot) {
   return path.join(path.resolve(projectRoot || '.'), '.codenode', 'worktrees');
 }
@@ -132,12 +156,9 @@ async function listWorktrees(projectRoot, options) {
 
 /** 只认受管目录里的工作树（remove 的安全边界） */
 async function managedWorktrees(projectRoot, options) {
-  const root = worktreesRoot(projectRoot);
   const all = await listWorktrees(projectRoot, options);
-  return all.filter((w) => {
-    const rel = path.relative(root, w.path);
-    return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-  });
+  // 用归一化后的比较：git 回的可能是 8.3 短路径、大小写也可能不同（见 normalizePath 注释）
+  return all.filter((w) => isManagedPath(projectRoot, w.path));
 }
 
 /**
@@ -212,7 +233,9 @@ async function removeWorktree(projectRoot, options, helpers) {
   if (!wanted) return { ok: false, error: 'MISSING_TARGET', message: '需要 name 或 path' };
   const managed = await managedWorktrees(root, opts);
   const wantedPath = path.isAbsolute(wanted) ? path.resolve(wanted) : path.join(worktreesRoot(root), slugify(wanted));
-  const hit = managed.find((w) => path.resolve(w.path) === wantedPath) || managed.find((w) => path.basename(w.path) === slugify(wanted));
+  const hit =
+    managed.find((w) => normalizePath(w.path) === normalizePath(wantedPath)) ||
+    managed.find((w) => path.basename(w.path) === slugify(wanted));
   if (!hit) {
     return {
       ok: false,
@@ -236,6 +259,8 @@ async function removeWorktree(projectRoot, options, helpers) {
 module.exports = {
   MAX_WORKTREES,
   GIT_TIMEOUT_MS,
+  normalizePath,
+  isManagedPath,
   worktreesRoot,
   slugify,
   runGit,
