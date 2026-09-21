@@ -77,7 +77,14 @@ function worktreeRegistry() {
     check('[A] 分支名规范（codenode/feature-a）', created.branch === 'codenode/feature-a', String(created.branch));
     check('[A] 是 git 认得的工作树（有 .git 文件、指向主仓的 worktrees 元数据）', fs.existsSync(path.join(created.path, '.git')));
     const list = await worktree.listWorktrees(repo, opts);
-    check('[A] git worktree list 里能看到它，且主工作树仍在项目根', list.length === 2 && list.some((w) => path.resolve(w.path) === path.resolve(repo)) && list.some((w) => path.resolve(w.path) === path.resolve(created.path)), JSON.stringify(list.map((w) => path.basename(w.path))));
+    // 路径比较必须走 normalizePath：CI 上 git 回的是 8.3 短路径，裸 path.resolve 比不出来
+    // （这条断言自己就在 CI 上红过一次 —— 判据也要用同一个归一化口径）
+    const norm = (p) => worktree.normalizePath(p);
+    check(
+      '[A] git worktree list 里能看到它，且主工作树仍在项目根',
+      list.length === 2 && list.some((w) => norm(w.path) === norm(repo)) && list.some((w) => norm(w.path) === norm(created.path)),
+      JSON.stringify(list.map((w) => path.basename(w.path)))
+    );
   }
 
   // ==================== B. 隔离（这一项的意义）====================
