@@ -14,14 +14,17 @@ max_tokens=32768
 # 同理，stream_options.include_usage 默认随流式请求下发（DeepSeek 用它报用量）；不认这个字段的网关写 false：
 # agent.send_stream_options=false
 #
-# ── 模型接入协议（S13：不止 OpenAI 兼容那一档）───────────────────────────────
-# 绝大多数厂商（DeepSeek / Qwen / Kimi / GLM / 豆包 / OpenRouter / Groq / Ollama…）都是 OpenAI 兼容，
-# 保持默认即可。Claude 原生 / Gemini 原生 / Azure 企业版由下面几项切换；**界面里也能改**
-# （模型管理 → 接入协议），且按厂商预设添加时会自动选好，一般不用手写这里。
-# api_protocol=openai            # openai（默认）| anthropic（Claude 原生 /v1/messages）| gemini（generativelanguage 原生）
-# api_auth=auto                  # auto（按协议取默认）| bearer | x-api-key | api-key | x-goog-api-key | none（本地免鉴权）
-# api_endpoint=standard          # standard（默认）| azure（/openai/deployments/<部署名>/…?api-version=…）
-# api_version=2024-10-21         # Azure OpenAI 的 api-version
+# ── 模型接入协议（S13）──────────────────────────────────────────────────────
+# **一般情况下什么都不用配**：协议按 API 地址自动判定 ——
+#   api.anthropic.com                  → Claude 原生（/v1/messages + x-api-key）
+#   generativelanguage.googleapis.com  → Gemini 原生（contents + x-goog-api-key）
+#   *.openai.azure.com                 → Azure 端点（部署名路径 + api-key + api-version）
+#   其余（DeepSeek / Qwen / Kimi / GLM / 豆包 / OpenRouter / Groq / Ollama…）→ OpenAI 兼容 /chat/completions
+# 下面几项只在「地址判不出来、要强制指定」时才写（界面上不暴露，避免让用户选协议）：
+# api_protocol=openai            # openai | anthropic | gemini（写了就以此为准，不再按地址判定）
+# api_auth=                      # 留空 = 按协议自动：Bearer / x-api-key / x-goog-api-key / api-key
+# api_endpoint=                  # 留空 = 按地址自动（azure 端点会自带部署名路径与 api-version）
+# api_version=2024-10-21         # Azure OpenAI 的 api-version（不填用出厂值）
 # azure_deployment=              # Azure 的部署名（留空 = 用 model）
 # max_tokens_field=max_tokens    # max_tokens（默认）| max_completion_tokens（OpenAI o 系 / GPT-5 家族只认后者）
 # anthropic_version=2023-06-01   # Anthropic 版本头
@@ -29,9 +32,7 @@ max_tokens=32768
 # 模型自己的开关（在「模型管理」里，models.json 持久化）：
 #   「支持推理强度」不勾 = 该模型**不下发** reasoning_effort（对不认这个字段的网关必需）；
 #   「视觉（图片输入）」不勾 = 该模型不接受图片附件（会当场给出明确提示，而不是发过去让模型自己说看不懂）；
-#   价格的 0 = 不参与成本统计（人民币计价的厂商建议留 0，避免把 ¥ 记成 $）；
-#   「测试连接」真发一次最小请求（失败时会补发一次最小形态请求，区分「密钥/地址不对」与「附加字段不认」）；
-#   「拉取模型列表」直接问厂商要模型清单（Azure 无此端点，会明确说明）。
+#   价格的 0 = 不参与成本统计（人民币计价的厂商建议留 0，避免把 ¥ 记成 $）。
 # 进度检查层（对齐 Java 版「每 3 步注入任务清单」）：每 N 轮注入一条只讲事实的进度清单
 # （轮次 / 已用工具调用数 / 已改动文件 / 失败次数与最近错误码 / 用量），并要求下一步先交代
 # 「目标 / 已完成 / 下一步」—— 长任务里能显著减少空转与目标漂移。0 = 关闭。

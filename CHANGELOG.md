@@ -4,6 +4,29 @@
 
 ## [未发布]
 
+### 变更（模型管理界面精简：只保留 API Key 入口，协议改按地址自动判定；2026-09-23）
+
+用户反馈：「你只需要提供 api key 接口，其他的根本不需要，请删除」。上一轮加的 UI（厂商预设下拉、「全部加入」、
+接入协议区、测试连接、拉取模型列表）与配套四条 IPC 通道**已全部删除**；协议适配留在后台，改成按 API 地址
+自动判定 —— 用户只填一个 Key（地址与模型 ID），不用选协议/认证/端点。
+
+- **删除**：界面上的预设下拉、协议/认证头/输出上限字段/端点风格选择、Azure 部署名与 api-version 输入、
+  价格提示、测试结果框、模型列表选择器、「测试连接」「拉取模型列表」按钮（含对应 CSS）；
+  主进程的 `models:presets` / `models:preset-apply` / `models:test` / `models:fetch` 四条通道路、
+  `electron/providerPresets.cjs`（32 条预设目录）、`buildModelListRequest` / `parseModelList`；
+  preload 的四条方法与 `global.d.ts` 的对应声明。模型管理界面回到改动前形态（268 行，逐字节还原）。
+- **改为自动判定**（`modelProtocol.resolveProtocol` / `normalizeEndpoint`，只看域名特征、离线确定性）：
+  `api.anthropic.com` → Claude 原生；`generativelanguage.googleapis.com` → Gemini 原生；
+  `*.openai.azure.com` → Azure 端点（部署名路径 + `api-key`）；其余 → OpenAI 兼容 + `Bearer`。
+  「未指定」与「指定 openai」严格区分：`models.json` 里留空 = 按地址判定，写死就以写死为准；
+  归一化对未知/缺省值一律**留空**（钉成 openai 会让「改地址后」突然 404）。
+- **保留**（非界面、也非网络行为）：协议翻译层本身、`config/agent.properties.example` 的可选键、
+  headless（`bin/codenode-agent.cjs`）与评测/冒烟的 `*_PROTOCOL/_AUTH/_ENDPOINT` 环境变量覆盖。
+- **判据**：`test:model-protocol` 94 → **79 条断言**（删掉预设/通道级段落，新增「协议自动判定」G 段与
+  「界面已精简」的负向 I 段：界面里不许再出现预设/协议/认证/端点/测连接/拉列表字样、preload 与类型同步删除、
+  主进程只剩 4 条模型通道、预设库文件确实不存在、`resolveProtocol` 真的被请求构造用到）；核心套件仍 104 项。
+  旧的四条通道 wiring 与预设点名断言随功能一起删除（不留空转判据）。
+
 ### 新增（多厂商 / 多协议模型接入：一份 harness 接四档协议；2026-09-23）
 
 原始诉求是「让 CodeNode 兼容市面上所有主流模型的 api key」。改造前的请求只有一种形状 ——

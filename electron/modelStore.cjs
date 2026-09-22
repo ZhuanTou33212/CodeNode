@@ -65,12 +65,6 @@ function seedModels(cfg) {
       id: 'deepseek-v4-flash',
       label: 'DeepSeek V4.1 Flash',
       model: 'deepseek-flash',
-      // 协议 / 认证 / 端点（S13）：不填即 OpenAI 兼容 + Bearer，与旧版本行为一致
-      provider: 'deepseek',
-      protocol: 'openai',
-      auth: 'auto',
-      endpoint: 'standard',
-      maxTokensField: 'max_tokens',
       apiBase,
       apiKey,
       contextWindow: 1_000_000,
@@ -85,11 +79,6 @@ function seedModels(cfg) {
       id: 'deepseek-v4-pro',
       label: 'DeepSeek V4.1 Pro',
       model: 'deepseek-v4-pro',
-      provider: 'deepseek',
-      protocol: 'openai',
-      auth: 'auto',
-      endpoint: 'standard',
-      maxTokensField: 'max_tokens',
       apiBase,
       apiKey,
       contextWindow: 1_000_000,
@@ -164,20 +153,21 @@ function findModel(userDataDir, cfg, id) {
  */
 const MODEL_PROTOCOLS = new Set(['openai', 'anthropic', 'gemini']);
 const MODEL_ENDPOINTS = new Set(['standard', 'azure']);
-const MODEL_MAX_TOKENS_FIELDS = new Set(['max_tokens', 'max_completion_tokens']);
 
 function normalizeModelInput(model) {
   const out = { ...(model || {}) };
-  // 别名归一（claude / messages → anthropic，google / googleai → gemini），认不出来的回落 openai
+  /**
+   * 别名归一（claude / messages → anthropic，google / googleai → gemini）。
+   * **未指定 / 认不出来一律留空** —— 留空表示「按 API 地址自动判定」，不能钉成 openai
+   * （钉死会让「把地址改成 Claude 或 Gemini」的模型突然 404）。
+   */
   const rawProtocol = String(out.protocol || '').trim().toLowerCase();
   const alias = { claude: 'anthropic', messages: 'anthropic', google: 'gemini', googleai: 'gemini', generativelanguage: 'gemini' };
   const protocol = alias[rawProtocol] || rawProtocol;
-  out.protocol = MODEL_PROTOCOLS.has(protocol) ? protocol : 'openai';
+  out.protocol = MODEL_PROTOCOLS.has(protocol) ? protocol : '';
   const endpoint = String(out.endpoint || '').trim().toLowerCase();
-  out.endpoint = MODEL_ENDPOINTS.has(endpoint) ? endpoint : (/azure/i.test(String(out.provider || '')) ? 'azure' : 'standard');
-  const maxTokensField = String(out.maxTokensField || '').trim();
-  out.maxTokensField = MODEL_MAX_TOKENS_FIELDS.has(maxTokensField) ? maxTokensField : 'max_tokens';
-  out.auth = String(out.auth || '').trim() || 'auto';
+  out.endpoint = MODEL_ENDPOINTS.has(endpoint) ? endpoint : (/openai\.azure\.com/i.test(String(out.apiBase || '')) ? 'azure' : '');
+  out.auth = String(out.auth || '').trim();
   out.apiVersion = String(out.apiVersion || '').trim();
   out.azureDeployment = String(out.azureDeployment || '').trim();
   out.provider = String(out.provider || '').trim();

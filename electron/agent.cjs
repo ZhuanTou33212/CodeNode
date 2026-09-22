@@ -130,9 +130,10 @@ function loadConfig(projectRoot) {
      * 协议 / 认证 / 端点（S13）：不填 = OpenAI 兼容 + Bearer（既有行为逐字节不变）。
      * 这三个键只影响「怎么发请求」；模型能力（思考链、视觉）仍由 models.json 的 supportsEffort / vision 决定。
      */
-    protocol: protocolLib.normalizeProtocol(cfg.api_protocol),
-    auth: String(cfg.api_auth || '').trim() || 'auto',
-    endpoint: String(cfg.api_endpoint || '').trim() || 'standard',
+    // 未声明 = 空串（**不是** openai）：请求时按 API 地址自动判定，用户只填一个 key 就能用
+    protocol: cfg.api_protocol ? protocolLib.normalizeProtocol(cfg.api_protocol) : '',
+    auth: String(cfg.api_auth || '').trim(),
+    endpoint: String(cfg.api_endpoint || '').trim(),
     apiVersion: String(cfg.api_version || '').trim(),
     azureDeployment: String(cfg.azure_deployment || '').trim(),
     anthropicVersion: String(cfg.anthropic_version || '').trim(),

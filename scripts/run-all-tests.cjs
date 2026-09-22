@@ -121,7 +121,8 @@ const CORE = [
   // 无 Key fail-closed + 用独立进程 mock 服务器跑一遍真 HTTP 真机管线（离线确定性）
   'test:real-model-pr',
   // 多厂商协议兼容（S13）：四家协议真跑 HTTP（OpenAI 兼容逐字节不变 / Claude 原生 / Gemini 原生 /
-  // Azure 企业端点）+ 端到端 Claude 原生工具循环 + 协议接错的判别力对照 + 预设清单点名
+  // Azure 企业端点）+ 端到端 Claude 原生工具循环 + 协议接错的判别力对照 + 「界面只有一个 key 入口」
+  // 的负向断言（协议按地址自动判定，不许误判也不许改动默认档）
   'test:model-protocol',
   // 每轮固定开销分层（增量审查 §4.3）：画布规则按需注入 + 开销上界门禁
   'test:prompt-layers',

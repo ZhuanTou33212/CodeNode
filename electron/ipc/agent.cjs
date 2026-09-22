@@ -342,9 +342,10 @@ function register(ctx) {
          * （generativelanguage + x-goog-api-key）、Azure OpenAI（部署名路径 + api-key）都靠这三项切换；
          * 缺省（未声明）= OpenAI 兼容，与旧行为逐字节一致。
          */
-        cfg.protocol = modelProtocol.normalizeProtocol(sel.protocol || cfg.protocol);
-        cfg.auth = String(sel.auth || cfg.auth || 'auto');
-        cfg.endpoint = String(sel.endpoint || cfg.endpoint || 'standard');
+        // 只在模型条目**显式写了**时才覆盖；没写就留给地址自动判定（界面不暴露这些开关）
+        if (sel.protocol) cfg.protocol = modelProtocol.normalizeProtocol(sel.protocol);
+        if (sel.auth) cfg.auth = String(sel.auth);
+        if (sel.endpoint) cfg.endpoint = String(sel.endpoint);
         if (sel.apiVersion) cfg.apiVersion = String(sel.apiVersion);
         if (sel.azureDeployment) cfg.azureDeployment = String(sel.azureDeployment);
         if (sel.maxTokensField) cfg.maxTokensField = String(sel.maxTokensField);

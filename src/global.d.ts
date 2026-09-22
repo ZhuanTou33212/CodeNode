@@ -97,48 +97,6 @@ interface ModelSpecDto {
   /** 是否支持图片输入（多模态） */
   vision?: boolean;
   enabled?: boolean;
-  /** 协议（S13）：openai（默认，兼容绝大多数厂商）| anthropic（Claude 原生）| gemini（Gemini 原生） */
-  protocol?: string;
-  /** 认证头风格：auto（按协议取默认）| bearer | x-api-key | api-key | x-goog-api-key | none */
-  auth?: string;
-  /** 端点风格：standard（默认）| azure（部署名路径 + api-version） */
-  endpoint?: string;
-  apiVersion?: string;
-  azureDeployment?: string;
-  /** 输出上限字段名：max_tokens（默认）| max_completion_tokens（OpenAI o 系 / GPT-5） */
-  maxTokensField?: string;
-  /** 预设来源（用于 UI 回显与「重新应用预设」） */
-  provider?: string;
-  providerLabel?: string;
-}
-
-/** 厂商预设（模型管理「从预设添加」用；不含密钥） */
-interface ProviderPresetDto {
-  id: string;
-  label: string;
-  region: 'cn' | 'intl' | 'local';
-  apiBase: string;
-  protocol: string;
-  auth: string;
-  endpoint: string;
-  apiVersion?: string;
-  keyHint?: string;
-  docs?: string;
-  note?: string;
-  local?: boolean;
-  models: Array<{ id: string; contextWindow: number; vision: boolean; supportsEffort: boolean }>;
-}
-
-interface ModelTestResultDto {
-  ok: boolean;
-  latencyMs?: number;
-  reply?: string;
-  usage?: Record<string, number> | null;
-  protocol?: { protocol: string; protocolLabel: string; endpoint: string; auth: string; authLabel: string };
-  error?: string;
-  status?: number;
-  hint?: string;
-  minimal?: { ok: boolean; reply?: string; error?: string } | null;
 }
 
 interface CodenodeApi {
@@ -195,16 +153,6 @@ interface CodenodeApi {
   modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsActive: (id: string) => Promise<{ ok: boolean; activeId?: string | null; error?: string }>;
-  modelsPresets: () => Promise<{ ok: boolean; regions?: Record<string, string>; presets: ProviderPresetDto[]; error?: string }>;
-  modelsPresetApply: (payload: { presetId: string; apiBase?: string; apiKey?: string }) => Promise<{
-    ok: boolean;
-    models?: ModelSpecDto[];
-    activeId?: string | null;
-    added?: number;
-    error?: string;
-  }>;
-  modelsTest: (id: string) => Promise<ModelTestResultDto>;
-  modelsFetch: (id: string) => Promise<{ ok: boolean; models?: Array<{ id: string; label: string }>; count?: number; error?: string; hint?: string }>;
   agentGreeting: (
     root: string | null
   ) => Promise<{ greeting: string; name: string; configured: boolean }>;

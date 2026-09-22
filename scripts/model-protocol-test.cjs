@@ -6,6 +6,10 @@
  *   `reasoning_effort` / `stream_options` 无条件下发。于是 Claude 原生 / Gemini 原生 /
  *   Azure 企业版这三档**主流 key 直接不可用**（400/401/404），而它们的占比恰恰最大。
  *
+ * 界面上只有「API Key」一个入口（预设清单 / 协议选择 / 测连接 / 拉列表都已按用户要求删除），
+ * 协议与端点由 `resolveProtocol()` 按 API 地址自动判定（Claude 地址 → /v1/messages，Azure 地址 →
+ * 部署名路径；其余 = OpenAI 兼容），所以本用例还要锁住「自动判定不许误判、也不许改动默认档」。
+ *
  * 本用例的取证方式（不看内部变量，只看**服务端收到什么**与**调用方拿到什么**）：
  *   ① 四个 mock 服务端各自**严格校验**自己的协议（路径 / 认证头 / 请求体禁用字段），
  *      不合规回 4xx —— 于是「协议接错」不可能静默通过（M1/M2 就是这条判据的自证）；
@@ -28,7 +32,6 @@ const path = require('path');
 
 const agent = require('../electron/agent.cjs');
 const protocolLib = require('../electron/modelProtocol.cjs');
-const presetLib = require('../electron/providerPresets.cjs');
 const modelStore = require('../electron/modelStore.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const sandbox = require('../electron/sandbox.cjs');
@@ -605,223 +608,74 @@ async function main() {
       check('F4 Azure 端点用 Bearer 打 → 401（api-key 头不是可选项）', !!wrongAzure && /HTTP 401/.test(wrongAzure.message), wrongAzure && wrongAzure.message.slice(0, 120));
     }
 
-    // ======================= G. 模型列表 / 预设清单 =======================
-    console.log('\n== G. 拉取模型列表 + 厂商预设清单 ==');
+    // ======================= G. 协议自动判定（界面上只有「API Key」一个入口） =======================
+    console.log('\n== G. 协议按 API 地址自动判定（用户不需要选协议） ==');
     {
-      const listReq = protocolLib.buildModelListRequest({ apiBase: openai.base, apiKey: KEY, model: 'x' });
-      const res = await fetch(listReq.url, { method: listReq.method, headers: listReq.headers });
-      const json = await res.json();
-      const parsed = protocolLib.parseModelList('openai', json);
-      check('G1 OpenAI 兼容档可拉取模型列表（/models + Bearer）', res.ok && parsed.length === 2 && parsed[0].id === 'deepseek-v4-flash', JSON.stringify(parsed));
-
-      const anthropicList = protocolLib.buildModelListRequest({ apiBase: anthropic.base, apiKey: KEY, protocol: 'anthropic' });
-      const ares = await fetch(anthropicList.url, { method: anthropicList.method, headers: anthropicList.headers });
-      const aparsed = protocolLib.parseModelList('anthropic', await ares.json());
-      check('G2 Anthropic 档列表端点（/v1/models + x-api-key + design 头）', ares.ok && aparsed[0].id === 'claude-sonnet-4-5', JSON.stringify(aparsed));
-
-      const geminiList = protocolLib.buildModelListRequest({ apiBase: gemini.base, apiKey: KEY, protocol: 'gemini' });
-      const gres = await fetch(geminiList.url, { method: geminiList.method, headers: geminiList.headers });
-      const gparsed = protocolLib.parseModelList('gemini', await gres.json());
-      check('G3 Gemini 档列表端点（/v1beta/models → 去掉 models/ 前缀）', gres.ok && gparsed[0].id === 'gemini-2.5-pro', JSON.stringify(gparsed));
-
-      check('G4 Azure 没有列表端点 → 明确返回 null（不编造）', protocolLib.buildModelListRequest({ apiBase: azure.base, apiKey: KEY, endpoint: 'azure' }) === null);
-
-      const presets = presetLib.allPresets();
-      const ids = presets.map((p) => p.id);
-      const required = ['deepseek', 'moonshot', 'dashscope', 'zhipu', 'minimax', 'volcengine', 'qianfan', 'hunyuan', 'spark', 'siliconflow', 'openai', 'anthropic', 'gemini', 'azure-openai', 'openrouter', 'groq', 'mistral', 'xai', 'together', 'perplexity', 'ollama', 'lmstudio'];
-      const missing = required.filter((id) => !ids.includes(id));
-      check('G5 主流厂商预设不缺（' + required.length + ' 家点名核对）', missing.length === 0, missing.length ? '缺失=' + missing.join(',') : '共 ' + ids.length + ' 家');
-      check('G6 每条预设的地址都是绝对 URL', presets.every((p) => /^https?:\/\//.test(p.apiBase)), presets.filter((p) => !/^https?:\/\//.test(p.apiBase)).map((p) => p.id).join(','));
-      check('G7 协议取值全在白名单内', presets.every((p) => protocolLib.PROTOCOL_IDS.includes(protocolLib.normalizeProtocol(p.protocol))));
-      check('G8 Anthropic / Gemini 预设的协议与认证头自动配对（用户不用手改）',
-        (() => {
-          const a = presetLib.findPreset('anthropic');
-          const g = presetLib.findPreset('gemini');
-          return a.protocol === 'anthropic' && a.auth === 'x-api-key' && g.protocol === 'gemini' && g.auth === 'x-goog-api-key';
-        })());
-      check('G9 Azure 预设 = azure 端点 + api-key 认证',
-        (() => {
-          const az = presetLib.findPreset('azure-openai');
-          return az.endpoint === 'azure' && az.auth === 'api-key';
-        })());
-      check('G10 本地预设免鉴权（auth=none，空 Key 合法）', presetLib.findPreset('ollama').auth === 'none' && presetLib.findPreset('lmstudio').auth === 'none');
-      const applied = presetLib.presetModels(presetLib.findPreset('anthropic'), { apiKey: KEY });
-      check('G11 预设 → 模型条目带上协议/认证/上下文/价格', applied.length >= 1 && applied[0].protocol === 'anthropic' && applied[0].auth === 'x-api-key' && applied[0].contextWindow > 0 && applied[0].apiKey === KEY, JSON.stringify(applied[0]));
-      check('G12 预设条目的模型 ID 带厂商前缀（两家同名模型不会互相覆盖）', applied.every((m) => m.id.startsWith('anthropic/')), applied.map((m) => m.id).join(','));
+      check('G1 Claude 地址 → anthropic', protocolLib.resolveProtocol({ apiBase: 'https://api.anthropic.com' }) === 'anthropic');
+      check('G2 Gemini 地址 → gemini', protocolLib.resolveProtocol({ apiBase: 'https://generativelanguage.googleapis.com' }) === 'gemini');
+      check('G3 Azure 地址 → openai 协议 + azure 端点 + api-key 头',
+        protocolLib.resolveProtocol({ apiBase: 'https://myres.openai.azure.com' }) === 'openai'
+          && protocolLib.normalizeEndpoint({ apiBase: 'https://myres.openai.azure.com' }) === 'azure'
+          && protocolLib.normalizeAuthStyle('', 'openai', 'azure') === 'api-key');
+      check('G4 负向：普通 OpenAI 兼容地址仍是 openai + standard + Bearer（不许误判）',
+        protocolLib.resolveProtocol({ apiBase: 'https://api.deepseek.com' }) === 'openai'
+          && protocolLib.normalizeEndpoint({ apiBase: 'https://api.deepseek.com' }) === 'standard'
+          && protocolLib.normalizeAuthStyle('', 'openai', 'standard') === 'bearer');
+      check('G5 显式声明优先于地址判定（api_protocol 仍可强制）',
+        protocolLib.resolveProtocol({ apiBase: 'https://api.anthropic.com', protocol: 'openai' }) === 'openai');
+      check('G6 空地址/未配置不炸（回落 openai 兼容）', protocolLib.resolveProtocol({}) === 'openai' && protocolLib.resolveProtocol({ apiBase: '' }) === 'openai');
+      // 判定结果**真的进了请求构造**（本地 mock 的地址没有域名线索，所以这里在纯函数层锁 URL/认证头）
+      const autoAnth = protocolLib.buildRequest({ apiBase: 'https://api.anthropic.com', apiKey: KEY, model: 'claude-sonnet-4-5', maxTokens: 4096 }, MESSAGES, { stream: true });
+      check('G7 Claude 地址下真的构造出 /v1/messages + x-api-key（不需要用户选协议）',
+        autoAnth.url === 'https://api.anthropic.com/v1/messages' && autoAnth.headers['x-api-key'] === KEY && !autoAnth.headers.Authorization,
+        autoAnth.url);
+      const autoAz = protocolLib.buildRequest({ apiBase: 'https://myres.openai.azure.com', apiKey: KEY, model: 'gpt-4o', maxTokens: 1024 }, MESSAGES, { stream: true });
+      check('G8 Azure 地址下真的构造出部署名路径 + api-key 头 + api-version',
+        /\/openai\/deployments\/gpt-4o\/chat\/completions\?api-version=/.test(autoAz.url) && autoAz.headers['api-key'] === KEY && !autoAz.headers.Authorization,
+        autoAz.url);
+      check('G9 OpenAI 兼容地址下请求形状不变（负向：自动判定没有改动默认档）',
+        (() => { const r = protocolLib.buildRequest({ apiBase: 'https://api.deepseek.com', apiKey: KEY, model: 'deepseek-flash', maxTokens: 1024 }, MESSAGES, { stream: true }); return r.url === 'https://api.deepseek.com/chat/completions' && r.headers.Authorization === 'Bearer ' + KEY; })());
     }
-
     // ======================= H. 存储层：新增字段进得了 models.json =======================
     console.log('\n== H. models.json 往返（协议字段可持久化，密钥仍加密） ==');
     {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-models-'));
       const norm = modelStore.normalizeModelInput({ id: 'x', label: 'X', model: 'm', protocol: 'CLAUDE', endpoint: 'Azure', apiVersion: '', auth: '', provider: 'azure-openai' });
       check('H1 协议别名归一（CLAUDE → anthropic）', norm.protocol === 'anthropic', JSON.stringify(norm));
-      check('H2 端点/认证缺省值收敛（Azure → azure + api-key，空 auth → auto）', norm.endpoint === 'azure' && norm.auth === 'auto', JSON.stringify({ e: norm.endpoint, a: norm.auth }));
+      check('H2 Azure 地址自动判成 azure 端点；未声明的认证留空（请求时按协议取默认，不钉死）', norm.endpoint === 'azure' && norm.auth === '', JSON.stringify({ e: norm.endpoint, a: norm.auth }));
       const bad = modelStore.normalizeModelInput({ id: 'y', protocol: '不存在的协议', maxTokensField: 'nonsense' });
-      check('H3 非法取值收敛到默认（不把脏值写进配置）', bad.protocol === 'openai' && bad.maxTokensField === 'max_tokens', JSON.stringify(bad));
+      check('H3 非法取值一律**留空**（不写脏值，也不钉成 openai —— 钉死会让改地址后突然 404）', bad.protocol === '' && bad.endpoint === '', JSON.stringify(bad));
       const seeded = modelStore.seedModels({ apiBase: 'https://api.deepseek.com', apiKey: '' });
-      check('H4 首启种子模型带协议字段且仍是 OpenAI 兼容档', seeded.every((m) => m.protocol === 'openai' && m.endpoint === 'standard'), JSON.stringify(seeded.map((m) => m.protocol)));
+      check('H4 首启种子模型不再带协议字段（留空 = 按地址自动判定，DeepSeek 地址自然落到 openai 兼容）',
+        seeded.every((m) => m.protocol === undefined && m.endpoint === undefined), JSON.stringify(seeded.map((m) => m.protocol)));
       check('H5 seed 的模型 ID / 价格口径没变（不顺手改动默认档）',
         seeded[0].model === 'deepseek-flash' && seeded[0].contextWindow === 1000000 && seeded[1].priceInput === 0.66,
         JSON.stringify(seeded.map((m) => [m.model, m.contextWindow])));
       void dir;
     }
-    // ======================= J. IPC handler 级：四条新通道真跑一遍 =======================
-    console.log('\n== J. 模型管理通道（handler 级真实调用：写入 / 测连接 / 拉列表） ==');
-    {
-      const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-models-ipc-'));
-      /**
-       * 纯 Node 下没有 Electron 的 safeStorage，写入带密钥的条目会按设计**拒绝保存**
-       * （`model-store-security-test.cjs` 就是锁这条的）。这里按仓库既有做法往 require.cache
-       * 注入一个**确定性可逆**的密钥环桩，好让本段能真的跑通「写入 → 加密落盘 → 读回 → 测连接」，
-       * 同时 J3 断言落盘文件里没有明文密钥。
-       */
-      const electronPath = require.resolve('electron');
-      /** @type {any} */
-      const cache = require.cache;
-      const originalElectron = cache[electronPath];
-      cache[electronPath] = {
-        id: electronPath,
-        filename: electronPath,
-        loaded: true,
-        exports: {
-          safeStorage: {
-            isEncryptionAvailable: () => true,
-            encryptString: (value) => Buffer.from('stub:' + value),
-            decryptString: (buf) => buf.toString().slice(5),
-          },
-          app: { getPath: () => userData },
-        },
-      };
-      const ipcModels = require('../electron/ipc/models.cjs');
-      const handlers = new Map();
-      /**
-       * 配置源用桩：真实 `agent.loadConfig` 会读仓库的 config/agent.properties（本用例不许往仓库写任何东西，
-       * 也不该依赖本机安装的密钥）。流式调用走的仍是**真实** chatCompletionStream。
-       */
-      const baseCfg = {
-        apiBase: 'http://127.0.0.1:9',
-        apiKey: 'test-key',
-        model: 'stub',
-        maxTokens: 1024,
-        reasoningEffort: null,
-        sendStreamOptions: true,
-        protocol: 'openai',
-        auth: 'auto',
-        endpoint: 'standard',
-        maxTokensField: 'max_tokens',
-        reliability: { maxAttempts: 1, retryBaseMs: 10, retryMaxMs: 20 },
-      };
-      ipcModels.register({
-        ipcMain: /** @type {any} */ ({ handle: (channel, fn) => handlers.set(channel, fn) }),
-        agent: { loadConfig: () => baseCfg, chatCompletionStream: agent.chatCompletionStream },
-        userDataDir: () => userData,
-      });
-      const call = (channel, arg) => handlers.get(channel)({}, arg);
-
-      const presetsRes = await call('models:presets');
-      check('J1 models:presets 返回完整厂商清单（含分组）', presetsRes.ok && presetsRes.presets.length >= 30 && !!presetsRes.regions.cn, 'count=' + presetsRes.presets.length);
-
-      const applied = await call('models:preset-apply', { presetId: 'ollama', apiKey: '' });
-      check('J2 models:preset-apply 落盘（本地预设免鉴权，条目进 models.json）', applied.ok && applied.added >= 1 && (applied.models || []).some((m) => m.provider === 'ollama'), JSON.stringify({ added: applied.added }));
-      const savedRaw = fs.readFileSync(path.join(userData, 'models.json'), 'utf8');
-      check('J3 落盘文件里没有明文密钥（apiKey 字段不是明文）', !/test-key/.test(savedRaw) && !/"apiKey":\s*"sk-/.test(savedRaw), '');
-
-      // 测连接：真发一次最小请求打 Anthropic mock（走完整 handler 路径：cfg 合并 → 协议层 → 解析）
-      const anthropicModel = {
-        id: 'anthropic/claude-sonnet-4-5',
-        label: 'Claude',
-        model: 'claude-sonnet-4-5',
-        apiBase: anthropic.base,
-        apiKey: KEY,
-        protocol: 'anthropic',
-        auth: 'x-api-key',
-        endpoint: 'standard',
-        maxTokensField: 'max_tokens',
-        contextWindow: 200000,
-        priceInput: 0,
-        priceInputHit: 0,
-        priceOutput: 0,
-        supportsEffort: false,
-        vision: true,
-        enabled: true,
-      };
-      await call('models:save', anthropicModel);
-      const testRes = await call('models:test', anthropicModel.id);
-      check('J4 models:test 真发请求并如实回报（ok / 延迟 / 协议 / 回复）',
-        testRes.ok === true && testRes.protocol.protocol === 'anthropic' && testRes.protocol.auth === 'x-api-key' && typeof testRes.latencyMs === 'number' && typeof testRes.reply === 'string',
-        JSON.stringify({ ok: testRes.ok, p: testRes.protocol, reply: testRes.reply }));
-
-      const fetchRes = await call('models:fetch', anthropicModel.id);
-      check('J5 models:fetch 拉到 Anthropic 模型清单', fetchRes.ok && fetchRes.models[0].id === 'claude-sonnet-4-5', JSON.stringify(fetchRes).slice(0, 160));
-
-      // 失败路径：协议接错 → 404，且必须给出可照做的建议 + 最小形态对照
-      await call('models:save', { ...anthropicModel, id: 'wrong/proto', model: 'claude-x', apiBase: openai.base });
-      const bad = await call('models:test', 'wrong/proto');
-      check('J6 失败时带回状态码 + 建议 + 最小对照（不把 404 说成「密钥无效」）',
-        bad.ok === false && bad.status === 404 && /地址|模型 ID/.test(String(bad.hint)) && bad.minimal && bad.minimal.ok === false,
-        JSON.stringify({ status: bad.status, hint: bad.hint, minimal: bad.minimal }));
-
-      // Azure 没有列表端点：handler 必须如实说明，而不是抛异常或编造
-      await call('models:save', { ...anthropicModel, id: 'az/x', model: 'gpt-4o', protocol: 'openai', endpoint: 'azure', auth: 'api-key', apiBase: azure.base });
-      const azFetch = await call('models:fetch', 'az/x');
-      check('J7 Azure 的 fetch 给出明确说明（不抛异常、不编造列表）', azFetch.ok === false && /部署/.test(String(azFetch.error)), String(azFetch.error));
-
-      const listAfter = await call('models:list');
-      check('J8 models:list 只回 apiKeySet 布尔、正文里没有密钥（明文只存在主进程）',
-        (listAfter.models || []).length >= 3
-          && (listAfter.models || []).every((m) => !m.apiKey && typeof m.apiKeySet === 'boolean')
-          && !JSON.stringify(listAfter).includes(KEY)
-          && !JSON.stringify(listAfter).includes('test-key'),
-        JSON.stringify((listAfter.models || []).map((m) => m.apiKeySet)));
-      if (originalElectron) cache[electronPath] = originalElectron;
-      else delete cache[electronPath];
-      fs.rmSync(userData, { recursive: true, force: true });
-    }
-
-    // ======================= I. 接线：主进程 → preload → 类型 → UI =======================
-    console.log('\n== I. 接线断言（新增四条通道与「推理强度」开关都真的接上了） ==');
+    // ======================= I. 界面回到极简（只有 API Key 一个入口）+ 关键接线 =======================
+    console.log('\n== I. 界面精简与接线（删掉的东西不许残留，留下的必须真接线） ==');
     {
       const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
-      const ipcSrc = read('electron/ipc/models.cjs');
+      const uiSrc = read('src/components/ModelManager.tsx');
       const preloadSrc = read('electron/preload.cjs');
       const dts = read('src/global.d.ts');
-      const uiSrc = read('src/components/ModelManager.tsx');
+      const ipcSrc = read('electron/ipc/models.cjs');
       const agentIpc = read('electron/ipc/agent.cjs');
-      const mainSrc = read('electron/main.cjs');
-      const wiring = [
-        ['models:presets', 'modelsPresets'],
-        ['models:preset-apply', 'modelsPresetApply'],
-        ['models:test', 'modelsTest'],
-        ['models:fetch', 'modelsFetch'],
-      ];
-      for (const [channel, method] of wiring) {
-        const parts = {
-          '主进程 handler': ipcSrc.includes("'" + channel + "'"),
-          preload: preloadSrc.includes(method + ':'),
-          '类型声明': dts.includes(method),
-          'UI 调用': uiSrc.includes('api.' + method),
-        };
-        check('I 通道 ' + channel + ' 四段接线齐全', Object.values(parts).every(Boolean), JSON.stringify(parts));
-      }
-      check('I main.cjs 仍注册模型域 IPC 模块', /require\('\.\/ipc\/models\.cjs'\)/.test(mainSrc) || mainSrc.includes('ipc/models.cjs'), '');
-      /**
-       * 取某个 async 处理函数的函数体：接线断言必须落在**函数体内部**且是**调用**形态
-       * （写错方法名 api.modelsFetchX( 也算「字符串出现」，实测变异存活过一轮）。
-       */
-      const bodyOf = (text, marker) => {
-        const at = text.indexOf(marker);
-        return at === -1 ? '' : text.slice(at, at + 1400);
-      };
-      check('I 「拉取模型列表」按钮真的调用 modelsFetch（不是字符串出现、也不是方法名写错）',
-        /api\.modelsFetch\(/.test(bodyOf(uiSrc, 'const fetchModels = async () => {')));
-      check('I 「测试连接」按钮真的调用 modelsTest', /api\.modelsTest\(/.test(bodyOf(uiSrc, 'const testConnection = async () => {')));
-      check('I 「全部加入」按钮真的调用 modelsPresetApply', /api\.modelsPresetApply\(/.test(bodyOf(uiSrc, 'const addPresetAll = async () => {')));
-      check('I 预设清单真的被加载（打开对话框时调 modelsPresets）', /api\.modelsPresets\(/.test(uiSrc));
-      check('I UI 提供协议选择（openai / anthropic / gemini）', ['openai', 'anthropic', 'gemini'].every((id) => uiSrc.includes("'" + id + "'")), '');
-      check('I UI 暴露「拉取模型列表」「测试连接」按钮', uiSrc.includes('拉取模型列表') && uiSrc.includes('测试连接'));
-      check('I 「支持推理强度」勾选框真的进了运行期（agent:chat 里按模型置空 reasoningEffort）',
-        /sel\.supportsEffort === false/.test(agentIpc), '');
+      const removed = ['接入协议', '从预设添加', '拉取模型列表', '测试连接', '认证头', '端点风格', '厂商预设'];
+      const left = removed.filter((word) => uiSrc.includes(word));
+      check('I1 模型管理界面里没有预设/协议/认证/端点/测连接/拉列表（只剩原有的名称/ID/地址/Key/上下文/价格/开关）',
+        left.length === 0, left.join(','));
+      const removedMethods = ['modelsPresets', 'modelsPresetApply', 'modelsTest', 'modelsFetch'];
+      check('I2 preload 不再暴露这四条通道', removedMethods.every((m) => !preloadSrc.includes(m)));
+      check('I3 类型声明同步（global.d.ts 里也没有）', removedMethods.every((m) => !dts.includes(m)));
+      check('I4 主进程只剩原有的四条模型通道', (ipcSrc.match(/ipcMain\.handle\(/g) || []).length === 4,
+        'handles=' + (ipcSrc.match(/ipcMain\.handle\(/g) || []).length);
+      check('I5 模型管理仍在 App 里挂载（没把入口一起删掉）', /<ModelManager \/>/.test(read('src/App.tsx')));
+      check('I6 「支持推理强度」仍然进了运行期（按模型置空 reasoningEffort）', /sel\.supportsEffort === false/.test(agentIpc));
+      check('I7 协议自动判定已接线（请求构造走 resolveProtocol）',
+        /const protocol = resolveProtocol\(cfg\);/.test(read('electron/modelProtocol.cjs')));
+      check('I8 预设库文件已删除（不留死文件）', !fs.existsSync(path.join(__dirname, '..', 'electron', 'providerPresets.cjs')));
     }
   } finally {
     await Promise.all([openai.close(), anthropic.close(), gemini.close(), azure.close()]);

@@ -114,7 +114,32 @@ function normalizeEndpoint(cfg) {
   // 只填了 apiVersion / azureDeployment 也按 azure 处理（UI 上这两个字段是 Azure 专属）
   if (cfg && (cfg.apiVersion || cfg.azureDeployment)) return 'azure';
   if (cfg && cfg.provider && /azure/i.test(String(cfg.provider))) return 'azure';
+  // 地址本身就是 Azure 企业端点时不必再让用户勾选（界面已不再暴露端点开关）
+  if (cfg && /openai\.azure\.com/i.test(String(cfg.apiBase || ''))) return 'azure';
   return 'standard';
+}
+
+/**
+ * 协议**自动判定**（界面上只有「API Key」一个入口，不该再让用户选协议）：
+ * 只看 API 地址的域名特征 —— 确定性、可离线单测、不做联网探测。
+ *   api.anthropic.com                  → anthropic（/v1/messages + x-api-key）
+ *   generativelanguage.googleapis.com  → gemini（contents + x-goog-api-key）
+ *   其它（含 *.openai.azure.com）       → openai 兼容（Azure 的 api-key 头与 api-version 由端点风格补）
+ * 需要强制指定时仍可写 config/agent.properties 的 api_protocol，或模型条目里的 protocol 字段。
+ */
+function inferProtocolFromBase(apiBase) {
+  const text = String(apiBase || '').toLowerCase();
+  if (!text) return 'openai';
+  if (/anthropic\.com|\/v1\/messages/.test(text)) return 'anthropic';
+  if (/generativelanguage\.googleapis\.com|googleapis\.com\/v1beta/.test(text)) return 'gemini';
+  return 'openai';
+}
+
+/** 协议解析：显式声明优先 → 按地址判定 → 回落 OpenAI 兼容 */
+function resolveProtocol(cfg) {
+  const declared = String((cfg && (cfg.protocol || cfg.apiProtocol)) || '').trim();
+  if (declared) return normalizeProtocol(declared);
+  return inferProtocolFromBase(cfg && cfg.apiBase);
 }
 
 function trimSlashes(value) {
@@ -666,7 +691,7 @@ function parseOpenAiResponse(data) {
  * @returns {{ protocol: string, url: string, headers: Record<string,string>, body: any }}
  */
 function buildRequest(cfg, messages, /** @type {{ stream?: boolean, tools?: any }} */ options = {}) {
-  const protocol = normalizeProtocol(cfg && (cfg.protocol || cfg.apiProtocol));
+  const protocol = resolveProtocol(cfg);
   if (protocol === 'anthropic') return buildAnthropicRequest(cfg, messages, options);
   if (protocol === 'gemini') return buildGeminiRequest(cfg, messages, options);
   return buildOpenAiRequest(cfg, messages, options);
@@ -896,75 +921,9 @@ function createStreamTranslator(protocol) {
   };
 }
 
-/**
- * 列出可用模型的请求（「拉取模型列表」用）。三家的形状都不一样：
- *   openai    GET {base}/models                    → { data: [{ id }] }
- *   anthropic GET {base}/v1/models?limit=100       → { data: [{ id, display_name }] }
- *   gemini    GET {base}/v1beta/models?pageSize=200 → { models: [{ name: 'models/x', displayName }] }
- * azure 没有等价端点（模型由「部署」决定），返回 null 让调用方如实说明。
- */
-/** @returns {{ protocol: string, method: string, url: string, headers: Record<string, string> }|null} */
-function buildModelListRequest(cfg) {
-  const protocol = normalizeProtocol(cfg && (cfg.protocol || cfg.apiProtocol));
-  const endpoint = normalizeEndpoint(cfg);
-  const authStyle = normalizeAuthStyle(cfg && cfg.auth, protocol, endpoint);
-  if (protocol === 'anthropic') {
-    const base = stripVersionSuffix((cfg && cfg.apiBase) || 'https://api.anthropic.com', ['/v1/messages', '/v1']);
-    return {
-      protocol,
-      method: 'GET',
-      url: base + '/v1/models?limit=100',
-      headers: Object.assign({ 'anthropic-version': String((cfg && cfg.anthropicVersion) || ANTHROPIC_VERSION) }, authHeaders(cfg, authStyle)),
-    };
-  }
-  if (protocol === 'gemini') {
-    const base = stripVersionSuffix((cfg && cfg.apiBase) || 'https://generativelanguage.googleapis.com', ['/v1beta/models', '/v1beta', '/v1']);
-    let url = base + '/v1beta/models?pageSize=200';
-    /** @type {Record<string, string>} */
-    const headers = {};
-    if (authStyle === 'query') url += '&key=' + encodeURIComponent(String((cfg && cfg.apiKey) || ''));
-    else Object.assign(headers, authHeaders(cfg, authStyle));
-    return { protocol, method: 'GET', url, headers };
-  }
-  if (endpoint === 'azure') {
-    // Azure 的模型列表要看「部署」，与 OpenAI 的 /models 不同：调用方据此给出明确的提示文案
-    return null;
-  }
-  const base = trimSlashes((cfg && cfg.apiBase) || 'https://api.deepseek.com');
-  return {
-    protocol,
-    method: 'GET',
-    url: base + '/models',
-    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders(cfg, authStyle)),
-  };
-}
-
-/** 各家的「模型列表」响应 → [{ id, label }]（认不出来的形状返回空数组，不编造） */
-function parseModelList(protocol, json) {
-  const normalized = normalizeProtocol(protocol);
-  if (normalized === 'gemini') {
-    const list = json && Array.isArray(json.models) ? json.models : [];
-    return list
-      .map((m) => {
-        if (!m) return null;
-        const id = String(m.name || '').replace(/^models\//, '');
-        return id ? { id, label: String(m.displayName ? m.displayName + ' · ' + id : id) } : null;
-      })
-      .filter(Boolean);
-  }
-  const list = json && Array.isArray(json.data) ? json.data : [];
-  return list
-    .map((m) => {
-      if (!m) return null;
-      const id = String(m.id || m.name || '');
-      return id ? { id, label: String(m.display_name || m.displayName ? (m.display_name || m.displayName) + ' · ' + id : id) } : null;
-    })
-    .filter(Boolean);
-}
-
 /** 给日志 / 自检 / UI 的人话摘要（**不含密钥**） */
 function describeProtocol(cfg) {
-  const protocol = normalizeProtocol(cfg && (cfg.protocol || cfg.apiProtocol));
+  const protocol = resolveProtocol(cfg);
   const endpoint = normalizeEndpoint(cfg);
   const auth = normalizeAuthStyle(cfg && cfg.auth, protocol, endpoint);
   return {
@@ -986,13 +945,13 @@ module.exports = {
   ANTHROPIC_VERSION,
   AZURE_DEFAULT_API_VERSION,
   normalizeProtocol,
+  inferProtocolFromBase,
+  resolveProtocol,
   normalizeAuthStyle,
   normalizeEndpoint,
   defaultAuthStyle,
   buildRequest,
   parseResponse,
-  buildModelListRequest,
-  parseModelList,
   createStreamTranslator,
   describeProtocol,
   // 供用例直接锁细节（工具 / 消息 / 用量映射）
