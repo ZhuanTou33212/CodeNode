@@ -693,10 +693,18 @@ function register(ctx) {
           mode: cfg.prompt && cfg.prompt.canvasRules,
           intentHint: intentPolicy ? intentPolicy.routeHint : null,
         });
-        const decision = toolkit.profiles.resolveToolProfiles({ canvas: layers.canvas, prompt, mode: cfg.tools.toolProfile });
+        const decision = toolkit.profiles.resolveToolProfiles({
+          canvas: layers.canvas,
+          prompt,
+          mode: cfg.tools.toolProfile,
+          // 续跑：沿原 run 记下的面（读不到就退回全量面）—— 同一 run 的工具面只增不减
+          resuming: !!resumePlan,
+          resumeProfiles: resumePlan ? lastToolFaceProfiles(projectRoot, resumePlan.runId) : null,
+        });
         const registered = registry.listTools().map((t) => t.name);
-        if (decision.source === 'off') {
-          toolFace = { applied: false, reason: 'config-off', profiles: [], exposed: registered.length, hidden: 0 };
+        if (decision.source === 'off' || decision.source === 'resume-full') {
+          // 不裁剪：配置关了，或续跑但读不到原 run 的面（「不知道原来有什么」→ 宁可多带）
+          toolFace = { applied: false, reason: decision.reason, profiles: [], exposed: registered.length, hidden: 0 };
         } else if (!registry.contains('discover_tools')) {
           // 取回入口被 tools.allowed/deny 挡掉 → **整体放弃裁剪**（fail-open 回旧的全量面）
           toolFace = { applied: false, reason: 'no-discover-tool', profiles: decision.profiles, exposed: registered.length, hidden: 0 };
@@ -1047,4 +1055,25 @@ function register(ctx) {
   });
 }
 
-module.exports = { register, activeRequests, saveDoc };
+/**
+ * 读某个 run 记下的**工具面**（`tool_face` 事件的 profiles）—— 续跑要沿用它，见下面定面块。
+ *
+ * 只认 `applied === true` 且 profiles 非空的那一条：未裁剪的事件（config-off / no-discover-tool /
+ * resume-keep-full-face）不构成「一个面」，读到了会让续跑以为要退回全量面。
+ * 读不到（事件缺失 / run 记录不存在 / 旧版本 run）→ 返回 null，调用方退回全量面。
+ * @returns {string[]|null}
+ */
+function lastToolFaceProfiles(projectRoot, runId) {
+  try {
+    const events = runStore.readRun(projectRoot, runId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev && ev.type === 'tool_face' && ev.applied === true && Array.isArray(ev.profiles) && ev.profiles.length) {
+        return ev.profiles.map(String);
+      }
+    }
+  } catch {}
+  return null;
+}
+
+module.exports = { register, activeRequests, saveDoc, lastToolFaceProfiles };

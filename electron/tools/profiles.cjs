@@ -85,16 +85,33 @@ const ORCHESTRATION_RE = /子代理|子任务|并行|分工|多个\s*(agent|代�
 /**
  * 按任务判定该暴露哪些 profile。
  *
- * @param {{canvas?: boolean, prompt?: string, intentHint?: string|null, mode?: string}} input
+ * @param {{canvas?: boolean, prompt?: string, intentHint?: string|null, mode?: string,
+ *          resuming?: boolean, resumeProfiles?: string[]|null}} input
  *   canvas  —— `agent.resolvePromptLayers().canvas` 的结论（唯一来源，本模块不重判）
  *   mode    —— 'off' 关闭裁剪 / 'auto' 或未给按任务裁剪 / 其他值 = 逗号分隔的显式 profile 名
- * @returns {{profiles: string[], reason: string, source: 'auto'|'explicit'|'off'}}
+ *   resuming —— 本次是**续跑**：读不到原面时退回全量面，绝不重新裁一次（同一 run 只增不减）
+ *   resumeProfiles —— 原 run 记下的 profile 名单（续跑时优先于 mode；见下方的续跑分支）
+ * @returns {{profiles: string[], reason: string, source: 'auto'|'explicit'|'off'|'resume'|'resume-full'}}
  */
 function resolveToolProfiles(input) {
   const i = input || {};
   const mode = String(i.mode == null ? 'auto' : i.mode).trim();
 
   if (mode === 'off') return { profiles: [], reason: 'config-off', source: 'off' };
+
+  /**
+   * 续跑（resume）**绝不重新裁一次**：一个 run 的工具面只增不减，而续跑时 `intentPolicy` 为空
+   * （续跑不分类，见 ipc 注释），画布层可能因此从「意图救回来」变成「省掉」—— 于是同一 run 的后半程
+   * 比前半程**更窄**：模型上一轮刚调过的工具突然看不见，历史里还留着对它的调用。
+   *
+   * 两种取值：给出原 run 记下的 profile（`tool_face` 事件）就沿用它；读不到就**退回全量面** ——
+   * 「不知道原来有什么」时，多带 schema 只是多花钱，缩窄却是能力静默消失。
+   */
+  if (Array.isArray(i.resumeProfiles) && i.resumeProfiles.length) {
+    const set = new Set(i.resumeProfiles.filter((p) => PROFILE_NAMES.includes(p)));
+    return { profiles: PROFILE_NAMES.filter((p) => set.has(p)), reason: 'resume-original-face', source: 'resume' };
+  }
+  if (i.resuming === true) return { profiles: [], reason: 'resume-keep-full-face', source: 'resume-full' };
 
   if (mode && mode !== 'auto') {
     const wanted = mode.split(',').map((s) => s.trim()).filter(Boolean);

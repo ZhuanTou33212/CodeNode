@@ -677,6 +677,8 @@ const TOOL_GUIDE = {
   query_scalars: '本地标量精确查询：取画布节点 prompt/goal/名字/属性等精准数据（不走云端）',
   remember: '保存项目长期记忆（决策、约定、偏好）',
   recall: '搜索项目长期记忆',
+  // 工具面裁剪生效时才注册（见 toolkit.registerDiscoverTool）：那句引导必须说清「为什么会有没下发的工具」
+  discover_tools: '搜索本次没下发给你的工具并启用（画布/子代理/联网等能力按需取回）',
 };
 
 /** 由注册表生成工具引导列表（名称 + 一句用途）。 */

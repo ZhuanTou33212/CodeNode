@@ -38,6 +38,21 @@
   `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
   `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
 
+### 修复（续跑不重新裁面 + README 门禁计数；2026-09-22）
+
+- **续跑（resume）绝不重新裁面**（真实缺陷）：续跑不分类 → `intentPolicy` 为空 → 画布层可能从「意图救回」
+  变成「省掉」，于是**同一 run 的后半程比前半程更窄**（模型上一轮刚调过的工具突然从 schema 消失，历史里还留着
+  对它的调用）。现在：原 run 记过生效的工具面（`tool_face` 事件）就**原样沿用**，读不到就**退回全量面**
+  （「不知道原来有什么」时，多带 schema 只是多花钱，缩窄是能力静默消失）；`resume` 优先级高于显式配置。
+  判据 `test:token-overhead` 新增 J 组 10 条（含「不加 resuming 就会拿到 auto 面」的判别力断言 + 真从 run
+  记录读回那个面 + 读不到/旧 run 返回 null）。
+- **README 门禁计数对齐唯一来源**：徽章与「亮点速览」写的是 `92 core + 6 display`（还有一处更旧的
+  `87 core + 5 display`），而 `scripts/run-all-tests.cjs --list` 的实际值是 **96 core + 7 display** ——
+  本次 +2（token-overhead / tool-projection），显示套件那 1 项的偏差是**既存过期**，一并按唯一来源改正。
+- 顺带量了除已投影 4 个工具外的**其余全部内置工具**（真实执行 + 比对 text/data）：`read_file` 的 data 只有元数据、
+  `list_directory` 只有计数/游标、`scan_project`/`analyze_project` 的 data 是载荷本身（文本只有一行摘要）——
+  **没有遗留的重复回灌**，审计点名的 4 个就是全部。
+
 ### 修复（工具面裁剪的两处边界；2026-09-22）
 
 - **项目扩展 / MCP 工具不再被裁剪隐藏**：暴露面的权威表示改成**隐藏集**（`_hiddenTools`）而不是可见集 ——

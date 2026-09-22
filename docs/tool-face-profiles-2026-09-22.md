@@ -152,6 +152,35 @@ agent.memory_inject=matched           # matched（默认，有命中才注入）
   `electron/tools/impl/{findFilesTool,searchFilesTool,executeShellTool}.cjs`、
   `scripts/user-memory-test.cjs`（接线判据跟进新入口）、`scripts/run-all-tests.cjs`、`package.json`
 
+## 8.1 续跑（resume）边界：同一 run 的工具面只增不减
+
+续跑时 `intentPolicy` 为空（续跑不分类，见 `ipc/agent.cjs` 的注释），画布层可能因此从「意图 rescue 回来」
+变成「省掉」→ 若在续跑时**重新裁一次面**，同一 run 的后半程会**比前半程更窄**：模型上一轮刚调过的工具
+突然从 schema 里消失，而历史里还留着对它的调用（前缀也白改一次）。**这是本轮修掉的真实缺陷。**
+
+口径（`profiles.resolveToolProfiles`）：
+
+| 续跑时的情况 | 判定 | 结果 |
+|---|---|---|
+| 原 run 记录里有生效过的 `tool_face` | `source='resume'` | **原样沿用**那个面（profile 名归一化，未知名忽略） |
+| 读不到（旧版本 run / 记录缺失 / 只有未裁剪事件） | `source='resume-full'` | **退回全量面**（不裁剪）—— 「不知道原来有什么」时，多带 schema 只是多花钱，缩窄是能力静默消失 |
+
+`resume` / `resume-full` 的优先级高于显式配置 `agent.tool_profile`（进行中的 run 不受配置改动影响）；
+`off` 仍然最高（不裁剪）。判据见 `test:token-overhead` 的 J 组（含「不加 `resuming` 就会得到 auto 面」的
+判别力断言，以及真的从 run 记录里读回那个面）。
+
+## 8.2 其余内置工具没有重复回灌（已用探针确认）
+
+除本次投影的 4 个工具外，其余内置工具逐个量过（真实执行 + 比对 `text` 与 `data`）：
+
+- `read_file`：`data` 只有元数据（`path/language/binary/lineCount/truncated/offset/startLine/endLine`，约 128 字符），
+  正文只出现一次 —— 这些元数据正是模型分页决策的依据，**不该省**；
+- `list_directory`：`data = {count, offset, path}`（35 字符），不是列表本身；
+- `scan_project` / `analyze_project` / `project_info` / `code_review`：`data` 是**载荷本身**（树 / 统计 / 结构化分析），
+  文本里只有一行摘要 —— 不是重复。
+
+结论：审计点名的 4 个就是全部重复项，没有遗留。
+
 ## 9. 安全边界（为什么裁剪不会削弱门禁）
 
 - 暴露面**只影响「模型看不看得见」**：`registry.execute()` 的四道门（角色/能力门、网络门、审批门、

@@ -369,6 +369,48 @@ async function runTurn(registry, script) {
       memoryStore.selectRelevant(entries, 'zzzz').matched === false && memoryStore.selectRelevant(entries, 'zzzz').entries.length === 3);
   }
 
+  // ============================ J. 续跑：同一 run 的工具面只增不减 ============================
+  console.log('\n== J. 续跑（resume）不重新裁面 ==');
+  {
+    // 契约层：续跑时拿不到原面 → **退回全量面**，绝不 fall through 到 auto 重裁一次
+    const full = profiles.resolveToolProfiles({ canvas: false, prompt: '把 add 改成加法', resuming: true });
+    const auto = profiles.resolveToolProfiles({ canvas: false, prompt: '把 add 改成加法' });
+    check('[J] 续跑且读不到原面 → 不裁剪（source=resume-full、profiles 为空）',
+      full.source === 'resume-full' && full.profiles.length === 0 && full.reason === 'resume-keep-full-face',
+      JSON.stringify(full));
+    check('[J] 变异/判别力：同一输入若不加 resuming，就看得到 auto 面（证明这条分支真的在起作用）',
+      auto.profiles.length > 0 && auto.source === 'auto', JSON.stringify(auto));
+    const kept = profiles.resolveToolProfiles({ canvas: true, prompt: '画布上建一条链路', resuming: true, resumeProfiles: ['core', 'canvas'] });
+    check('[J] 续跑能读到原面 → 原样沿用（顺序按 PROFILE_NAMES 归一）',
+      kept.source === 'resume' && kept.reason === 'resume-original-face' &&
+      JSON.stringify(kept.profiles) === JSON.stringify(['core', 'canvas']), JSON.stringify(kept));
+    check('[J] 原面里混进未知/拼错的名字 → 忽略但不报错',
+      JSON.stringify(profiles.resolveToolProfiles({ resuming: true, resumeProfiles: ['core', 'cod'] }).profiles) === JSON.stringify(['core']));
+    check('[J] 原面优先于显式配置（同一 run 的面只增不减，配置改动不影响进行中的 run）',
+      JSON.stringify(profiles.resolveToolProfiles({ mode: 'core,code', resuming: true, resumeProfiles: ['core', 'canvas'] }).profiles) ===
+      JSON.stringify(['core', 'canvas']));
+
+    // 读取层：真的能从 run 记录里读到那个面（不是只看代码）
+    const ipcMod = require('../electron/ipc/agent.cjs');
+    const runStore = require('../electron/runStore.cjs');
+    runStore.appendEvent(root, 'run-with-face', 'tool_face', { applied: true, profiles: ['core', 'code', 'canvas'], exposed: 26 });
+    runStore.appendEvent(root, 'run-with-face', 'tool_face', { applied: false, reason: 'config-off', profiles: [] });
+    check('[J] 读 run 记录拿到**生效过**的那个面', JSON.stringify(ipcMod.lastToolFaceProfiles(root, 'run-with-face')) === JSON.stringify(['core', 'code', 'canvas']),
+      JSON.stringify(ipcMod.lastToolFaceProfiles(root, 'run-with-face')));
+    runStore.appendEvent(root, 'run-no-face', 'tool_face', { applied: false, reason: 'resume-keep-full-face', profiles: [] });
+    check('[J] 只有「未裁剪」事件时返回 null（不把「没裁过」当成一个面）',
+      ipcMod.lastToolFaceProfiles(root, 'run-no-face') === null);
+    check('[J] run 记录不存在时返回 null（旧版本 run 也能安全续跑）',
+      ipcMod.lastToolFaceProfiles(root, 'run-does-not-exist') === null);
+
+    // 接线：ipc 真的把「续跑」这件事传进去了
+    const ipcSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
+    check('[J] ipc 把 resuming / 原面传给了定面函数',
+      /resuming:\s*!!resumePlan/.test(ipcSrc) && /resumeProfiles:\s*resumePlan\s*\?\s*lastToolFaceProfiles\(projectRoot, resumePlan\.runId\)/.test(ipcSrc));
+    check('[J] resume-full 与 config-off 走同一条「不裁剪」分支',
+      /decision\.source === 'off' \|\| decision\.source === 'resume-full'/.test(ipcSrc));
+  }
+
   // ============================ I. 接线（防「实现了但没接线」） ============================
   console.log('\n== I. 接线静态断言 ==');
   {
