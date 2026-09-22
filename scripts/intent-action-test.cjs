@@ -172,6 +172,22 @@ const bodyOf = (input) => intent.buildClassifierMessages(input)[1].content;
         return AgentToolResult.ok('已读');
       },
     );
+    registry.registerDescriptor(
+      {
+        name: 'fake_confirm',
+        description: '假确认类工具（本来就要用户确认）',
+        inputSchema: { type: 'object', properties: {} },
+        mutatesWorkspace: true,
+        requiredCapability: 'workspace.write',
+        // 声明了 requiresConfirmation 且 explicit=true → confirmationEnforced，门 3 本来就会问。
+        // 注意取值是 **大写** 的 ConfirmationLevel（'WRITE'）；写成小写会被 normalizeDescriptor 静默归一成 false。
+        requiresConfirmation: 'WRITE',
+      },
+      async () => {
+        executed.count += 1;
+        return AgentToolResult.ok('已确认执行');
+      },
+    );
     return registry;
   };
 
@@ -254,25 +270,113 @@ const bodyOf = (input) => intent.buildClassifierMessages(input)[1].content;
     check('[C] 复核返回 null → 维持原判定', res.ok === true && executed.count === 1);
   }
 
-  // ======================= D. 接线（防「实现了但没接线」） =======================
-  console.log('\n== D. 接线静态断言 ==');
+  {
+    // 归因：收紧导致的确认要在**弹窗说明**里说清原因（用户才知道为什么又问一次）
+    const executed = { count: 0 };
+    const seen = [];
+    const registry = makeRegistry(executed);
+    const ctx = new AgentToolContext({
+      projectRoot: root,
+      confirm: async (level, what, detail) => {
+        seen.push({ level, what, detail: String(detail || '') });
+        return false;
+      },
+      intentReview: async () => ({ tighten: true }),
+    });
+    const res = await registry.execute('fake_write', {}, ctx);
+    check(
+      '[C] 收紧导致的审批在说明里带归因（不是凭空多问一次）',
+      seen.length === 1 && seen[0].detail.includes('意图复核'),
+      JSON.stringify({ approvals: seen.length, detail: seen[0] && seen[0].detail.slice(0, 60), code: res.data && res.data.code }),
+    );
+
+    // 负向对照（用**本来就要确认**的工具）：不收紧时照常问，但说明里**不能**出现归因
+    const seen2 = [];
+    const ctx2 = new AgentToolContext({
+      projectRoot: root,
+      confirm: async (level, what, detail) => {
+        seen2.push(String(detail || ''));
+        return true;
+      },
+      intentReview: async () => ({ tighten: false }),
+    });
+    await registry.execute('fake_confirm', {}, ctx2);
+    check(
+      '[C] 本来要确认的工具 + 不收紧 → 照常问但不带归因（说明与旧行为一致）',
+      seen2.length === 1 && !seen2[0].includes('意图复核'),
+      JSON.stringify(seen2.map((d) => d.slice(0, 40))),
+    );
+
+    // 正向对照：同一个工具 + 收紧 → 仍然只问一次，但说明里带上了归因
+    const seen3 = [];
+    const ctx3 = new AgentToolContext({
+      projectRoot: root,
+      confirm: async (level, what, detail) => {
+        seen3.push(String(detail || ''));
+        return true;
+      },
+      intentReview: async () => ({ tighten: true }),
+    });
+    await registry.execute('fake_confirm', {}, ctx3);
+    check(
+      '[C] 同一个工具 + 收紧 → 不重复问，只在说明里加归因',
+      seen3.length === 1 && seen3[0].includes('意图复核'),
+      JSON.stringify(seen3.map((d) => d.slice(-40))),
+    );
+  }
+
+  // ======================= E. fork 继承（A4：子代理不能绕过收紧） =======================
+  console.log('\n== E. 子代理上下文（fork）==');
+  {
+    const parent = new AgentToolContext({
+      projectRoot: root,
+      intentPolicy: { tighten: true, forceConfirm: () => true, describe: () => 'stub' },
+      intentReview: async () => ({ tighten: true }),
+    });
+    const child = parent.fork({ role: 'verifier', taskId: 't1' });
+    check(
+      '[E] fork 出的子上下文继承意图收紧（策略 + 复核通道都在）',
+      !!child.intentPolicy() && child.intentPolicy().forceConfirm() === true && typeof child.intentReview === 'function',
+      JSON.stringify({ hasPolicy: !!child.intentPolicy(), hasReview: typeof child.intentReview }),
+    );
+
+    const executed = { count: 0 };
+    const registry = makeRegistry(executed);
+    const res = await registry.execute('fake_write', {}, child);
+    check(
+      '[E] 子上下文里收紧同样生效（子代理写类动作 → APPROVAL_REQUIRED，且未执行）',
+      res.ok === false && res.data && res.data.code === 'APPROVAL_REQUIRED' && executed.count === 0,
+      JSON.stringify({ ok: res.ok, code: res.data && res.data.code, executed: executed.count }),
+    );
+
+    // 负向：父上下文未接线时，fork 出来的也不带（子代理行为与加功能前逐字节一致）
+    const plainChild = new AgentToolContext({ projectRoot: root }).fork({ role: 'verifier' });
+    check(
+      '[E] 父上下文未接线 → fork 也不带（不凭空收紧子代理）',
+      plainChild.intentPolicy() === null && (await plainChild.intentReview({ tool: 'x' })) === null,
+      JSON.stringify({ policy: plainChild.intentPolicy() }),
+    );
+  }
+
+  // ======================= F. 接线（防「实现了但没接线」） =======================
+  console.log('\n== F. 接线静态断言 ==');
   {
     const ipcSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
     const regSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'tools', 'registry.cjs'), 'utf8');
-    check('[D] ipc 把 intentReview 注入 run 级上下文', /^\s*intentReview,\s*$/m.test(ipcSrc));
-    check('[D] ipc 的复核实现走动作级 scope', ipcSrc.includes("scope: 'action'"));
-    check('[D] 复核只用 tighten===true 判定（不读其它字段做放行）', regSrc.includes('intentTighten = !!(review && review.tighten === true)'));
-    check('[D] 门 3 把收紧当成「需要审批」（只增不减）', regSrc.includes('intentTighten === true ||'));
+    check('[F] ipc 把 intentReview 注入 run 级上下文', /^\s*intentReview,\s*$/m.test(ipcSrc));
+    check('[F] ipc 的复核实现走动作级 scope', ipcSrc.includes("scope: 'action'"));
+    check('[F] 复核只用 tighten===true 判定（不读其它字段做放行）', regSrc.includes('intentTighten = !!(review && review.tighten === true)'));
+    check('[F] 门 3 把收紧当成「需要审批」（只增不减）', regSrc.includes('intentTighten === true ||'));
     check(
-      '[D] 插话既进 steers 又触发轮级重判（否则用户授权不生效）',
+      '[F] 插话既进 steers 又触发轮级重判（否则用户授权不生效）',
       ipcSrc.includes('queueEntry.steers.push') && ipcSrc.includes("refreshIntentPolicy('steer')"),
     );
     check(
-      '[D] 重判用纯函数 canReplacePolicy 把关（没有信号绝不替换 → 不放宽）',
+      '[F] 重判用纯函数 canReplacePolicy 把关（没有信号绝不替换 → 不放宽）',
       ipcSrc.includes('intentLib.canReplacePolicy(verdict)'),
     );
-    check('[D] 重判后就地替换 run 上下文的 policy（riskGate 每次读它 → 立即生效）', ipcSrc.includes('runContext.intentPolicyValue = next'));
-    check('[D] 动作级复核落 run 事件（可回放/审计）', ipcSrc.includes("'intent_action_review'"));
+    check('[F] 重判后就地替换 run 上下文的 policy（riskGate 每次读它 → 立即生效）', ipcSrc.includes('runContext.intentPolicyValue = next'));
+    check('[F] 动作级复核落 run 事件（可回放/审计）', ipcSrc.includes("'intent_action_review'"));
   }
 
   console.log('\n' + (failures === 0 ? 'INTENT ACTION TEST: PASS' : 'INTENT ACTION TEST: FAIL (' + failures + ')'));

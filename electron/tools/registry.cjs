@@ -14,6 +14,7 @@
  */
 'use strict';
 
+const crypto = require('crypto');
 const { AgentToolResult } = require('./result.cjs');
 // 跨 Agent 资源租约（多 Agent 信息完整性 P3 的「单一写者」）：资源键的推导也在那边
 const { resourceKeysFor } = require('./leases.cjs');
@@ -135,6 +136,120 @@ class AgentToolRegistry {
      * @type {boolean|undefined}
      */
     this.confirmWrites = options ? options.confirmWrites : undefined;
+    /**
+     * 工具面暴露（token 效率审计 P0-1 / 阶段 A）：`null` = 全部暴露（与旧行为**逐字节一致**）；
+     * 给定名单 = 只把这些 schema 下发给模型。**只影响「模型看不看得见」，不影响能不能执行** ——
+     * execute() 的四道门（角色/能力、网络、审批、租约）与角色白名单判据都不读这个字段。
+     * @type {string[]|null}
+     */
+    this.toolExposure = null;
+    /**
+     * model-visible specs 的 run 内缓存（P0-1 第 5 条）：此前同一轮里 compaction 估算、preflight
+     * 与正式请求会各构造一次完整 JSON（33 工具 ≈ 20k 字符/次 × 4 次），既浪费 CPU 又容易口径漂移。
+     * 键 = 暴露名单签名 + 注册表版本号；任何注册/契约/暴露变更都会清空并推进 `schemaRevision`。
+     * @type {Map<string, any>}
+     */
+    this._schemaCache = new Map();
+    /** 注册表内容版本号：缓存键的一部分，也把「这一版 schema」带进 run 事件/审计 */
+    this.schemaRevision = 0;
+    /** 缓存被清空的次数（只增）；用例用它证明「注册/注销/改契约真的让缓存失效」 */
+    this.schemaCacheMisses = 0;
+  }
+
+  /** 任何会让「下发给模型的 schema」变化的事都要走这里（注册/注销/改契约/改暴露） */
+  _invalidateSchemas() {
+    this.schemaRevision += 1;
+    if (this._schemaCache.size) {
+      this._schemaCache.clear();
+      this.schemaCacheMisses += 1;
+    }
+    return this.schemaRevision;
+  }
+
+  /**
+   * 设定暴露名单（P0-1）。传 `null` 恢复「全部暴露」。
+   *
+   * 归一化到**注册顺序**：顺序一变前缀哈希就变 → 每轮都 cache miss。所以名单只做过滤、不重排
+   * （与「run 内只增不减」配套，见 exposeNames）。名单里注册表没有的名字被静默丢弃 ——
+   * profile 名单是能力清单，配了 rag/web_search 开关时那些工具可能压根没注册。
+   * @param {string[]|null} names
+   */
+  setExposure(names) {
+    if (names == null) {
+      this.toolExposure = null;
+    } else {
+      const wanted = new Set(Array.isArray(names) ? names.map((n) => String(n)) : []);
+      this.toolExposure = [...this.tools.keys()].filter((n) => wanted.has(n));
+    }
+    this._invalidateSchemas();
+    return this.exposedNames();
+  }
+
+  /**
+   * **单调追加**暴露（`discover_tools` 用）：一个 run 内工具面只增不减。
+   * 为什么只增：减会让模型上一轮刚看到的工具突然消失，中途换面比多带一个 schema 更贵。
+   * @param {string[]} names
+   * @returns {string[]} 追加后的完整暴露名单（仍按注册顺序）
+   */
+  exposeNames(names) {
+    const add = Array.isArray(names) ? names : [];
+    if (!add.length) return this.exposedNames();
+    const base = this.toolExposure == null ? [...this.tools.keys()] : this.toolExposure;
+    return this.setExposure([...base, ...add]);
+  }
+
+  /** 当前有效暴露名单（注册顺序）；`null` 暴露 = 全部工具 */
+  exposedNames() {
+    return this.toolExposure == null ? [...this.tools.keys()] : [...this.toolExposure];
+  }
+
+  /** 这个工具此刻会不会下发给模型（`discover_tools` 与「提示词规则是否注入」共用同一判据） */
+  isExposed(name) {
+    const n = String(name || '');
+    if (!this.tools.has(n)) return false;
+    return this.toolExposure == null ? true : this.toolExposure.includes(n);
+  }
+
+  /**
+   * 指定名单（缺省 = 当前暴露面）的 schema 快照：tools 数组 + 序列化 JSON + 哈希 + 字符数。
+   *
+   * `hash` 是**稳定口径**：同一份暴露面在任何进程/任何轮次都得到同一个值 —— run 事件与成本账本
+   * 据此回答「这轮贵在哪个工具面上」，也是「前缀有没有被改坏」的判据（P1-1/P2-2 的基础设施）。
+   * @param {string[]} [names]
+   */
+  schemaInfo(names) {
+    const wanted = names == null
+      ? (this.toolExposure == null ? null : this.toolExposure)
+      : (Array.isArray(names) ? names.map((n) => String(n)) : []);
+    const list = wanted == null
+      ? [...this.tools.keys()]
+      : [...this.tools.keys()].filter((n) => wanted.includes(n));
+    const key = list.join('\u0000') + '#' + this.schemaRevision;
+    const cached = this._schemaCache.get(key);
+    if (cached) return cached;
+    const tools = list.map((n) => {
+      const t = this.tools.get(n);
+      return {
+        type: 'function',
+        function: {
+          name: t.spec.name,
+          description: t.spec.description,
+          parameters: t.spec.inputSchema == null ? { type: 'object', properties: {} } : t.spec.inputSchema,
+        },
+      };
+    });
+    const json = JSON.stringify(tools);
+    const entry = Object.freeze({
+      tools: Object.freeze(tools),
+      json,
+      hash: crypto.createHash('sha256').update(json).digest('hex').slice(0, 16),
+      chars: json.length,
+      count: tools.length,
+      revision: this.schemaRevision,
+      names: Object.freeze(list),
+    });
+    this._schemaCache.set(key, entry);
+    return entry;
   }
 
   /** 旧接口：按名单合成保守契约（未声明只读 = 可写） */
@@ -145,6 +260,7 @@ class AgentToolRegistry {
       descriptor: descriptorLib.descriptorForLegacy(name, description, spec.inputSchema),
       executor,
     });
+    this._invalidateSchemas();
     return this;
   }
 
@@ -161,11 +277,13 @@ class AgentToolRegistry {
       descriptor,
       executor,
     });
+    this._invalidateSchemas();
     return this;
   }
 
   unregister(name) {
     this.tools.delete(name);
+    this._invalidateSchemas();
   }
 
   listTools() {
@@ -184,6 +302,7 @@ class AgentToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) return false;
     tool.descriptor = descriptorLib.normalizeDescriptor({ ...tool.descriptor, ...(patch || {}), explicit: true });
+    this._invalidateSchemas();
     return true;
   }
 
@@ -349,11 +468,18 @@ class AgentToolRegistry {
       }
       const scope = approvalScopeFor(descriptor, name, args);
       const toolCallId = (callInfo && callInfo.toolCallId) || null;
+      /**
+       * 归因：收紧导致的这次确认要**说清原因**（否则用户只会看到「又问了一次」，
+       * 不知道是意图复核判定的结果，也不知道该不该改口径）。
+       */
+      const intentNote = intentTighten
+        ? '（意图复核：本轮动作被判定为「风险高 / 授权不明 / 置信低」，所以即使有免打扰规则也会问你一次）'
+        : '';
       const token = await approval.request({
         capability: descriptor.requiredCapability || null,
         level: descriptor.requiresConfirmation,
         what: name,
-        detail: descriptor.description || '',
+        detail: (descriptor.description || '') + intentNote,
         scope,
         toolCallId,
         attemptId: (callInfo && callInfo.attemptId) || null,
@@ -439,22 +565,16 @@ class AgentToolRegistry {
     }
   }
 
-  /** 转换为 OpenAI chat.completions 的 tools 参数。 */
-  toOpenAiTools() {
-    const result = [];
-    for (const t of this.tools.values()) {
-      result.push({
-        type: 'function',
-        function: {
-          name: t.spec.name,
-          description: t.spec.description,
-          parameters: t.spec.inputSchema == null
-            ? { type: 'object', properties: {} }
-            : t.spec.inputSchema,
-        },
-      });
-    }
-    return result;
+  /**
+   * 转换为 OpenAI chat.completions 的 tools 参数。
+   *
+   * - 无参：当前暴露面（`toolExposure == null` 时 = 全部工具，与旧行为逐字节一致）；
+   * - 给定名单：那个名单的 schema（例如成本探针要单独量某个 profile）。
+   * 返回**缓存数组的浅拷贝**：调用方只读（JSON.stringify），别指望改它会影响注册表。
+   * @param {string[]} [names]
+   */
+  toOpenAiTools(names) {
+    return this.schemaInfo(names).tools.slice();
   }
 }
 

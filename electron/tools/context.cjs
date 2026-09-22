@@ -425,6 +425,15 @@ class AgentToolContext {
       // fork（子代理等）必须继承这两项：否则子代理读不了技能正文、也搜不了网（能力在子代理里静默消失）
       skillMaxChars: this.skillMaxCharsValue,
       webSearchConfig: this.webSearchConfigValue,
+      /**
+       * 意图收紧也要继承（A4）：子代理的写类动作与审批**不能因为「换了个上下文」就绕过收紧**。
+       * 语义上这更严格也更正确 —— 子代理动作的授权来源是**用户对主任务的授权**（用户说过的话），
+       * 而不是主代理给子代理的任务描述（那是 assistant 生成的东西，属**不可信证据**）。
+       * 代价：子代理复核共享主 run 的动作预算（总量仍有上限），预算耗尽时子代理同样按「没有信号」回落
+       * （不收紧、也不放宽）。注意这里是**按值**继承 —— 主 run 之后的重判不会回灌到已 fork 的子上下文。
+       */
+      intentPolicy: this.intentPolicyValue,
+      intentReview: this.intentReviewer,
     });
   }
 }
