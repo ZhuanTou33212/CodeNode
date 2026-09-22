@@ -484,6 +484,13 @@ function buildConfig(task, workspace, opts) {
   cfg.apiBase = mode === 'model' ? modelCfg.apiBase : 'https://scripted.eval.local/v1';
   cfg.apiKey = mode === 'model' ? modelCfg.apiKey : 'scripted-eval-key';
   cfg.model = mode === 'model' ? modelCfg.model : 'scripted-eval/' + task.id;
+  // 协议只在真机档生效：脚本化档走内置 stub（OpenAI 形状），别被 env 带偏
+  if (mode === 'model') {
+    const protocolLib = require('../electron/modelProtocol.cjs');
+    cfg.protocol = protocolLib.normalizeProtocol(modelCfg.protocol || cfg.protocol);
+    cfg.auth = String(modelCfg.auth || cfg.auth || 'auto');
+    cfg.endpoint = String(modelCfg.endpoint || cfg.endpoint || 'standard');
+  }
   cfg.maxTokens = 4096;
   cfg.reasoningEffort = 'low';
   // 评测内重试固定为 1、且不做流式中断重发：脚本化传输的失败必须确定性可判定
@@ -756,6 +763,10 @@ async function main() {
     apiKey: String(process.env.CODENODE_EVAL_API_KEY || '').trim(),
     apiBase: String(process.env.CODENODE_EVAL_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, ''),
     model: String(process.env.CODENODE_EVAL_MODEL || 'deepseek-chat'),
+    // S13：真机档可切到 Claude / Gemini 原生协议或 Azure 端点（留空 = OpenAI 兼容档）
+    protocol: String(process.env.CODENODE_EVAL_PROTOCOL || '').trim(),
+    auth: String(process.env.CODENODE_EVAL_AUTH || '').trim(),
+    endpoint: String(process.env.CODENODE_EVAL_ENDPOINT || '').trim(),
   };
 
   if (opts.list) {
@@ -1060,7 +1071,7 @@ function renderMarkdown(report) {
   lines.push('');
   lines.push('- 本报告由 `scripts/agent-eval.cjs` 自动生成；判据不采信模型自述。');
   lines.push('- 离线模式在 fetch 传输边界注入脚本化 chat 客户端，工具执行、文件系统、shell、Run JSONL 都是真实运行。');
-  lines.push('- 真实模型模式需要 CODENODE_EVAL_API_KEY / CODENODE_EVAL_BASE_URL / CODENODE_EVAL_MODEL；未配置时该模式显式 skipped 且退出码非 0（fail-closed）。');
+  lines.push('- 真实模型模式需要 CODENODE_EVAL_API_KEY / CODENODE_EVAL_BASE_URL / CODENODE_EVAL_MODEL（接 Claude / Gemini 原生或 Azure 端点时另给 CODENODE_EVAL_PROTOCOL / _AUTH / _ENDPOINT）；未配置时该模式显式 skipped 且退出码非 0（fail-closed）。');
   lines.push('- CI 矩阵在 GitHub Actions 上的实跑结果由主 agent 汇总，本报告只覆盖本机执行证据。');
   lines.push('');
   return lines.join('\n');

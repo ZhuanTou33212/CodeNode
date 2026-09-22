@@ -20,9 +20,10 @@ CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作
 | 维度 | 现状 |
 | --- | --- |
 | 代码规模 | TypeScript / Node 约 39k 行（渲染层 12.6k、Electron 主进程 15.3k、门禁与工具脚本 11k） |
-| 门禁 | `npm run verify` = 构建 + `check:js`（主进程/脚本 checkJs）+ **103 项核心套件 + 7 项显示环境套件**；清单唯一来源 `scripts/run-all-tests.cjs` |
+| 门禁 | `npm run verify` = 构建 + `check:js`（主进程/脚本 checkJs）+ **104 项核心套件 + 7 项显示环境套件**；清单唯一来源 `scripts/run-all-tests.cjs` |
 | CI | Windows / macOS / Linux 三平台矩阵：构建 → 静态检查 → 全量门禁 → 打包 → 评测；Agent 评测报告按 commit 归档为 artifact |
 | Agent 评测 | 11 个多步任务离线确定性评测（多步读写、改完跑测试、引用、长上下文压缩、提示注入、取消、崩溃恢复、预算上限），最近一次 **11/11 通过 / 127 次工具调用** |
+| 模型接入 | 一套 harness 接四档协议：OpenAI 兼容（含国内 14 家 / 国际 12 家 / 本地 4 类**共 32 条厂商预设**）、Anthropic Messages 原生、Google Gemini 原生、Azure OpenAI 企业端点；含「测试连接」「拉取模型列表」与密钥安全存储 |
 | 分发 | electron-builder 打包 portable exe / dmg / AppImage，附 sha256/sha512 清单、签名与升级回滚判据（`docs/release-process.md`） |
 | 文档 | `CHANGELOG.md` 按 Keep a Changelog 记录每次行为变化与验证证据；`docs/` 含架构审查、整改进度、评测报告 |
 
@@ -121,6 +122,15 @@ Agent 侧不是「套一层 API」，实现要点：
 
 ### 检查器（右上角悬浮角标）
 - 默认显示悬浮角标（节点数 / 选中提示），点击展开为检查器浮层，可编辑节点名称 / 状态 / 目标说明
+
+### 模型接入（多厂商 / 多协议）
+
+- **拖一个下拉就能接**：内置 32 条厂商预设（DeepSeek、Kimi、通义千问、智谱、MiniMax、豆包、文心、混元、星火、硅基流动、阶跃、百川、零一万物、魔搭、OpenAI、Anthropic、Gemini、Azure OpenAI、OpenRouter、Groq、Mistral、xAI、Together、Fireworks、Perplexity、Cerebras、DeepInfra、Ollama、LM Studio、llama.cpp/vLLM、one-api 网关、自定义），地址 / 协议 / 认证头 / 参考模型 / 上下文 / 价格一次填好
+- **四档协议**（`electron/modelProtocol.cjs`）：OpenAI 兼容（默认）/ Anthropic Messages 原生（`/v1/messages` + `x-api-key` + `thinking.budget_tokens`）/ Google Gemini 原生（`contents` + `functionDeclarations` + `alt=sse`）/ Azure OpenAI（部署名路径 + `api-key` + `api-version`）。**流式翻译成 OpenAI SSE 后再进累加器**，于是中途断线整轮重发、停滞判定、用量归并、坏 JSON 记 anomaly 这套已锁死的语义对四档协议**原样复用**
+- **不猜**：界面里「测试连接」真发一次最小请求（失败时再补一次最小形态请求，区分「密钥/地址不对」与「附加字段不认」）；「拉取模型列表」直接问厂商（OpenAI 兼容走 `/models`，Anthropic 走 `/v1/models`，Gemini 走 `/v1beta/models`，Azure 明确说明无此端点）
+- **按模型生效的开关**：「支持推理强度」不再只是界面摆设 —— 不勾就是**不下发** `reasoning_effort`（部分网关对这个字段直接 400）；输出上限字段名（`max_tokens` / `max_completion_tokens`）按模型选；本地服务（`auth=none` 或回环地址）允许**空 Key**
+- **密钥仍走 safeStorage 加密**（models.json 落盘前加密、UI 读回只给 `apiKeySet` 布尔），预设/测试/列表三条新通道完全不接触明文密钥以外的路径
+- **负向判据**：`protocol` 未声明时请求体（含字段顺序）与改造前**逐字节一致**；协议接错、认证头接错当场失败（门禁 `test:model-protocol` 的 F 组就是这条的自证）
 
 ### Agentic RAG（本地项目检索）
 - Agent 可把主问题、符号名、业务词和技术词作为多个查询，一次完成 RRF 融合排序

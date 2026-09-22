@@ -190,3 +190,7 @@ jobs:
           CODENODE_E2E_API_KEY: ${{ secrets.CODENODE_E2E_API_KEY }}
           CODENODE_E2E_API_BASE: ${{ vars.CODENODE_E2E_API_BASE }}
           CODENODE_E2E_MODEL: ${{ vars.CODENODE_E2E_MODEL }}
+          # S13：真实供应商冒烟也可切到 Claude / Gemini 原生或 Azure 端点（留空 = OpenAI 兼容档）
+          CODENODE_E2E_PROTOCOL: ${{ vars.CODENODE_E2E_PROTOCOL }}
+          CODENODE_E2E_AUTH: ${{ vars.CODENODE_E2E_AUTH }}
+          CODENODE_E2E_ENDPOINT: ${{ vars.CODENODE_E2E_ENDPOINT }}

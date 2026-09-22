@@ -20,6 +20,8 @@ const path = require('path');
 const agent = require('../agent.cjs');
 const toolkit = require('../tools/toolkit.cjs');
 const modelStore = require('../modelStore.cjs');
+// 协议层（S13）：Claude / Gemini 原生协议与 Azure 企业端点的切换都经过它的归一化
+const modelProtocol = require('../modelProtocol.cjs');
 const runStore = require('../runStore.cjs');
 const eventBus = require('../eventBus.cjs');
 const runCheckpoint = require('../runCheckpoint.cjs');
@@ -335,6 +337,23 @@ function register(ctx) {
         if (sel.apiBase) cfg.apiBase = sel.apiBase;
         if (sel.apiKey) cfg.apiKey = sel.apiKey;
         if (sel.model) cfg.model = sel.model;
+        /**
+         * 协议 / 认证 / 端点（S13）：Claude 原生（/v1/messages + x-api-key）、Gemini 原生
+         * （generativelanguage + x-goog-api-key）、Azure OpenAI（部署名路径 + api-key）都靠这三项切换；
+         * 缺省（未声明）= OpenAI 兼容，与旧行为逐字节一致。
+         */
+        cfg.protocol = modelProtocol.normalizeProtocol(sel.protocol || cfg.protocol);
+        cfg.auth = String(sel.auth || cfg.auth || 'auto');
+        cfg.endpoint = String(sel.endpoint || cfg.endpoint || 'standard');
+        if (sel.apiVersion) cfg.apiVersion = String(sel.apiVersion);
+        if (sel.azureDeployment) cfg.azureDeployment = String(sel.azureDeployment);
+        if (sel.maxTokensField) cfg.maxTokensField = String(sel.maxTokensField);
+        /**
+         * 「支持推理强度」在模型管理里是个勾选框，此前**只影响界面、不影响请求**：
+         * 不勾也照样下发 `reasoning_effort`，对不认这个字段的网关等于每次请求都 400。
+         * 现在它是真开关：不勾 = 该模型不下发这个字段（字段消失，而不是发 false）。
+         */
+        if (sel.supportsEffort === false) cfg.reasoningEffort = null;
         // 上下文窗口来自模型管理（models.json）：上下文压缩的触发线 = 窗口 × agent.compact.ratio
         // （Codex 口径）。取不到时留给 agent.compact.fallback_window。
         cfg.contextWindow = Number(sel.contextWindow) > 0 ? Number(sel.contextWindow) : 0;
@@ -342,7 +361,15 @@ function register(ctx) {
         cfg.model = reqModel;
       }
       if (reqEffort) cfg.reasoningEffort = reqEffort;
-      if (!cfg.apiKey) {
+      /**
+       * 本地/自建服务（Ollama、LM Studio、llama.cpp、one-api 网关）可以**免鉴权**：
+       * 这类模型配置 auth = 'none' 或地址是本机回环，空 Key 是合法配置 ——
+       * 不能拿「未配置 API Key」把用户挡在门外（这正是「本地模型用不了」的常见成因）。
+       */
+      const keylessAllowed =
+        String(cfg.auth || '').toLowerCase() === 'none' ||
+        /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)([:/]|$)/i.test(String(cfg.apiBase || ''));
+      if (!cfg.apiKey && !keylessAllowed) {
         return { ok: false, error: '未配置 API Key（模型管理中填写或 config/agent.properties）' };
       }
       // 图片附件需要模型具备视觉能力：不支持的模型直接给出明确提示，

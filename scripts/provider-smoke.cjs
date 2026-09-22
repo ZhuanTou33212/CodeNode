@@ -14,6 +14,11 @@ async function main() {
     apiBase: String(process.env.CODENODE_E2E_API_BASE || 'https://api.deepseek.com').replace(/\/+$/, ''),
     apiKey,
     model: process.env.CODENODE_E2E_MODEL || 'deepseek-v4-flash',
+    // 接 Claude / Gemini 原生或 Azure 端点时由 env 指定（默认空 = OpenAI 兼容档）
+    protocol: process.env.CODENODE_E2E_PROTOCOL || '',
+    auth: process.env.CODENODE_E2E_AUTH || '',
+    endpoint: process.env.CODENODE_E2E_ENDPOINT || '',
+    apiVersion: process.env.CODENODE_E2E_API_VERSION || '',
     maxTokens: 32,
     reasoningEffort: process.env.CODENODE_E2E_REASONING || 'low',
     reliability: { maxAttempts: 2, retryBaseMs: 500, retryMaxMs: 3000 },

@@ -27,7 +27,8 @@
  * 退出码：0 正常结束｜1 run 失败或撞上限｜2 配置/凭据问题（含未配置 API Key）｜3 被取消
  *
  * 环境变量覆盖（优先级最高，方便 CI 注入而不落盘）：CODENODE_API_KEY / CODENODE_BASE_URL /
- * CODENODE_MODEL / CODENODE_MAX_TOKENS。
+ * CODENODE_MODEL / CODENODE_MAX_TOKENS；接非 OpenAI 兼容的厂商时再给
+ * CODENODE_MODEL_PROTOCOL（openai | anthropic | gemini）、CODENODE_MODEL_AUTH、CODENODE_MODEL_ENDPOINT。
  */
 'use strict';
 
@@ -40,6 +41,8 @@ const { parseWebSearchConfig } = require(path.join(ROOT, 'electron', 'tools', 'i
 const toolkit = require(path.join(ROOT, 'electron', 'tools', 'toolkit.cjs'));
 const sandbox = require(path.join(ROOT, 'electron', 'sandbox.cjs'));
 const runStore = require(path.join(ROOT, 'electron', 'runStore.cjs'));
+// 协议层（S13）：headless 也要能接 Claude / Gemini 原生协议与 Azure 端点
+const modelProtocol = require(path.join(ROOT, 'electron', 'modelProtocol.cjs'));
 const { AgentToolContext, ConfirmationLevel } = require(path.join(ROOT, 'electron', 'tools', 'context.cjs'));
 const { RequestBudget } = require(path.join(ROOT, 'electron', 'requestBudget.cjs'));
 
@@ -136,6 +139,11 @@ async function main() {
   if (process.env.CODENODE_API_KEY) cfg.apiKey = process.env.CODENODE_API_KEY;
   if (process.env.CODENODE_BASE_URL) cfg.apiBase = process.env.CODENODE_BASE_URL;
   if (process.env.CODENODE_MODEL) cfg.model = process.env.CODENODE_MODEL;
+  // 协议覆盖（S13）：headless 走 Claude / Gemini 原生协议或 Azure 端点时需要它
+  if (process.env.CODENODE_MODEL_PROTOCOL) cfg.protocol = modelProtocol.normalizeProtocol(process.env.CODENODE_MODEL_PROTOCOL);
+  if (process.env.CODENODE_MODEL_AUTH) cfg.auth = String(process.env.CODENODE_MODEL_AUTH);
+  if (process.env.CODENODE_MODEL_ENDPOINT) cfg.endpoint = String(process.env.CODENODE_MODEL_ENDPOINT);
+  if (process.env.CODENODE_MODEL_API_VERSION) cfg.apiVersion = String(process.env.CODENODE_MODEL_API_VERSION);
   if (process.env.CODENODE_MAX_TOKENS) cfg.maxTokens = Number(process.env.CODENODE_MAX_TOKENS) || cfg.maxTokens;
   if (args.maxIterations) {
     cfg.limits = Object.assign({}, cfg.limits, { maxToolIterations: Math.max(1, Math.floor(args.maxIterations)) });

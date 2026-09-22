@@ -2,7 +2,8 @@
  * CodeNode Agent 核心（参考 DeepSeek Harness 配置分层 + 原项目 Agent 工具）
  * - 配置：工程 .codenode/agent.properties 覆盖全局 config/agent.properties
  * - 灵魂：soul.md（初次注入语言风格/称呼/名字/问候）
- * - 对话：OpenAI 兼容 /chat/completions（默认 DeepSeek）
+ * - 对话：OpenAI 兼容 /chat/completions（默认 DeepSeek）；Claude 原生、Gemini 原生与 Azure 端点
+ *   由 modelProtocol.cjs 适配（协议 / 认证头 / 请求体都在那一处，见该文件顶部说明）
  * - 会话：追加式 JSONL 记录（时间/角色/内容）
  */
 'use strict';
@@ -13,6 +14,8 @@ const runStore = require('./runStore.cjs');
 // S8：统一运行事件流（.codenode/events.jsonl，带 runId/turnId/toolCallId/attemptId，可按 run 回放）
 const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
+// 协议适配层（S13）：OpenAI 兼容 / Anthropic Messages / Gemini 原生 / Azure OpenAI 共用一个请求构造
+const protocolLib = require('./modelProtocol.cjs');
 // 上下文压缩（照 Codex CLI 的做法）：窗口逼近上限时用交接摘要替换助手长文/工具结果
 const compactionLib = require('./compaction.cjs');
 // P1-2 动态上下文预算（键名与分配算法集中在那一处）
@@ -123,6 +126,17 @@ function loadConfig(projectRoot) {
   const cfg = { ...globalCfg, ...projectCfg };
   return {
     apiBase: (cfg.api_base || 'https://api.deepseek.com').replace(/\/+$/, ''),
+    /**
+     * 协议 / 认证 / 端点（S13）：不填 = OpenAI 兼容 + Bearer（既有行为逐字节不变）。
+     * 这三个键只影响「怎么发请求」；模型能力（思考链、视觉）仍由 models.json 的 supportsEffort / vision 决定。
+     */
+    protocol: protocolLib.normalizeProtocol(cfg.api_protocol),
+    auth: String(cfg.api_auth || '').trim() || 'auto',
+    endpoint: String(cfg.api_endpoint || '').trim() || 'standard',
+    apiVersion: String(cfg.api_version || '').trim(),
+    azureDeployment: String(cfg.azure_deployment || '').trim(),
+    anthropicVersion: String(cfg.anthropic_version || '').trim(),
+    maxTokensField: String(cfg.max_tokens_field || '').trim() || 'max_tokens',
     apiKey: cfg.api_key || '',
     model: cfg.model || 'deepseek-v4-flash',
     maxTokens: Number(cfg.max_tokens) || DEFAULT_MAX_TOKENS,
@@ -1200,7 +1214,9 @@ async function chatCompletion(cfg, messages, options = {}) {
  */
 async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
-  const url = cfg.apiBase + '/chat/completions';
+  // 协议层现算 URL / 认证头 / 请求体：非 OpenAI 协议（Claude / Gemini / Azure）在这里被翻译
+  const request = protocolLib.buildRequest(cfg, messages, { stream: false });
+  const url = request.url;
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -1217,8 +1233,8 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
         if (attemptsRef) attemptsRef.count = attempt;
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-          body: JSON.stringify(chatBody(cfg, messages, { stream: false })),
+          headers: request.headers,
+          body: JSON.stringify(request.body),
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -1232,13 +1248,8 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
         }
         /** @type {any} */
         const data = await res.json();
-        const msg = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message : null;
-        return {
-          content: (msg && msg.content) || '',
-          reasoning: (msg && msg.reasoning_content) || '',
-          toolCalls: (msg && msg.tool_calls) || null,
-          usage: data.usage || null,
-        };
+        // 协议层归一（OpenAI 分支与改造前逐字段一致；Claude / Gemini 在这里翻译成同一形状）
+        return protocolLib.parseResponse(request.protocol, data);
       } catch (error) {
         lastError = error;
         if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
@@ -1338,25 +1349,14 @@ function readRunPlan(projectRoot, cfg) {
 }
 
 /**
- * 构建 /chat/completions 请求体：模型 + 消息 + 推理强度 + 工具参数。
- * DeepSeek V4 全部支持 thinking 模式，reasoning_effort 始终随配置下发。
+ * 构建**本次协议**的请求体（委托 modelProtocol.buildRequest）。
+ * OpenAI 兼容档：模型 + 消息 + 推理强度 + 工具参数，`reasoning_effort` 只在模型支持时下发；
+ * 其余协议（Anthropic / Gemini）在这里被翻译成各自的形状（system 提升、input_schema、functionDeclarations…）。
  */
 function chatBody(cfg, messages, /** @type {{ stream?: boolean, tools?: any }} */ { stream, tools } = {}) {
-  const body = {
-    model: cfg.model,
-    messages,
-    stream: !!stream,
-    max_tokens: cfg.maxTokens,
-  };
-  if (cfg.reasoningEffort) {
-    body.reasoning_effort = cfg.reasoningEffort;
-  }
-  // stream_options 只有流式才有意义；且**可关**（网关不认这个字段时用 agent.send_stream_options=false）
-  if (stream && cfg.sendStreamOptions !== false) {
-    body.stream_options = { include_usage: true };
-  }
-  if (tools && tools.length) body.tools = tools;
-  return body;
+  // 单一来源：请求体由协议层构造（modelProtocol.buildRequest）。
+  // protocol 未声明 = OpenAI 兼容，产出的字段与字段顺序与改造前逐字节一致。
+  return protocolLib.buildRequest(cfg, messages, { stream, tools }).body;
 }
 
 /**
@@ -1383,7 +1383,9 @@ async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
  */
 async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS, tools, attemptsRef, sentBefore = 0 } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
-  const url = cfg.apiBase + '/chat/completions';
+  // 协议层现算 URL / 认证头 / 请求体（重发时复用同一份，保证「整轮重发」发的是同一个请求）
+  const request = protocolLib.buildRequest(cfg, messages, { stream: true, tools });
+  const url = request.url;
   const controller = new AbortController();
   let timedOut = false;
   let stalled = false;
@@ -1410,7 +1412,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
   /** 本尝试已流出的部分（供重发时如实上报「作废了多少字」） */
   const partial = { content: '', reasoning: '', toolCalls: [] };
   try {
-    const body = chatBody(cfg, messages, { stream: true, tools });
+    const body = request.body;
     const attempts = maxAttemptsFor(cfg);
     let res = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -1419,7 +1421,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
       try {
         res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+          headers: request.headers,
           body: JSON.stringify(body),
           signal: controller.signal,
         });
@@ -1441,6 +1443,13 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
     // 分片解析统一交给 streamAccumulator（纯函数、可单测）：重复/累积分片、index 漂移与复用、
     // finish_reason、坏 JSON 都在那里判定，主循环只把事件转成 onEvent。
     const state = streamAccumulator.createAccumulator();
+    /**
+     * 协议翻译：Claude 的 `content_block_delta` / Gemini 的 `candidates[].parts` 在这里
+     * 逐帧翻成 OpenAI 的 `choices[].delta` 文本 —— 于是「中途断线整轮重发 / 停滞判定 /
+     * 用量帧归并 / 坏 JSON 记 anomaly」这套已经用测试锁死的语义，非 OpenAI 协议**原样复用**。
+     * openai 协议下 translate 是恒等函数（零开销）。
+     */
+    const translator = protocolLib.createStreamTranslator(request.protocol);
     const forward = (events) => {
       for (const event of events) {
         if (!event) continue;
@@ -1461,11 +1470,13 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
       if (done) break;
       // 有分片到达 = 连接还活着：重置停滞计时
       armIdle();
-      forward(streamAccumulator.applySseText(state, decoder.decode(value, { stream: true })));
+      forward(streamAccumulator.applySseText(state, translator.translate(decoder.decode(value, { stream: true }))));
     }
     // Some OpenAI-compatible providers omit the final newline. Do not drop its
     // last content/tool-call event, otherwise the agent may end the turn early.
-    forward(streamAccumulator.applySseText(state, decoder.decode()));
+    forward(streamAccumulator.applySseText(state, translator.translate(decoder.decode())));
+    // 翻译层的残行 + 收尾帧（Gemini 不给 [DONE]，由翻译层补）先落地，再让累加器收尾
+    forward(streamAccumulator.applySseText(state, translator.flush()));
     forward(streamAccumulator.applySseText(state, '\n'));
     const final = streamAccumulator.finalize(state);
     usage = final.usage || usage;
@@ -2959,16 +2970,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             items: Array.isArray(planForUi.items) ? planForUi.items : [],
           });
       }
-      const payload = {
-        model: cfg.model,
-        messages,
-        stream: true,
-        max_tokens: turnMaxTokens,
-        stream_options: { include_usage: true },
-      };
-      if (tools && tools.registry) {
-        payload.tools = tools.registry.toOpenAiTools();
-      }
+      /**
+       * 这里**不再**自己拼请求体（唯一来源 = 协议层，见 chatBody）：payload 只保留
+       * 「OpenAI 形状的工具面」供 token 估算与 run 事件留痕，别拿它当实际发出的报文。
+       */
+      const payload = { tools: tools && tools.registry ? tools.registry.toOpenAiTools() : null };
       const turnStartedAt = Date.now();
       const onEvent = (ev) => {
         if (ev.kind === 'stream_restart') {
@@ -3015,7 +3021,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const buildTurnCfg = () => (turnMaxTokens === Number(cfg.maxTokens) ? cfg : { ...cfg, maxTokens: turnMaxTokens });
       const sendTurn = async () => {
         try {
-          return await chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools });
+          return await chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools || undefined });
         } catch (error) {
           const overflow = classifyContextOverflow(error);
           if (!overflow || !compactionEnabled || overflowRecoveries >= maxOverflowRecoveries) throw error;
@@ -3052,7 +3058,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const shrankOutput = fit < turnMaxTokens;
           if (shrankOutput) turnMaxTokens = fit;
           emitTrace({ kind: 'context_overflow_retry', turnId: iter, tokens, tokensAfter, maxTokens: turnMaxTokens, shrankOutput });
-          return chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools });
+          return chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools || undefined });
         }
       };
       const res = await sendTurn();

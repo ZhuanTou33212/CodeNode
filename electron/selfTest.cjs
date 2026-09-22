@@ -317,6 +317,10 @@ function summarizeConfig(projectRoot) {
     apiKeySet: !!cfg.apiKey,
     maxTokens: cfg.maxTokens,
     reasoningEffort: cfg.reasoningEffort,
+    // S13：接的是哪一档协议（openai / anthropic / gemini + 端点风格），排障第一眼要看这个
+    protocol: cfg.protocol,
+    endpoint: cfg.endpoint,
+    auth: cfg.auth,
     toolsEnabled: !!(cfg.tools && cfg.tools.toolsEnabled),
     ragEnabled: !!(cfg.rag && cfg.rag.enabled),
     limits: cfg.limits || null,

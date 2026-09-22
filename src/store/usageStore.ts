@@ -18,6 +18,25 @@ export interface ModelSpec {
   /** 是否支持图片输入（多模态）。只有为 true 时才允许给该模型附加图片 */
   vision?: boolean;
   enabled?: boolean;
+  /** 协议（S13）：openai（默认，兼容绝大多数厂商）| anthropic（Claude 原生）| gemini（Gemini 原生） */
+  protocol?: string;
+  /** 认证头：auto（按协议取默认）| bearer | x-api-key | api-key | x-goog-api-key | none */
+  auth?: string;
+  /** 端点风格：standard（默认）| azure（部署名路径 + api-version） */
+  endpoint?: string;
+  apiVersion?: string;
+  azureDeployment?: string;
+  /** 输出上限字段名：max_tokens（默认）| max_completion_tokens（OpenAI o 系 / GPT-5） */
+  maxTokensField?: string;
+  provider?: string;
+  providerLabel?: string;
+}
+
+/** 该模型是不是 DeepSeek（高峰价只对 DeepSeek 成立；别的厂商按同时段 ×2 会把账算错） */
+function isDeepSeekModel(model: { provider?: string; apiBase?: string; model?: string }): boolean {
+  if (!model) return false;
+  if (String(model.provider || '').toLowerCase().includes('deepseek')) return true;
+  return /deepseek/i.test(String(model.apiBase || '') + ' ' + String(model.model || ''));
 }
 
 /** 是否为 DeepSeek 高峰时段（01:00–04:00、06:00–10:00 UTC，周一至周五），高峰价 = 非高峰价 × 2 */
@@ -30,7 +49,8 @@ function isPeakHours(now = new Date()): boolean {
 
 /** 根据当前时段返回实际价格（$ / 1M tokens）；models.json 中记录的是非高峰价 */
 export function modelPrice(model: ModelSpec): { priceInput: number; priceInputHit: number; priceOutput: number } {
-  const peak = isPeakHours();
+  // 高峰价是 DeepSeek 的定价规则：非 DeepSeek 模型一律按原价（S13 起支持多厂商，这条必须限定范围）
+  const peak = isDeepSeekModel(model) && isPeakHours();
   return {
     priceInput: peak ? model.priceInput * 2 : model.priceInput,
     priceInputHit: peak ? model.priceInputHit * 2 : model.priceInputHit,

@@ -65,6 +65,12 @@ function seedModels(cfg) {
       id: 'deepseek-v4-flash',
       label: 'DeepSeek V4.1 Flash',
       model: 'deepseek-flash',
+      // 协议 / 认证 / 端点（S13）：不填即 OpenAI 兼容 + Bearer，与旧版本行为一致
+      provider: 'deepseek',
+      protocol: 'openai',
+      auth: 'auto',
+      endpoint: 'standard',
+      maxTokensField: 'max_tokens',
       apiBase,
       apiKey,
       contextWindow: 1_000_000,
@@ -79,6 +85,11 @@ function seedModels(cfg) {
       id: 'deepseek-v4-pro',
       label: 'DeepSeek V4.1 Pro',
       model: 'deepseek-v4-pro',
+      provider: 'deepseek',
+      protocol: 'openai',
+      auth: 'auto',
+      endpoint: 'standard',
+      maxTokensField: 'max_tokens',
       apiBase,
       apiKey,
       contextWindow: 1_000_000,
@@ -146,4 +157,43 @@ function findModel(userDataDir, cfg, id) {
   return store.models.find((m) => m && m.id === id) || null;
 }
 
-module.exports = { getModels, findModel, readModels, writeModels, seedModels, toPublicModel, toPublicModels, encryptSecret, decryptSecret };
+/**
+ * 归一化一条模型记录（S13）：协议 / 端点 / 认证 / 输出上限字段名只允许落到白名单取值上，
+ * 其余字段原样保留（用户手写的额外字段不该被吞掉）。
+ * 归一化的是「怎么发请求」，不是「模型能力」—— 能力仍由 supportsEffort / vision / contextWindow 决定。
+ */
+const MODEL_PROTOCOLS = new Set(['openai', 'anthropic', 'gemini']);
+const MODEL_ENDPOINTS = new Set(['standard', 'azure']);
+const MODEL_MAX_TOKENS_FIELDS = new Set(['max_tokens', 'max_completion_tokens']);
+
+function normalizeModelInput(model) {
+  const out = { ...(model || {}) };
+  // 别名归一（claude / messages → anthropic，google / googleai → gemini），认不出来的回落 openai
+  const rawProtocol = String(out.protocol || '').trim().toLowerCase();
+  const alias = { claude: 'anthropic', messages: 'anthropic', google: 'gemini', googleai: 'gemini', generativelanguage: 'gemini' };
+  const protocol = alias[rawProtocol] || rawProtocol;
+  out.protocol = MODEL_PROTOCOLS.has(protocol) ? protocol : 'openai';
+  const endpoint = String(out.endpoint || '').trim().toLowerCase();
+  out.endpoint = MODEL_ENDPOINTS.has(endpoint) ? endpoint : (/azure/i.test(String(out.provider || '')) ? 'azure' : 'standard');
+  const maxTokensField = String(out.maxTokensField || '').trim();
+  out.maxTokensField = MODEL_MAX_TOKENS_FIELDS.has(maxTokensField) ? maxTokensField : 'max_tokens';
+  out.auth = String(out.auth || '').trim() || 'auto';
+  out.apiVersion = String(out.apiVersion || '').trim();
+  out.azureDeployment = String(out.azureDeployment || '').trim();
+  out.provider = String(out.provider || '').trim();
+  out.providerLabel = String(out.providerLabel || '').trim();
+  return out;
+}
+
+module.exports = {
+  getModels,
+  findModel,
+  readModels,
+  writeModels,
+  seedModels,
+  toPublicModel,
+  toPublicModels,
+  normalizeModelInput,
+  encryptSecret,
+  decryptSecret,
+};

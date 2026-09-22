@@ -120,6 +120,9 @@ const CORE = [
   // 真机回归挂 PR（增量审查 §4.1）：任务声明完整性 + --subset=pr 体检 + CI 接线 +
   // 无 Key fail-closed + 用独立进程 mock 服务器跑一遍真 HTTP 真机管线（离线确定性）
   'test:real-model-pr',
+  // 多厂商协议兼容（S13）：四家协议真跑 HTTP（OpenAI 兼容逐字节不变 / Claude 原生 / Gemini 原生 /
+  // Azure 企业端点）+ 端到端 Claude 原生工具循环 + 协议接错的判别力对照 + 预设清单点名
+  'test:model-protocol',
   // 每轮固定开销分层（增量审查 §4.3）：画布规则按需注入 + 开销上界门禁
   'test:prompt-layers',
   // 意图识别（照 Codex guardian 分类器）：解析与保守回落 / 只收紧不放宽 / 无信号两可 / 提示词路由 / 审批门禁 / 接线

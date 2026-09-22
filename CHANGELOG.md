@@ -4,6 +4,63 @@
 
 ## [未发布]
 
+### 新增（多厂商 / 多协议模型接入：一份 harness 接四档协议；2026-09-23）
+
+原始诉求是「让 CodeNode 兼容市面上所有主流模型的 api key」。改造前的请求只有一种形状 ——
+`apiBase + '/chat/completions'` + `Authorization: Bearer` + 无条件下发 `reasoning_effort` /
+`stream_options` —— 于是**Claude 原生、Gemini 原生、Azure 企业版这三档主流 key 直接不可用**，
+而占绝大多数的 OpenAI 兼容厂商也得靠用户自己填对地址、模型 ID 与那一堆开关。
+
+- **协议适配层**（新增 `electron/modelProtocol.cjs`）：协议（`openai` / `anthropic` / `gemini`）与
+  认证风格（`bearer` / `x-api-key` / `api-key` / `x-goog-api-key` / `query` / `none`）正交给两个正交维度，
+  另加端点风格（`standard` / `azure`）。四件事都收敛到四个纯函数：`buildRequest` 组装
+  URL+认证头+请求体、`parseResponse` 归一非流式响应、`createStreamTranslator` 把原生 SSE 翻成
+  OpenAI SSE 文本、`buildModelListRequest` 拉模型清单。**消息与工具双向往返翻译**：system 提升为顶层
+  （Anthropic）/ `systemInstruction`（Gemini）、`role:'tool'` → `tool_result`（user 消息内，id 对齐）/
+  `functionResponse`（按 id 反查函数名）、`input_schema` / `functionDeclarations`、
+  `thinking.budget_tokens`（按 `max_tokens` 夹住）/ `thinkingConfig.thinkingBudget`、
+  用量映射（Anthropic 的 input/output 分帧 → 只增不减合并；Gemini 的 `usageMetadata` 全量替换）。
+- **流式走「翻译成 OpenAI SSE」而不是各写一套累加器**：中途断线整轮重发、停滞判定、重复/累积分片、
+  usage 帧归并、坏 JSON 记 anomaly 这套已经用测试锁死的语义，四档协议**原样复用**（OpenAI 档 translate
+  是恒等函数，零开销）。
+- **厂商预设 32 条**（新增 `electron/providerPresets.cjs`）：国内 14 家 + 国际 12 家 + 本地/自建 4 类 +
+  自定义，地址 / 协议 / 认证头 / 参考模型 / 上下文 / 价格一次填好；Anthropic、Gemini、Azure 会自动
+  选好各自的协议与认证头（用户不用知道 `/v1/messages` 与 `api-key` 的存在）。
+- **模型管理界面**（`ModelManager.tsx` + `styles.css`）：厂商预设下拉（分组：国内 / 国际 / 本地）、
+  协议 / 认证 / 端点 / 输出上限字段名、Azure 的部署名与 api-version、「测试连接」「拉取模型列表」、
+  把该厂商预设的模型一次全部加入。
+- **不猜、不静默**：`models:test` 真发一次最小请求，失败时**再补一次最小形态请求**（不带工具 / 思考链 /
+  stream_options），据此区分「密钥或地址不对」与「附加字段不认」，并把供应商原话与可照做的建议带回界面；
+  `models:fetch` 按协议问厂商要模型清单（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models`；
+  Azure 明确回复「无此端点，模型由部署决定」）。
+- **「支持推理强度」从摆设变成真开关**：此前只影响界面，不勾也照样下发 `reasoning_effort`（对不认这个
+  字段的网关每次请求都 400）；现在不勾 = 该模型**不下发**这个字段（字段消失，而不是发 `false`）。
+  同理 `max_tokens` / `max_completion_tokens` 按模型选，本地服务（`auth=none` 或回环地址）允许空 Key。
+- **成本口径限定范围**：DeepSeek 的高峰价（UTC 01–04 / 06–10 周一至周五 ×2）此前对**所有**模型生效 ——
+  多厂商接入后会系统性把别家的账算成两倍，现改为只对 DeepSeek 生效。预设里人民币计价的厂商价格一律留 0
+  （0 = 不参与成本统计），避免把 ¥ 记成 $。
+- **负向判据（逐字节）**：`protocol` 未声明 / `= openai` 时，请求的 URL、认证头与请求体（**含字段顺序**）
+  与改造前逐字节一致；关掉可关字段（`reasoning_effort` / `stream_options`）时字段是**消失**而不是发空值。
+- **门禁 `test:model-protocol`（新增，核心套件 103 → 104）**：四个 mock 服务端各自**严格校验自己的协议**
+  （路径 / 认证头 / 禁用字段，不合格回 4xx）并记录原始请求，用例据「服务端收到什么」与「调用方拿到什么」
+  取证：A 组 OpenAI 档逐字节不变（原始报文直接字符串比对）、B 组 Claude 原生（含 thinking 分片、缓存用量、
+  夹预算）、C 组 Gemini 原生（含 schema 子集剥离 `additionalProperties`）、D 组 Azure（api-key 头 + 部署名
+  路径 + `Authorization` 必须缺席）、**E 组端到端**（真实 `runAgentChat` + 真实工具注册表跑完 Claude 原生
+  的两轮工具循环，第 2 轮请求里必须出现 Anthropic 形状的 `tool_result` 且 `tool_use_id` 对得上）、
+  F 组判别力（协议接错 / 认证头接错 → 404/401，证明前四组不是空转）、G 组预设清单点名（22 家主流厂逐个核对，
+  共 32 条）、H 组存储往返（协议别名归一 / 非法值收敛 / seed 不漂移）、I 组接线（四条新通道主进程→preload→
+  类型→UI 四段齐全，且按**函数体内的调用形态**判，不看「字符串出现过」）、**J 组通道级**（注入确定性密钥环桩后
+  真跑 `models:presets` / `preset-apply` / `test` / `fetch`：落盘加密、测连接如实回报协议与延迟、404 带建议与
+  最小形态对照、Azure 无列表端点如实说明、list 只回 `apiKeySet` 布尔）。共 **94 条断言**，全部离线确定性，
+  无网络、无 Key、无 display。
+- **变异校验（7/7 全部被杀）**：真把协议接错地改一遍源码，判据必须红在**预期的那条断言**上 ——
+  ① 不提升 system → B4；② Claude 用 Bearer 认证 → 被服务端 401 拒掉；③ 不剥 Gemini 不认的
+  schema 关键字 → 被 400 拒掉；④ OpenAI 档多下发一个字段 → A3（逐字节）红；⑤ 不下发 thinking → B7；
+  ⑥ 用量帧只替换不合并 → B11；⑦ UI 把「拉取模型列表」的方法名写错 → I 组红。第 ③ 条第一次是**存活**的：
+  夹具里的工具 schema 没带 `additionalProperties`（而生产注册表 `closeInputSchema()` 会加）→ 判据空转；
+  夹具改成与生产同形后立刻被杀。第 ⑦ 条也是先存活（接线断言原本只判「字符串出现过」，写错方法名照样过）→
+  改成按函数体内的**调用形态**正则后才被杀。
+
 ### 新增（主 Agent 工具面分层 + 结果单份投影 + 记忆注入预算；2026-09-22）
 
 审计结论：不是「没压缩」，而是**压缩前每轮已经背着过宽的固定工具面和若干重复内容**。这一批只做

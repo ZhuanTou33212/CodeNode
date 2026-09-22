@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld('codenode', {
   modelsSave: (model) => ipcRenderer.invoke('models:save', model),
   modelsDelete: (id) => ipcRenderer.invoke('models:delete', id),
   modelsActive: (id) => ipcRenderer.invoke('models:active', id),
+  // S13：厂商预设 / 测连接 / 拉模型列表（让任何一家的 key 都能一次填对）
+  modelsPresets: () => ipcRenderer.invoke('models:presets'),
+  modelsPresetApply: (payload) => ipcRenderer.invoke('models:preset-apply', payload),
+  modelsTest: (id) => ipcRenderer.invoke('models:test', id),
+  modelsFetch: (id) => ipcRenderer.invoke('models:fetch', id),
   agentChat: (payload) => ipcRenderer.invoke('agent:chat', payload),
   stopAgent: (requestId) => ipcRenderer.invoke('agent:stop', requestId),
   onAgentDelta: (cb) => {

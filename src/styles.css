@@ -1618,6 +1618,24 @@ button:disabled {
   color: #fca5a5;
 }
 
+/* ---------- 模型管理：厂商预设 / 协议 / 测连接（S13 多厂商兼容） ---------- */
+.mm-error { margin: 0; padding: 8px 18px; border-bottom: 1px solid rgba(239, 68, 68, 0.32); background: rgba(239, 68, 68, 0.12); color: #fca5a5; font-size: 12px; }
+.mm-preset { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.mm-preset select { flex: 1; min-width: 0; }
+.mm-preset .mm-btn { flex: none; white-space: nowrap; }
+.mm-section { margin: 4px 0 12px; padding: 10px 12px 2px; border: 1px solid var(--border); border-radius: 10px; background: rgba(32, 36, 44, 0.5); }
+.mm-section-title { margin-bottom: 9px; color: var(--text-dim); font-size: 11px; letter-spacing: 0.02em; }
+.mm-hint { margin: -4px 0 12px; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
+.mm-tag { margin-right: 6px; padding: 1px 5px; border-radius: 4px; background: rgba(59, 130, 246, 0.18); color: #93c5fd; font-size: 10px; }
+.mm-status { margin: 10px 0 12px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; font-size: 11.5px; line-height: 1.65; }
+.mm-status.ok { border-color: rgba(34, 197, 94, 0.42); background: rgba(34, 197, 94, 0.1); color: #86efac; }
+.mm-status.err { border-color: rgba(239, 68, 68, 0.38); background: rgba(239, 68, 68, 0.1); color: #fca5a5; }
+.mm-status-hint { margin-top: 4px; color: var(--text-dim); }
+.mm-model-list { margin: 4px 0 12px; }
+.mm-model-items { display: flex; flex-wrap: wrap; gap: 5px; max-height: 132px; overflow: auto; padding: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-panel-2); }
+.mm-model-item { max-width: 100%; padding: 3px 7px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-dim); font: 11px Consolas, 'Cascadia Mono', monospace; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-model-item:hover { border-color: var(--accent); color: #bfdbfe; }
+
 /* ---------- 补齐工程工作台：编辑器 / Diff / 终端 / 运行 / 恢复 / 扩展 ---------- */
 .toolbar-run { background: rgba(34, 197, 94, 0.14); border-color: rgba(34, 197, 94, 0.42); color: #86efac; }
 .pm-search { display: flex; align-items: center; gap: 6px; margin-top: 9px; padding: 6px 8px; background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: 7px; color: var(--text-dim); }
