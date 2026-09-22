@@ -31,9 +31,15 @@ async function main() {
   const p1 = await reg.execute('poll_job', { jobId }, ctx);
   assert.ok(['running', 'done'].includes(p1.data.status), '立即 poll 应处于 running 或 done');
 
-  // 轮询等待任务完成（CI 冷启动的 Windows runner 上 PowerShell + 隔离层初始化明显更慢，最多等 90 秒）
+  /**
+   * 轮询等待任务完成。等待窗口是**给 CI 机器慢**留的余量，不是功能判据 ——
+   * 2026-09-22 实测：windows-latest 上整个 core 套件跑 458s（本地 345s），一个 `Start-Sleep -Seconds 2`
+   * 的后台任务在 90s 窗口内没跑完（runner 被饿死）。窗口放宽到 180s，并把**已经等了多久**写进失败信息，
+   * 免得下次红了看不出是「慢」还是「卡死」。
+   */
   let p2 = null;
-  const deadline = Date.now() + 90000;
+  const waitStartedAt = Date.now();
+  const deadline = waitStartedAt + 180000;
   while (Date.now() < deadline) {
     p2 = await reg.execute('poll_job', { jobId, waitSeconds: 4 }, ctx);
     if (p2.data.status === 'done' || p2.data.status === 'error' || p2.data.status === 'timeout') break;
@@ -41,7 +47,7 @@ async function main() {
   assert.strictEqual(
     p2.data.status,
     'done',
-    '轮询后应完成（实际 status=' + p2.data.status + ' exitCode=' + p2.data.exitCode + ' 输出=' + JSON.stringify(String(p2.data.output || '').slice(0, 200)) + '）'
+    '轮询后应完成（等了 ' + Math.round((Date.now() - waitStartedAt) / 1000) + 's，实际 status=' + p2.data.status + ' exitCode=' + p2.data.exitCode + ' 输出=' + JSON.stringify(String(p2.data.output || '').slice(0, 200)) + '）'
   );
   assert.strictEqual(p2.data.exitCode, 0, '退出码应为 0');
   assert.ok((p2.data.output || '').includes('BG_DONE'), '应包含命令输出');
