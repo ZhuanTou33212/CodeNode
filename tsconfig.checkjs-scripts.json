@@ -1,0 +1,19 @@
+{
+  "// 说明": "对仓库脚本（门禁、夹具、探针）做静态检查。与主进程**分档**：这里保留宽松口径（不开 strictNullChecks），因为脚本里大量 mock/夹具会写出「先声明后按场景赋值」的形状，严格档的噪声远大于收益。主进程那份见 tsconfig.checkjs.json。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["scripts/**/*.cjs"]
+}

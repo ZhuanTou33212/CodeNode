@@ -334,7 +334,7 @@ async function ensureSession(root, extension, options) {
   const handshakeMs = Math.max(HANDSHAKE_FLOOR_MS, Math.min(HANDSHAKE_CEIL_MS, Math.floor(callTimeoutMs / 4)));
   const created = createSession(root, extension, { context: options.context, signal: options.signal });
   if (!created.ok) return created;
-  const session = created.session;
+  const session = /** @type {any} */ (created.session);
 
   try {
     session.handshake = await session.rpc(

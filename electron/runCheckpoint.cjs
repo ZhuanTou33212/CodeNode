@@ -424,8 +424,9 @@ function buildResumeMessages(plan, { systemPrompt } = {}) {
     '【断点续跑】上一次执行被中断，请从中断处继续完成任务，不要从头重复已完成的工作。',
     '原始任务：' + String(plan.prompt || '').slice(0, 2000),
   ];
-  if (plan.completedSteps.length) {
-    lines.push('已完成步骤（不要重复执行）：' + plan.completedSteps.map((step) => step.tool).join('、'));
+  const completedSteps = Array.isArray(plan.completedSteps) ? plan.completedSteps : [];
+  if (completedSteps.length) {
+    lines.push('已完成步骤（不要重复执行）：' + completedSteps.map((step) => step.tool).join('、'));
   }
   if (plan.skippedByLedger && plan.skippedByLedger.length) {
     lines.push('已由幂等账本确认完成、本次会被自动跳过的写操作：' + plan.skippedByLedger.map((step) => step.tool).join('、'));

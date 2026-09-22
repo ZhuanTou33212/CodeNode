@@ -379,7 +379,7 @@ function register(ctx) {
       if (!normalizedAttachments.ok) {
         return { ok: false, error: normalizedAttachments.error };
       }
-      if (normalizedAttachments.attachments.length > 0 && sel && sel.vision !== true) {
+      if (Array.isArray(normalizedAttachments.attachments) && normalizedAttachments.attachments.length > 0 && sel && sel.vision !== true) {
         return {
           ok: false,
           error: `当前模型「${sel.label || sel.model}」未开启视觉能力，无法接收图片；请在模型管理中开启「视觉（图片输入）」或切换到支持视觉的模型`,

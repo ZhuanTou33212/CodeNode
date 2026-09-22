@@ -25,7 +25,8 @@ function parseDataUrl(dataUrl) {
   const mime = m[1].toLowerCase();
   const base64 = m[2].replace(/\s+/g, '');
   // 粗略但足够：base64 长度 → 字节数
-  const bytes = Math.floor((base64.length * 3) / 4) - (/=+$/.test(base64) ? /(=+)$/.exec(base64)[1].length : 0);
+  const pad = /(=+)$/.exec(base64);
+  const bytes = Math.floor((base64.length * 3) / 4) - (pad ? pad[1].length : 0);
   return { mime, base64, bytes };
 }
 

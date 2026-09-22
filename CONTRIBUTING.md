@@ -26,7 +26,7 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 | 命令 | 覆盖 |
 |---|---|
 | `npm run build` | `src/` 的 `tsc --noEmit` + vite 构建 + 图标 |
-| `npm run check:js` | `electron/**`、`scripts/**` 的 checkJs 静态检查（这些是 `.cjs`，不受 `src/` 的 tsc 覆盖） |
+| `npm run check:js` | `electron/**`、`scripts/**` 的 checkJs 静态检查（这些是 `.cjs`，不受 `src/` 的 tsc 覆盖）。**分两档**：`electron/**` 走 `tsconfig.checkjs.json`（开 `strictNullChecks`），`scripts/**` 走 `tsconfig.checkjs-scripts.json`（宽松） |
 | `npm test` | **core 套件**：25 项，无显示环境、无网络、确定性（CI 跑这个） |
 | `npm run test:display` | 需要 Electron 窗口 / 本机无头 Edge 的用例（smoke、RAG UI、矢量画布） |
 | `npm run test:list` | 打印套件清单 |

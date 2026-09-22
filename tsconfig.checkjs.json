@@ -1,5 +1,5 @@
 {
-  "// 说明": "对 Electron 主进程 / 工具层 / 脚本做静态检查（这些文件是 .cjs，不受 src/ 的 tsc 覆盖）",
+  "// 说明": "对 Electron 主进程 / 工具层做**严格档**静态检查（这些文件是 .cjs，不受 src/ 的 tsc 覆盖）。这一档开着 strictNullChecks —— agent 循环、沙箱、工具注册表是「出错就要见血」的代码面，null/undefined 解引用必须能被拦住。仓库脚本（门禁与用例）另走宽松档 tsconfig.checkjs-scripts.json。",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
@@ -10,10 +10,11 @@
     "noEmit": true,
     "strict": false,
     "noImplicitAny": false,
+    "strictNullChecks": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["electron/**/*.cjs", "scripts/**/*.cjs"]
+  "include": ["electron/**/*.cjs"]
 }

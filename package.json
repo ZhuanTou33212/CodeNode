@@ -96,7 +96,7 @@
     "test": "node scripts/run-all-tests.cjs",
     "test:display": "node scripts/run-all-tests.cjs --group display",
     "test:list": "node scripts/run-all-tests.cjs --list",
-    "check:js": "tsc -p tsconfig.checkjs.json",
+    "check:js": "tsc -p tsconfig.checkjs.json && tsc -p tsconfig.checkjs-scripts.json",
     "verify": "npm run build && npm run check:js && npm test",
     "start": "node scripts/run-electron.cjs .",
     "start:prod": "npm run build && node scripts/run-electron.cjs .",

@@ -138,7 +138,7 @@ function briefOf(c) {
  * @returns {{v: number, digest: string, counts: any, resources: Array<any>, conflicts: Array<any>, rejectedDecisions: Array<any>, requiresArbitration: boolean}}
  */
 function merge(input = {}) {
-  const { contributions: canon, duplicatesRemoved } = canonicalize(input.contributions);
+  const { contributions: canon, duplicatesRemoved } = canonicalize(/** @type {any[]} */ (input.contributions));
   const decisions = Array.isArray(input.decisions) ? input.decisions.filter(Boolean) : [];
   const decisionByKey = new Map();
   for (const d of decisions) {

@@ -138,6 +138,7 @@ async function listWorktrees(projectRoot, options) {
   const res = await runGit(projectRoot, ['worktree', 'list', '--porcelain'], options);
   if (!res.ok) return [];
   const list = [];
+  /** @type {{path: string, branch: string|null, head: string|null, detached: boolean}|null} */
   let current = null;
   for (const line of res.stdout.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) {

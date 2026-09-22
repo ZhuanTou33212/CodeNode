@@ -238,6 +238,7 @@ function collectData(dirs, marker) {
   }
 
   // 工程文件解码校验（真实的 .cnode 解码器）
+  /** @type {{path: string, exists: boolean, decodeOk: boolean|null, markerHit: boolean, warnings?: string[], error?: string}} */
   let projectFileCheck = { path: projectFile, exists: exists(projectFile), decodeOk: null, markerHit: false };
   if (projectFileCheck.exists) {
     try {
@@ -372,7 +373,7 @@ function runSelfTest(options = {}) {
     appId: pkg.build ? pkg.build.appId || null : null,
     commit: gitCommit(REPO_ROOT),
     startedAt,
-    finishedAt: null,
+    finishedAt: /** @type {string|null} */ (null),
     platform: process.platform,
     arch: process.arch,
     electron: process.versions.electron || null,
@@ -383,9 +384,9 @@ function runSelfTest(options = {}) {
     marker,
     markerProvided: !!(options.marker || flagValue(argv, MARKER_FLAG) || process.env.CODENODE_SELFTEST_MARKER),
     expectVersion: expectVersion || null,
-    seed: null,
-    data: null,
-    config: null,
+    seed: /** @type {any} */ (null),
+    data: /** @type {any} */ (null),
+    config: /** @type {any} */ (null),
     checks: {},
     warnings,
   };

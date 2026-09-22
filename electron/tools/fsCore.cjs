@@ -218,7 +218,7 @@ function walkEachFile(root, dir, fileRegex, onFile, shouldStop) {
  * @param {string} dir
  * @param {string} rel
  * @param {{ files: Array, stopped: boolean }} out
- * @param {() => boolean|null} shouldStop
+ * @param {(() => boolean)|null} shouldStop
  * @param {((count: number) => void)|null} onProgress
  */
 function walk(root, dir, rel, out, shouldStop, onProgress) {
@@ -481,7 +481,7 @@ function summarizeFile(root, meta) {
     if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
     const read = readTextFileSafe(full);
     if (!read.ok) return null;
-    const lines = read.text.split('\n');
+    const lines = /** @type {string} */ (read.text).split('\n');
     const imports = [];
     const classes = [];
     const functions = [];

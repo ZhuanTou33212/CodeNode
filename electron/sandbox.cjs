@@ -426,7 +426,7 @@ class SandboxChild extends EventEmitter {
   _onBrokerData(chunk) {
     this._rest += chunk.toString('utf8');
     const lines = this._rest.split('\n');
-    this._rest = lines.pop();
+    this._rest = lines.pop() || '';
     for (const line of lines) {
       if (!line.trim()) continue;
       let event;

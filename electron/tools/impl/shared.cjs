@@ -79,7 +79,7 @@ function resolveFileFuzzy(root, relative) {
   const MAX_WALK = 20000;
   const queue = [''];
   while (queue.length && walked < MAX_WALK) {
-    const relDir = queue.shift();
+    const relDir = queue.shift() || '';
     const absDir = path.join(resolvedRoot, relDir);
     let entries;
     try {

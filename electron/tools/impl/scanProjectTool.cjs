@@ -13,6 +13,7 @@ const fsRunner = require('../fsRunner.cjs');
 const MAX_WORKBENCH_NODES = 200;
 
 function buildTree(files, root) {
+  /** @type {{name: string, dirs: Record<string, any>, files: string[]}} */
   const tree = { name: '/', dirs: {}, files: [] };
   for (const f of files) {
     const parts = f.relPath.split('/');

@@ -75,7 +75,7 @@ function addUserMemory(entry) {
     id: 'umem-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
     key,
     content,
-    tags: Array.isArray(entry && entry.tags) ? entry.tags.map(String) : [],
+    tags: entry && Array.isArray(entry.tags) ? entry.tags.map(String) : [],
     createdAt: new Date().toISOString(),
   };
   const list = writeUserMemory([...current.entries, record]);
