@@ -17,7 +17,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { selectRelevant, buildMemoryText } = require('./memory.cjs');
+const { selectRelevant, buildMemoryText, buildMemoryInjection } = require('./memory.cjs');
 
 const MAX_USER_MEMORY_ENTRIES = 200;
 
@@ -88,6 +88,17 @@ function buildUserMemoryText(query, options) {
   return buildMemoryText(data.entries, query, Object.assign({ label: '用户级（跨项目）记忆' }, options || {}));
 }
 
+/**
+ * **自动注入**用（阶段 A / A4）：与项目级同口径 —— 有命中才注入 + 单条/整段预算。
+ * `budgetTokens` 由调用方按「项目级用掉多少」传剩下的额度（两类记忆共用一个预算池）。
+ * @param {string} query
+ * @param {{limit?: number, maxEntryChars?: number, budgetTokens?: number, requireMatch?: boolean, label?: string}} [options]
+ */
+function buildUserMemoryInjection(query, options) {
+  const data = readUserMemory();
+  return buildMemoryInjection(data.entries, query, Object.assign({ label: '用户级（跨项目）记忆' }, options || {}));
+}
+
 module.exports = {
   MAX_USER_MEMORY_ENTRIES,
   userHome,
@@ -97,4 +108,5 @@ module.exports = {
   addUserMemory,
   buildUserMemoryText,
   selectRelevant,
+  buildUserMemoryInjection,
 };

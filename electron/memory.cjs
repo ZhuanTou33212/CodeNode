@@ -179,6 +179,102 @@ function selectRelevant(entries, query, options = {}) {
   };
 }
 
+/**
+ * 与 `compaction.estimateTokens` 同一把尺的纯文本估算（中文按 0.7、其余按 1/4 字符）。
+ * 为什么在这里再写一份：memory.cjs 是底层模块（不依赖 compaction），而「注入预算」必须与
+ * compaction 的窗口估算用同一个口径 —— 两把尺子会得到「这里够用、那里已超」的假安全感。
+ */
+function estimateTextTokens(text) {
+  const s = String(text == null ? '' : text);
+  if (!s) return 0;
+  let cjk = 0;
+  for (const ch of s) {
+    const code = ch.codePointAt(0) || 0;
+    if (
+      (code >= 0x3000 && code <= 0x30ff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xac00 && code <= 0xd7af) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjk += 1;
+    }
+  }
+  const other = [...s].length - cjk;
+  return Math.round(cjk * 0.7 + other / 4);
+}
+
+/** 自动注入的出厂预算（token 效率审计 §4 P1-2） */
+const MEMORY_INJECTION_DEFAULTS = Object.freeze({
+  topK: 5,
+  maxEntryChars: 400,
+  budgetTokens: 2000,
+});
+
+/**
+ * **自动注入**用（阶段 A / A4）：与 `buildMemoryText`（选择器口径，`recall` 工具与既有用例依赖它）
+ * 的关键差别是两条：
+ *   1. **有命中才注入**：没有任何关键词命中时返回空串，不再「回退最近 N 条」。
+ *      旧口径把与本次提问无关的记忆当成固定税，每轮塞进 system prompt 中部（还破坏稳定前缀）。
+ *      模型真要看最近的记忆，有 `recall` 可调 —— 那是显式动作，不是每轮的默认税。
+ *      需要旧行为可配 `agent.memory_inject=recent`。
+ *   2. **有预算**：单条字符上限 + 整段 token 上限，超出按分数截断并如实标注。
+ *
+ * @param {Array<any>} entries
+ * @param {string} query
+ * @param {{limit?: number, maxEntryChars?: number, budgetTokens?: number, requireMatch?: boolean, label?: string}} [options]
+ * @returns {{text: string, tokens: number, count: number, matched: boolean, dropped: number, truncated: number}}
+ */
+function buildMemoryInjection(entries, query, options = {}) {
+  const opt = options || {};
+  const limit = opt.limit == null ? MEMORY_INJECTION_DEFAULTS.topK : Math.max(0, Math.floor(Number(opt.limit) || 0));
+  const maxEntryChars = opt.maxEntryChars == null ? MEMORY_INJECTION_DEFAULTS.maxEntryChars : Math.max(0, Math.floor(Number(opt.maxEntryChars) || 0));
+  const budgetTokens = opt.budgetTokens == null ? MEMORY_INJECTION_DEFAULTS.budgetTokens : Math.max(0, Math.floor(Number(opt.budgetTokens) || 0));
+  const requireMatch = opt.requireMatch !== false;
+  const empty = { text: '', tokens: 0, count: 0, matched: false, dropped: 0, truncated: 0 };
+  if (limit === 0 || budgetTokens === 0) return empty;
+
+  const picked = selectRelevant(entries, query, { limit });
+  if (!picked.entries.length) return empty;
+  if (requireMatch && !picked.matched) return Object.assign({}, empty, { matched: false });
+
+  const label = String(opt.label || '此项目');
+  const header = picked.matched ? '' : '（以下为' + label + '最近保存的记忆，未按当前问题检索）\n';
+  const lines = [];
+  const truncatedNotes = [];
+  let tokens = estimateTextTokens(header);
+  let dropped = 0;
+  let truncated = 0;
+  for (const entry of picked.entries) {
+    let body = (entry.key ? '[' + entry.key + '] ' : '') + String(entry.content || '');
+    if (maxEntryChars > 0 && body.length > maxEntryChars) {
+      body = body.slice(0, maxEntryChars) + '…（本条已截断）';
+      truncated += 1;
+      truncatedNotes.push(String(entry.key || entry.id || '?'));
+    }
+    const line = '- ' + body + '\n';
+    const cost = estimateTextTokens(line);
+    if (tokens + cost > budgetTokens) {
+      dropped += 1;
+      continue;
+    }
+    tokens += cost;
+    lines.push(line);
+  }
+  if (!lines.length) return empty;
+
+  let text = header + lines.join('');
+  if (dropped > 0 || truncated > 0) {
+    const notes = [];
+    if (dropped > 0) notes.push('另有 ' + dropped + ' 条因预算省略');
+    if (truncated > 0) notes.push('有 ' + truncated + ' 条被截断（' + truncatedNotes.join('、') + '）');
+    text += '（' + notes.join('；') + '，需要完整内容用 recall 检索）\n';
+    tokens = estimateTextTokens(text);
+  }
+  return { text, tokens, count: lines.length, matched: picked.matched, dropped, truncated };
+}
+
 /** 注入到 system prompt 的记忆文本（ipc/agent.cjs 直接用这个，保证与测试同一条代码路径） */
 function buildMemoryText(entries, query, options = {}) {
   const picked = selectRelevant(entries, query, options);
@@ -194,4 +290,16 @@ function buildMemoryText(entries, query, options = {}) {
   return lines.join('\n');
 }
 
-module.exports = { readMemory, writeMemory, memoryPath, MAX_MEMORY_ENTRIES, tokenize, scoreEntry, selectRelevant, buildMemoryText };
+module.exports = {
+  readMemory,
+  writeMemory,
+  memoryPath,
+  MAX_MEMORY_ENTRIES,
+  MEMORY_INJECTION_DEFAULTS,
+  estimateTextTokens,
+  tokenize,
+  scoreEntry,
+  selectRelevant,
+  buildMemoryText,
+  buildMemoryInjection,
+};

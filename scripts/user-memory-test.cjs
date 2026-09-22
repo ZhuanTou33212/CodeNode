@@ -129,7 +129,14 @@ function registry() {
     const without = agent.buildSystemPrompt({ raw: '' }, '', [], '项目记忆内容', '', {});
     check('[E] 不传时零痕迹（不出现用户级段落）', !/用户级记忆/.test(without));
     const src = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
-    check('[E] ipc 真的把用户级记忆传进了 buildSystemPrompt（接线）', /userMemoryText,/.test(src) && /buildUserMemoryText\(prompt/.test(src));
+    // A4（token 效率审计 §4 P1-2）：注入入口从 buildUserMemoryText 换成 buildUserMemoryInjection
+    // —— 前者是选择器口径（无命中退回最近 N 条），后者是**自动注入**口径（有命中才注入 + 预算）。
+    // 接线判据同时锁住「用的是剩余预算」：两类记忆共用一个预算池，谁都不能以为自己只占一点。
+    check('[E] ipc 真的把用户级记忆传进了 buildSystemPrompt（接线 + 共用预算池）',
+      /userMemoryText,/.test(src) &&
+      /userMemoryStore\.buildUserMemoryInjection\(prompt, \{/.test(src) &&
+      /budgetTokens: Math\.max\(0, Number\(memoryCfg\.budgetTokens \|\| 0\) - projInjection\.tokens\)/.test(src),
+      'injection=' + /buildUserMemoryInjection/.test(src) + ' budget=' + /projInjection\.tokens/.test(src));
   }
 
   try {

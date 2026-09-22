@@ -13,6 +13,8 @@ const { registerProjectExtensions } = require('./extensions.cjs');
 // 角色契约（白名单 / 是否只读 / 授予的能力 / 角色提示）的唯一来源 —— 见 tools/roles.cjs。
 // 本文件只做「按角色裁剪注册表」这件事，不再自己维护一份角色语义。
 const roles = require('./roles.cjs');
+// 工具面分层（阶段 A / P0-1）：profile 名单与「按任务裁剪」的确定性判定
+const profiles = require('./profiles.cjs');
 
 /** @type {Record<string, readonly string[]>} 兼容旧导入：角色 → 工具白名单（从 roles.cjs 派生） */
 const ROLE_TOOLS = Object.freeze(
@@ -54,6 +56,9 @@ const BUILTINS = [
   // 工作树隔离（对照 Codex/Claude Code）：create/list/remove，只在 .codenode/worktrees/ 下动手
   require('./impl/worktreeTool.cjs'),
 ];
+// 注意：`discover_tools`（工具面分层的取回入口）**故意不在这里** —— 它只在真的裁剪了工具面时才注册
+// （见 registerDiscoverTool）。理由：`agent.tool_profile=off` 时请求体必须与没有这个功能**逐字节一致**，
+// 而进 BUILTINS 会让它无条件多出一个工具 schema（约 60 tokens/轮）。
 
 function buildDefaultRegistry() {
   const registry = new AgentToolRegistry();
@@ -84,6 +89,16 @@ function declareSemantics(registry) {
       concurrencyPolicy: descriptor.concurrencyPolicy,
     });
   }
+  return registry;
+}
+
+/**
+ * 注册 `discover_tools`（工具面分层 / P0-1 的取回入口）。**只在裁剪真的生效时调用** ——
+ * 未裁剪时它没有可发现的工具，多注册一个 schema 纯属白付固定开销。
+ * 必须在 `filterByConfig` **之前**调用：用户的 `tools.allowed/deny` 是显式白/黑名单，照旧说了算。
+ */
+function registerDiscoverTool(registry) {
+  require('./impl/discoverToolsTool.cjs').register(registry);
   return registry;
 }
 
@@ -160,4 +175,15 @@ function filterByRole(registry, role) {
   return registry;
 }
 
-module.exports = { buildDefaultRegistry, filterByConfig, filterByRole, buildDefaultRegistryWithConfig, declareSemantics, BUILTINS, ROLE_TOOLS };
+module.exports = {
+  buildDefaultRegistry,
+  filterByConfig,
+  filterByRole,
+  buildDefaultRegistryWithConfig,
+  declareSemantics,
+  BUILTINS,
+  ROLE_TOOLS,
+  registerDiscoverTool,
+  /** 工具面分层（阶段 A / P0-1）：profile 名单与确定性路由都在 tools/profiles.cjs（唯一来源） */
+  profiles,
+};

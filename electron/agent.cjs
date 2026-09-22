@@ -147,6 +147,28 @@ function loadConfig(projectRoot) {
     costPrices: parseCostPrices(cfg),
     alertThresholds: parseAlertThresholds(cfg),
     alertWebhook: String(cfg['alerts.webhook'] || '').trim(),
+    memory: parseMemoryConfig(cfg),
+  };
+}
+
+/**
+ * 记忆**自动注入**的预算（阶段 A / A4，token 效率审计 §4 P1-2）。
+ *
+ *   agent.memory_top_k                = 5      项目记忆最多注入几条（默认 5，旧值 30）
+ *   agent.user_memory_top_k           = 3      用户级记忆最多几条（旧值 20）
+ *   agent.memory_max_chars_per_entry  = 400    单条字符上限（旧：无上限）
+ *   agent.memory_budget_tokens        = 2000   两类记忆**合计** token 上限（旧：无上限）
+ *   agent.memory_inject               = matched | recent
+ *        matched（默认）= 有命中才注入：无关键词命中时注入为空（需要时模型用 recall 检索）；
+ *        recent          = 旧行为：无命中时回退最近 N 条。
+ */
+function parseMemoryConfig(cfg) {
+  return {
+    topK: configInteger(cfg, 'agent.memory_top_k', 5, 0, 30),
+    userTopK: configInteger(cfg, 'agent.user_memory_top_k', 3, 0, 30),
+    maxEntryChars: configInteger(cfg, 'agent.memory_max_chars_per_entry', 400, 0, 8000),
+    budgetTokens: configInteger(cfg, 'agent.memory_budget_tokens', 2000, 0, 20000),
+    requireMatch: String(cfg['agent.memory_inject'] == null ? 'matched' : cfg['agent.memory_inject']).trim().toLowerCase() !== 'recent',
   };
 }
 
@@ -170,6 +192,14 @@ function parseToolsConfig(cfg) {
     // P7 收口：文件遍历类工具（scan_project / find_files / search_files）在 worker 线程里跑（默认开）。
     // 关掉 = 退回主线程同步执行（会阻塞界面、且单次同步 fs 调用不可中断），仅供排障与老平台兜底。
     toolsFsWorker: cfg['tools.fs_worker'] == null ? true : String(cfg['tools.fs_worker']).toLowerCase() !== 'false',
+    /**
+     * 工具面分层（阶段 A / P0-1）。判定与名单在 `tools/profiles.cjs`（唯一来源）：
+     *   `auto`（默认）= 按任务确定性裁剪：core+code 常驻，画布/调研/编排命中才加；
+     *   `off`         = 不下发裁剪，暴露全部工具（与没有这个功能**逐字节一致**）；
+     *   `core,code`   = 显式指定（core 永远在内，不做关键词推断）。注意显式指定也可能让运行规则
+     *                   悬空（规则点名了没暴露的工具）→ agent.cjs 会按暴露面把对应规则行一并收敛。
+     */
+    toolProfile: String(cfg['agent.tool_profile'] == null ? 'auto' : cfg['agent.tool_profile']).trim(),
   };
 }
 
@@ -675,6 +705,60 @@ const CANVAS_RULES =
       '    g) 收到需求先做「需求拆分」：从需求中识别要制作/使用的对象（数据、配置、实体等）→ 各建一个 object 节点；识别需子代理独立完成的工作 → 建 stage 节点；识别条件判断/循环 → 用 scope 包裹并把节点加入 members；拆成具体可执行步骤 → 用 task/tool 节点；最后以 start 开头、end 结尾连线成一条完整链路。确保每个节点都落在「start→…→end」的完整路径上：不要留下没有任何入边/出边的悬空节点，对象/任务都要被连线接入链路（可用 workbench_edit 返回的【链路提示】检查并补全）。\n' +
       '    h) 所有画布操作（新建节点、连线、移动、删除、把节点放进范围节点、改名/设属性）都是你要执行的控制操作，统一通过 workbench_edit 完成；create 时可给节点指定自定义 id（如 id:"start-1"），以便同一批 operations 里用该 id 连线或放进 scope。\n'
 ;
+/**
+ * 规则行的**工具前提**（阶段 A / P0-1）：规则里点名了某个工具，而该工具不在本轮暴露面里 → 这条规则
+ * 整行省略（或只摘掉点名那半句）。
+ *
+ * 为什么必须这么做：模型会照着规则去调一个它看不到的工具 —— 这是**真实故障模式**（未知工具失败 +
+ * 白烧一轮），不是单纯的预算浪费。工具面裁剪与提示词必须同源。
+ *
+ * 边界：`exposedTools` 为 null/undefined（未裁剪）时**整段不生效** → 提示词逐字节不变。
+ */
+const RUNTIME_RULE_GATES = Object.freeze([
+  { rule: 2, tool: 'workbench_edit' },
+  { rule: 6, tool: 'workbench_edit' },
+  {
+    rule: 7,
+    tool: 'workbench_edit',
+    // 只摘掉点名 workbench_edit 的那两句话，保留同一行的 offset 分段续读建议（对纯代码任务也要用）
+    stripText:
+      '工作台节点（创建/编辑/连线）统一用 workbench_edit，把一次任务需要的所有节点变更放进 operations 数组一次调用完成，避免逐个多次调用。工具返回的 [data] 中已包含节点 id、label 等结构化信息，直接使用返回结果，不要重复调用 get_workbench_model 反复确认。',
+  },
+  { rule: 12, tool: 'query_scalars' },
+  { rule: 19, tool: 'workbench_edit' },
+]);
+
+/** 工具面被裁剪时才追加的那条规则（把「怎么把能力找回来」告诉模型，否则 discover_tools 白给） */
+const RUNTIME_RULE_DISCOVER =
+  '20. 本次工具面**已按任务裁剪**（用不到的能力没有下发，以省每轮预算）：如果你确实需要某个看不见的能力（画布、子代理、联网、批量编辑等），用 discover_tools 搜功能词，它会把匹配的工具从下一轮开始启用；不要凭记忆调用参数不存在的工具。';
+
+/** 去掉以 `n. ` 开头的那一行（规则行都是单行文本，编号在行首） */
+function stripRuleLine(text, n) {
+  const parts = String(text).split('\n');
+  const idx = parts.findIndex((line) => line.startsWith(n + '. '));
+  if (idx >= 0) parts.splice(idx, 1);
+  return parts.join('\n');
+}
+
+/**
+ * 按暴露面收敛运行规则。
+ * @param {string} text 组装好的运行规则全文
+ * @param {string[]|null|undefined} exposedTools 本轮暴露的工具名；null/undefined = 未裁剪（原样返回）
+ * @param {boolean} [trimmed] 工具面是否**真的**被裁剪过（决定要不要追加「怎么把能力找回来」那条）。
+ *   与 exposedTools 分开是因为「暴露了全部工具」和「根本没裁剪」在规则上应当逐字节相同 ——
+ *   门控全通过时不许再追加任何东西，否则 `tool_profile=off` 就不再等价于没有这个功能。
+ */
+function applyToolGates(text, exposedTools, trimmed) {
+  if (!Array.isArray(exposedTools)) return text;
+  let out = text;
+  for (const gate of RUNTIME_RULE_GATES) {
+    if (exposedTools.includes(gate.tool)) continue;
+    out = gate.stripText ? out.split(gate.stripText).join('') : stripRuleLine(out, gate.rule);
+  }
+  if (trimmed === true && !out.includes('20. ')) out = out + '\n' + RUNTIME_RULE_DISCOVER;
+  return out;
+}
+
 /** 画布层未注入时的占位：保留编号，避免「规则编号断档」被模型读成漏读/异常。 */
 const CANVAS_RULES_STUB =
   '14. 【画布建模规则本次未注入】本次任务与画布无关（画布为空且提问未涉及节点/连线/流程），该条省略以省预算；若任务确实需要画布建模，请先说明。\n';
@@ -711,7 +795,10 @@ function resolvePromptLayers(input = {}) {
 
 function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, options = {}) {
   const promptLayers = resolvePromptLayers({ canvasSummary, prompt: options.prompt, mode: options.canvasMode, intentHint: options.intentHint });
-  const canvasRules = promptLayers.canvas ? CANVAS_RULES : CANVAS_RULES_STUB;
+  // 工具面同源：画布建模规则要求 workbench_edit —— 工具面被裁剪且没带画布时，连规则也要退成占位，
+  // 否则模型会照着 a–h 去调一个不存在的工具。（exposedTools 为空 = 未裁剪 → 判定不变，逐字节一致。）
+  const canvasToolsExposed = !Array.isArray(options.exposedTools) || options.exposedTools.includes('workbench_edit');
+  const canvasRules = promptLayers.canvas && canvasToolsExposed ? CANVAS_RULES : CANVAS_RULES_STUB;
   const lines = [];
   lines.push(
     '\n【回复与编码约束】\n' +
@@ -733,6 +820,7 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
     );
   }
   lines.push(
+    applyToolGates(
     '\n【运行规则】（硬性要求）\n' +
       '1. 你是一个工具型 Agent：所有对画布/文件的实际操作都必须通过「函数调用（function calling）」完成。\n' +
       '2. 需要读取画布时调用 get_workbench_model；创建/编辑/连线节点统一调用 workbench_edit（用 operations 数组一次提交全部节点变更）。\n' +
@@ -752,7 +840,10 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
       '16. 需要向用户提问、澄清或确认时，直接用自然语言在回复中提问，不要调用 ask_user 工具，也不要在回复中展示 JSON、工具调用代码或参数片段。\n' +
       '17. 低敏感/只读操作（如 read_file、find_files、search_files、list_directory、scan_project、analyze_project、project_info、retrieve_context、query_scalars、get_workbench_model 等）无需询问用户，直接执行；只有高风险/破坏性/不可撤销操作才需要先征求用户同意。\n' +
       '18. 读取策略（泛读/精读分层，避免逐文件空转）：看全貌优先用批量/摘要工具——scan_project、analyze_project、list_directory、find_files、search_files、read_file analyze=true；仅对少数关键文件用 read_file 单文件全文深读。需要了解多个相互没有依赖的文件时，在同一条回复里并发发起多个 read_file（一次性并行），不要一个个串行等待造成多次往返。\n' +
-      '19. 大批量画布操作按「逻辑组」分批提交 operations（如先建主线、再建 scope 循环体、最后统一连线），不要把所有节点变更塞进单个超长 workbench_edit 调用，避免单次输出过大被截断；小/中量变更仍可一次 operations 提交。'
+      '19. 大批量画布操作按「逻辑组」分批提交 operations（如先建主线、再建 scope 循环体、最后统一连线），不要把所有节点变更塞进单个超长 workbench_edit 调用，避免单次输出过大被截断；小/中量变更仍可一次 operations 提交。',
+      options.exposedTools,
+      options.toolFaceTrimmed === true,
+    )
   );
   return lines.join('\n\n');
 }
@@ -1561,10 +1652,17 @@ const REPEAT_NOTICE = '（相同参数已重复调用，直接复用上次结果
 
 /**
  * 组装发送给主模型（上下文）的工具结果消息内容。
- * SCALAR_BACKED_TOOLS 的结果不追加 [data]（已本地化）；其余按 cap 截断。
+ *
+ * 两条口径：
+ *   1. `result.modelContent != null`（A1 单份投影）：**只发它**，不再附加 `[data]` JSON。
+ *      适用面是「text 与 data 说的是同一件事」的工具（find_files 的文件列表、search_files 的匹配
+ *      列表、execute_shell 的命令输出、子代理任务的视图）—— 此前这些结果被发了两遍，
+ *      随后的 LLM 压缩还要为这份重复付一次费（审计 §4 P0-2）。
+ *   2. 缺省（`modelContent == null`，既有 60+ 处调用）：`text` + `[data]` JSON —— 与旧行为**逐字节一致**。
+ *      SCALAR_BACKED_TOOLS 的结果不追加 [data]（已本地化）；其余按 cap 截断。
  */
 function buildToolContent(result, toolName, malformed, repeated, cap) {
-  const rawText = result.text || (result.ok ? '（空）' : '（失败）');
+  const rawText = result.modelContent != null ? String(result.modelContent) : (result.text || (result.ok ? '（空）' : '（失败）'));
   // 截断**正文本身**：cap（agent.data_truncate_cap）此前只作用于下面的 [data] 附加段，
   // result.text 没有任何上限 —— 一次大目录扫描 / 大文件读取就能把上下文撑爆（审查 §3 P1）。
   // 截断必须带明确标记和「怎么拿剩余内容」的指引，否则模型会以为这就是全部内容。
@@ -1577,7 +1675,8 @@ function buildToolContent(result, toolName, malformed, repeated, cap) {
       '【参数格式错误】传给 ' + toolName + ' 的 arguments 不是合法 JSON（引号未转义等），解析后为空。请修正转义后重新调用，不要重复相同调用。\n' +
       content;
   }
-  if (result.data && typeof result.data === 'object' && Object.keys(result.data).length && !SCALAR_BACKED_TOOLS.has(toolName)) {
+  // A1：投影了就不再附加 [data]（那份数据仍然照旧交给 UI / 审计 / 回放，只是不发第二遍给模型）
+  if (result.modelContent == null && result.data && typeof result.data === 'object' && Object.keys(result.data).length && !SCALAR_BACKED_TOOLS.has(toolName)) {
     try {
       const dataJson = JSON.stringify(result.data);
       content += '\n[data] ' + (dataJson.length > cap ? dataJson.slice(0, cap) + '…（已截断，可用 offset/更小范围参数获取剩余）' : dataJson);
@@ -3151,6 +3250,7 @@ module.exports = {
   buildSkillsIndex,
   parseReasoningEffort,
   parseReliabilityConfig,
+  parseMemoryConfig,
   shouldCompress,
   buildToolContent,
   COMPRESSOR_SYSTEM_PROMPT,

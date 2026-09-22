@@ -4,6 +4,40 @@
 
 ## [未发布]
 
+### 新增（主 Agent 工具面分层 + 结果单份投影 + 记忆注入预算；2026-09-22）
+
+审计结论：不是「没压缩」，而是**压缩前每轮已经背着过宽的固定工具面和若干重复内容**。这一批只做
+**确定性收益**（不引入任何新的模型调用）：
+
+- **P0-1 工具面按任务分层**：33 个工具 schema 此前无条件常驻（实测 **7,261 tokens/轮**、纯代码固定输入
+  **9,493**）。现在 `--core(+code/canvas/research/orchestration)` 按**确定性规则**定面（`tools/profiles.cjs`，
+  纯函数、无模型调用），注册表新增暴露面（`setExposure`/`exposeNames`/`isExposed`）与
+  **model-visible specs 的 run 内缓存 + 稳定哈希**（`schemaInfo()`；同一轮里 compaction 估算、preflight
+  与正式请求此前各构造一遍 20k 字符 JSON）。用不到的能力由 `discover_tools` 按功能词取回（**只增不减**）。
+  实测：纯代码 19 工具 **5,327**（−43.9%）、调研 −41.8%、编排 −29.3%；**真实请求体单轮输入 7,285 → 3,692
+  tokens（−49.3%）**。
+- **P0-2 工具结果只向模型投影一次**：`find_files` / `search_files` / `execute_shell` / `get_subagent_task`
+  的 `text` 与 `data` 说的是同一件事，此前**发两遍**（随后的 LLM 压缩还要为重复再付一次费）。新增
+  `AgentToolResult.modelContent` 作为「唯一进入上下文的那份」；实测 search_files −53.9%、find_files −56.5%、
+  execute_shell −93.5%，投影后无 `[data]` 段（重复率 0）。结构化 `data` 仍完整交给 UI/审计/回放。
+  失败结果**不投影**（`code`/`retryable`/`userActionRequired` 是判据，不能省）。
+- **P1-2 记忆自动注入有预算、有命中才注入**：无关键词命中不再回退「最近 30/20 条」当固定税；
+  单条 ≤400 字符、两类合计 ≤2,000 tokens（`agent.memory_*`）。选择器语义未动
+  （`recall` 与既有用例依赖「无命中退回最近 N 条」），自动注入走新入口 `buildMemoryInjection`。
+- **规则面与工具面同源**：规则点名的工具不在暴露面里时，对应规则行一并收敛（`RUNTIME_RULE_GATES`）——
+  否则模型会照着规则去调一个不存在的工具（真实故障，不只是浪费）。裁剪生效时追加规则 20 说明
+  `discover_tools` 的用法。
+- **负向判据（逐字节）**：`agent.tool_profile=off` 时，工具面 JSON（26/31/33 三种装配）、
+  `buildSystemPrompt` 三态、`buildToolGuide`、`buildToolContent` 各形态、记忆文本、`loadConfig` 既有键
+  与改动前**逐字节相同**（同进程对照 `git archive HEAD` 的旧代码）。`discover_tools` **只在裁剪生效时注册**
+  —— 否则 off 的请求体会多一个工具 schema，这条判据就不成立。
+- 判据 `test:token-overhead`（A–I 九组：基线 / 各面棘轮 / 负向逐字节 / 规则同源 / 变异 / 取回语义 /
+  **真实请求体** / 记忆预算 / 接线）、`test:tool-projection`（真实执行 search_files/find_files/execute_shell）；
+  核心套件 **94 → 96**。`npm test` 96/96、`check:js` 0 错误、`build` 通过（隔离目录前台跑）。
+- **未达项**：画布档实测 **8,891（−13.1%）**，未达审计估算的 6,000 —— 常驻运行规则直接点名
+  `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
+  `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
+
 ### 新增（动作级意图复核 + 插话后重判；2026-09-21）
 
 - **A2 动作级复核**：轮级判定看不到「助手接下来真要做什么」—— 真机取证证实了盲区（assistant **没说出来的**

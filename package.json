@@ -137,7 +137,9 @@
     "test:shell-hardening": "node scripts/shell-hardening-test.cjs",
     "test:confirm-payload": "node scripts/confirm-payload-test.cjs",
     "test:run-store-scale": "node scripts/run-store-scale-test.cjs",
-    "test:storage-hardening": "node scripts/storage-hardening-test.cjs"
+    "test:storage-hardening": "node scripts/storage-hardening-test.cjs",
+    "test:token-overhead": "node scripts/token-overhead-test.cjs",
+    "test:tool-projection": "node scripts/tool-result-projection-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

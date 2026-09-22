@@ -90,12 +90,12 @@ function register(registry) {
       }
       const truncated = total > offset + max;
       const shownRange = (offset + 1) + '-' + (offset + page.length);
-      return AgentToolResult.ok(
+      // A1（审计 §4 P0-2）：同 find_files —— 匹配列表只发一份（文本里已含列表与分页游标）
+      const text =
         '找到 ' + total + ' 处匹配' +
-          (truncated ? '，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : '：') +
-          '\n' + page.join('\n'),
-        { count: total, offset, matches: page }
-      );
+        (truncated ? '，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : '：') +
+        '\n' + page.join('\n');
+      return AgentToolResult.ok(text, { count: total, offset, matches: page }, { modelContent: text });
     }
   );
 }

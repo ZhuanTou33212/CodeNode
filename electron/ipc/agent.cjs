@@ -38,6 +38,8 @@ const userMemoryStore = require('../userMemory.cjs');
 // 意图识别 / 授权判定（照 Codex guardian 分类器，见 electron/intent.cjs 顶部注释）
 const intentLib = require('../intent.cjs');
 const { parseWebSearchConfig } = require('../tools/impl/webSearchTool.cjs');
+// schema 的 token 量测（工具面事件的留痕口径，与 compaction 预检同一把尺）
+const compactionLib = require('../compaction.cjs');
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
 function webSearchConfig(cfg) {
@@ -521,15 +523,41 @@ function register(ctx) {
           onDelta: onAgentDelta,
         });
         subagentManager.register(registry);
+        /**
+         * 工具面分层（阶段 A / P0-1）：裁剪生效时才注册取回入口 `discover_tools`。
+         * 放在 filterByConfig **之前**：用户的 tools.allowed/deny 是显式白/黑名单，照旧说了算；
+         * 它若被白名单挡掉，下面会**整体放弃裁剪**（没有取回入口就裁剪 = 悄悄削减用户允许的能力）。
+         * `agent.tool_profile=off` 时压根不注册 → 请求体与没有这个功能**逐字节一致**。
+         */
+        if (cfg.tools.toolProfile !== 'off') toolkit.registerDiscoverTool(registry);
         toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
       }
-      const toolGuide = agent.buildToolGuide(registry ? registry.listTools() : []);
       const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
-      // 第 5 项：注入按当前提问检索（key/tags/content 打分，均无命中才退回最近的记忆），
-      // 不再是 entries.slice(-30) 的纯时间切片。
-      const memoryText = memoryStore.buildMemoryText(memory.entries, prompt, { limit: 30 });
-      // 用户级（跨项目）记忆：与项目记忆同口径（按提问打分），但**分开注入**成独立段落
-      const userMemoryText = userMemoryStore.buildUserMemoryText(prompt, { limit: 20 });
+      /**
+       * A4（token 效率审计 §4 P1-2）：自动注入从「无命中就退回最近 30/20 条」改成
+       * **有命中才注入 + 单条/整段预算**。旧口径把与本次提问无关的记忆当成每轮的固定税，
+       * 还塞在 system prompt 中部（破坏稳定前缀）；要看最近的记忆，模型有 `recall` 可调。
+       * 选择器本身的口径**没动**（recall 工具与既有用例依赖「无命中退回最近 N 条」）。
+       * 两类记忆共用一个预算池：项目级先用，剩下的才给用户级 —— 否则两处都以为自己只占一点。
+       */
+      /** @type {any} */  // 形状来自 agent.parseMemoryConfig（键名集中在那一处）
+      const memoryCfg = cfg.memory || {};
+      const projInjection = memoryStore.buildMemoryInjection(memory.entries, prompt, {
+        limit: memoryCfg.topK,
+        maxEntryChars: memoryCfg.maxEntryChars,
+        budgetTokens: memoryCfg.budgetTokens,
+        requireMatch: memoryCfg.requireMatch,
+        label: '此项目',
+      });
+      const memoryText = projInjection.text;
+      const userInjection = userMemoryStore.buildUserMemoryInjection(prompt, {
+        limit: memoryCfg.userTopK,
+        maxEntryChars: memoryCfg.maxEntryChars,
+        budgetTokens: Math.max(0, Number(memoryCfg.budgetTokens || 0) - projInjection.tokens),
+        requireMatch: memoryCfg.requireMatch,
+        label: '用户级（跨项目）记忆',
+      });
+      const userMemoryText = userInjection.text;
       const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
       /**
        * 渐进披露（对照 Claude Code 的 Agent Skills）：prompt 里**只放索引**（名字 + 一句话），
@@ -649,12 +677,60 @@ function register(ctx) {
           } catch {}
         }
       }
+      /**
+       * 工具面分层（阶段 A / P0-1）：**在意图识别之后**定面 —— 画布判定必须与提示词层同源
+       * （`intentPolicy.routeHint` 是 `resolvePromptLayers` 的一路信号）。判定是纯函数
+       * （`tools/profiles.cjs`），无模型调用、无 IO。
+       *
+       * 定面只改「模型看不看得见」：注册表执行侧的四道门（角色/能力、网络、审批、租约）逐条不变，
+       * 未暴露的工具一样会被 `execute` 拒绝成 PERMISSION_DENIED / 未知工具。
+       */
+      let toolFace = null;
+      if (registry) {
+        const layers = agent.resolvePromptLayers({
+          canvasSummary,
+          prompt,
+          mode: cfg.prompt && cfg.prompt.canvasRules,
+          intentHint: intentPolicy ? intentPolicy.routeHint : null,
+        });
+        const decision = toolkit.profiles.resolveToolProfiles({ canvas: layers.canvas, prompt, mode: cfg.tools.toolProfile });
+        const registered = registry.listTools().map((t) => t.name);
+        if (decision.source === 'off') {
+          toolFace = { applied: false, reason: 'config-off', profiles: [], exposed: registered.length, hidden: 0 };
+        } else if (!registry.contains('discover_tools')) {
+          // 取回入口被 tools.allowed/deny 挡掉 → **整体放弃裁剪**（fail-open 回旧的全量面）
+          toolFace = { applied: false, reason: 'no-discover-tool', profiles: decision.profiles, exposed: registered.length, hidden: 0 };
+        } else {
+          const names = toolkit.profiles.namesForProfiles(decision.profiles, registered);
+          registry.setExposure(names);
+          const info = registry.schemaInfo();
+          toolFace = {
+            applied: true,
+            profiles: decision.profiles,
+            reason: decision.reason,
+            source: decision.source,
+            exposed: names.length,
+            hidden: registered.length - names.length,
+            chars: info.chars,
+            hash: info.hash,
+            tokens: compactionLib.estimateTokens([], info.tools),
+          };
+        }
+        runStore.appendEvent(projectRoot, runId, 'tool_face', toolFace);
+      }
+      // 工具引导（名称 + 一句话）只列**实际暴露**的工具：提示词里列着模型看不到的工具 = 悬空指令。
+      // 未裁剪（toolExposure === null）时它与 listTools() 等价 —— 与改动前逐字节一致。
+      const toolGuide = agent.buildToolGuide(registry ? registry.listTools().filter((t) => registry.isExposed(t.name)) : []);
       const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
         userMemoryText,
         // 意图识别的提示词路由信号（只在「本来会省画布层」时把层救回来；null = 不改变既有判定）
         intentHint: intentPolicy ? intentPolicy.routeHint : null,
+        // 工具面同源：按暴露面收敛运行规则（null = 未裁剪 → 规则一个不动，逐字节一致）
+        exposedTools: registry ? registry.toolExposure : null,
+        // 「真的裁剪过」才追加 discover_tools 那条规则（暴露全部工具 ≠ 没裁剪，二者提示词必须一致）
+        toolFaceTrimmed: !!(toolFace && toolFace.applied),
       });
       const messages = resumePlan
         ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })

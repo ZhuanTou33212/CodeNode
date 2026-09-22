@@ -99,6 +99,10 @@ const CORE = [
   // 纯 Node 断言；scale 会写约 45MB 临时文件、2-4s
   'test:run-store-scale',
   'test:storage-hardening',
+  // 阶段 A（token 效率审计 P0-1/P0-2 + A1/A3/A4）：工具面按任务裁剪 + 结果单份投影 + 记忆预算。
+  // 纯 Node 断言 + 脚本化模型请求体取证，离线确定性（数字口径 = compaction.estimateTokens）
+  'test:token-overhead',
+  'test:tool-projection',
   // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
   // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
   'test:fixture-shape',

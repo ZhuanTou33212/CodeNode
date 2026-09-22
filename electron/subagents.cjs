@@ -362,7 +362,10 @@ class SubagentManager {
             );
           }
         }
-        return AgentToolResult.ok(JSON.stringify(view), view);
+        // A1（审计 §4 P0-2）：子代理视图此前是 `JSON.stringify(view)` + 同一个 `view` 各发一遍。
+        // 只保留给模型的 JSON 文本；`data`（含 envelope / 产物哈希）照旧给 UI、审计与合并流程。
+        const viewJson = JSON.stringify(view);
+        return AgentToolResult.ok(viewJson, view, { modelContent: viewJson });
       }
     );
     registry.register(

@@ -63,12 +63,14 @@ function register(registry) {
       }
       const truncated = total > offset + max;
       const shownRange = (offset + 1) + '-' + (offset + page.length);
-      return AgentToolResult.ok(
+      // A1（审计 §4 P0-2）：文件列表**只发一份** —— 下面这段文本里已经是完整列表 + 分页游标，
+      // 而 data.files 是同一条列表。旧口径把它俩都发给模型（结果发两遍，LLM 压缩再为重复付一次费）。
+      // data 照旧交给 UI / 审计 / 回放，只是不再自动追加给模型。
+      const text =
         '找到 ' + total +
-          (truncated ? ' 个文件，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : ' 个文件：') +
-          '\n' + page.join('\n'),
-        { count: total, offset, files: page }
-      );
+        (truncated ? ' 个文件，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : ' 个文件：') +
+        '\n' + page.join('\n');
+      return AgentToolResult.ok(text, { count: total, offset, files: page }, { modelContent: text });
     }
   );
 }

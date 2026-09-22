@@ -494,7 +494,10 @@ function register(registry) {
           const truncNote = collected.droppedChars
             ? '\n…（输出超出 ' + MAX_COLLECT_CHARS + ' 字符收集上限，中间约 ' + collected.droppedChars + ' 字符未被保留）'
             : '';
-          resolve(AgentToolResult.ok('退出码 ' + exitCode + truncNote + '\n' + page.output.trim() + suffix, {
+          // A1（审计 §4 P0-2）：命令输出只发一份（`data.output` 与文本里那份逐字相同）。
+          // 失败路径**不动**：失败结果的 [data] 里 code/retryable/userActionRequired 是判据。
+          const shellText = '退出码 ' + exitCode + truncNote + '\n' + page.output.trim() + suffix;
+          resolve(AgentToolResult.ok(shellText, {
             exitCode,
             command,
             output: page.output,
@@ -505,7 +508,7 @@ function register(registry) {
             jobId,
             outputTruncated: collected.droppedChars > 0,
             droppedOutputChars: collected.droppedChars,
-          }));
+          }, { modelContent: shellText }));
         });
       });
     }
