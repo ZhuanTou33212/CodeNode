@@ -661,6 +661,7 @@ const TOOL_GUIDE = {
   read_file: '读取项目内文本文件（含 PDF 文字层提取）',
   write_file: '写入项目内文件',
   edit_file: '精确替换文件中的某段文本',
+  update_plan: '写下/更新本次任务的步骤清单（长任务先写计划）',
   find_files: '按 glob 模式查找文件',
   search_files: '按正则搜索文件内容',
   list_directory: '列出项目目录',
@@ -675,6 +676,10 @@ const TOOL_GUIDE = {
   write_analysis_md: '把分析结果写成 Markdown 分析节点',
   retrieve_context: '本地检索：mode=auto 自动路由（名字/prompt/具体数据→标量库；代码/文档/语义→文件向量库），混合查询返回两类来源并注明路由决策',
   query_scalars: '本地标量精确查询：取画布节点 prompt/goal/名字/属性等精准数据（不走云端）',
+  read_skill: '读取项目 Skill 的完整正文（提示词里只有索引）',
+  view_image: '把项目内的图片附到对话里（真的看到画面）',
+  worktree: '为独立任务建/列/删 git 工作树（改代码不影响主工作树）',
+  web_search: '联网搜索（需要配置搜索后端）',
   remember: '保存项目长期记忆（决策、约定、偏好）',
   recall: '搜索项目长期记忆',
   // 工具面裁剪生效时才注册（见 toolkit.registerDiscoverTool）：那句引导必须说清「为什么会有没下发的工具」
@@ -734,6 +739,49 @@ const RUNTIME_RULE_GATES = Object.freeze([
 const RUNTIME_RULE_DISCOVER =
   '20. 本次工具面**已按任务裁剪**（用不到的能力没有下发，以省每轮预算）：如果你确实需要某个看不见的能力（画布、子代理、联网、批量编辑等），用 discover_tools 搜功能词，它会把匹配的工具从下一轮开始启用；不要凭记忆调用参数不存在的工具。';
 
+/**
+ * 按**任务面**变化、因此必须后置到 cache boundary 之后的规则编号（P1-1）。
+ *
+ * 口径与 `RUNTIME_RULE_GATES` 对齐：那条表决定「工具面没带时这行还要不要」，这条表决定
+ * 「这行算稳定段还是任务段」。两张表都指向同一批规则 —— 所以加规则时要么两处都登记，要么都不登记
+ * （`prompt-prefix-stability-test` 会核对两表编号一致）。
+ */
+const TASK_RULE_NUMBERS = Object.freeze([2, 6, 7, 12, 19, 20]);
+
+/** 任务规则段的标题（PROMPT_SECTIONS 里按前缀 '【任务相关规则' 匹配；正文用完整标题） */
+const TASK_RULES_TITLE = '【任务相关规则（与本次任务面/画布相关的规则；编号沿用上面那套，未列出的条目与本次无关）】';
+
+/**
+ * 把「运行规则全文」拆成稳定段与任务段（P1-1）。
+ *
+ * 输入是 `applyToolGates` 之后的全文：此时按面该去的行已经去了，画布建模块（或它的占位）也在里面。
+ * 输出两段都保留各自的标题行；任务段按规则编号升序排列（画布块按 14 的位置插进去），于是
+ * **两段的编号并集恰好是完整的一套规则**（用例直接断言这一点，防止搬运时漏行）。
+ *
+ * @param {string} text
+ * @param {string} canvasBlock CANVAS_RULES 或 CANVAS_RULES_STUB（本次实际注入的那个）
+ * @returns {{stable: string, task: string}}
+ */
+function splitRuntimeRules(text, canvasBlock) {
+  let rest = String(text == null ? '' : text);
+  const parts = [];
+  const chunk = String(canvasBlock || '');
+  const at = chunk ? rest.indexOf(chunk) : -1;
+  if (at >= 0) {
+    parts.push({ n: 14, text: chunk });
+    rest = rest.slice(0, at) + rest.slice(at + chunk.length);
+  }
+  const stableLines = [];
+  for (const line of rest.split('\n')) {
+    const m = /^(\d+)\. /.exec(line);
+    if (m && TASK_RULE_NUMBERS.includes(Number(m[1]))) parts.push({ n: Number(m[1]), text: line });
+    else stableLines.push(line);
+  }
+  parts.sort((a, b) => a.n - b.n);
+  const task = [TASK_RULES_TITLE].concat(parts.map((p) => p.text)).join('\n');
+  return { stable: stableLines.join('\n').replace(/\n+$/, '\n'), task };
+}
+
 /** 去掉以 `n. ` 开头的那一行（规则行都是单行文本，编号在行首） */
 function stripRuleLine(text, n) {
   const parts = String(text).split('\n');
@@ -764,6 +812,88 @@ function applyToolGates(text, exposedTools, trimmed) {
 /** 画布层未注入时的占位：保留编号，避免「规则编号断档」被模型读成漏读/异常。 */
 const CANVAS_RULES_STUB =
   '14. 【画布建模规则本次未注入】本次任务与画布无关（画布为空且提问未涉及节点/连线/流程），该条省略以省预算；若任务确实需要画布建模，请先说明。\n';
+
+/**
+ * system prompt 的**段落清单**（P1-1）：顺序即**装配顺序**，`stable: true` 的一律排在 dynamic 之前。
+ *
+ * 为什么要显式登记：重排的唯一目的是让**请求前缀**尽量长且稳定（prompt cache 命中前缀），
+ * 而「哪些段落每轮都会变」是个必须有人负责的知识 —— 新增段落忘了登记时，`orderPromptSections`
+ * 会把它当**动态**段（fail-open：宁可放到边界之后，也不让它打断稳定前缀）。
+ * 判据 `scripts/prompt-prefix-stability-test.cjs` 直接读这张表。
+ */
+const PROMPT_SECTIONS = Object.freeze([
+  // ---- 稳定前缀：同一项目 + 同一工具面 → 逐字节相同 ----
+  { id: 'reply-rules', title: '【回复与编码约束】', stable: true },
+  { id: 'runtime-rules', title: '【运行规则】', stable: true },
+  { id: 'soul', title: '【灵魂设定】', stable: true },
+  { id: 'tools', title: '【可用工具', stable: true },
+  // ---- cache boundary ----
+  { id: 'task-rules', title: '【任务相关规则', stable: false },
+  { id: 'skills', title: '【项目 Skills', stable: false },
+  { id: 'memory', title: '【项目长期记忆', stable: false },
+  { id: 'user-memory', title: '【用户级记忆', stable: false },
+  { id: 'canvas', title: '【当前画布节点清单', stable: false },
+]);
+
+/**
+ * 段落标题在**行首**出现的位置（找不到返回 -1）。
+ *
+ * 为什么必须行首匹配：`includes()` 会命中**别处提到**这个名字的位置 —— 画布建模规则 f) 里就引用了
+ * `【当前画布节点清单】`，于是切分会把「规则块中间」当成画布段的起点（实测踩到：段落顺序看起来是
+ * reply→rules→canvas→soul…，整段厚度也全错）。段落标题只出现在自己那一行的行首。
+ */
+function sectionStart(text, title) {
+  const s = String(text == null ? '' : text);
+  const at = s.indexOf('\n' + title);
+  if (at >= 0) return at + 1;
+  return s.startsWith(title) ? 0 : -1;
+}
+
+/** 段落 → 登记信息（**按自己那一行的行首标题**匹配；未登记返回 null） */
+function promptSectionOf(text) {
+  const head = String(text == null ? '' : text).replace(/^\n+/, '');
+  return PROMPT_SECTIONS.find((meta) => head.startsWith(meta.title)) || null;
+}
+
+/**
+ * 按「稳定在前、动态在后」给段落排序（P1-1）。
+ * 三类：登记的稳定段（按清单顺序）→ 登记的动态段（按清单顺序）→ **未登记段**（保持原相对顺序，放最后）。
+ * @param {string[]} sections
+ * @returns {string[]}
+ */
+function orderPromptSections(sections) {
+  const list = (Array.isArray(sections) ? sections : []).map((text) => ({ text, meta: promptSectionOf(text) }));
+  const pick = (meta) => list.find((item) => item.meta === meta);
+  return [
+    ...PROMPT_SECTIONS.filter((m) => m.stable).map(pick).filter(Boolean),
+    ...PROMPT_SECTIONS.filter((m) => !m.stable).map(pick).filter(Boolean),
+    ...list.filter((item) => !item.meta),
+  ].map((item) => item.text);
+}
+
+/**
+ * 把一段装配好的 system prompt 按登记表切回段落（顺序即实际出现的顺序）。
+ * 用途：① 用例判「稳定前缀逐字节相同、变化只出现在边界之后」；
+ *      ② 后续 P2-2 的成本归因要回答「**第一个变化的区段**是哪个」（cache miss 时）。
+ * @param {string} text
+ * @returns {Array<{id: string|null, title: string|null, stable: boolean, start: number, text: string}>}
+ */
+function splitPromptSections(text) {
+  const s = String(text == null ? '' : text);
+  const hits = [];
+  for (const meta of PROMPT_SECTIONS) {
+    const at = sectionStart(s, meta.title);
+    if (at >= 0) hits.push({ meta, at });
+  }
+  hits.sort((a, b) => a.at - b.at);
+  const out = [];
+  for (let i = 0; i < hits.length; i++) {
+    const start = hits[i].at;
+    const end = i + 1 < hits.length ? hits[i + 1].at : s.length;
+    out.push({ id: hits[i].meta.id, title: hits[i].meta.title, stable: hits[i].meta.stable, start, text: s.slice(start, end) });
+  }
+  return out;
+}
 
 /** 提问里出现这些词即视为「与画布有关」（宁可多注入，不省错） */
 const CANVAS_KEYWORDS = /画布|节点|连线|工作流|流程|链路|建模|scope|stage|object|start\s*节点|end\s*节点/i;
@@ -821,8 +951,8 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
         toolGuide.map((t) => `- ${t.name}：${t.desc}`).join('\n')
     );
   }
-  lines.push(
-    applyToolGates(
+  /** 段落全部按「内容需要」push，最后统一按 P1-1 的顺序装配（稳定前置、动态后置） */
+  const rulesText = applyToolGates(
     '\n【运行规则】（硬性要求）\n' +
       '1. 你是一个工具型 Agent：所有对画布/文件的实际操作都必须通过「函数调用（function calling）」完成。\n' +
       '2. 需要读取画布时调用 get_workbench_model；创建/编辑/连线节点统一调用 workbench_edit（用 operations 数组一次提交全部节点变更）。\n' +
@@ -843,11 +973,32 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
       '17. 低敏感/只读操作（如 read_file、find_files、search_files、list_directory、scan_project、analyze_project、project_info、retrieve_context、query_scalars、get_workbench_model 等）无需询问用户，直接执行；只有高风险/破坏性/不可撤销操作才需要先征求用户同意。\n' +
       '18. 读取策略（泛读/精读分层，避免逐文件空转）：看全貌优先用批量/摘要工具——scan_project、analyze_project、list_directory、find_files、search_files、read_file analyze=true；仅对少数关键文件用 read_file 单文件全文深读。需要了解多个相互没有依赖的文件时，在同一条回复里并发发起多个 read_file（一次性并行），不要一个个串行等待造成多次往返。\n' +
       '19. 大批量画布操作按「逻辑组」分批提交 operations（如先建主线、再建 scope 循环体、最后统一连线），不要把所有节点变更塞进单个超长 workbench_edit 调用，避免单次输出过大被截断；小/中量变更仍可一次 operations 提交。',
-      options.exposedTools,
-      options.toolFaceTrimmed === true,
-    )
+    options.exposedTools,
+    options.toolFaceTrimmed === true,
   );
-  return lines.join('\n\n');
+  /**
+   * P1-1 第二步：把规则块拆成「与工具面无关的（稳定）」与「按任务面/画布变化的（任务级）」两段。
+   * 前者留在稳定前缀里，后者后置到 cache boundary 之后 —— 于是**纯代码任务与画布任务的前缀也能对上**。
+   * 拆法只按规则编号搬运整行（正文一个字节不改），编号在两段里都沿用总表（并集仍是完整的一套规则）。
+   */
+  const splitRules = splitRuntimeRules(rulesText, canvasRules);
+  lines.push(splitRules.stable);
+  if (splitRules.task) lines.push(splitRules.task);
+  /**
+   * P1-1：按「稳定前置、动态后置」装配。
+   *
+   * 为什么：prompt cache 命中的是**请求前缀**，而此前「画布清单 / 项目记忆 / 用户记忆」紧跟回复约束
+   * —— 每个提问都会改写第 3 段，等于把后面所有稳定内容（运行规则 ≈3.3k 字符、soul、工具引导）
+   * 一起踢出缓存。现在每轮可能变的段落全部后置：
+   *
+   *   稳定前缀（同一项目 + 同一工具面 → 逐字节相同）：回复约束 → 运行规则 → soul → 可用工具
+   *   ---- cache boundary ----
+   *   动态区段：项目 Skills → 项目长期记忆 → 用户级记忆 → 当前画布节点清单
+   *
+   * 两点如实说明：① 重排**不减少上下文占用**（缓存命中的内容一样占窗口），省的是**计费与首 token 延迟**；
+   * ② 这是**纯搬迁**，每段正文逐字节不变（判据 prompt-prefix-stability-test 会按段落逐字节比对）。
+   */
+  return orderPromptSections(lines).join('\n\n');
 }
 
 function isRetryableStatus(status) {
@@ -3221,6 +3372,12 @@ module.exports = {
   resolvePromptLayers,
   CANVAS_RULES,
   CANVAS_RULES_STUB,
+  PROMPT_SECTIONS,
+  TASK_RULE_NUMBERS,
+  TASK_RULES_TITLE,
+  orderPromptSections,
+  splitPromptSections,
+  splitRuntimeRules,
   buildToolGuide,
   chatCompletion,
   validateRagGrounding,

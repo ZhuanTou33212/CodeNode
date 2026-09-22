@@ -139,6 +139,7 @@
     "test:run-store-scale": "node scripts/run-store-scale-test.cjs",
     "test:storage-hardening": "node scripts/storage-hardening-test.cjs",
     "test:token-overhead": "node scripts/token-overhead-test.cjs",
+    "test:prompt-prefix": "node scripts/prompt-prefix-stability-test.cjs",
     "test:tool-projection": "node scripts/tool-result-projection-test.cjs"
   },
   "build": {

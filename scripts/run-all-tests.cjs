@@ -103,6 +103,8 @@ const CORE = [
   // 纯 Node 断言 + 脚本化模型请求体取证，离线确定性（数字口径 = compaction.estimateTokens）
   'test:token-overhead',
   'test:tool-projection',
+  // P1-1：稳定内容前置 + 规则按面分层（前缀稳定性 / 规则零改字 / 变异判别力）。纯 Node，离线确定性
+  'test:prompt-prefix',
   // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
   // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
   'test:fixture-shape',
