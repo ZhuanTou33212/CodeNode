@@ -2580,8 +2580,13 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       buffer: compactionCfg.bufferTokens,
     });
     const trimmedNow = !!(lastTrimStats && (lastTrimStats.trimmed > 0 || lastTrimStats.overBudget) && compactionCfg.onTrim !== false);
+    /**
+     * P1-4（审计 §4）：**先 compact，再做不可逆硬裁剪** —— 这一轮的硬裁剪要是真会丢正文，
+     * 就先把语义压缩机会用掉（见下面 `before-trim` 的调用点）。
+     */
+    const beforeTrimNow = opts.beforeTrim === true;
     const forced = forceCompaction === true || opts.force === true;
-    if (!forced && !plan.needed && !trimmedNow) return null;
+    if (!forced && !plan.needed && !trimmedNow && !beforeTrimNow) return null;
     // /compact 强制压缩、但确实没东西可压（只剩 system 与人的话）：如实说明，别假装压过
     if (compressible <= 0) {
       emitTrace({ kind: 'compaction_skipped', turnId: iter, reason: 'nothing-to-compact', tokens });
@@ -2595,8 +2600,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         });
       return { ok: false, error: 'nothing-to-compact' };
     }
-    /** 触发来源：manual（/compact）/ over-limit（窗口阈值）/ after-trim（硬裁剪已开始丢正文）/
-     *  provider-rejected（供应商真报了超窗后的补救压缩） */
+    /** 触发来源：manual（/compact）/ over-limit（窗口阈值）/ before-trim（**还没丢正文**就先压）/
+     *  after-trim（上一轮已经丢了正文，补救压缩）/ provider-rejected（供应商真报了超窗后的补救压缩） */
     const trigger = opts.trigger || (forced ? 'manual' : plan.needed ? 'over-limit' : 'after-trim');
     // 压缩进行中：机器轮次不保留（等价于 Codex 丢掉 <codex_internal_context> 那类注入）
     const machineTurns = messages.filter((m) => m && m.role === 'user' && compactionLib.isMachineInjectedUserMessage(String(m.content || ''))).length;
@@ -2686,6 +2691,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     emitTrace({
       kind: 'compaction_done',
       turnId: iter,
+      // 触发来源：manual / over-limit / before-trim / after-trim / provider-rejected
+      // （`before-trim` = 这一轮硬裁剪本来会丢正文，所以**先压**；见 P1-4 的时序说明）
+      trigger,
       windowNumber: compactionWindowNumber,
       tokensBefore: tokens,
       tokensAfter: after,
@@ -2740,10 +2748,35 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         taskId: tools && tools.context && typeof tools.context.taskId === 'function' ? tools.context.taskId() : '',
         role: tools && tools.context && typeof tools.context.role === 'function' ? tools.context.role() : 'supervisor',
       };
-      // ① 语义压缩（照 Codex CLI）：窗口逼近上限、或上一轮已被迫硬裁剪 → 用交接摘要替换
-      //    「助手长文 + 工具结果」，保留 system 与人的轮次。
-      if (compactionEnabled) await runCompactionStep(iter);
-      // ② 上下文预算（第 1 项）：请求前裁剪。只把**旧的、超大的工具结果正文**换成占位符，
+      /**
+       * ① P1-4（审计 §4）：**先 compact，再做不可逆硬裁剪**。
+       *
+       * 硬裁剪把旧的工具结果正文换成占位符 —— 这一步**不可逆**，而且一旦发生，语义压缩看到的
+       * 就已经是占位符而不是原始正文（摘要质量直接受影响，审计点名的就是这个时序）。
+       * 所以在动手裁之前**先探一次**「这一轮到底会不会丢正文」（`contextBudget.planTrim` 是纯函数，
+       * 零成本、不改消息）：会丢就先做语义压缩；压缩成功 → 历史已被摘要替换，通常就没得丢了；
+       * 压缩失败 / 不可用 / 不划算（ROI 门：只剩一轮就别付这笔钱）→ 才真的换占位符，
+       * 并把 `lastTrimStats` 留给下一轮再试一次压缩（原有的补救路径不变）。
+       */
+      let preTrimWouldDrop = 0;
+      if (contextTrimEnabled) {
+        try {
+          preTrimWouldDrop = contextBudget.planTrim(messages, {
+            maxChars: contextMaxChars,
+            keepRecent: contextKeepRecent,
+            minResultChars: contextMinResultChars,
+            hardKeepRecent: contextHardKeepRecent,
+          }).plan.length;
+        } catch {
+          preTrimWouldDrop = 0; // 探测失败不该拦住主流程：退回原来的顺序（压缩在②之前那次调用里已经试过）
+        }
+      }
+      // ② 语义压缩（照 Codex CLI）：窗口逼近上限 / 这一轮硬裁剪会丢正文 / 上一轮已被迫硬裁剪
+      //    → 用交接摘要替换「助手长文 + 工具结果」，保留 system 与人的轮次。
+      if (compactionEnabled) {
+        await runCompactionStep(iter, preTrimWouldDrop > 0 ? { beforeTrim: true, trigger: 'before-trim' } : undefined);
+      }
+      // ③ 上下文预算（第 1 项）：请求前裁剪。只把**旧的、超大的工具结果正文**换成占位符，
       // 消息条数/角色顺序/tool_calls↔tool_call_id 配对一概不动 —— 不制造「孤立 tool 消息」。
       if (contextTrimEnabled) {
         const trim = contextBudget.applyTrim(messages, {

@@ -38,6 +38,22 @@
   `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
   `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
 
+### 修复（P1-4 收尾：先 compact，再做不可逆硬裁剪；2026-09-22）
+
+审计点名的是一个**时序**问题：硬裁剪把旧工具结果正文换成占位符是不可逆的，而旧流程里
+「字符预算超了」这一轮直接换占位符，语义压缩要到下一轮才触发 —— 那时摘要看到的已经是占位符，
+原始正文再也回不来。
+
+- 动手裁之前先用 `contextBudget.planTrim`（纯函数，零成本）**探一次**「这一轮会不会丢正文」；
+  会丢就先做语义压缩（触发来源 `before-trim`），压完通常就没得裁了。
+- 压缩失败 / 不可用 / 不划算（P1-3 的 ROI 门）→ 才真的换占位符，`lastTrimStats` 仍留给下一轮再试一次
+  压缩（原有 `after-trim` 补救路径与硬裁剪兜底网都没动）。
+- `compaction_done` 事件新增 `trigger` 字段（manual / over-limit / **before-trim** / after-trim /
+  provider-rejected），压缩到底是被哪条路径触发的可回放归因。
+- 判据：`test:compaction-tail` 新增 G 组（端到端真实 run）——`before-trim` 触发、**摘要请求看到的是
+  原始正文而不是占位符**、压完主请求里既无原始正文也无占位符；负向：关掉压缩后硬裁剪照旧兜底
+  （占位符出现、`context_trim` > 0）。
+
 ### 优化（P1-2：动态上下文段落共用一个 token 预算；2026-09-22）
 
 审计原文：「记忆、RAG、画布状态共用一个 `DynamicContextBudget`，避免各模块都认为自己只占一点。」

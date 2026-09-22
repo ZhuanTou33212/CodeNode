@@ -292,7 +292,104 @@ console.log('\n== E. 配置与接线 ==');
     f2.compaction ? JSON.stringify({ after: f2.compaction.tokensAfter, limit: f2.compaction.limit }) : 'missing');
   check('[F] 紧窗口：主请求仍然发得出去（没有被预检拦下）', !!f2.sent && f2.calls === 2, 'calls=' + f2.calls);
 
-  console.log('\n' + (failures === 0 ? 'COMPACTION TAIL TEST: PASS（无损操作尾部逐字保留 + 原子配对 + 统一触发公式 + 压不下来会自动收窄）' : 'COMPACTION TAIL TEST: FAIL —— ' + failures + ' 项断言未通过'));
+  // ============ G. 顺序：先 compact，再做不可逆硬裁剪（审计 §4 P1-4 最后一条）============
+  console.log('\n== G. 顺序：硬裁剪之前先压 ==');
+  {
+    const contextBudget = require('../electron/contextBudget.cjs');
+    const RAW = 'RAW_TOOL_BODY_';
+    /**
+     * 造一段「**字符预算超了、但远没到模型窗口**」的历史：这正是审计点名的时序 ——
+     * 旧代码会直接换占位符（不可逆），下一轮才拿占位符去做摘要；现在应当**先压**。
+     */
+    const rawHistory = () => [
+      { role: 'system', content: '你是测试用 system' },
+      { role: 'user', content: '第一轮：看看 a.txt' },
+      { role: 'assistant', content: '我读一下', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"work/a.txt"}' } }] },
+      { role: 'tool', name: 'read_file', tool_call_id: 'call_1', content: RAW + 'x'.repeat(4000) },
+      { role: 'user', content: '第二轮：继续' },
+    ];
+    const runOrder = async ({ runId, compactionEnabled }) => {
+      const controller = new AbortController();
+      const context = new AgentToolContext({
+        projectRoot: root, confirm: async () => true, audit: () => {}, askUser: async () => '',
+        ragConfig: { enabled: false }, sandbox: policy, signal: controller.signal,
+      });
+      const ledger = new costLedger.CostLedger({ projectRoot: root, runId });
+      const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false, toolsAllowed: ['read_file'] });
+      const stub = installScriptedModel(
+        [
+          { content: '<compaction>摘要：已读过 a.txt（原始正文很长）', finishReason: 'stop' },
+          { content: '按摘要继续完成。', finishReason: 'stop' },
+        ],
+        { loopLast: false },
+      );
+      try {
+        await agent.runAgentChat({
+          cfg: {
+            apiBase: 'http://scripted.local/v1', apiKey: 'test-...al', model: 'scripted-model',
+            maxTokens: 2048, reasoningEffort: '',
+            reliability: { maxAttempts: 1, retryBaseMs: 1, retryMaxMs: 2, streamMaxAttempts: 0 },
+            limits: { ...agent.loadConfig(root).limits, maxTotalTokens: 10000000, maxConcurrentRuns: 1 },
+            compression: { enabled: false },
+            // 硬裁剪：字符预算很小（3000），最近 0 条受保护 → 那条大工具结果**会被换占位符**
+            context: { enabled: true, maxInputChars: 3000, keepRecentMessages: 0, minResultChars: 200, hardKeepRecentMessages: 0 },
+            // 压缩：窗口给得很大（20 万）→ **比例触发线永远不会到**（这保证测的是新加的 before-trim 通路）
+            // 注意 `enabled` 是**解析结果字段**（配置键是 `agent.compact.enabled`，传 {enabled:'false'} 会被忽略）
+            compaction: {
+              ...agent.parseCompactionConfig({}),
+              enabled: compactionEnabled,
+              tailTokens: 0,
+              ratio: 0.9,
+              bufferTokens: 8000,
+            },
+            contextWindow: 200000,
+            rag: { enabled: false }, tools: {},
+            costLedger: ledger, costRunId: runId,
+          },
+          messages: rawHistory(),
+          tools: { registry, context },
+          signal: controller.signal,
+          timeoutMs: 30000,
+        });
+      } finally {
+        stub.restore();
+      }
+      const traces = (() => {
+        const file = path.join(root, '.codenode', 'tools_trace.jsonl');
+        if (!fs.existsSync(file)) return [];
+        return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((t) => t.runId === runId);
+      })();
+      const summaryReq = stub.seen[0] ? stub.seen[0].messages : null;
+      const mainReq = stub.seen[stub.seen.length - 1] ? stub.seen[stub.seen.length - 1].messages : null;
+      return {
+        compaction: traces.filter((t) => t.kind === 'compaction_done').pop() || null,
+        skipped: traces.filter((t) => t.kind === 'compaction_skipped').pop() || null,
+        trimmed: traces.filter((t) => t.kind === 'context_trim').length,
+        summarySawRaw: !!summaryReq && JSON.stringify(summaryReq).includes(RAW),
+        mainHasRaw: !!mainReq && JSON.stringify(mainReq).includes(RAW),
+        mainHasPlaceholder: !!mainReq && JSON.stringify(mainReq).includes(contextBudget.TRIM_MARKER),
+        mainMessages: mainReq,
+      };
+    };
+
+    const g1 = await runOrder({ runId: 'run-order-on', compactionEnabled: true });
+    check('[G] 硬裁剪本来会丢正文 → **先压**（trigger=before-trim，不是等下一轮的 after-trim）',
+      !!g1.compaction && g1.compaction.trigger === 'before-trim',
+      g1.compaction ? JSON.stringify({ trigger: g1.compaction.trigger, before: g1.compaction.tokensBefore, after: g1.compaction.tokensAfter }) : JSON.stringify(g1.skipped || {}));
+    check('[G] 摘要请求看到的是**原始正文**（不是占位符）—— 这正是旧时序坏掉的地方',
+      g1.summarySawRaw === true);
+    check('[G] 压完就没得裁了：主请求里既没有原始正文（进了摘要）也没有占位符（没做不可逆裁剪）',
+      g1.mainHasRaw === false && g1.mainHasPlaceholder === false && g1.trimmed === 0,
+      JSON.stringify({ raw: g1.mainHasRaw, placeholder: g1.mainHasPlaceholder, trims: g1.trimmed }));
+
+    // 负向：压缩关掉时，硬裁剪仍然照旧兜底（新顺序没有把兜底网拆掉）
+    const g2 = await runOrder({ runId: 'run-order-off', compactionEnabled: false });
+    check('[G] 压缩关掉 → 硬裁剪照样兜底（占位符出现在主请求里，能力没有被新顺序搞掉）',
+      g2.mainHasPlaceholder === true && g2.trimmed > 0 && g2.compaction === null,
+      JSON.stringify({ placeholder: g2.mainHasPlaceholder, trims: g2.trimmed }));
+  }
+
+  console.log('\n' + (failures === 0 ? 'COMPACTION TAIL TEST: PASS（无损操作尾部逐字保留 + 原子配对 + 统一触发公式 + 压不下来会自动收窄 + 先压后裁）' : 'COMPACTION TAIL TEST: FAIL —— ' + failures + ' 项断言未通过'));
   process.exitCode = failures === 0 ? 0 : 1;
 })().catch((error) => {
   console.error('COMPACTION TAIL TEST: FAIL');
