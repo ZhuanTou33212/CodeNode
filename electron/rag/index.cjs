@@ -369,7 +369,7 @@ class LocalRagIndex {
     this.vectorStoreFatal = null;
     this.vectorStoreChange = null;
     this.lastVectorError = null;
-    this.pendingChange = { deleted: [], upserted: [] };
+    this.pendingChange = { deleted: /** @type {any[]} */ ([]), upserted: /** @type {any[]} */ ([]) };
     this.chunkById = new Map();
     this.stats = { indexedFiles: 0, chunks: 0, skippedFiles: 0, changedFiles: 0, removedFiles: 0, invalidatedFiles: 0, truncated: false };
   }
@@ -435,7 +435,7 @@ class LocalRagIndex {
   async syncVectorStore() {
     const store = this.ensureVectorStore();
     const change = this.pendingChange;
-    this.pendingChange = { deleted: [], upserted: [] };
+    this.pendingChange = { deleted: /** @type {any[]} */ ([]), upserted: /** @type {any[]} */ ([]) };
     if (!store || (!change.deleted.length && !change.upserted.length)) return null;
     try {
       const applied = await store.applyChanges(change, this.ensureEmbedder());

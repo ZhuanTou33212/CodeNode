@@ -117,7 +117,7 @@ function register(registry) {
         if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return AgentToolResult.error('文件不存在：' + relative);
         const read = readTextFile(file);
         if (!read.ok) return AgentToolResult.error(read.error);
-        code = read.text;
+        code = /** @type {string} */ (read.text);
       }
       const maxMethodLines = typeof args.maxMethodLines === 'number' && Number.isFinite(args.maxMethodLines) ? Math.max(1, Math.floor(args.maxMethodLines)) : 200;
       const findings = [];

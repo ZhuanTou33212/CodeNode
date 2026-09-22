@@ -249,7 +249,7 @@ function replayPayload(projectRoot, options) {
   const opts = options || {};
   const rawLimit = Number(opts.limit);
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 0;
-  const report = replay(projectRoot, { runId: opts.runId || null, kinds: opts.kinds || undefined });
+  const report = replay(projectRoot, { runId: /** @type {any} */ (opts.runId || null), kinds: opts.kinds || undefined });
   const all = report.runs.flatMap((run) => run.events);
   return {
     ok: true,

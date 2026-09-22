@@ -196,7 +196,7 @@ class ToolScheduler {
       const childSignal = linkAbort(d.signal, controller, detachers);
       const limit = descriptor.timeoutMs == null ? 0 : descriptor.timeoutMs;
       const promise = withTimeout(
-        () => d.execute(item, { turnId: d.turnId, toolCallId: callId, attemptId: callId + '#1', signal: childSignal, scheduler: 'parallel-readonly' }),
+        () => /** @type {any} */ (d).execute(item, { turnId: d.turnId, toolCallId: callId, attemptId: callId + '#1', signal: childSignal, scheduler: 'parallel-readonly' }),
         limit,
         { tool: item.name, toolCallId: callId, signal: childSignal, onTimeout: () => controller && controller.abort() },
       ).finally(() => {

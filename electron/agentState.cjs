@@ -114,8 +114,8 @@ function createStateMachine(options = {}) {
   const machine = {
     runId: options.runId || null,
     state: STATES.RUNNING,
-    history: [],
-    violations: [],
+    history: /** @type {Array<any>} */ ([]),
+    violations: /** @type {Array<any>} */ ([]),
     startedAt: new Date().toISOString(),
   };
 

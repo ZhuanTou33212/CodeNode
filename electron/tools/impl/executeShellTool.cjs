@@ -137,7 +137,7 @@ function startBackgroundJob(root, tokens, normalized, command, timeoutSeconds, s
   } catch (e) {
     return { jobId: null, error: describeSpawnError(e) };
   }
-  const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', tail: '', droppedChars: 0, exitCode: null, error: null, child };
+  const job = { jobId, projectRoot: root, command, startedAt: Date.now(), status: 'running', output: '', tail: '', droppedChars: 0, exitCode: null, error: /** @type {string|null} */ (null), child };
   BACKGROUND_JOBS.set(jobId, job);
   const onAbort = () => {
     if (job.status !== 'running') return;
@@ -543,7 +543,7 @@ function register(registry) {
           const finish = () => {
             clearTimeout(timer);
             signal && signal.removeEventListener('abort', onAbort);
-            resolve();
+            resolve(undefined);
           };
           const onAbort = () => {
             finish();

@@ -118,6 +118,7 @@ function isInternalUrl(url) {
 
 // 渲染层不使用任何浏览器权限（src/ 内无 getUserMedia / Notification / clipboard / fullscreen 调用），
 // 因此默认全量拒绝；将来确有需要，必须在这里显式放行并说明用途。
+/** @type {Set<string>} 渲染层不使用的权限一律不在集合里（默认全量拒绝） */
 const ALLOWED_PERMISSIONS = new Set([]);
 
 function createWindow() {

@@ -202,6 +202,7 @@ async function runHook(rule, deps) {
   const inRoot = path.resolve(d.projectRoot || '.');
   const policy = d.policy || null;
   // 1) 静态审计：与 execute_shell 同一套判据（越界写硬拒；断网时疑似联网硬拒）
+  /** @type {{outsideWrites: string[], unresolvedWrites: string[], network: string[], reasons: string[]}} */
   let guard = { outsideWrites: [], unresolvedWrites: [], network: [], reasons: [] };
   try {
     guard = shellGuard.analyzeShellCommand(command, {

@@ -371,7 +371,7 @@ function buildCompactedHistory(input = {}) {
   const out = [];
   if (systemMessage) out.push(systemMessage);
   out.push(...kept);
-  out.push({ role: 'user', content: buildSummaryEnvelope(summary) });
+  out.push({ role: 'user', content: buildSummaryEnvelope(/** @type {string} */ (summary)) });
   /**
    * P1-4：无损操作尾部接在摘要**之后** —— 它是历史里最新、也最该逐字保留的部分
    * （摘要负责「很早以前」，尾部负责「刚刚」）。顺序与审计给的结构一致：

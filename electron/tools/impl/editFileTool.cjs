@@ -85,7 +85,7 @@ function register(registry) {
       try {
         const read = readTextFile(file);
         if (!read.ok) return AgentToolResult.error(read.error);
-        const initial = read.text;
+        const initial = /** @type {string} */ (read.text);
         // 确认前的这遍计算只为「注定失败的编辑别打扰用户」；真正写盘用的是确认后的重算结果
         if (!initial.includes(oldText)) return AgentToolResult.error('文件中未找到目标文本：' + abbreviate(oldText));
         const initialReplaced = occurrence > 0 ? (indexOfOccurrence(initial, oldText, occurrence) < 0 ? 0 : 1) : countOccurrences(initial, oldText);
@@ -108,7 +108,7 @@ function register(registry) {
         // 直接用旧快照写会把确认期间的外部改动一起覆盖掉。
         const fresh = readTextFile(file);
         if (!fresh.ok) return AgentToolResult.error(fresh.error);
-        const content = fresh.text;
+        const content = /** @type {string} */ (fresh.text);
         if (!content.includes(oldText)) return AgentToolResult.error('确认期间文件已被改动，目标文本不存在了：' + relative);
         let updated;
         let replaced;

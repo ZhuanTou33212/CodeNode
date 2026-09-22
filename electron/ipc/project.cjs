@@ -50,7 +50,7 @@ async function walkProject(root) {
   const queue = [''];
   const MAX = 20000;
   while (queue.length && files.length < MAX) {
-    const relDir = queue.shift();
+    const relDir = queue.shift() || '';
     const absDir = path.join(root, relDir);
     let items;
     try {
@@ -151,7 +151,7 @@ function register(ctx) {
 
   function runProjectCommand(root, command, timeoutSeconds = 120) {
     const tokens = splitProjectCommand(command);
-    const base = (tokens[0] || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    const base = ((tokens[0] || '').replace(/\\/g, '/').split('/').pop() || '').toLowerCase();
     if (!tokens.length) return Promise.resolve({ ok: false, error: '命令为空' });
     if (!PROJECT_COMMANDS.has(base)) return Promise.resolve({ ok: false, error: `命令不在白名单：${tokens[0]}` });
     const cwd = path.resolve(root || '.');
@@ -179,7 +179,7 @@ function register(ctx) {
 
   function startProjectStream(event, root, command, timeoutSeconds = 180) {
     const tokens = splitProjectCommand(command);
-    const base = (tokens[0] || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    const base = ((tokens[0] || '').replace(/\\/g, '/').split('/').pop() || '').toLowerCase();
     if (!tokens.length) return { ok: false, error: '命令为空' };
     if (!PROJECT_COMMANDS.has(base)) return { ok: false, error: `命令不在白名单：${tokens[0]}` };
     const sessionId = 'term-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -187,6 +187,7 @@ function register(ctx) {
     let child;
     try { child = spawnProjectProcess(tokens, base, cwd); }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    /** @type {{sessionId: string, child: any, timer: any, done: boolean}} */
     const job = { sessionId, child, timer: null, done: false };
     projectProcesses.set(sessionId, job);
     const send = (payload) => { try { if (!event.sender.isDestroyed()) event.sender.send('project:run:event', { sessionId, ...payload }); } catch {} };
@@ -207,7 +208,7 @@ function register(ctx) {
   }
 
   ipcMain.handle('graph:save', async (_event, payload) => {
-    const { canceled, filePath } = await dialog.showSaveDialog(getFocusedWindow(), {
+    const { canceled, filePath } = await dialog.showSaveDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '另存为 CodeNode 工程',
       defaultPath: 'workflow.cnode',
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
@@ -218,7 +219,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('graph:open', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(getFocusedWindow(), {
+    const { canceled, filePaths } = await dialog.showOpenDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '打开 CodeNode 工程',
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
       properties: ['openFile'],
@@ -241,7 +242,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('project:choose', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(getFocusedWindow(), {
+    const { canceled, filePaths } = await dialog.showOpenDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '选择项目目录',
       properties: ['openDirectory'],
     });
@@ -250,7 +251,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('project:create', async () => {
-    const { canceled, filePath } = await dialog.showSaveDialog(getFocusedWindow(), {
+    const { canceled, filePath } = await dialog.showSaveDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '新建 CodeNode 项目',
       defaultPath: '未命名项目.cnode',
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],

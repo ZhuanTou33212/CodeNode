@@ -210,8 +210,9 @@ class AgentToolRegistry {
 
   /** 当前有效暴露名单（注册顺序）；`null` 暴露 = 全部工具 */
   exposedNames() {
-    if (!this._hiddenTools) return [...this.tools.keys()];
-    return [...this.tools.keys()].filter((n) => !this._hiddenTools.has(n));
+    const hidden = this._hiddenTools;
+    if (!hidden) return [...this.tools.keys()];
+    return [...this.tools.keys()].filter((n) => !hidden.has(n));
   }
 
   /**
@@ -556,7 +557,7 @@ class AgentToolRegistry {
       if (keys.length) {
         const holder = (base && typeof base.taskId === 'function' && base.taskId()) || 'supervisor';
         const role = (base && typeof base.role === 'function' && base.role()) || '';
-        const claim = this.leases.acquire(keys, holder, { role });
+        const claim = /** @type {any} */ (this.leases).acquire(keys, holder, { role });
         if (!claim.ok) {
           const c = claim.conflict || {};
           const traceNote = /** @type {any} */ (execContext).trace;

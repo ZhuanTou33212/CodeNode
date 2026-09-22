@@ -20,7 +20,7 @@ const fsCore = require('./fsCore.cjs');
 /** 回消息给主线程；通道已关闭时静默（主线程可能已经 terminate 我们了） */
 function reply(message) {
   try {
-    parentPort.postMessage(message);
+    /** @type {any} */ (parentPort).postMessage(message);
   } catch {}
 }
 

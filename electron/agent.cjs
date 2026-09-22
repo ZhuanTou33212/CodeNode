@@ -1013,7 +1013,7 @@ function orderPromptSections(sections) {
     ...PROMPT_SECTIONS.filter((m) => m.stable).map(pick).filter(Boolean),
     ...PROMPT_SECTIONS.filter((m) => !m.stable).map(pick).filter(Boolean),
     ...list.filter((item) => !item.meta),
-  ].map((item) => item.text);
+  ].map((item) => (item ? item.text : ''));
 }
 
 /**
@@ -1179,7 +1179,7 @@ function waitForRetry(ms, signal) {
     };
     timer = setTimeout(() => {
       signal && signal.removeEventListener('abort', onAbort);
-      resolve();
+      resolve(undefined);
     }, Math.max(0, ms));
     signal && signal.addEventListener('abort', onAbort, { once: true });
   });
@@ -1528,9 +1528,11 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
 async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}) {
   const reliability = (cfg && cfg.reliability) || {};
   const signal = options.signal;
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : Number(reliability.turnTimeoutMs) || DEFAULT_TURN_TIMEOUT_MS;
+  const rawTimeoutMs = options.timeoutMs;
+  const timeoutMs = Number.isFinite(rawTimeoutMs) ? Number(rawTimeoutMs) : Number(reliability.turnTimeoutMs) || DEFAULT_TURN_TIMEOUT_MS;
   const idleTimeoutMs = Number.isFinite(options.idleTimeoutMs) ? options.idleTimeoutMs : Number(reliability.streamIdleTimeoutMs) || DEFAULT_STREAM_IDLE_TIMEOUT_MS;
-  const restarts = Number.isFinite(options.streamMaxAttempts) ? options.streamMaxAttempts : Number(reliability.streamMaxAttempts) || 0;
+  const rawRestarts = options.streamMaxAttempts;
+  const restarts = typeof rawRestarts === 'number' && Number.isFinite(rawRestarts) ? rawRestarts : Number(reliability.streamMaxAttempts) || 0;
   const totalAttempts = 1 + Math.max(0, restarts);
   const startedAt = Date.now();
   let firstError = null;
@@ -2287,7 +2289,7 @@ function logToolTrace(projectRoot, entry) {
 /** 终端日志转义：非 ASCII 转成 \\uXXXX，避免 Windows 终端（GBK）把中文显示成乱码 */
 function safeLog(s) {
   return String(s || '').replace(/[^\x20-\x7E]/g, (c) => {
-    const cp = c.codePointAt(0);
+    const cp = c.codePointAt(0) || 0;
     return cp <= 0xffff ? '\\u' + cp.toString(16).padStart(4, '0') : '\\u{' + cp.toString(16) + '}';
   });
 }
@@ -2960,7 +2962,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
        */
       const planForUi = readRunPlan(traceProjectRoot(), cfg);
       const planUiStamp = planForUi && planForUi.updatedAt ? String(planForUi.updatedAt) : '';
-      if (planUiStamp && planUiStamp !== lastPlanUiStamp) {
+      if (planForUi && planUiStamp && planUiStamp !== lastPlanUiStamp) {
         lastPlanUiStamp = planUiStamp;
         emitTrace({ kind: 'plan_card', turnId: iter, items: Array.isArray(planForUi.items) ? planForUi.items.length : 0, updatedAt: planUiStamp });
         onDelta &&
@@ -3475,7 +3477,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             try {
               const attachmentLib = require('./attachments.cjs');
               const checked = attachmentLib.normalizeAttachments([{ dataUrl: imageData.dataUrl, name: imageData.path, bytes: imageData.bytes }]);
-              if (checked.ok && checked.attachments.length) {
+              if (checked.ok && Array.isArray(checked.attachments) && checked.attachments.length) {
                 messages.push(
                   attachmentLib.buildUserMessage(
                     '（上面这次工具调用读取的图片，请直接依据画面内容继续：' + String(imageData.path || '') + '）',

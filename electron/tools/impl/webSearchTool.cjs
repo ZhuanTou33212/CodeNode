@@ -99,6 +99,7 @@ function register(registry) {
       const limit = Math.min(20, Math.max(1, Number((args && args.maxResults) || config.maxResults)));
       const url = buildQueryUrl(config, query);
       try {
+        /** @type {Record<string, string>} */
         const headers = config.apiKey ? { authorization: 'Bearer ' + config.apiKey } : {};
         /**
          * 走 `publicHttp.request` 而不是 `fetchPublicText`：搜索端点由**用户自己配置**，

@@ -96,7 +96,7 @@ function register(registry) {
       let eventWritten = null;
       if (root && runId) {
         const updatedAt = new Date().toISOString();
-        file = planLib.writePlan(root, runId, items, { updatedAt });
+        file = planLib.writePlan(root, runId, /** @type {any} */ (items), { updatedAt });
         try {
           const runStore = require('../../runStore.cjs');
           eventWritten = runStore.appendEvent(root, runId, 'plan_updated', {

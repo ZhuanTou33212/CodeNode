@@ -123,7 +123,7 @@ function readResponse(url, address, signal, maxBytes, options) {
  */
 async function fetchPublicText(value, { signal, timeoutMs = 30000, maxBytes = 1024 * 1024 } = {}) {
   const controller = new AbortController();
-  const onAbort = () => controller.abort(signal.reason);
+  const onAbort = () => controller.abort(signal && signal.reason);
   if (signal) {
     signal.addEventListener('abort', onAbort, { once: true });
     if (signal.aborted) onAbort();

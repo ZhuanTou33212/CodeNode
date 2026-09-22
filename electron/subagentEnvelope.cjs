@@ -165,7 +165,7 @@ function collectEvidence(input = {}) {
 /**
  * 组装信封。
  * @param {{task?: any, projectRoot?: string, model?: any, inReplyTo?: string|null, view?: any,
- *          summary?: string, error?: string, changedFiles?: string[], clipped?: {droppedChars: number}}} input
+ *          summary?: string, error?: string, changedFiles?: string[], clipped?: {droppedChars: number}|null}} input
  */
 function buildEnvelope(input = {}) {
   const { task, projectRoot, model, inReplyTo = null, view = {}, changedFiles = [], clipped = null } = input;

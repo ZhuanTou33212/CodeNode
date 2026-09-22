@@ -102,13 +102,13 @@ function buildSubagentPrompt(task, options) {
   }
 
   // 能力（真实注册表里的工具）
-  lines.push(toolsSection(opts.tools));
+  lines.push(toolsSection(/** @type {any} */ (opts.tools)));
 
   // 职责技能
   lines.push(skillsSection(roleSkills.resolveRoleSkills(def ? def.skills : [])));
 
   // 项目自定义 Skill
-  const projectSection = projectSkillsSection(opts.projectSkills);
+  const projectSection = projectSkillsSection(/** @type {any} */ (opts.projectSkills));
   if (projectSection) lines.push(projectSection);
 
   // 运行规则
