@@ -135,8 +135,11 @@ function registry() {
     check('[E] ipc 真的把用户级记忆传进了 buildSystemPrompt（接线 + 共用预算池）',
       /userMemoryText,/.test(src) &&
       /userMemoryStore\.buildUserMemoryInjection\(prompt, \{/.test(src) &&
-      /budgetTokens: Math\.max\(0, Number\(memoryCfg\.budgetTokens \|\| 0\) - projInjection\.tokens\)/.test(src),
-      'injection=' + /buildUserMemoryInjection/.test(src) + ' budget=' + /projInjection\.tokens/.test(src));
+      // P1-2 之后：预算额度由统一分配器给出（量测用 memoryCap、被裁时用授予的 memCap），
+      // 但「两类共用一个池子」的口径不变 —— 用户级永远拿**剩余额度**。
+      /budgetTokens: Math\.max\(0, Number\(memoryCap \|\| 0\) - measureProj\.tokens\)/.test(src) &&
+      /budgetTokens: Math\.max\(0, memCap - rebuiltProj\.tokens\)/.test(src),
+      'injection=' + /buildUserMemoryInjection/.test(src) + ' budget=' + /measureProj\.tokens/.test(src));
   }
 
   try {

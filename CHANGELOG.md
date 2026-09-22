@@ -38,6 +38,26 @@
   `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
   `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
 
+### 优化（P1-2：动态上下文段落共用一个 token 预算；2026-09-22）
+
+审计原文：「记忆、RAG、画布状态共用一个 `DynamicContextBudget`，避免各模块都认为自己只占一点。」
+此前记忆有 2,000 的池子，而**画布摘要与技能索引完全没有上限**。
+
+- 新增 `electron/dynamicContextBudget.cjs`（纯函数）：按 `priority` + 单段 `cap` 把一份总预算分给
+  画布 / 记忆 / 技能 / RAG，并如实记下每段「想要多少 / 拿到多少 / 为什么」
+  （`full` / `capped` / `trimmed` / `starved`）+ `overcommit`。保底 `minTokens` 优先于总预算（不静默饿死）。
+- 出厂：总预算 6,000 tokens；cap 画布 4,000 / 记忆 2,000（与 `agent.memory_budget_tokens` 一致）/
+  技能 800 / RAG 1,500。配置 `agent.dynamic_context_tokens`（0 = 关闭）+ 四段各自的 `*_tokens`。
+- 新增两个纯裁剪函数：`agent.truncateCanvasSummary`（**按节点粒度**，裁完 JSON 仍合法 + 取回提示；
+  坏 JSON 字符级裁并标注）、`agent.truncateSkillsIndex`（整行裁 + `read_skill` 提示）。
+- **不触发时逐字节不变**：各段都装得下时 `granted === desired` → 不重建不裁剪；实测同一项目内容下
+  关闭预算与出厂预算的 system prompt **逐字节一致**（5062 = 5062 字符）。
+- 每次分配落 `context_budget` run 事件（每段 desired/granted/reason），供归因面板使用。
+- 注入给**模型**的画布摘要用裁剪后的那一份；意图分类与工具上下文仍用完整摘要（它们不是提示词固定税）。
+- 判据 `test:dynamic-context-budget`（分配器六条 + 裁剪两条 + 端到端三条 + 接线）。核心套件 **102 → 103**。
+- 没做（如实列出）：`rag` 段的 cap 目前无消费者（本 harness 的 RAG 是按需工具，不常驻注入）；
+  未做真机 A/B（要凭据）。
+
 ### 优化（阶段 B / P0-3：意图模型移出默认热路径；2026-09-22）
 
 审计验收线「普通代码 run 的 intent 调用平均 <0.5 次」逐条落地：

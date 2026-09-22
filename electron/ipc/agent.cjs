@@ -41,6 +41,8 @@ const taskRouter = require('../taskRouter.cjs');
 const { parseWebSearchConfig } = require('../tools/impl/webSearchTool.cjs');
 // schema 的 token 量测（工具面事件的留痕口径，与 compaction 预检同一把尺）
 const compactionLib = require('../compaction.cjs');
+// 动态上下文段落的统一 token 预算（审计 §4 P1-2）
+const dynamicContext = require('../dynamicContextBudget.cjs');
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
 function webSearchConfig(cfg) {
@@ -543,22 +545,8 @@ function register(ctx) {
        */
       /** @type {any} */  // 形状来自 agent.parseMemoryConfig（键名集中在那一处）
       const memoryCfg = cfg.memory || {};
-      const projInjection = memoryStore.buildMemoryInjection(memory.entries, prompt, {
-        limit: memoryCfg.topK,
-        maxEntryChars: memoryCfg.maxEntryChars,
-        budgetTokens: memoryCfg.budgetTokens,
-        requireMatch: memoryCfg.requireMatch,
-        label: '此项目',
-      });
-      const memoryText = projInjection.text;
-      const userInjection = userMemoryStore.buildUserMemoryInjection(prompt, {
-        limit: memoryCfg.userTopK,
-        maxEntryChars: memoryCfg.maxEntryChars,
-        budgetTokens: Math.max(0, Number(memoryCfg.budgetTokens || 0) - projInjection.tokens),
-        requireMatch: memoryCfg.requireMatch,
-        label: '用户级（跨项目）记忆',
-      });
-      const userMemoryText = userInjection.text;
+      /** @type {any} */  // 形状来自 agent.parseDynamicContextConfig（键名集中在那一处）
+      const dynCfg = cfg.dynamicContext || dynamicContext.parseDynamicContextConfig({});
       const skills = projectRoot ? extensionStore.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills') : [];
       /**
        * 渐进披露（对照 Claude Code 的 Agent Skills）：prompt 里**只放索引**（名字 + 一句话），
@@ -566,7 +554,104 @@ function register(ctx) {
        * 无论本次任务用不用得上都在付固定开销（每轮都发）。
        */
       // 索引由纯函数生成（可判据直锁）：prompt 只放名字 + 一句话，正文走 read_skill
-      const skillsText = agent.buildSkillsIndex(skills);
+      const skillsIndexFull = agent.buildSkillsIndex(skills);
+
+      /**
+       * P1-2 动态上下文预算：**先量「想要多少」，再定「能拿多少」**。
+       *
+       * 各段先用**自己的 cap** 跑一遍当预算（所以 desired 天然 ≤ cap，cap 与总量是仅有的两个约束），
+       * 然后由统一预算按优先级分配 —— 这样「每段都不大但加起来很高」这件事第一次有了唯一的出口，
+       * 而且能如实回答「这一轮把多少额度花在了哪一段、被谁吃掉了」。
+       *
+       * 同一段要构建两次（量一次、按额度再建一次）：都是纯函数、无 IO、无模型调用，代价可忽略。
+       * `granted === desired` 时**不重建、不裁剪** —— 常见项目下输出与没有这套预算时逐字节一致。
+       */
+      /**
+       * 记忆段的量测预算 = `min(agent.memory_budget_tokens, agent.dynamic_context_memory_tokens)`：
+       * 两个键都保留语义（前者是记忆自己的池子，后者是统一预算给的 cap），取小 = 谁紧听谁的，
+       * 出厂默认两者都是 2000 → 与加这套预算之前**逐字节一致**。
+       */
+      const dynMemoryCap = dynCfg.sections.find((s) => s.id === 'memory')
+        ? dynCfg.sections.find((s) => s.id === 'memory').capTokens
+        : memoryCfg.budgetTokens;
+      const memoryCap = Math.min(Math.max(0, Number(memoryCfg.budgetTokens) || 0), Math.max(0, Number(dynMemoryCap) || 0));
+      const measureProj = memoryStore.buildMemoryInjection(memory.entries, prompt, {
+        limit: memoryCfg.topK,
+        maxEntryChars: memoryCfg.maxEntryChars,
+        budgetTokens: memoryCap,
+        requireMatch: memoryCfg.requireMatch,
+        label: '此项目',
+      });
+      const measureUser = userMemoryStore.buildUserMemoryInjection(prompt, {
+        limit: memoryCfg.userTopK,
+        maxEntryChars: memoryCfg.maxEntryChars,
+        budgetTokens: Math.max(0, Number(memoryCap || 0) - measureProj.tokens),
+        requireMatch: memoryCfg.requireMatch,
+        label: '用户级（跨项目）记忆',
+      });
+      const canvasSummaryRaw = String(canvasSummary == null ? '' : canvasSummary);
+      const contextBudget =
+        dynCfg.totalTokens > 0
+          ? dynamicContext.allocateContextBudget({
+              totalTokens: dynCfg.totalTokens,
+              sections: [
+                { id: 'canvas', desiredTokens: compactionLib.estimateTextTokens(canvasSummaryRaw) },
+                { id: 'memory', desiredTokens: measureProj.tokens + measureUser.tokens },
+                { id: 'skills', desiredTokens: compactionLib.estimateTextTokens(skillsIndexFull) },
+              ],
+            })
+          : null;
+      /** 各段最终文本：默认（`granted === desired` 或预算关闭）就是量出来的那一次，逐字节不改 */
+      let memoryText = measureProj.text;
+      let userMemoryText = measureUser.text;
+      let skillsText = skillsIndexFull;
+      let canvasSummaryForPrompt = canvasSummaryRaw;
+      if (contextBudget) {
+        const grantOf = (id) => {
+          const row = contextBudget.trace.find((t) => t.id === id);
+          return row ? Number(row.granted) || 0 : 0;
+        };
+        const trimOf = (id) => {
+          const row = contextBudget.trace.find((t) => t.id === id);
+          return !row || row.reason === 'full' || row.reason === 'empty' ? null : row;
+        };
+        // 记忆：额度变小才重建（项目级先占，剩下的给用户级 —— 沿用「两类共用一个池」的口径）
+        const memCap = grantOf('memory');
+        if (trimOf('memory') && memCap !== memoryCap) {
+          const rebuiltProj = memoryStore.buildMemoryInjection(memory.entries, prompt, {
+            limit: memoryCfg.topK,
+            maxEntryChars: memoryCfg.maxEntryChars,
+            budgetTokens: memCap,
+            requireMatch: memoryCfg.requireMatch,
+            label: '此项目',
+          });
+          const rebuiltUser = userMemoryStore.buildUserMemoryInjection(prompt, {
+            limit: memoryCfg.userTopK,
+            maxEntryChars: memoryCfg.maxEntryChars,
+            budgetTokens: Math.max(0, memCap - rebuiltProj.tokens),
+            requireMatch: memoryCfg.requireMatch,
+            label: '用户级（跨项目）记忆',
+          });
+          memoryText = rebuiltProj.text;
+          userMemoryText = rebuiltUser.text;
+        }
+        // 画布：按**节点粒度**裁剪（保持 JSON 合法）并留取回提示
+        if (trimOf('canvas')) {
+          const cut = agent.truncateCanvasSummary(canvasSummaryRaw, grantOf('canvas'));
+          canvasSummaryForPrompt = cut.text;
+        }
+        // 技能索引：按整行裁（留「用 read_skill 查」的提示）
+        if (trimOf('skills')) {
+          const cut = agent.truncateSkillsIndex(skillsIndexFull, grantOf('skills'));
+          skillsText = cut.text;
+        }
+        runStore.appendEvent(projectRoot, runId, 'context_budget', {
+          totalTokens: contextBudget.totalTokens,
+          used: contextBudget.used,
+          overcommit: contextBudget.overcommit,
+          trace: contextBudget.trace,
+        });
+      }
       // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
       // 判定在 agent.resolvePromptLayers 里（纯函数，用例锁）；这里只负责把当轮事实传进去。
       /**
@@ -760,7 +845,8 @@ function register(ctx) {
       // 工具引导（名称 + 一句话）只列**实际暴露**的工具：提示词里列着模型看不到的工具 = 悬空指令。
       // 未裁剪（toolExposure === null）时它与 listTools() 等价 —— 与改动前逐字节一致。
       const toolGuide = agent.buildToolGuide(registry ? registry.listTools().filter((t) => registry.isExposed(t.name)) : []);
-      const systemContent = agent.buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, {
+      // 注入给模型的画布摘要用**预算裁剪后**的那一份（分类/工具侧仍用完整摘要：它们不是提示词固定税）
+      const systemContent = agent.buildSystemPrompt(soul, canvasSummaryForPrompt, toolGuide, memoryText, skillsText, {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
         userMemoryText,

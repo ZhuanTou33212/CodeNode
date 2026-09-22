@@ -112,6 +112,8 @@ const CORE = [
   'test:compaction-tail',
   // 阶段 B / P0-3：确定性路由 + 分类门 + 动作级准入（含「跳过 guardian 不影响静态层」的安全不变量）
   'test:intent-cost-gate',
+  // P1-2：记忆/画布/技能/RAG 的统一 token 预算（含「不触发时逐字节不变」的负向判据）
+  'test:dynamic-context',
   // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
   // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
   'test:fixture-shape',

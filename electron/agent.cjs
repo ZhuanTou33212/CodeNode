@@ -15,6 +15,8 @@ const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
 // 上下文压缩（照 Codex CLI 的做法）：窗口逼近上限时用交接摘要替换助手长文/工具结果
 const compactionLib = require('./compaction.cjs');
+// P1-2 动态上下文预算（键名与分配算法集中在那一处）
+const dynamicContextLib = require('./dynamicContextBudget.cjs');
 const costAttribution = require('./costAttribution.cjs');
 const costLedgerLib = require('./costLedger.cjs');
 // 上下文预算：每次请求前把最旧的超大工具结果裁成占位符（见 electron/contextBudget.cjs 顶部注释）
@@ -150,6 +152,8 @@ function loadConfig(projectRoot) {
     alertThresholds: parseAlertThresholds(cfg),
     alertWebhook: String(cfg['alerts.webhook'] || '').trim(),
     memory: parseMemoryConfig(cfg),
+    // P1-2 动态上下文预算（记忆 / RAG / 画布 / 技能共用一个池子）
+    dynamicContext: parseDynamicContextConfig(cfg),
   };
 }
 
@@ -172,6 +176,14 @@ function parseMemoryConfig(cfg) {
     budgetTokens: configInteger(cfg, 'agent.memory_budget_tokens', 2000, 0, 20000),
     requireMatch: String(cfg['agent.memory_inject'] == null ? 'matched' : cfg['agent.memory_inject']).trim().toLowerCase() !== 'recent',
   };
+}
+
+/**
+ * 解析 `agent.dynamic_context_*`（P1-2 动态上下文预算）。键名的默认值与范围集中在
+ * `dynamicContextBudget.cjs`，这里只转发 —— 避免两处各写一套默认值（历史上记忆的默认值就散过）。
+ */
+function parseDynamicContextConfig(cfg) {
+  return dynamicContextLib.parseDynamicContextConfig(cfg || {});
 }
 
 /** 解析 tools.* 配置：tools.enabled / tools.allowed(逗号分隔) / tools.deny(逗号分隔) */
@@ -867,6 +879,91 @@ const PROMPT_SECTIONS = Object.freeze([
   { id: 'user-memory', title: '【用户级记忆', stable: false },
   { id: 'canvas', title: '【当前画布节点清单', stable: false },
 ]);
+
+/**
+ * P1-2：按预算裁剪**画布摘要**（此前它没有上限 —— 大画布会把固定输入吃光）。
+ *
+ * 口径：
+ *   - 能解析成 JSON 数组就**按节点粒度**裁（保持 JSON 合法），并留一句取回提示；
+ *   - 解析不了（不是数组 / 坏 JSON）就按字符裁 + 明确标注已截断（不假装完整）；
+ *   - `budgetTokens <= 0` 或本来就装得下 → **原样返回**（这是负向判据的落点）。
+ * @param {any} canvasSummary
+ * @param {number} budgetTokens
+ * @returns {{text: string, dropped: number, truncated: boolean}}
+ */
+function truncateCanvasSummary(canvasSummary, budgetTokens) {
+  const asIs = canvasSummary == null ? '' : String(canvasSummary);
+  const raw = asIs.trim();
+  const budget = Math.max(0, Math.floor(Number(budgetTokens) || 0));
+  if (!raw || budget <= 0) return { text: asIs, dropped: 0, truncated: false };
+  if (compactionLib.estimateTextTokens(raw) <= budget) return { text: raw, dropped: 0, truncated: false };
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      // 二分找「装得下的最大节点数」：节点大小差异大，二分对上千节点也只在几十次内收敛
+      let lo = 0;
+      let hi = parsed.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (compactionLib.estimateTextTokens(JSON.stringify(parsed.slice(0, mid))) <= budget) lo = mid;
+        else hi = mid - 1;
+      }
+      const kept = parsed.slice(0, lo);
+      const dropped = parsed.length - kept.length;
+      if (dropped <= 0) return { text: raw, dropped: 0, truncated: false };
+      return {
+        text:
+          JSON.stringify(kept) +
+          '\n（另有 ' + dropped + ' 个节点未列出（动态上下文预算 ' + budget + ' tokens），需要时用 get_workbench_model 读取完整画布）',
+        dropped,
+        truncated: true,
+      };
+    }
+  } catch {
+    // 落到字符级裁剪：宁可给出「明确标注的片段」，也不假装完整
+  }
+  const slice = raw.slice(0, Math.max(80, budget * 4));
+  return {
+    text: slice + '\n（已按动态上下文预算 ' + budget + ' tokens 截断，完整内容用 get_workbench_model 读取）',
+    dropped: 0,
+    truncated: true,
+  };
+}
+
+/**
+ * P1-2：按预算裁剪**技能索引**（整行裁，不切半句话）。
+ * 索引只写「名字 + 一句话」，正文走 `read_skill`；被裁掉的条目留一句提示，避免模型不知道有它们。
+ * @param {string} indexText
+ * @param {number} budgetTokens
+ * @returns {{text: string, dropped: number, truncated: boolean}}
+ */
+function truncateSkillsIndex(indexText, budgetTokens) {
+  const raw = String(indexText == null ? '' : indexText);
+  const budget = Math.max(0, Math.floor(Number(budgetTokens) || 0));
+  if (!raw || budget <= 0 || compactionLib.estimateTextTokens(raw) <= budget) return { text: raw, dropped: 0, truncated: false };
+  const lines = raw.split('\n');
+  const kept = [];
+  let tokens = 0;
+  let dropped = 0;
+  for (const line of lines) {
+    const cost = compactionLib.estimateTextTokens(line + '\n');
+    if (tokens + cost > budget) {
+      if (kept.length > 0) dropped += 1;
+      else break;
+      continue;
+    }
+    tokens += cost;
+    kept.push(line);
+  }
+  if (!kept.length) return { text: raw, dropped: 0, truncated: false };
+  return {
+    text:
+      kept.join('\n') +
+      '\n（另有 ' + dropped + ' 条技能未列出（动态上下文预算 ' + budget + ' tokens），用 read_skill 按名字读取）',
+    dropped,
+    truncated: true,
+  };
+}
 
 /**
  * 段落标题在**行首**出现的位置（找不到返回 -1）。
@@ -3709,6 +3806,9 @@ module.exports = {
   parseSoul,
   buildSystemPrompt,
   resolvePromptLayers,
+  // P1-2：预算裁剪的两个纯函数（导出以便判据直锁）
+  truncateCanvasSummary,
+  truncateSkillsIndex,
   CANVAS_RULES,
   CANVAS_RULES_STUB,
   PROMPT_SECTIONS,

@@ -312,6 +312,60 @@ agent.memory_inject=matched           # matched（默认，有命中才注入）
 - Structured Outputs / `response_format` 未接：不同网关对未知字段的处理不一致，接了得配兼容回退，
   属下一轮。
 
+## 8.6 P1-2：动态上下文段落的统一 token 预算（同日）
+
+审计原文：「记忆、RAG、画布状态共用一个 `DynamicContextBudget`，避免各模块都认为自己只占一点。」
+此前每段各有各的口径 —— 记忆有 2,000 的池子，而**画布摘要与技能索引完全没有上限**，
+于是"每段看起来都不大"加起来把固定输入推得很高，而且没有任何一处能回答「这一轮把多少额度花在了哪一段」。
+
+### 新模块 `electron/dynamicContextBudget.cjs`（纯函数，不产生文本、不读 IO、不认识任何具体段落）
+
+```
+allocateContextBudget({totalTokens, sections:[{id, desiredTokens, capTokens?, priority?, minTokens?}]})
+  → {totalTokens, used, overcommit, granted:{id:n}, trace:[{id, desired, cap, granted, reason}]}
+```
+
+规则（确定性）：① 每段先拿 `minTokens` 保底，**保底优先于总预算**（配置错误宁可超一点也要如实报
+`overcommit`，绝不静默把某段饿成 0）；② 剩余额度按 `priority` 补齐到 `min(desired, cap)`；
+③ 理由只有四种：`full` / `capped`（自己的 cap 咬住）/ `trimmed`（总量不够）/ `starved`（没分到）。
+
+出厂段落表与取值理由：`canvas`(p1, cap 4000) 是**当前任务的直接输入**，最优先但要兜住大画布；
+`memory`(p2, cap 2000，与既有 `agent.memory_budget_tokens` 一致) 缺了还能 `recall`；
+`skills`(p3, cap 800) 只需索引；`rag`(p4, cap 1500) 本就按需。总预算出厂 **6000**。
+
+配置：`agent.dynamic_context_tokens`（0 = **关闭**这套预算，各段退回自己的口径）、
+`agent.dynamic_context_{canvas,memory,skills,rag}_tokens`。
+
+### 裁剪怎么落地（两个纯函数，在 `agent.cjs`）
+
+- `truncateCanvasSummary(summary, budget)`：能解析成 JSON 数组就**按节点粒度**裁（二分找装得下的最大节点数，
+  **保持 JSON 合法**）并留「另有 N 个节点未列出，需要时用 get_workbench_model 读取完整画布」；
+  坏 JSON 就字符级裁 + 明确标注（不假装完整）；装得下或预算为 0 → **原样返回**。
+- `truncateSkillsIndex(text, budget)`：**按整行**裁（不切半句话）+ 「用 read_skill 按名字读取」。
+
+### 关键口径
+
+1. **不触发时逐字节不变**：每段都 ≤ cap 且合计 ≤ 总量时 `granted === desired` → 不重建、不裁剪。
+   实测：同一项目内容，`agent.dynamic_context_tokens=0` 与出厂的 system prompt **逐字节一致**
+   （off=5062 on=5062 字符）—— 这是这套东西能安全上线的根基，也是判据里最硬的一条。
+2. **完整摘要仍留给分类与工具侧**：注入给**模型**的画布摘要是裁剪后的那一份；意图分类与工具上下文
+   仍用完整摘要（它们不是提示词固定税）。理由：分类要判"这是不是画布活"，按裁剪后的残片判会失真。
+3. **两类记忆共用一个池子的口径没变**：项目级先用，用户级拿剩余（`memCap - rebuiltProj.tokens`）。
+4. 每次分配落 `context_budget` run 事件（每段的 desired/granted/reason）——归因面板的数据来源。
+
+### 判据 `test:dynamic-context-budget`（103 项核心套件）
+
+分配器（全额 / 总量不够 / cap / 保底 + overcommit / 关闭 / 配置解析与夹取）、两个裁剪函数
+（画布裁完仍是合法 JSON + 取回提示 + 坏 JSON 不抛错、技能整行裁）、端到端三条：
+**负向逐字节比对**、超大画布（事件 `capped` + prompt 里 JSON 仍合法 + 总长 34,471 → 14,977 字符）、
+总预算 900（画布先拿满 900、记忆被饿到 0，优先级真的在起作用）。
+
+### 没做的（如实列出）
+
+- **RAG 段只占位不裁**：本 harness 的 RAG 是按需工具（`search_project`），不常驻注入提示词，
+  所以 `rag` 段的 cap 目前没有消费者；等真加常驻检索片段时直接接这个分配器即可。
+- 未做真机 A/B 验证（要凭据，路径 `test:eval:model`）。
+
 ## 9. 安全边界（为什么裁剪不会削弱门禁）
 
 - 暴露面**只影响「模型看不看得见」**：`registry.execute()` 的四道门（角色/能力门、网络门、审批门、
