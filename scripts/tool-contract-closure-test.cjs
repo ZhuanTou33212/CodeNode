@@ -14,6 +14,8 @@
  *      先剥离（不会因闭合 schema 变成「未知参数」错误）；
  *   C. 全部工具 descriptor.source === 'explicit'，且语义与 descriptor.cjs 名单一致；
  *      `requiresConfirmation` 没有因为「补声明」而变（写工具不会突然多一道审批）。
+ *   D. 数组参数一律有长度上限（schema 自己声明，或吃到 `DEFAULT_MAX_ARRAY_ITEMS` 兜底）——
+ *      超限在参数校验阶段就被拒，不会进到执行体。
  */
 'use strict';
 
@@ -162,6 +164,62 @@ function context() {
     check('C7 未接入白名单本身没有过期（文件确实还在、且确实没注册）',
       NOT_WIRED.every((file) => fs.existsSync(path.join(implDir, file))),
       JSON.stringify(NOT_WIRED.filter((file) => !fs.existsSync(path.join(implDir, file)))));
+  }
+
+  // ======================= D. 数组参数的默认长度上限（没声明也不能没闸） =======================
+  // 背景：13 个数组参数里只有 2 个声明了 maxItems（update_plan.steps / retrieve_context.queries），
+  // 同族的 retrieve_context.keys 反而没有 —— 于是「模型幻觉出几万条 operations/connections」这条路
+  // 上没有任何闸：参数校验放行，主进程逐条执行。修法是在校验层给**所有**数组补兜底上限（一处收口，
+  // 新增工具自动受益），而不是给每个 schema 逐个补 maxItems（那会把工具面固定开销推过 token 门禁）。
+  {
+    const { validateInput, DEFAULT_MAX_ARRAY_ITEMS } = require('../electron/tools/registry.cjs');
+
+    const over = validateInput(
+      new Array(DEFAULT_MAX_ARRAY_ITEMS + 1).fill('x'),
+      { type: 'array', items: { type: 'string' } },
+    );
+    check('D1 未声明 maxItems 的数组超默认上限被拒，且文案带上限值',
+      typeof over === 'string' && over.includes(String(DEFAULT_MAX_ARRAY_ITEMS)), JSON.stringify(over));
+
+    const atCap = validateInput(
+      new Array(DEFAULT_MAX_ARRAY_ITEMS).fill('x'),
+      { type: 'array', items: { type: 'string' } },
+    );
+    check('D2 恰好等于默认上限仍放行（不过度修复）', atCap === null, JSON.stringify(atCap));
+
+    check('D3 显式声明的 maxItems 优先于兜底（声明 3 → 4 项被拒、3 项放行）',
+      typeof validateInput(new Array(4).fill('x'), { type: 'array', items: { type: 'string' }, maxItems: 3 }) === 'string'
+      && validateInput(new Array(3).fill('x'), { type: 'array', items: { type: 'string' }, maxItems: 3 }) === null,
+      '');
+
+    check('D4 负向：标量 / 对象 / 短数组一概不受影响',
+      validateInput('x', { type: 'string' }) === null
+      && validateInput({ a: 1 }, { type: 'object', properties: { a: { type: 'integer' } } }) === null
+      && validateInput(['x'], { type: 'array', items: { type: 'string' } }) === null,
+      '');
+
+    // 端到端：真实注册表里的工具收到超限数组 → 当场被拒（进不到执行体，也不会写画布）
+    const huge = await registry.execute(
+      'workbench_edit',
+      { operations: new Array(DEFAULT_MAX_ARRAY_ITEMS + 1).fill({ action: 'create' }) },
+      context(),
+    );
+    check('D5 真实工具收到超限数组 → INVALID_TOOL_ARGUMENTS',
+      huge.ok === false && huge.data && huge.data.code === 'INVALID_TOOL_ARGUMENTS',
+      JSON.stringify({ ok: huge.ok, code: huge.data && huge.data.code, text: String(huge.text).slice(0, 120) }));
+
+    // 普查：注册表里每个数组参数都被上限管住（自己声明、或吃到默认兜底）
+    const uncovered = [];
+    for (const d of registry.listDescriptors()) {
+      const props = (d.inputSchema && d.inputSchema.properties) || {};
+      for (const [name, prop] of Object.entries(props)) {
+        if (!prop || prop.type !== 'array') continue;
+        const sample = prop.items && prop.items.type === 'string' ? 'x' : {};
+        const err = validateInput({ [name]: new Array(DEFAULT_MAX_ARRAY_ITEMS + 1).fill(sample) }, d.inputSchema);
+        if (typeof err !== 'string') uncovered.push(d.name + '.' + name);
+      }
+    }
+    check('D6 注册表里每个数组参数都被上限管住（声明或默认兜底）', uncovered.length === 0, JSON.stringify(uncovered));
   }
 
   fs.rmSync(root, { recursive: true, force: true });

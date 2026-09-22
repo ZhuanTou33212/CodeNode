@@ -28,6 +28,19 @@ const descriptorLib = require('./descriptor.cjs');
  */
 const CONFIRMATION_SELF_FIELDS = Object.freeze(['confirmed', 'approved', 'approvalToken', 'approval_token', 'approvalId', 'approval_id', 'userApproved']);
 
+/**
+ * 数组参数的**默认长度上限**（schema 自己没声明 `maxItems` 时生效）。
+ *
+ * 为什么要有兜底：审计发现 13 个数组参数里只有 2 个声明天花板（`update_plan.steps`、
+ * `retrieve_context.queries`），同族的 `retrieve_context.keys` 反而没有 —— 于是
+ * 「模型幻觉出一个几万条的 operations / connections / list 数组」这条路径上没有任何一道闸：
+ * 参数校验放行，主进程再逐条执行。声明与消费不能只靠「每个工具作者自觉写上 maxItems」。
+ *
+ * 取 1,000：远宽于本仓任何合法批量（`bulk_edit` / `workbench_edit` 自己的批量常量是 200），
+ * 只拦「明显不可能是有意为之」的量级。**显式声明 `maxItems` 的参数仍以声明为准**。
+ */
+const DEFAULT_MAX_ARRAY_ITEMS = 1000;
+
 /** S7：审批 scope —— 能力 + 本次目标（路径/节点类参数优先），供令牌的覆盖校验使用 */
 function approvalScopeFor(descriptor, name, args) {
   const capability = descriptor.requiredCapability || descriptor.name || name;
@@ -67,7 +80,9 @@ function validateInput(value, schema, path = '$') {
   }
   if (Array.isArray(value)) {
     if (schema.minItems != null && value.length < schema.minItems) return `${path} 至少需要 ${schema.minItems} 项`;
-    if (schema.maxItems != null && value.length > schema.maxItems) return `${path} 不能超过 ${schema.maxItems} 项`;
+    // 上限一律有闸：显式声明的用声明值，没声明的用兜底（见 DEFAULT_MAX_ARRAY_ITEMS 的注释）
+    const cap = schema.maxItems != null ? schema.maxItems : DEFAULT_MAX_ARRAY_ITEMS;
+    if (value.length > cap) return `${path} 不能超过 ${cap} 项`;
     if (schema.items) {
       for (let i = 0; i < value.length; i++) {
         const error = validateInput(value[i], schema.items, `${path}[${i}]`);
@@ -627,4 +642,4 @@ class AgentToolRegistry {
   }
 }
 
-module.exports = { AgentToolRegistry, validateInput, closeInputSchema };
+module.exports = { AgentToolRegistry, validateInput, closeInputSchema, DEFAULT_MAX_ARRAY_ITEMS };
