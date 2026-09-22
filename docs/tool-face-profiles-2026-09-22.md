@@ -229,6 +229,34 @@ agent.memory_inject=matched           # matched（默认，有命中才注入）
 - 供应商侧的显式 cache breakpoint（Anthropic 风格 `cache_control`）**没有做**：本 harness 走
   OpenAI 兼容面，DeepSeek / OpenAI 都是**自动前缀缓存**，没有可传的 cache key，重排就是全部杠杆。
 
+## 8.4 第三批：成本归因 / 压缩收益 / 输出分档 / 压缩尾部（同日）
+
+| 项 | 口径 | 判据 |
+|---|---|---|
+| **P2-2 成本按层归因** | 每次主请求记：`system_static / system_dynamic / tool_schema / memory / rag / project_state / history_user / history_assistant / tool_result / attachment` 十层 + 每种工具的 `raw → model` 投影 + 压缩的 `costTokens → savedTokens` + 供应商报的缓存命中/未命中；**缓存未命中时记「第一个变化的 prompt 区段」**（`agent.splitPromptSections` + 段落比对） | `test:cost-attribution`（守恒、层归属、fail-safe、区段定位、**真 run + 真账本**端到端） |
+| **P1-3 压缩收益驱动** | 主口径改 **token**（出厂 8,000，旧的字符阈值降为下界）；`剩余轮数 × (R − S) > (R + S)` 才算得过来；剩余轮数 ≤1 **永不压**；同类工具累计净亏（≥2 次）自动降级为确定性裁剪；记 `netTokensSaved`（收益口径）与 `netTokensImmediate`（单轮差），成本只用供应商**实报** usage；跳过原因进 `compression_skipped` 事件 | `test:compression-roi`（含审计那条 4.33 轮的算式、判别力、端到端压/不压） |
+| **P2-1 输出预算分档** | 上一轮调过工具 → tool 档（12k）；否则（首轮/交付/续写）→ final 档（32k）；两档**只往下压**、永不越过 `agent.max_tokens`；正文为空却被截断（reasoning 吃光额度）→ **加预算重试一次**，而不是「从断点接着写」一段不存在的内容（有正文才走补问） | `test:output-budget`（真请求体 max_tokens、负向开关、加预算重试与消息条数） |
+| **P1-4 无损操作尾部** | 压缩后的历史 = `[system] → [人话] → [摘要信封] → [最近无损操作组]`；操作组 = `assistant(tool_calls)` + `tool_call_id` 对得上的结果，**绝不切开**，孤儿 tool 消息一条不留；按 token 预算整组取；触发线统一进 `min(window×ratio, inputLimit−buffer, window−max(outputReserve, buffer))` | `test:compaction-tail`（原子配对、预算、两种超预算口径、**压不下来时自动收窄**、结构与接线、公式负向） |
+
+**尾部与「压缩必须真的压下来」的配合**（这条是被现有 `test:compaction` 抓出来的真缺陷）：
+第一版实现让尾部把预算吃光 → 压缩后仍超窗 → **主请求一次都发不出去**（预检直接判超窗）。
+现在的口径是两段式：
+
+1. **默认「最新操作逐字优先」**（`tail_allow_oversized` 默认 true）：单个操作组超过尾部预算时仍整组保留 ——
+   真实场景里一个操作组经常就超过 8k~15k，默认丢弃等于让这个能力几乎不生效；
+2. **压不下来就严格重算一次**：若压完仍 ≥ 触发线，按「固定部分（system + 人话 + 摘要）之外的余量」
+   用**严格预算**重算尾部（这一次会整组丢弃超预算的大组），纯计算、不额外花模型调用，并在 trace 里
+   记 `tailShrunk` / `tailDroppedForLimit`。端到端判据：够大窗口尾部原样进历史（实测 6,613 token，
+   `tailShrunk=false`）；紧窗口自动收窄到线下（`tailShrunk=true`），两种情况主请求都发得出去。
+
+实测（真 run，脚本化模型）：压缩一条 30,062 token 的工具结果 → 摘要 14 token，单轮省 30,048；
+成本按实报 usage 记 26,300，剩 3 轮的净收益 `3 × 30,048 − 26,300 = 63,844`（单轮口径 +3,748 也一并记）。
+
+**没做的一项（如实列出）**：审计 P1-4 还要求「先 compact，再做不可逆硬裁剪；只有 compaction 失败时才把工具结果换占位符」。
+本次**没有改这个顺序**：现行顺序是「硬裁剪是最廉价、最可靠的兜底网，先兜住再考虑花钱调模型摘要」，
+把它倒过来意味着在可能完全不需要摘要的场景先付一次 LLM 调用 —— 这会削弱现有的故障恢复链。
+要改需要单独一轮、并配「压缩失败 → 仍然硬裁剪」的完整回归。
+
 ## 9. 安全边界（为什么裁剪不会削弱门禁）
 
 - 暴露面**只影响「模型看不看得见」**：`registry.execute()` 的四道门（角色/能力门、网络门、审批门、

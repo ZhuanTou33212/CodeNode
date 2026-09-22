@@ -105,6 +105,11 @@ const CORE = [
   'test:tool-projection',
   // P1-1：稳定内容前置 + 规则按面分层（前缀稳定性 / 规则零改字 / 变异判别力）。纯 Node，离线确定性
   'test:prompt-prefix',
+  // P2-2 / P1-3 / P2-1 / P1-4（2026-09-22 第三批）：归因、压缩收益、输出分档、压缩尾部
+  'test:cost-attribution',
+  'test:compression-roi',
+  'test:output-budget',
+  'test:compaction-tail',
   // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
   // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
   'test:fixture-shape',

@@ -68,28 +68,43 @@ function isMachineInjectedUserMessage(text) {
  * @param {any} [tools]
  * @returns {number}
  */
+/**
+ * 纯文本的 token 估算（**唯一口径**：与 `estimateTokens` 完全同一套字符折算，只是不加每条消息的 +8 开销）。
+ * 抽出来是因为成本归因（P2-2）要按**段落**分别估 token，若各写一套折算规则，两处数字迟早对不上。
+ * @param {string} text
+ * @returns {number}
+ */
+function textTokensRaw(text) {
+  const s = String(text == null ? '' : text);
+  if (!s) return 0;
+  let cjk = 0;
+  for (const ch of s) {
+    const code = ch.codePointAt(0) || 0;
+    if (
+      (code >= 0x3000 && code <= 0x30ff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xac00 && code <= 0xd7af) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjk += 1;
+    }
+  }
+  const other = [...s].length - cjk;
+  return cjk * 0.7 + other / 4;
+}
+
+/** 取整后的纯文本估算（对外口径） */
+function estimateTextTokens(text) {
+  return Math.round(textTokensRaw(text));
+}
+
 function estimateTokens(messages, tools) {
   let tokens = 0;
+  // 与 estimateTextTokens 共用同一套字符折算（这里累加**不取整**的浮点值，最后统一取整 —— 与原实现数值一致）
   const add = (text) => {
-    const s = String(text || '');
-    if (!s) return;
-    let cjk = 0;
-    for (const ch of s) {
-      const code = ch.codePointAt(0) || 0;
-      // CJK 统一表意文字 / 扩展 A / 兼容 / 全角标点 / 日文假名 / 韩文
-      if (
-        (code >= 0x3000 && code <= 0x30ff) ||
-        (code >= 0x3400 && code <= 0x4dbf) ||
-        (code >= 0x4e00 && code <= 0x9fff) ||
-        (code >= 0xf900 && code <= 0xfaff) ||
-        (code >= 0xac00 && code <= 0xd7af) ||
-        (code >= 0xff00 && code <= 0xffef)
-      ) {
-        cjk += 1;
-      }
-    }
-    const other = [...s].length - cjk;
-    tokens += cjk * 0.7 + other / 4;
+    tokens += textTokensRaw(text);
   };
   for (const msg of Array.isArray(messages) ? messages : []) {
     if (!msg) continue;
@@ -111,6 +126,101 @@ function estimateTokens(messages, tools) {
 }
 
 /**
+ * 「最近无损操作尾部」（P1-4）：从历史**末尾**整组整组地取回最近的操作，直到预算用完。
+ *
+ * 为什么需要：压缩后的新历史原本只有 `[system, 人说过的话, 一个摘要]` —— 摘要一写，「刚才那次
+ * 精确的 edit_file 到底改了什么」就没了。尾部就是把这个空白补上：最近若干轮**逐字**保留。
+ *
+ * 铁的规矩（原子性）：
+ *   - 一个操作组 = `assistant(tool_calls)` + 紧随其后、`tool_call_id` 对得上的 `tool` 结果；
+ *     **绝不从中间切断**（半个 tool_calls 或没有调用方的 tool 结果，供应商会直接 400）。
+ *   - 孤儿 `tool` 消息（找不到配对的 assistant 调用）一律不要 —— 与其交一个坏消息，不如少给一条。
+ *   - 单个操作组本身就超过预算时，**仍然保留它**（原子性优先于预算），并在返回值里如实标出。
+ *
+ * @param {Array<any>} messages
+ * @param {{tokenBudget?: number, allowOversized?: boolean}} [options]
+ *   tokenBudget   —— 尾部预算（0 = 不保留尾部）
+ *   allowOversized —— 单个操作组超预算时是否仍整组保留（默认 true：最新操作逐字优先，见下）
+ * @returns {{messages: Array<any>, tokens: number, groups: number, droppedGroups: number, firstKeptIndex: number, oversized: boolean}}
+ */
+function buildLosslessTail(messages, options = {}) {
+  const list = Array.isArray(messages) ? messages : [];
+  const budget = Number(options.tokenBudget) > 0 ? Number(options.tokenBudget) : 0;
+  // 默认 true：**最新操作逐字优先**（真实场景里一个操作组经常就超过 8k~15k 的尾部预算，
+  // 默认丢弃等于让这个能力在真实数据上几乎不生效）。压不下来时由压缩环节用**严格预算**重算一次，
+  // 见 agent.cjs 的 `buildHistory(..., 严格)` —— 那里才是「必须真的压下来」的兜底。
+  const allowOversized = options.allowOversized !== false;
+  /** 切分成原子组（保持顺序） */
+  const groups = [];
+  for (let i = 0; i < list.length; i++) {
+    const msg = list[i];
+    if (!msg || msg.role === 'system') continue;
+    if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+      const ids = new Set(msg.tool_calls.map((call) => call && call.id).filter(Boolean));
+      const group = [msg];
+      let j = i + 1;
+      while (j < list.length && list[j] && list[j].role === 'tool') {
+        const id = list[j].tool_call_id;
+        if (id && ids.has(id)) group.push(list[j]);
+        // 配对不上的 tool 消息不进组（孤儿），它会在下面被整条丢弃
+        j += 1;
+      }
+      groups.push({ messages: group, tokens: estimateTokens(group, null) });
+      i = j - 1;
+      continue;
+    }
+    if (msg.role === 'tool') continue; // 孤儿 tool 消息：没有调用方，不能单独成组
+    groups.push({ messages: [msg], tokens: estimateTokens([msg], null) });
+  }
+  // 预算为 0 = 明确要求「不保留尾部」（旧行为），不要退化成「全都留」
+  if (!(budget > 0)) return { messages: [], tokens: 0, groups: 0, droppedGroups: groups.length, firstKeptIndex: list.length, oversized: false };
+  const picked = [];
+  let tokens = 0;
+  let droppedGroups = 0;
+  let oversized = false;
+  for (let g = groups.length - 1; g >= 0; g--) {
+    const group = groups[g];
+    /**
+     * ① 单组**本身就超预算**：这个分支必须排在「累加超预算」之前，否则最新那组一超预算就被
+     * 默默算进「累加」分支，规则说不清。两种取法都有代价，所以**做成显式选择**：
+     *   - 默认（`allowOversized !== false`）：**整组保留**（原子性 + 最新操作逐字优先），并标记 `oversized`；
+     *     若这让压缩后仍在线下不了，调用方会用严格预算重算一次（见 agent.cjs），所以不会卡在线上；
+     *   - `allowOversized=false`：**不要这一组**，尾部到此为止（尊重预算的严格口径）。
+     * 两种情况下都**不切开**这一组（不存在半个 tool_calls / 孤儿 tool 结果）。
+     */
+    if (group.tokens > budget) {
+      oversized = true;
+      if (allowOversized) {
+        picked.unshift(group);
+        tokens += group.tokens;
+        droppedGroups = g;
+      } else {
+        droppedGroups = g + 1;
+      }
+      break;
+    }
+    // ② 预算用完就整组停（绝不为凑预算把一组切开）
+    if (picked.length && tokens + group.tokens > budget) {
+      droppedGroups = g + 1;
+      break;
+    }
+    picked.unshift(group);
+    tokens += group.tokens;
+    droppedGroups = g;
+  }
+  const out = [];
+  for (const group of picked) out.push(...group.messages);
+  return {
+    messages: out,
+    tokens,
+    groups: picked.length,
+    droppedGroups,
+    firstKeptIndex: picked.length ? list.indexOf(picked[0].messages[0]) : list.length,
+    oversized,
+  };
+}
+
+/**
  * 压缩后的「交接摘要」信封。用尖括号标签 + 明确禁止当指令，避免模型把它读成新的用户要求。
  * @param {string} summary
  */
@@ -125,16 +235,27 @@ function buildSummaryEnvelope(summary) {
 
 /**
  * 是否该压缩。
- * @param {{tokens: number, contextWindow: number, ratio: number, compressible?: number}} input
+ * @param {{tokens: number, contextWindow: number, ratio: number, compressible?: number,
+ *          inputLimit?: number, outputReserve?: number, buffer?: number}} input
  *   compressible = 压缩时会被丢掉的消息条数（助手长文 / 工具结果 / 机器注入提示）；
  *   为 0 表示「压了也没东西可丢」（只剩 system + 人的轮次），跳过以免白花一次模型调用。
+ *   P1-4：`inputLimit` / `outputReserve` / `buffer` 参与统一触发公式（都为 0 时行为与旧版逐字一致）。
  * @returns {{needed: boolean, limit: number, reason: string}}
  */
-function shouldCompact({ tokens, contextWindow, ratio, compressible = 1 }) {
+function shouldCompact({ tokens, contextWindow, ratio, compressible = 1, inputLimit = 0, outputReserve = 0, buffer = 0 }) {
   const window = Number(contextWindow) || 0;
   const r = Number(ratio);
   if (!(window > 0) || !(r > 0)) return { needed: false, limit: 0, reason: 'no-window' };
-  const limit = Math.floor(window * r);
+  /**
+   * P1-4：把「输入上限 / 输出预留 / 安全 buffer」统一进同一个公式（审计建议）：
+   *     estimated >= min(inputLimit − buffer, contextLimit − max(outputReserve, buffer))
+   * 三个新输入任何一个没配（= 0）时，公式里的那一项就退化成「不约束」→ limit 仍是原来的 `window × ratio`
+   * （默认行为逐字不变；只有窗口小 / 输出预留大时公式才会真的更早触发）。
+   */
+  const safeBuffer = Math.max(0, Number(buffer) || 0);
+  const reserve = Math.max(0, Number(outputReserve) || 0, safeBuffer);
+  const byInput = Number(inputLimit) > 0 ? Number(inputLimit) - safeBuffer : Infinity;
+  const limit = Math.max(1, Math.floor(Math.min(window * r, byInput, window - reserve)));
   if (Number(compressible) <= 0) return { needed: false, limit, reason: 'nothing-to-compact' };
   const needed = Number(tokens) >= limit;
   return { needed, limit, reason: needed ? 'over-limit' : 'below-limit' };
@@ -208,8 +329,10 @@ function buildSummarizationMessages(input = {}) {
  * 构造压缩后的新历史：`[system, ...人的轮次, 摘要]`（Codex 的 replacement_history 形状）。
  *
  * @param {{systemMessage?: any, messages?: Array<any>, summary?: string, keepUserTurns?: boolean,
+ *          keepTailTokens?: number, allowOversizedTail?: boolean,
  *          keepUserMaxChars?: number, keepUserTotalChars?: number}} [input]
- * @returns {{messages: Array<any>, keptUserTurns: number}}
+ * @returns {{messages: Array<any>, keptUserTurns: number, tailGroups: number, tailTokens: number,
+ *            tailDroppedGroups: number, tailOversized: boolean}}
  */
 function buildCompactedHistory(input = {}) {
   const {
@@ -219,11 +342,20 @@ function buildCompactedHistory(input = {}) {
     keepUserTurns = true,
     keepUserMaxChars = 2000,
     keepUserTotalChars = 20000,
+    /** P1-4：无损操作尾部的 token 预算（0 = 不保留尾部，保持旧行为） */
+    keepTailTokens = 0,
+    /** P1-4：单个操作组超过尾部预算时是否仍然整组保留（默认 false = 尊重预算，见 buildLosslessTail） */
+    allowOversizedTail = false,
   } = input;
   const list = Array.isArray(messages) ? messages : [];
+  /** 先算无损尾部：它的起点决定「人话」要保留到哪 —— 尾部里已经有最新的人话，别再保留一遍 */
+  const tail = keepTailTokens > 0
+    ? buildLosslessTail(list, { tokenBudget: keepTailTokens, allowOversized: allowOversizedTail })
+    : { messages: [], tokens: 0, groups: 0, droppedGroups: 0, firstKeptIndex: list.length, oversized: false };
+  const headEnd = Number.isFinite(tail.firstKeptIndex) ? tail.firstKeptIndex : list.length;
   const kept = [];
   if (keepUserTurns) {
-    const humans = list.filter(
+    const humans = list.slice(0, headEnd).filter(
       (m) => m && m.role === 'user' && typeof m.content === 'string' && !isMachineInjectedUserMessage(m.content),
     );
     let budget = Number(keepUserTotalChars) > 0 ? Number(keepUserTotalChars) : Infinity;
@@ -240,14 +372,29 @@ function buildCompactedHistory(input = {}) {
   if (systemMessage) out.push(systemMessage);
   out.push(...kept);
   out.push({ role: 'user', content: buildSummaryEnvelope(summary) });
-  return { messages: out, keptUserTurns: kept.length };
+  /**
+   * P1-4：无损操作尾部接在摘要**之后** —— 它是历史里最新、也最该逐字保留的部分
+   * （摘要负责「很早以前」，尾部负责「刚刚」）。顺序与审计给的结构一致：
+   *   [system] → [人说过的话] → [新摘要/检查点] → [最近无损操作组]
+   */
+  out.push(...tail.messages);
+  return {
+    messages: out,
+    keptUserTurns: kept.length,
+    tailGroups: tail.groups,
+    tailTokens: tail.tokens,
+    tailDroppedGroups: tail.droppedGroups,
+    tailOversized: tail.oversized,
+  };
 }
 
 module.exports = {
+  buildLosslessTail,
   COMPACTION_PROMPT,
   MACHINE_USER_PREFIXES,
   isMachineInjectedUserMessage,
   estimateTokens,
+  estimateTextTokens,
   buildSummaryEnvelope,
   shouldCompact,
   countCompressible,

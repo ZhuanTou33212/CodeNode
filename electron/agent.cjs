@@ -15,6 +15,8 @@ const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
 // 上下文压缩（照 Codex CLI 的做法）：窗口逼近上限时用交接摘要替换助手长文/工具结果
 const compactionLib = require('./compaction.cjs');
+const costAttribution = require('./costAttribution.cjs');
+const costLedgerLib = require('./costLedger.cjs');
 // 上下文预算：每次请求前把最旧的超大工具结果裁成占位符（见 electron/contextBudget.cjs 顶部注释）
 const contextBudget = require('./contextBudget.cjs');
 const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
@@ -313,6 +315,10 @@ function parseCompressionConfig(cfg) {
   const defaults = ['retrieve_context', 'query_scalars', 'ask_user'];
   return {
     enabled: cfg['agent.compression.enabled'] == null ? true : String(cfg['agent.compression.enabled']).toLowerCase() !== 'false',
+    // P1-3：主口径改成 **token**（出厂 8,000）—— 旧字符阈值保留为**下界**（显式配过的老配置不会被悄悄放宽）
+    thresholdTokens: configInteger(cfg, 'agent.compression.threshold_tokens', 8000, 500, 200000),
+    /** 摘要的 token 预算（收益判据要拿它当 S；字符预算只用于给模型的长度指令） */
+    summaryTokens: configInteger(cfg, 'agent.compression.summary_tokens', 1500, 100, 20000),
     thresholdChars: configInteger(cfg, 'agent.compression.threshold_chars', 2400, 200, 100000),
     budgetChars: configInteger(cfg, 'agent.compression.budget_chars', 1500, 200, 20000),
     maxCalls: configInteger(cfg, 'agent.compression.max_calls', 8, 0, 50),
@@ -415,6 +421,17 @@ function parseLimitsConfig(cfg) {
      * 与重试策略无关 —— 放错地方会导致主循环读不到（接线错误，用例已锁）。
      */
     progressEvery: configInteger(cfg, 'agent.progress_every', 3, 0, 50),
+    /**
+     * P2-1：按阶段分配**输出预算**（两档）。审计的证据是「reasoning 会吃掉正文额度，并触发多次续写」，
+     * 所以不能简单把主模型全局 max_tokens 从 32k 降到 8k，而是：
+     *   「选择工具」的轮次 8k~12k（出厂 12k），最终交付/续写轮 24k~32k（出厂 32k）。
+     * 开关关掉即完全回到旧行为（请求体逐字节一致）——这是负向判据。
+     */
+    outputTiers: cfg['agent.output_budget_tiers'] == null ? true : String(cfg['agent.output_budget_tiers']).toLowerCase() !== 'false',
+    toolMaxTokens: configInteger(cfg, 'agent.output_budget_tool', 12000, 1000, 200000),
+    finalMaxTokens: configInteger(cfg, 'agent.output_budget_final', 32000, 1000, 200000),
+    /** 正文为空却被截断时，允许「加预算重试」的次数（不是无限补问） */
+    truncationBumps: configInteger(cfg, 'agent.truncation_budget_bumps', 1, 0, 5),
     maxConcurrentRuns: configInteger(cfg, 'agent.max_concurrent_runs', 2, 1, 8),
     // 单次运行的累计 token 上限。带图对话的输入会明显变大，默认给到 60 万；
     // 真正防止"算错"的是 requestBudget 的估算口径（图片按 token 规则折算，不按 base64 字节）。
@@ -605,6 +622,22 @@ function parseCompactionConfig(cfg) {
     keepUserTurns: cfg['agent.compact.keep_user_turns'] == null ? true : String(cfg['agent.compact.keep_user_turns']).toLowerCase() !== 'false',
     keepUserMaxChars: configInteger(cfg, 'agent.compact.keep_user_max_chars', 2000, 100, 100000),
     keepUserTotalChars: configInteger(cfg, 'agent.compact.keep_user_total_chars', 20000, 500, 500000),
+    /**
+     * P1-4：压缩后**逐字保留**的最近操作尾部（token）。0 = 不保留（回到旧行为）。
+     * 审计给的量级是 8k~15k；出厂 12k。尾部按**原子操作组**整组取，绝不为凑预算切开一次工具调用。
+     */
+    tailTokens: configInteger(cfg, 'agent.compact.tail_tokens', 12000, 0, 15000),
+    /**
+     * 单个操作组超过尾部预算时是否仍然整组保留。默认 **true**（最新操作逐字优先）：
+     * 真实场景里一个操作组经常就超过尾部预算，默认丢弃等于让这个能力几乎不生效。
+     * 怕压不下来的话不必担心 —— 压缩环节在「压后仍在线下」时会用**严格预算**自动重算一次。
+     */
+    tailAllowOversized: cfg['agent.compact.tail_allow_oversized'] == null
+      ? true
+      : String(cfg['agent.compact.tail_allow_oversized']).toLowerCase() === 'true',
+    /** P1-4 触发公式里的安全 buffer 与输入上限（0 = 不参与约束，行为与旧版一致） */
+    bufferTokens: configInteger(cfg, 'agent.compact.buffer_tokens', 8000, 0, 200000),
+    inputLimit: configInteger(cfg, 'agent.compact.input_limit', 0, 0, 4000000),
     // 硬裁剪一启动（占位符已经开始顶替正文）就顺手做语义压缩：占位符换不出质量
     onTrim: cfg['agent.compact.on_trim'] == null ? true : String(cfg['agent.compact.on_trim']).toLowerCase() !== 'false',
     /**
@@ -1526,6 +1559,67 @@ function shouldCompress(compression, toolName, contentLength, usedCalls) {
   return contentLength > compression.thresholdChars;
 }
 
+/**
+ * 压缩收益判据（P1-3）：压一次要花「原文 R + 摘要 S」，只在**预计剩余轮数**足够多、
+ * 后续每轮省下的 (R − S) 能把这一次的成本赚回来时才值得压。
+ *
+ * 审计给的算式就是这条：回本所需轮数 `> (R + S) / (R − S)`。原实现用字符阈值（2,400 字符）判，
+ * 于是刚过线的结果要再被用 4~5 轮才回本 —— 短任务里反而更贵。
+ *
+ * @param {{contentTokens?: number, summaryTokens?: number, remainingRounds?: number, costTokens?: number}} [input]
+ * @returns {{savedPerRound: number, cost: number, roundsToBreakEven: number, profitable: boolean}}
+ */
+function compressionRoi(input = {}) {
+  const content = Number(input.contentTokens) || 0;
+  const summary = Number(input.summaryTokens) || 0;
+  const remaining = Number(input.remainingRounds) || 0;
+  const extra = Number(input.costTokens) || 0;
+  const savedPerRound = content - summary;
+  const cost = content + summary + extra;
+  const roundsToBreakEven = savedPerRound > 0 ? cost / savedPerRound : Infinity;
+  return {
+    savedPerRound,
+    cost,
+    roundsToBreakEven,
+    profitable: savedPerRound > 0 && remaining * savedPerRound > cost,
+  };
+}
+
+/**
+ * 该不该对这一条工具结果做 LLM 压缩（P1-3 的完整判据；`shouldCompress` 只做旧口径的粗筛）。
+ *
+ * 顺序（每一条都有明确理由）：
+ *   ① 旧粗筛（开关 / exclude / max_calls / 旧字符下界）—— 保持既有语义与既有用例；
+ *   ② **token 阈值**（出厂 8,000）：先做确定性投影/分页/句柄，投影后还这么大才轮到 LLM 摘要；
+ *   ③ **预计剩余轮数**：未知或不 > 1 → 不压（最后一轮压了必然亏）；
+ *   ④ **同类工具长期净亏** → 本 run 内改用确定性裁剪（自动降级，见 `stats`）；
+ *   ⑤ **净收益判据** `剩余轮数 × (R − S) > (R + S)`。
+ * @returns {{compress: boolean, reason: string, roi?: object}}
+ */
+function compressionDecision(input = {}) {
+  const comp = input.compression || {};
+  const usedCalls = Number(input.usedCalls) || 0;
+  if (!shouldCompress(comp, input.toolName, Number(input.contentChars) || 0, usedCalls)) {
+    return { compress: false, reason: 'legacy-gate' };
+  }
+  const thresholdTokens = Number(comp.thresholdTokens) > 0 ? Number(comp.thresholdTokens) : 8000;
+  if (!(Number(input.contentTokens) >= thresholdTokens)) return { compress: false, reason: 'below-token-threshold' };
+  const remaining = Number(input.remainingRounds);
+  if (!Number.isFinite(remaining) || remaining <= 1) return { compress: false, reason: 'last-round' };
+  const stats = input.stats && typeof input.stats.get === 'function' ? input.stats.get(input.toolName) : null;
+  if (stats && Number(stats.calls) >= 2 && Number(stats.netTokensSaved) < 0) {
+    return { compress: false, reason: 'negative-net' };
+  }
+  const roi = compressionRoi({
+    contentTokens: input.contentTokens,
+    summaryTokens: Number(comp.summaryTokens) > 0 ? Number(comp.summaryTokens) : 1500,
+    remainingRounds: remaining,
+    costTokens: 0,
+  });
+  if (!roi.profitable) return { compress: false, reason: 'roi-negative', roi };
+  return { compress: true, reason: 'profitable', roi };
+}
+
 /** 压缩结果的内容级缓存（同一份原文 + 同一预算只压一次，命中即零 token） */
 const compressionLib = require('./compressionCache.cjs');
 
@@ -2297,6 +2391,29 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let lastContextSummary = '';
   /** 上一轮硬裁剪的规模（tier≥1 表示「已经开始丢正文」→ 触发摘要） */
   let lastTrimStats = null;
+  /**
+   * P2-2：本 run 内「工具原始结果 → 模型可见投影」的累加器（按工具名），
+   * 用来回答「哪类工具最该做确定性裁剪」。只统计，不参与任何决策。
+   */
+  const toolProjection = new Map();
+  /** P2-2：上一次请求的 system 段落（缓存未命中时定位「第一个变化的区段」） */
+  let lastAttributionSections = null;
+  /** P2-1：上一轮模型输出里有没有工具调用（决定这一轮是「选工具」还是「交付/续写」） */
+  let lastResponseHadToolCalls = false;
+  /** P2-1：本 run 内被「加预算重试」抬起来过的输出预算（0 = 没抬过） */
+  let outputBudgetOverride = 0;
+  let truncationBumps = 0;
+  /**
+   * P1-3：本 run 的压缩账（按工具累计 原始/摘要/成本/净收益）。
+   * 用途一：记账（`netTokensSaved` 进账本与归因，回答「压缩到底赚不赚」）；
+   * 用途二：**自动降级** —— 某类工具累计净亏且已压过 ≥2 次，本次 run 内不再对它调压缩模型，
+   *         改走确定性裁剪（`data_truncate_cap` / 投影 / 分页）。
+   */
+  const compressionStats = new Map();
+  /** 本 run 被跳过的压缩次数（按原因计数），进 trace 与归因，别让「没压」变成不可观测的静默 */
+  const compressionSkips = new Map();
+  /** 本轮跳过的压缩原因（每轮清零）—— 用于「一条都没压」时也留一条 trace */
+  const roundCompressionSkips = new Map();
   // P6：来源校验门（默认 warn = 只上报，行为与之前完全一致；enforce 才拦交付）
   const groundingCfg = (cfg && cfg.grounding) || {};
   const groundingEnforce = groundingCfg.mode === 'enforce';
@@ -2360,6 +2477,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       contextWindow: compactionWindow,
       ratio: compactionCfg.ratio,
       compressible,
+      // P1-4：把输入上限 / 输出预留 / 安全 buffer 统一进同一个触发公式（见 shouldCompact 注释）
+      inputLimit: compactionCfg.inputLimit,
+      outputReserve: Number(cfg.maxTokens) || 0,
+      buffer: compactionCfg.bufferTokens,
     });
     const trimmedNow = !!(lastTrimStats && (lastTrimStats.trimmed > 0 || lastTrimStats.overBudget) && compactionCfg.onTrim !== false);
     const forced = forceCompaction === true || opts.force === true;
@@ -2427,16 +2548,40 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       return { ok: false, error: failure || '模型未返回摘要' };
     }
     const systemMessage = messages.length && messages[0] && messages[0].role === 'system' ? messages[0] : null;
-    const rebuilt = compactionLib.buildCompactedHistory({
+    const buildHistory = (tailBudget, strict = false) => compactionLib.buildCompactedHistory({
       systemMessage,
       messages,
       summary,
       keepUserTurns: compactionCfg.keepUserTurns !== false,
       keepUserMaxChars: compactionCfg.keepUserMaxChars,
       keepUserTotalChars: compactionCfg.keepUserTotalChars,
+      // P1-4：摘要负责「很早以前」，这份无损尾部负责「刚刚」—— 原子保留最近的操作组
+      keepTailTokens: tailBudget,
+      // strict=true 时按「尊重预算」口径重算：单个超预算的大组会被整组丢弃
+      allowOversizedTail: strict ? false : compactionCfg.tailAllowOversized === true,
     });
+    const toolsForEstimate = tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null;
+    let rebuilt = buildHistory(compactionCfg.tailTokens);
+    let after = compactionLib.estimateTokens(rebuilt.messages, toolsForEstimate);
+    /**
+     * **压缩必须真的把上下文压下来**（这一条是被现有用例抓出来的真缺陷）：
+     * 无损尾部若把预算吃光，压缩后仍超过触发线 —— 下一轮立刻又压一次（甚至直接被预检判超窗，
+     * 一次模型请求都发不出去）。所以：压完若仍在线上，就按「固定部分（system+人话+摘要）之外的余量」
+     * 重算尾部预算，最多重算一次（纯计算、不额外花模型调用），并在 trace 里如实记下被缩过。
+     */
+    let tailShrunk = false;
+    let tailDroppedForLimit = false;
+    if (plan.limit > 0 && after >= plan.limit && compactionCfg.tailTokens > 0) {
+      const fixed = Math.max(0, after - (rebuilt.tailTokens || 0));
+      const slack = Math.max(0, plan.limit - fixed - 200); // 200 token 余量，别贴着线停
+      const nextTail = Math.min(compactionCfg.tailTokens, slack);
+      // 重算这一次用**严格预算**：否则「单组超预算就整组保留」会让重算永远收敛不到线下
+      rebuilt = buildHistory(nextTail, true);
+      after = compactionLib.estimateTokens(rebuilt.messages, toolsForEstimate);
+      tailShrunk = true;
+      tailDroppedForLimit = nextTail === 0;
+    }
     messages.splice(0, messages.length, ...rebuilt.messages);
-    const after = compactionLib.estimateTokens(messages, tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null);
     compactionCount += 1;
     compactionWindowNumber += 1;
     lastContextSummary = summary;
@@ -2448,6 +2593,13 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       tokensBefore: tokens,
       tokensAfter: after,
       keptUserTurns: rebuilt.keptUserTurns,
+      tailGroups: rebuilt.tailGroups || 0,
+      tailTokens: rebuilt.tailTokens || 0,
+      tailShrunk: tailShrunk === true,
+      tailDroppedForLimit: tailDroppedForLimit === true,
+      limit: plan.limit,
+      tailDroppedGroups: rebuilt.tailDroppedGroups || 0,
+      tailOversized: rebuilt.tailOversized === true,
       machineTurnsDropped: machineTurns,
       summaryChars: summary.length,
       droppedByCharCap: built.dropped,
@@ -2479,6 +2631,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   try {
     for (let iter = 0; iter < maxToolIterations; iter++) {
       loopIterations = iter + 1;
+      roundCompressionSkips.clear();
       turnContent = '';
       turnReasoning = '';
       if (signal && signal.aborted) {
@@ -2556,6 +2709,29 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         }
       }
       let turnMaxTokens = Number(cfg.maxTokens) || 0;
+      /**
+       * P2-1：按阶段定档。只在本 run 有工具面、且用户显式给了 max_tokens 时生效
+       * （没有工具面的纯对话、或没配 max_tokens 的场景保持原样 —— 不给「不涉及工具的场景」加新行为）。
+       * 口径：上一轮**没有**工具调用（正在交付/续写）→ final 档；否则（在选工具）→ tool 档。
+       * 两档都只能**往下压**，永远不会超过用户配的 max_tokens。
+       */
+      if (limits.outputTiers && turnMaxTokens > 0 && tools && tools.registry) {
+        // 上一轮**调过工具** → 这一轮是在「选工具」（tool 档）；否则（首轮 / 交付 / 续写）→ final 档。
+        // 首轮给 final 档是有意的：那时还不知道要干什么，压缩首轮等于给「一次问清」的场景加截断风险。
+        const tierBudget = lastResponseHadToolCalls ? limits.toolMaxTokens : limits.finalMaxTokens;
+        const wanted = Math.max(Number(outputBudgetOverride) || 0, Number(tierBudget) || 0);
+        const capped = wanted > 0 ? Math.min(turnMaxTokens, wanted) : turnMaxTokens;
+        if (capped !== turnMaxTokens) {
+          emitTrace({
+            kind: 'output_budget_tier',
+            turnId: iter,
+            tier: lastResponseHadToolCalls ? 'tool' : 'final',
+            from: turnMaxTokens,
+            to: capped,
+          });
+          turnMaxTokens = capped;
+        }
+      }
       if (preflightWindow > 0 || shrinkWindow > 0) {
         const preflightTools = tools && tools.registry && typeof tools.registry.toOpenAiTools === 'function' ? tools.registry.toOpenAiTools() : null;
         const estimate = compactionLib.estimateTokens(messages, preflightTools);
@@ -2798,6 +2974,35 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       }
       if (res.usage) {
         usage = mergeUsage(usage, res.usage);
+        /**
+         * P2-2：主请求内部构成（哪一层在烧 token）。
+         * 只测量：把 system 段落 + 历史按角色 + 工具 schema + 工具投影累加器一起算出来挂到账本 meta 上。
+         * `cacheMiss` 由**供应商报的**命中/未命中推（没有数据时为 false —— 不编造 miss）。
+         */
+        let attribution = null;
+        try {
+          const usageParts = costLedgerLib.tokenParts(res.usage);
+          const systemContent = messages[0] && messages[0].role === 'system' && typeof messages[0].content === 'string'
+            ? messages[0].content
+            : '';
+          const sections = systemContent ? splitPromptSections(systemContent) : [];
+          const schemaInfo = tools && tools.registry && typeof tools.registry.schemaInfo === 'function' ? tools.registry.schemaInfo() : null;
+          attribution = costAttribution.attribute({
+            sections,
+            messages: messages.slice(systemContent ? 1 : 0),
+            tools: payload && payload.tools,
+            toolSchemaTokens: schemaInfo ? schemaInfo.tokens : null,
+            toolProjection,
+            compressionStats,
+            cachedTokens: usageParts.cached,
+            missTokens: usageParts.miss,
+            cacheMiss: usageParts.miss > 0 && usageParts.cached === 0,
+            previousSections: lastAttributionSections,
+          });
+          if (sections.length) lastAttributionSections = sections;
+        } catch {
+          attribution = null; // 归因失败绝不影响主流程
+        }
         // 记账口径由调用方决定：子代理用自己的 costKind='subagent' 逐轮记，
         // 外层**不再**额外汇总记一次 —— 否则同一个子代理会被记两遍（账本与成本告警约 2 倍失真）。
         recordCost(cfg, {
@@ -2806,6 +3011,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           usage: res.usage,
           latencyMs: Date.now() - turnStartedAt,
           runId: cfg.costRunId,
+          meta: attribution ? { attribution } : null,
         });
         totalTokens = Number(usage.total_tokens) || totalTokens;
         const maxTotalTokens = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 250000;
@@ -2817,6 +3023,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       }
 
       const toolCalls = res.toolCalls || [];
+      lastResponseHadToolCalls = toolCalls.length > 0;
       const finishReason = res.finishReason || null;
       if (finishReason) lastFinishReason = finishReason;
       // 被 max_tokens 截断（finish_reason=length）且没有任何工具调用：不能把半截回答当最终答案，
@@ -2824,6 +3031,26 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       // 其余交给 MAX_TOOL_ITERATIONS 兜底。
       // 提示语必须是「从断点接着写」：早先写的是「把回复拆短：只给结论」——那等于让模型
       // 在被截断之后主动丢信息，用户拿到的是越缩越水的半份交付。
+      /**
+       * P2-1：被 max_tokens 截断时，先分清「有正文」还是「正文为空」：
+       *   - 有正文 → 从断点接着写（既有行为，只补 maxTruncationNudges 次）；
+       *   - **正文为空** → 「接着写」是没意义的（没有断点可接），说明额度被 reasoning/空转吃掉了。
+       *     这时**加预算重试一次**同一轮（不动 messages），而不是让模型从零再写一遍半截。
+       *     只在预算是被阶段档压下来的时候才可能抬得动（永远不超过用户配的 max_tokens）。
+       */
+      if (!toolCalls.length && finishReason === 'length' && !String(res.content || '').trim()) {
+        const bumpTo = Math.min(
+          Number(cfg.maxTokens) || 0,
+          Math.max(turnMaxTokens * 2, Number(limits.finalMaxTokens) || 0),
+        );
+        if (truncationBumps < Number(limits.truncationBumps) && bumpTo > turnMaxTokens) {
+          truncationBumps += 1;
+          outputBudgetOverride = bumpTo;
+          emitTrace({ kind: 'truncation_budget_bump', turnId: iter, from: turnMaxTokens, to: bumpTo, count: truncationBumps });
+          onDelta && onDelta({ kind: 'truncated', count: truncationBumps, max: Number(limits.truncationBumps), finishReason, continuing: false, budgetBumped: true });
+          continue;
+        }
+      }
       if (!toolCalls.length && finishReason === 'length' && truncationNudges < maxTruncationNudges) {
         truncationNudges += 1;
         messages.push({ role: 'assistant', content: String(res.content || '') });
@@ -2838,7 +3065,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         continue;
       }
       if (tools && tools.registry && toolCalls.length) {
-        /** @type {Array<{toolName: string, content: string, record: any, cacheKey: string|null, messageIndex: number}>} */
+        /** @type {Array<{toolName: string, content: string, contentTokens: number, record: any, cacheKey: string|null, messageIndex: number}>} */
         const pendingCompression = [];
         // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
         assignCallIds(toolCalls, iter);
@@ -3028,6 +3255,31 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             if (cached && cached.compressed) record.compressed = true;
           } else {
             toolContent = buildToolContent(result, tc.name, malformed, repeated, dataTruncateCap);
+            /**
+             * P2-2：记「原始结果 → 模型可见投影」的 token。
+             * 「原始」= **投影之前**模型会看到的那份（即旧行为的 text + [data] 段），所以这里显式把
+             * `modelContent` 摘掉再走一遍同一个 `buildToolContent` —— 口径与旧实现完全一致，
+             * 不能用「text.length」近似，否则省下的到底是多少就对不上账。
+             * 没有投影的工具有 raw == model，不去多算一遍（热路径成本为零）。
+             */
+            {
+              const modelTokens = compactionLib.estimateTextTokens(toolContent);
+              let rawTokens = modelTokens;
+              if (result.modelContent != null) {
+                try {
+                  rawTokens = compactionLib.estimateTextTokens(
+                    buildToolContent({ ...result, modelContent: null }, tc.name, malformed, repeated, dataTruncateCap),
+                  );
+                } catch {
+                  rawTokens = modelTokens;
+                }
+              }
+              const stat = toolProjection.get(tc.name) || { calls: 0, rawTokens: 0, modelTokens: 0 };
+              stat.calls += 1;
+              stat.rawTokens += rawTokens;
+              stat.modelTokens += modelTokens;
+              toolProjection.set(tc.name, stat);
+            }
             // 回填缓存正文（此前只 set 了空串，命中路径因此丢 [data] 段）
             if (cacheKey && result.ok) {
               const entry = toolResultCache.get(cacheKey);
@@ -3036,8 +3288,27 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             // 子代理压缩（S10）：这里只**登记**待压缩项，等本轮所有工具执行完再合并成一次请求。
             // 当场逐个压缩时，N 份结果要付 N 遍 system 前缀 + N 次请求固定开销（而 system 是常量）。
             // max_calls 的额度按「已用调用数 + 本条占用的调用数」预判，避免一轮内无上限地登记。
-            if (shouldCompress(cfg && cfg.compression, tc.name, toolContent.length, compressCalls + pendingCompression.length)) {
+            /**
+             * P1-3：这次该不该压 —— 先看投影后的 token 是否还大到值得压，再看**预计剩余轮数**够不够回本。
+             * 跳过的原因要计数（`compressionSkips`），否则「该压没压」和「不值得压」在账上没法区分。
+             */
+            const contentTokens = compactionLib.estimateTextTokens(toolContent);
+            const compressDecision = compressionDecision({
+              compression: cfg && cfg.compression,
+              toolName: tc.name,
+              contentTokens,
+              contentChars: toolContent.length,
+              usedCalls: compressCalls + pendingCompression.length,
+              remainingRounds: Math.max(0, maxToolIterations - iter - 1),
+              stats: compressionStats,
+            });
+            if (!compressDecision.compress && compressDecision.reason !== 'legacy-gate' && compressDecision.reason !== 'below-token-threshold') {
+              compressionSkips.set(compressDecision.reason, (compressionSkips.get(compressDecision.reason) || 0) + 1);
+              roundCompressionSkips.set(compressDecision.reason, (roundCompressionSkips.get(compressDecision.reason) || 0) + 1);
+            }
+            if (compressDecision.compress) {
               pendingCompression.push({
+                contentTokens,
                 toolName: tc.name,
                 content: toolContent,
                 record,
@@ -3174,6 +3445,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const compCfg = (cfg && cfg.compression) || {};
           const maxPerBatch = Math.max(1, compCfg.batchMaxItems || 4);
           const startedAt = Date.now();
+          // P1-3：压缩前后各取一次账本游标 → 拿到这次压缩**实报**的 token 成本（见下面记账段）
+          const ledgerCursor = cfg && cfg.costLedger && Array.isArray(cfg.costLedger.entries) ? cfg.costLedger.entries.length : 0;
           const outs = await compressToolBatch(
             cfg,
             pendingCompression.map((entry) => ({ toolName: entry.toolName, content: entry.content })),
@@ -3201,6 +3474,55 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               }
             }
           });
+          /**
+           * P1-3 记账：这一次压缩的净收益 = 本轮省下的 (原文 − 摘要) − 这次调用实花的 (输入 + 输出)。
+           *
+           * 两个口径要如实：
+           *   - 省下的部分是**每后续轮各省一次**（所以它随剩余轮数放大，ROI 判据在前面已经用它做过决策）；
+           *     这里记的 `netTokensSaved` 是**单轮口径**（更保守），并同时记 `savedTokens` 供换算。
+           *   - 成本来自供应商**实报的 usage**（账本 delta）。拿不到就记 0 并标 `costKnown: false`，
+           *     绝不拿「估算成本」冒充实报成本。
+           */
+          const rawTokens = pendingCompression.reduce((sum, entry) => sum + (Number(entry.contentTokens) || 0), 0);
+          const newTokens = pendingCompression.reduce(
+            (sum, entry, i) => sum + compactionLib.estimateTextTokens((outs[i] && outs[i].text) || entry.content),
+            0,
+          );
+          const ledger = cfg && cfg.costLedger && Array.isArray(cfg.costLedger.entries) ? cfg.costLedger.entries : null;
+          const fresh = ledger ? ledger.slice(ledgerCursor) : [];
+          const costTokens = fresh
+            .filter((entry) => entry && entry.kind === 'compression')
+            .reduce((sum, entry) => sum + (Number(entry.tokens && entry.tokens.prompt) || 0) + (Number(entry.tokens && entry.tokens.completion) || 0), 0);
+          const savedTokens = Math.max(0, rawTokens - newTokens);
+          /**
+           * 剩余轮数（**本轮的压缩收益还没兑现**，从下一轮起才每轮省一次）。
+           * `netTokensSaved` 用**收益口径**：`每轮省 × 剩余轮数 − 成本` —— 这才是「值不值得压」的账，
+           * 也是自动降级（同类工具长期净亏）该看的数。单轮口径另记 `netTokensImmediate`，两个都给，不混用。
+           */
+          const remainingAfter = Math.max(0, maxToolIterations - iter - 1);
+          const netTokensSaved = savedTokens * remainingAfter - costTokens;
+          const netTokensImmediate = savedTokens - costTokens;
+          pendingCompression.forEach((entry, i) => {
+            const raw = Number(entry.contentTokens) || 0;
+            const outTokens = compactionLib.estimateTextTokens((outs[i] && outs[i].text) || entry.content);
+            const saved = Math.max(0, raw - outTokens);
+            const stat = compressionStats.get(entry.toolName) || {
+              calls: 0, rawTokens: 0, summaryTokens: 0, savedTokens: 0, costTokens: 0,
+              netTokensSaved: 0, netTokensImmediate: 0,
+            };
+            stat.calls += 1;
+            stat.rawTokens += raw;
+            stat.summaryTokens += outTokens;
+            stat.savedTokens += saved;
+            // 一批压缩 N 条：成本按原文 token 占比分摊（否则按工具看净收益会失真）
+            const share = rawTokens > 0 ? (costTokens * raw) / rawTokens : 0;
+            stat.costTokens += share;
+            stat.netTokensSaved = stat.savedTokens * remainingAfter - stat.costTokens;
+            stat.netTokensImmediate = stat.savedTokens - stat.costTokens;
+            compressionStats.set(entry.toolName, stat);
+            entry.record.netTokensSaved = Math.round(stat.netTokensSaved);
+            entry.record.compressedTokens = { from: raw, to: outTokens };
+          });
           emitTrace(
             {
               kind: 'compression',
@@ -3210,9 +3532,26 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               tools: pendingCompression.map((entry) => entry.toolName),
               cacheHits: outs.filter((out) => out && out.cacheHit).length,
               elapsedMs: Date.now() - startedAt,
+              // P1-3：净收益账（口径见上面注释）+ 本 run 跳过的压缩原因计数
+              rawTokens,
+              newTokens,
+              savedTokens,
+              costTokens,
+              costKnown: fresh.some((entry) => entry && entry.kind === 'compression' && entry.estimated !== true),
+              remainingRounds: remainingAfter,
+              netTokensSaved,
+              netTokensImmediate,
+              skips: Object.fromEntries(compressionSkips),
             },
             compressionProjectRoot,
           );
+        }
+        /**
+         * P1-3：本轮一条都没压、但**有意跳过**过（最后一轮 / ROI 不划算 / 同类工具净亏）→ 也留一条 trace。
+         * 不留痕的话，「该压没压」和「不值得压」在账上就分不出来了。
+         */
+        if (!pendingCompression.length && roundCompressionSkips.size) {
+          emitTrace({ kind: 'compression_skipped', turnId: iter, skips: Object.fromEntries(roundCompressionSkips) });
         }
         // 失败按**类别**分派提示（S5）：参数错 → 改参数重试；权限/用户拒绝 → 别原样重试、要人介入；
         // 超时 → 缩小范围；副作用未知 → 先只读核对；认不出来的码按最保守处理。
@@ -3411,6 +3750,8 @@ module.exports = {
   parseReliabilityConfig,
   parseMemoryConfig,
   shouldCompress,
+  compressionDecision,
+  compressionRoi,
   buildToolContent,
   COMPRESSOR_SYSTEM_PROMPT,
   compressToolContent,

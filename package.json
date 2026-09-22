@@ -140,6 +140,10 @@
     "test:storage-hardening": "node scripts/storage-hardening-test.cjs",
     "test:token-overhead": "node scripts/token-overhead-test.cjs",
     "test:prompt-prefix": "node scripts/prompt-prefix-stability-test.cjs",
+    "test:cost-attribution": "node scripts/cost-attribution-test.cjs",
+    "test:compression-roi": "node scripts/compression-roi-test.cjs",
+    "test:output-budget": "node scripts/output-budget-test.cjs",
+    "test:compaction-tail": "node scripts/compaction-tail-test.cjs",
     "test:tool-projection": "node scripts/tool-result-projection-test.cjs"
   },
   "build": {

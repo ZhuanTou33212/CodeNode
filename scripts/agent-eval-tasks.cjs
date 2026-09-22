@@ -178,14 +178,20 @@ const TASKS = [
     prompt: '读取 data/large.txt，统计里面出现最多的模块编号，并说明你读到的总行数。',
     allowTools: ['read_file', 'list_directory'],
     budget: { maxSteps: 4, timeoutMs: 60000, maxToolCalls: 4 },
-    // 收紧压缩阈值，让判据在固定数据上必然命中（默认阈值 2400 字符）
-    cfgOverride: { compression: { thresholdChars: 500, budgetChars: 120, maxCalls: 1 } },
+    /**
+     * 收紧压缩阈值，让判据在固定数据上必然命中。
+     * 2026-09-22：压缩阈值口径从**字符**改成 **token**（出厂 8,000，旧的 `threshold_chars` 降为下界）
+     * —— 本夹具的 160 行大文件读出来约 2,600 token，所以这里必须同时给 `thresholdTokens`，
+     * 否则「必然命中」的前提没了（这条夹具就是这么红的）。
+     */
+    cfgOverride: { compression: { thresholdTokens: 1500, thresholdChars: 500, budgetChars: 120, maxCalls: 1 } },
     // 真机适配（2026-09-20 实测）：`maxCalls: 1` 是照脚本化模型「一次大读 → 压一次」调的口径，
     // 真机模型会**分批带 offset** 读同一个大文件（3~6 次读），第 2 份起就超了压缩配额 →
     // 未压缩的大结果原样留在上下文，`context-bounded ≤4000` 判红（7,250 / 9,099 字符实测）。
     // 处理方式：真机下放宽**压缩配额**（成本旋钮），4,000 字符这条**实质不变式**保持不放宽 ——
     // 每份大结果都必须真的被压缩过（同时也让真机覆盖到「同一轮多份结果」的压缩路径）。
-    modelCfgOverride: { compression: { maxCalls: 6 } },
+    // 注意 `eval-limits.cjs` 对 modelCfgOverride 是**浅合并**（compression 整个替换）→ 阈值也要带上
+    modelCfgOverride: { compression: { thresholdTokens: 1500, thresholdChars: 500, budgetChars: 120, maxCalls: 6 } },
     fixture: { 'data/large.txt': buildLargeText(160), 'README.md': '# 长上下文压缩评测\n' },
     script: [
       { tool: 'read_file', args: { path: 'data/large.txt', maxLines: 200 } },

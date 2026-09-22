@@ -38,6 +38,36 @@
   `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
   `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
 
+### 新增（P2-2 成本按层归因 / P1-3 压缩收益 / P2-1 输出分档 / P1-4 压缩尾部；2026-09-22）
+
+第三批（审计 P2-2 / P1-3 / P2-1 / P1-4），每一项都带新判据：
+
+- **P2-2 成本按层归因**（新 `electron/costAttribution.cjs`）：主请求同时记十层（system_static /
+  system_dynamic / tool_schema / memory / rag / project_state / history_user / history_assistant /
+  tool_result / attachment）+ 每种工具的 `raw → model` 投影 + 压缩的 `costTokens → savedTokens` +
+  供应商报的缓存命中/未命中；**缓存未命中时记「第一个变化的 prompt 区段」**。只测量、不改行为；
+  未登记段落归 `system_dynamic`（fail-safe）。判据 `test:cost-attribution`（含真 run + 真账本端到端）。
+- **P1-3 压缩改收益驱动**：主口径从字符改成 **token**（出厂 8,000；旧字符阈值降为下界），
+  `剩余轮数 × (R − S) > (R + S)` 才压（审计那条 4.33 轮的算式原样进了判据）；剩余轮数 ≤1 永不压；
+  同类工具累计净亏（≥2 次）自动降级为确定性裁剪；记 `netTokensSaved`（收益口径）与
+  `netTokensImmediate`（单轮差），成本只用**实报** usage；跳过原因进 `compression_skipped` 事件
+  （不再让「该压没压」不可观测）。实测：一条 30,062 token 结果 → 摘要 14 token，剩 3 轮净收益 63,844。
+- **P2-1 输出预算分档**：tool 档 12k / final 档 32k，只往下压、永不越过 `agent.max_tokens`；
+  正文为空却被截断 → **加预算重试一次**（reasoning 吃光额度的场景不再让模型「从断点接着写」一段不存在的内容）。
+  `agent.output_budget_tiers=false` 完全回退旧行为。
+- **P1-4 压缩保留无损操作尾部**：`[system] → [人话] → [摘要] → [最近无损操作组]`；操作组原子
+  （`assistant(tool_calls)` + 配对结果绝不切开、孤儿 tool 消息不留）；触发线统一进
+  `min(window×ratio, inputLimit−buffer, window−max(outputReserve, buffer))`。
+  尾部与「压缩必须真的压下来」的两段式配合：默认**最新操作逐字优先**（`tail_allow_oversized` 默认 true），
+  若压完仍 ≥ 触发线，则按固定部分之外的余量用**严格预算重算一次**（会整组丢弃超大组，纯计算不加调用），
+  trace 记 `tailShrunk` / `tailDroppedForLimit`。
+  **这条是被现有 `test:compaction` 抓出来的真缺陷**：第一版实现让尾部吃光预算 → 压缩后仍超窗 →
+  主请求一次都发不出去（预检直接判超窗）。端到端判据已补：够大窗口尾部原样进历史（实测 6,613 token），
+  紧窗口自动收窄到线下，两种情况主请求都发得出去。
+- **没做**（如实列出）：审计还要求把「先 compact 再硬裁剪」的顺序倒过来 —— 现行顺序把硬裁剪当免费兜底网，
+  倒过来会在可能不需要摘要时先付一次 LLM 调用、削弱恢复链。需要单独一轮 + 完整回退回归，本次未动。
+- 核心套件 **97 → 101**，README 计数同步。
+
 ### 优化（P1-1：稳定内容前置 + 规则按面分层；2026-09-22）
 
 prompt cache 命中的是**请求前缀**，而重排前「画布清单 / 项目记忆 / 用户记忆」紧跟回复约束 —— 每个提问都会
