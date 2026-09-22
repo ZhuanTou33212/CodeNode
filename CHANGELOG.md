@@ -4,6 +4,44 @@
 
 ## [未发布]
 
+### 工程质量（门禁数字对齐唯一来源 + 主进程严格档 + 数组参数上限；2026-09-23 审计第 4 轮）
+
+三项独立整改，都在独立 worktree 内完成、各自跑过判据（`npm run check:js` 退出 0 + `npm test` 104/104）：
+
+- **门面数字对齐唯一来源**：README 对「门禁项数」给了三个数字（第 23 行「104 项核心 + 7 项显示」是对的，
+  第 248 行写「103 项核心」、第 256 行写「core 套件（87 项）」）—— 统一到
+  `node scripts/run-all-tests.cjs --list` 的实测输出（「核心套件 (104):」+「显示/浏览器套件 (7):」）。
+  生产边界段的 `agent.max_total_tokens` 默认值也从过期的 250,000 改为出厂值 600,000
+  （`electron/agent.cjs` 的 `configInteger(cfg, 'agent.max_total_tokens', 600000, …)`，
+  `test:agent-limits` 实测回显 `"maxTotalTokens":600000`）。
+- **过期结论就地标注、问题单归档**：`docs/harness-parity-vs-codex-claude-code-2026-09-21.md` 第 5 节 #5 / #7
+  与第 7 节末尾仍写「MCP HTTP transport / web_search / worktree 隔离 / 计划卡仍未做」，而它们已在同日第二批次
+  落地（`a2182cc` / `d7f6abb` / `7d5424f`）；行内补删除线与落地提交，文首补「后续更新」注记说明本文基线
+  （79 项门禁、`6f4521f`）已过期。根目录那份未跟踪的 `deepseek-agent-issues.md` 归档为
+  `docs/agent-issues-intake-2026-09-17.md`，文首附逐条回代码核实结论：第 2/3/4/5/6/7/9 项已落地且各有关联门禁，
+  第 1 项机制齐备但验收标准本轮未实测，第 8 项未核实，第 10/11 项原文即为「不要直接当 bug」。
+- **主进程开 `strictNullChecks`，`check:js` 分两档**：`electron/**`（agent 循环、沙箱、工具注册表、IPC）此前与
+  `src/` 不同 —— 后者 `strict:true`，这一档连 `strictNullChecks` 都没开，null/undefined 解引用全靠人眼。
+  开启后暴露 **94 处**（TS18048 30 / TS2345 22 / TS2322 17 / TS18047 12 / TS2532 3 / TS2810 2 / TS2722 2 / TS2531 2），
+  逐条清完，纪律是**零行为变化**：类型注解（对象字面量加 JSDoc 打断 `null` / `never[]` 的错误推断）、
+  等价改写（`lines.pop() || ''`、先收窄再 `Number(x)`、`resolve()` → `resolve(undefined)`）、
+  少数跨档类型用 `/** @type {any} */` 断言（不产生任何运行时代码）。`check:js` 相应拆两档：
+  `electron/**` 走 `tsconfig.checkjs.json`（严格），`scripts/**` 走新增的 `tsconfig.checkjs-scripts.json`
+  （保留宽松 —— 脚本里大量 mock/夹具是「先声明、后按场景赋值」的形状）。CI 与 `npm run verify` 无需改动。
+- **数组参数一律有长度上限**：13 个数组参数里只有 2 个声明过 `maxItems`（`update_plan.steps`、
+  `retrieve_context.queries`），同族的 `retrieve_context.keys` 反而没有 —— 于是「模型幻觉出几万条
+  operations / connections / list」这条路上没有任何一道闸：参数校验放行，主进程再逐条执行。
+  修法不是给每个 schema 逐个补声明（那会把画布面固定输入推过 `test:token-overhead` 的 9,000 tokens 验收线，
+  实测 9031），而是在 `electron/tools/registry.cjs` 的 `validateInput` 里加
+  `DEFAULT_MAX_ARRAY_ITEMS = 1000` 兜底（显式声明优先）—— **一处收口，将来新增的工具自动受益，且 schema 零变化**。
+  `test:tool-contract` 增 D 段 6 条判据（超限被拒 / 恰好等于上限放行 / 显式声明优先 / 标量与对象负向 /
+  真实工具端到端 / 注册表普查）。
+
+**变异校验（两处，都有判别力）**：① 严格档 —— 往 `electron/attachments.cjs` 注入 `__probeNull.field` → 变红
+（`TS18047`），`scripts/` 注入未知属性 → 脚本档变红（`TS2339`），还原后两档 0 错；② 数组上限 —— 把兜底拿掉
+（`const cap = schema.maxItems;`）后 D1/D5/D6 变红而 D2/D3/D4 保持绿，且 D5 在变异态**实证了漏洞本身**
+（超限数组不再被参数校验拦下、真的走到 workbench_edit 的执行体，返回「工作台不可用（无变更应用）」）。
+
 ### 变更（模型管理界面精简：只保留 API Key 入口，协议改按地址自动判定；2026-09-23）
 
 用户反馈：「你只需要提供 api key 接口，其他的根本不需要，请删除」。上一轮加的 UI（厂商预设下拉、「全部加入」、
