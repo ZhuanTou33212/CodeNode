@@ -3,6 +3,9 @@
 > 日期：2026-09-21 ｜ 被我方基线：`yimi-branch` @ `6f4521f`（工作区干净，`npm test` 79/79 全绿，321.8s）
 > 对照基线：本机 `codex-cli 0.135.0` 与 `Claude Code 2.1.153`
 > 结论口径：**本文只写可复跑的取证结果**，不写印象。第 6 节列明哪些结论证据不足。
+> **后续更新（2026-09-23）**：第 5 节 #5 / #7 与第 7 节末尾的「仍未做」已于 2026-09-21 落地（见行内标注）；
+> 本文的基线数字（79 项门禁、`6f4521f`）已过期，当前为 **104 项核心 + 7 项显示环境套件**
+> （唯一来源 `node scripts/run-all-tests.cjs --list`）。
 
 ## 0. 一句话结论
 
@@ -134,9 +137,9 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 | 2 | **P1** | ~~模型没有任务清单，长任务靠 12 轮上限 + 收尾兜底~~ **已落地 2026-09-21**：新增 `update_plan`（落 run 事件 + run 级文件 + 搭进度提示回灌） | 加 `update_plan` 形态的 todo 工具（`buildProgressNote` 的注入点直接升级成"计划 + 进度"，同一处替换逻辑已在 `agent.cjs:2289`） |
 | 3 | ~~P1~~ | ~~无 hooks~~ **已落地 2026-09-21**（`electron/hooks.cjs`，含 PostToolUse / SessionStart / Stop + 三个上限；`PreToolUse` 仍未做） |
 | 4 | ~~P1~~ | ~~技能静态注入~~ **已落地 2026-09-21**（`read_skill` + `agent.buildSkillsIndex`；工具面按任务裁剪**有意不做**——见 S20 的设计取舍记录） |
-| 5 | **P2** | ~~每次 spawn、无 `tools/list`~~ **部分落地 2026-09-21**（`electron/tools/mcpClient.cjs`：常驻会话 + 握手一次 + `tools/list` 缓存 + 空闲回收 + 崩溃重拉）；**仍未做**：streamable HTTP/SSE transport（只支持 stdio） |
+| 5 | **P2** | ~~每次 spawn、无 `tools/list`~~ **部分落地 2026-09-21**（`electron/tools/mcpClient.cjs`：常驻会话 + 握手一次 + `tools/list` 缓存 + 空闲回收 + 崩溃重拉）；~~**仍未做**：streamable HTTP/SSE transport（只支持 stdio）~~ **已落地 2026-09-21**（`a2182cc`：`electron/tools/mcpHttpTransport.cjs`；判据 `test:mcp-http` —— 真 HTTP 与真 SSE 两种应答、会话复用、`network=deny` 下拒绝且一条请求都不发） |
 | 6 | ~~P2~~ | ~~无持久审批规则~~ **已落地 2026-09-21**（`.codenode/approvals.json` + 界面「本项目始终允许」+ 受保护路径；只记忆注册表级审批） |
-| 7 | **P2** | **部分落地 2026-09-21**：用户级跨项目记忆 / `view_image` / headless 入口（`bin/codenode-agent.cjs`）已做；**仍未做**：`web_search`（需要搜索后端决策）、worktree 隔离（要设计工作树合并语义） |
+| 7 | **P2** | **部分落地 2026-09-21**：用户级跨项目记忆 / `view_image` / headless 入口（`bin/codenode-agent.cjs`）已做；~~**仍未做**：`web_search`（需要搜索后端决策）、worktree 隔离（要设计工作树合并语义）~~ **已落地 2026-09-21**（`web_search`：`d7f6abb` + `test:web-search`，出厂关闭、不配就不注册；工作树隔离：`7d5424f` + `test:worktree` / `test:subagent-worktree`） |
 
 ## 6. 本文的边界（证据不足或未验证）
 
@@ -149,7 +152,7 @@ system prompt（含画布规则）   : 4,601 字符 ≈ 2,317 tokens
 
 ## 7. 建议的处理顺序
 
-**落地记录**：`docs/agent-boundary-and-plan-2026-09-21.md`（#1 + #2）+ `docs/agent-control-plane-2026-09-21.md`（#3 / #4 / #6 + #7 的三项；MCP / web_search / worktree / 计划卡仍未做，理由见该文末节）。
+**落地记录**：`docs/agent-boundary-and-plan-2026-09-21.md`（#1 + #2）+ `docs/agent-control-plane-2026-09-21.md`（#3 / #4 / #6 + #7 的三项）；**MCP HTTP transport / web_search / worktree 隔离 / 计划卡已于同日第二批次落地**（`CHANGELOG.md` 的「控制面补齐·第二batch」，判据 `test:mcp-http` / `test:web-search` / `test:worktree` / `test:plan-ui`）。
 
 1. 第 5 节 #1（安全边界收口）—— 唯一会"丢数据"的口子，且改动集中在 `sandbox.cjs` / `executeShellTool.cjs` / 出厂 properties。
 2. #2（todo/plan 工具）—— 成本最低、对长任务可控性收益最大。
