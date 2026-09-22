@@ -144,6 +144,13 @@ class AgentToolRegistry {
      */
     this.toolExposure = null;
     /**
+     * 被裁掉的工具名（`null` = 没裁剪）。暴露面的**权威表示是「隐藏集」而不是「可见集」**：
+     * profile 管不到的东西（项目扩展 / MCP 工具 / 之后才注册的工具）天然不在隐藏集里 →
+     * **一律可见（fail-open）**。用可见集会反过来：晚注册的工具不在名单里就永远看不见了。
+     * @type {Set<string>|null}
+     */
+    this._hiddenTools = null;
+    /**
      * model-visible specs 的 run 内缓存（P0-1 第 5 条）：此前同一轮里 compaction 估算、preflight
      * 与正式请求会各构造一次完整 JSON（33 工具 ≈ 20k 字符/次 × 4 次），既浪费 CPU 又容易口径漂移。
      * 键 = 暴露名单签名 + 注册表版本号；任何注册/契约/暴露变更都会清空并推进 `schemaRevision`。
@@ -177,9 +184,11 @@ class AgentToolRegistry {
   setExposure(names) {
     if (names == null) {
       this.toolExposure = null;
+      this._hiddenTools = null;
     } else {
       const wanted = new Set(Array.isArray(names) ? names.map((n) => String(n)) : []);
       this.toolExposure = [...this.tools.keys()].filter((n) => wanted.has(n));
+      this._hiddenTools = new Set([...this.tools.keys()].filter((n) => !wanted.has(n)));
     }
     this._invalidateSchemas();
     return this.exposedNames();
@@ -194,20 +203,24 @@ class AgentToolRegistry {
   exposeNames(names) {
     const add = Array.isArray(names) ? names : [];
     if (!add.length) return this.exposedNames();
-    const base = this.toolExposure == null ? [...this.tools.keys()] : this.toolExposure;
-    return this.setExposure([...base, ...add]);
+    return this.setExposure([...this.exposedNames(), ...add]);
   }
 
   /** 当前有效暴露名单（注册顺序）；`null` 暴露 = 全部工具 */
   exposedNames() {
-    return this.toolExposure == null ? [...this.tools.keys()] : [...this.toolExposure];
+    if (!this._hiddenTools) return [...this.tools.keys()];
+    return [...this.tools.keys()].filter((n) => !this._hiddenTools.has(n));
   }
 
-  /** 这个工具此刻会不会下发给模型（`discover_tools` 与「提示词规则是否注入」共用同一判据） */
+  /**
+   * 这个工具此刻会不会下发给模型（`discover_tools` 与「提示词规则是否注入」共用同一判据）。
+   * 判定看**隐藏集**：不在隐藏集里就是可见 —— 于是「注册表里没有的名字」「profile 管不到的名字」
+   * 「晚一步注册进来的名字」都不会被误伤。
+   */
   isExposed(name) {
     const n = String(name || '');
     if (!this.tools.has(n)) return false;
-    return this.toolExposure == null ? true : this.toolExposure.includes(n);
+    return !this._hiddenTools || !this._hiddenTools.has(n);
   }
 
   /**
@@ -218,11 +231,11 @@ class AgentToolRegistry {
    * @param {string[]} [names]
    */
   schemaInfo(names) {
-    const wanted = names == null
-      ? (this.toolExposure == null ? null : this.toolExposure)
-      : (Array.isArray(names) ? names.map((n) => String(n)) : []);
+    // 缺省（当前暴露面）走**隐藏集口径**（fail-open：profile 管不到/晚注册的工具天然可见）；
+    // 显式给名单时按名单**精确过滤**（成本探针与审计要能单独量某一个面，不受 fail-open 影响）。
+    const wanted = names == null ? null : (Array.isArray(names) ? names.map((n) => String(n)) : []);
     const list = wanted == null
-      ? [...this.tools.keys()]
+      ? this.exposedNames()
       : [...this.tools.keys()].filter((n) => wanted.includes(n));
     const key = list.join('\u0000') + '#' + this.schemaRevision;
     const cached = this._schemaCache.get(key);

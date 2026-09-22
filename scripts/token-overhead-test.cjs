@@ -32,6 +32,7 @@ const profiles = require('../electron/tools/profiles.cjs');
 const memoryStore = require('../electron/memory.cjs');
 const { SubagentManager } = require('../electron/subagents.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
+const { AgentToolResult } = require('../electron/tools/result.cjs');
 const { installScriptedModel } = require('./lib/scripted-model.cjs');
 
 let failures = 0;
@@ -178,8 +179,17 @@ async function runTurn(registry, script) {
   console.log('\n== C. 负向判据：tool_profile=off（不触发时逐字节不变） ==');
   const allNames = base.listTools().map((t) => t.name);
   const offRegistry = buildRegistry(true);
-  check('[C] 未裁剪时暴露面 = 全部注册工具（与旧行为逐字节一致）',
-    offRegistry.toolExposure === null && JSON.stringify(offRegistry.toOpenAiTools()) === JSON.stringify(baseTools));
+  {
+    const offJson = JSON.stringify(offRegistry.toOpenAiTools());
+    const baseJson = JSON.stringify(baseTools);
+    let firstDiff = -1;
+    for (let i = 0; i < Math.max(offJson.length, baseJson.length); i++) {
+      if (offJson[i] !== baseJson[i]) { firstDiff = i; break; }
+    }
+    check('[C] 未裁剪时暴露面 = 全部注册工具（与旧行为逐字节一致）',
+      offRegistry.toolExposure === null && offJson === baseJson,
+      JSON.stringify({ exposureNull: offRegistry.toolExposure === null, off: offJson.length, base: baseJson.length, firstDiff, offSlice: offJson.slice(Math.max(0, firstDiff - 40), firstDiff + 40), baseSlice: baseJson.slice(Math.max(0, firstDiff - 40), firstDiff + 40) }));
+  }
   check('[C] 未裁剪时 schemaInfo 与 toOpenAiTools 同一份内容（缓存口径不漂移）',
     offRegistry.schemaInfo().json === JSON.stringify(offRegistry.toOpenAiTools()));
   check('[C] 稳定口径：两次独立装配得到同一个 hash',
@@ -287,6 +297,24 @@ async function runTurn(registry, script) {
     check('[F] 再搜同一批：已启用的不再重复报（隐藏集里没有了）',
       again.ok === true && !(again.data && again.data.enabled || []).includes('workbench_edit'),
       JSON.stringify(again.data && again.data.enabled));
+
+    // ---- fail-open：profile 管不到的工具一律可见（项目扩展 / MCP / 晚注册的工具）----
+    // 这条是**真实回归**的判据：裁剪一旦按「可见白名单」实现，用户自己装的 MCP/扩展工具会静默消失。
+    const withExt = buildRegistry(true);
+    withExt.register('mcp_stub_echo', 'MCP 扩展工具（假装来自 extensions.json）', { type: 'object', properties: {} }, async () => AgentToolResult.ok('x'));
+    const extAll = withExt.listTools().map((t) => t.name);
+    const extKeep = profiles.namesForProfiles(['core', 'code'], extAll);
+    check('[F] 不在任何 profile 名单里的工具（项目扩展 / MCP）进入裁剪名单（fail-open）',
+      extKeep.includes('mcp_stub_echo'), JSON.stringify({ kept: extKeep.length, total: extAll.length }));
+    withExt.setExposure(extKeep);
+    check('[F] 裁剪后扩展/MCP 工具仍然可见（能力不会静默消失）',
+      withExt.isExposed('mcp_stub_echo') === true && withExt.isExposed('workbench_edit') === false,
+      JSON.stringify({ ext: withExt.isExposed('mcp_stub_echo'), canvas: withExt.isExposed('workbench_edit') }));
+    check('[F] 扩展/MCP 工具确实出现在下发 schema 里',
+      withExt.schemaInfo().names.includes('mcp_stub_echo'));
+    withExt.register('late_registered_tool', '晚注册的工具', { type: 'object', properties: {} }, async () => AgentToolResult.ok('y'));
+    check('[F] 裁剪之后才注册的工具默认可见（隐藏集口径，不是可见集口径）',
+      withExt.isExposed('late_registered_tool') === true && withExt.schemaInfo().names.includes('late_registered_tool'));
 
     const miss = await registry.execute('discover_tools', { query: 'zzzz不存在的功能' }, ctx);
     check('[F] 一无所获时给出分组清单（可换词/说组名），不瞎猜',

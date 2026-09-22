@@ -134,8 +134,11 @@ function resolveToolProfiles(input) {
 /**
  * 把 profile 判定落成「注册表里真实存在的工具名」（稳定顺序 = 注册表注册顺序）。
  *
- * 为什么要过滤：profile 名单是**能力清单**（一份配置管所有环境），而注册表已按
- * `tools.allowed/deny`、rag/web_search 开关、项目扩展裁剪过 —— 名单里的名字可能根本没注册。
+ * 两条过滤规则：
+ *   1. 名单里的名字可能根本没注册 —— 注册表已按 `tools.allowed/deny`、rag/web_search 开关裁过；
+ *   2. **不在任何 profile 名单里的工具一律保持暴露（fail-open）**：项目扩展与 MCP 工具是用户自己
+ *      装上的能力，profile 名单管不到它们；新加的内置工具若忘了归类，也宁可多带一个 schema
+ *      （口径由 `test:token-overhead` 的棘轮盯着），**不能用「悄悄看不见」来省**。
  * @param {string[]} profiles
  * @param {string[]} registeredNames 注册表当前的工具名（顺序即暴露顺序）
  * @returns {string[]}
@@ -148,7 +151,9 @@ function namesForProfiles(profiles, registeredNames) {
     if (!list) continue;
     for (const n of list) wanted.add(n);
   }
-  return registered.filter((n) => wanted.has(n));
+  const known = new Set();
+  for (const p of PROFILE_NAMES) for (const n of PROFILE_TOOLS[p]) known.add(n);
+  return registered.filter((n) => wanted.has(n) || !known.has(n));
 }
 
 module.exports = {

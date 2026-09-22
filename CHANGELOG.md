@@ -38,6 +38,18 @@
   `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
   `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
 
+### 修复（工具面裁剪的两处边界；2026-09-22）
+
+- **项目扩展 / MCP 工具不再被裁剪隐藏**：暴露面的权威表示改成**隐藏集**（`_hiddenTools`）而不是可见集 ——
+  profile 名单管不到的名字（`.codenode/extensions.json` 的工具、MCP 工具、之后才注册的工具）天然不在隐藏集里，
+  **一律可见（fail-open）**。若按可见白名单实现，用户自己装的能力会静默消失（`namesForProfiles` 同时按
+  这条纪律把「不在任何 profile 名单里」的名字一并放行）。判据：`test:token-overhead` 的 F 组新增 4 条
+  （扩展/MCP 进名单 + 裁剪后仍可见 + 真的在下发 schema 里 + 晚注册工具默认可见）。
+- **`test:mcp-session` 的 D 块改成按会话键断言**：它此前用全局计数 `idleClosed === 1`，而 A/B/C 三段留下的
+  会话也各带空闲定时器（默认 `idleMs=1500`），CI 上正好在 D 的 900ms 窗口里到期 → 偶发失败
+  （本地/其它平台复现不到）。C 段早就改成「按会话键断言，不受别的章节影响」，D 段跟上同一纪律：
+  只问「**这条**会话被回收了吗」，全局计数只要求「至少回收过」。
+
 ### 新增（动作级意图复核 + 插话后重判；2026-09-21）
 
 - **A2 动作级复核**：轮级判定看不到「助手接下来真要做什么」—— 真机取证证实了盲区（assistant **没说出来的**

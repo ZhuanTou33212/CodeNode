@@ -122,7 +122,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const first = await mcpClient.callTool(root, ext, { name: 'echo' }, { text: 'idle' }, null, undefined);
     check('[D] 调用成功后这条会话仍活跃（复用窗口内）', first.ok === true && mcpClient.activeKeys().includes(mcpClient.sessionKey(root, ext)) === true, JSON.stringify(mcpClient.snapshot()));
     await sleep(900);
-    check('[D] 空闲到点自动关闭这条会话（不留孤儿进程）', mcpClient.activeKeys().includes(mcpClient.sessionKey(root, ext)) === false && mcpClient.snapshot().idleClosed === 1, JSON.stringify(mcpClient.snapshot()));
+    /**
+     * 按**会话键**断言，不用全局计数：A/B/C 三段留下的会话也各自带着空闲定时器（默认 idleMs=1500），
+     * 它们到期的时刻与本段的 900ms 窗口只差几百毫秒 —— CI 上（机器快慢不同）就会多关一条，
+     * `idleClosed === 1` 随之偶发失败。C 段早就改成了「按会话键断言，不受别的章节影响」，
+     * 这里跟上同一纪律：本段只问「**这条**会话被回收了吗」，全局计数只要求「至少回收过」。
+     */
+    const dKey = mcpClient.sessionKey(root, ext);
+    check('[D] 空闲到点自动关闭这条会话（不留孤儿进程）',
+      mcpClient.activeKeys().includes(dKey) === false && mcpClient.snapshot().idleClosed >= 1,
+      JSON.stringify({ active: mcpClient.activeKeys().length, idleClosed: mcpClient.snapshot().idleClosed, dAlive: mcpClient.activeKeys().includes(dKey) }));
     const again = await mcpClient.callTool(root, ext, { name: 'echo' }, { text: 'again' }, null, undefined);
     check('[D] 空闲关闭后下一次调用重新拉起', again.ok === true && mcpClient.snapshot().spawns === 2, JSON.stringify(mcpClient.snapshot()));
     const closed = mcpClient.closeAll();
