@@ -61,7 +61,13 @@ const GATED_METHODS = Object.freeze({
    * 只授给「能改动工作区 / 执行命令 / 保存工程」的动作；未授予时 fallback null = 不复核
    * （只读动作本来就不需要复核，见门 1.5 的 mutatesWorkspace 条件）。
    */
-  intentReview: { caps: ['workspace.write', 'project.save', 'shell.execute'], fallback: null },
+  /**
+   * P0-3：把 `ui.interact` 也纳入（界面动作是**外部副作用**，与 `intent.EXTERNAL_CAPABILITIES` 同口径）。
+   * 它自带强制确认 → 取舍判据会得出「已经必问 → 不问」，所以**不会**多花调用；
+   * 但若用户给它配了免打扰规则（本来会放行），分类收紧就能真的把它拉回「问一次」——
+   * 那正是这套判据唯一想覆盖的场景，不能因为 caps 漏了而静默失效。
+   */
+  intentReview: { caps: ['workspace.write', 'project.save', 'shell.execute', 'ui.interact'], fallback: null },
 });
 
 /** 旧方法名与「新面对象」重名的三个：做成可调用对象（旧调用 + `.方法`） */
@@ -188,6 +194,16 @@ function createExecutionContext(source, descriptor, callInfo) {
     available: () => (typeof base.approval === 'function' ? base.approval().available() : false),
     revoke: (id) => (typeof base.approval === 'function' ? base.approval().revoke(id) : false),
     service: () => (typeof base.approval === 'function' ? base.approval() : null),
+    /**
+     * P0-3：**纯查询**预览（不弹窗、不签发令牌、无副作用）—— 动作级复核靠它判断
+     * 「不带意图识别时这次审批会放行还是会问用户」，从而决定值不值得花一次模型调用。
+     * 拿不到服务（无审批通道）时按「会问用户」返回：宁可少花调用，不假装会放行。
+     */
+    preview: (req) => {
+      const svc = typeof base.approval === 'function' ? base.approval() : null;
+      if (svc && typeof svc.preview === 'function') return svc.preview(req);
+      return { available: false, ruleAllows: false, wouldAsk: true, rule: null, scope: null };
+    },
   };
 
   // ---- 面 4/6/5：审计 / 检查点 / 界面（与旧方法同名 → 可调用对象，两套同时可用） ----

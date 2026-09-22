@@ -38,6 +38,30 @@
   `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
   `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
 
+### 优化（阶段 B / P0-3：意图模型移出默认热路径；2026-09-22）
+
+审计验收线「普通代码 run 的 intent 调用平均 <0.5 次」逐条落地：
+
+- **默认档 `agent.intent_recognition=auto` → `ambiguous`**：新增确定性任务路由 `electron/taskRouter.cjs`
+  （`task` 从工具面判定**派生**，两者不可能互相矛盾），只在「没有任何确定性信号且输入有实质长度」时
+  才花一次分类调用。实测：`读 a.txt` / `把 buildSystemPrompt 改一下` / `统计 data/large.txt …` → **0 次**；
+  `这个怎么弄` → 1 次。
+- **默认档 `agent.intent_action_review=risky` → `authorization-gap`**：只有**外部副作用**
+  （capability ∈ shell.execute / network.request / subagent.delegate / ui.interact）**且静态层本来会放行**
+  的动作才问模型；本地写（write_file / edit_file / workbench_edit / save_project …）不再问。
+  跳过四种情况：只读 / 本地效果 / 本来就会问用户 / 规则已拒绝。
+  **关键反例**（第一版写错、已被判据锁住）：内置工具默认都不声明 `requiresConfirmation`，
+  所以「没命中免打扰规则」**不等于**「用户会被问到」——那种情况下收紧是唯一能让它被问一次的东西，必须问。
+- 复核触发范围补上 `ui.interact`（界面动作为外部副作用，与 `intent.EXTERNAL_CAPABILITIES` 同口径）。
+- 新增 `ApprovalService.preview()`（纯查询：不弹窗、不签发）供取舍判定使用。
+- **面板**：`agent:metrics` 新增 `auxiliary` —— intent / compression 的请求数、输入、输出、净节省
+  （`costAttribution.summarizeAuxiliary` + 账本只读 `records()`）；净节省按 run 取最后一次累计值（不逐轮相加）。
+- 判据 `test:intent-cost-gate`：确定性路由、分类门、动作准入四条、**安全不变量**
+  （跳过 guardian 后用户该被问的仍被问）、全关负向、接线。核心套件 **101 → 102**。
+- 没做（如实列出）：`agent.intent_model` 仍跟随主模型（选便宜模型是部署方知识）；`intent_max_tokens` 仍 1024
+  （"512 + reasoning 关闭"要在真机验证，属审计自己标注的 caveat）；`response_format`/JSON schema 未接
+  （网关兼容性需要回退设计）。
+
 ### 新增（P2-2 成本按层归因 / P1-3 压缩收益 / P2-1 输出分档 / P1-4 压缩尾部；2026-09-22）
 
 第三批（审计 P2-2 / P1-3 / P2-1 / P1-4），每一项都带新判据：

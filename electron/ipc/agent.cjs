@@ -37,6 +37,7 @@ const hooksLib = require('../hooks.cjs');
 const userMemoryStore = require('../userMemory.cjs');
 // 意图识别 / 授权判定（照 Codex guardian 分类器，见 electron/intent.cjs 顶部注释）
 const intentLib = require('../intent.cjs');
+const taskRouter = require('../taskRouter.cjs');
 const { parseWebSearchConfig } = require('../tools/impl/webSearchTool.cjs');
 // schema 的 token 量测（工具面事件的留痕口径，与 compaction 预检同一把尺）
 const compactionLib = require('../compaction.cjs');
@@ -597,6 +598,9 @@ function register(ctx) {
        */
       /** @type {any} */
       let intentCfg = cfg.intent || {};
+      /** 确定性任务路由结论（P0-3）：进事件流，也用来说明「为什么这一轮没分类」 */
+      /** @type {{task: string, ambiguous: boolean, reason: string}|null} */
+      let taskRoute = null;
       /** @type {any} */
       let classifier = null;
       const runSteers = [];
@@ -605,9 +609,33 @@ function register(ctx) {
       if (!resumePlan) {
         try {
           intentCfg = cfg.intent || {};
-          // 「这一轮要不要分类」是纯函数（intentLib.shouldClassify，用例直接锁它）：
-          //   never 永不 / always 每轮 / auto 只在画布为空时（提示词层唯一可能误判的那个分支）。
-          if (intentLib.shouldClassify(intentCfg, canvasSummary)) {
+          /**
+           * P0-3：**先做确定性路由，再决定要不要花一次模型调用**。
+           * `taskRouter.routeTask` 只读「提问 + 画布层结论」（工具面判定的同源结论），给出任务类型与
+           * 「确定性信号是否判不出来」。默认档 `ambiguous` 下，普通代码 run 一次都不分类。
+           */
+          const preLayers = agent.resolvePromptLayers({
+            canvasSummary,
+            prompt,
+            mode: cfg.prompt && cfg.prompt.canvasRules,
+          });
+          taskRoute = taskRouter.routeTask({ prompt, canvas: preLayers.canvas === true, canvasSummary });
+          runStore.appendEvent(projectRoot, runId, 'task_route', {
+            task: taskRoute.task,
+            ambiguous: taskRoute.ambiguous,
+            reason: taskRoute.reason,
+            mode: intentCfg.mode || null,
+          });
+          /**
+           * **动作级复核与轮级分类是两条独立的路**（这条第一版写错了）：新默认档下轮级不分类，
+           * 但动作复核（`authorization-gap`）仍然要对「外部副作用 + 静态层会放行」的动作问模型 ——
+           * 如果把分类器创建挂在轮级判定上，动作复核会跟着一起失效（静默少了一层收紧）。
+           * 两个作用域的调用次数各有独立预算（`maxCallsPerRun` / `actionMaxCallsPerRun`），
+           * 创建分类器本身不花任何 token。
+           */
+          const wantsTurnClassify = intentLib.shouldClassify(intentCfg, canvasSummary, { ambiguous: taskRoute.ambiguous });
+          const wantsActionReview = String(intentCfg.actionReview || 'authorization-gap') !== 'off';
+          if (wantsTurnClassify || wantsActionReview) {
             classifier = intentLib.createIntentClassifier({
               cfg: intentCfg,
               // 取消信号由分类器**透传**给 callModel（见 intent.cjs 的接口注释）：
@@ -633,6 +661,9 @@ function register(ctx) {
               },
               trace: (event, data) => runStore.appendEvent(projectRoot, runId, event, Object.assign({ traceKind: 'intent' }, data || {})),
             });
+          }
+          // 轮级分类只在「判得出来就不花钱」这条门放行时才真的发请求（动作级复核独立走自己的路）
+          if (wantsTurnClassify) {
             const verdict = await classifier.classify({
               prompt,
               history: history || [],
@@ -766,9 +797,35 @@ function register(ctx) {
        * 语义与轮级完全一致 —— **只收紧**：返回 null / 抛错 / 不收紧都让调用方维持原判定
        * （registry 只在 `tighten === true` 时把它当成「即使不需要确认也要问」）。
        */
-      const intentReview = async ({ tool, detail }) => {
+      const intentReview = async ({ tool, detail, effect, capability, readOnly, mutatesWorkspace, staticRequires, wouldConfirm, ruleAllows }) => {
         if (!classifier) return null;
-        if (intentCfg.actionReview === 'off') return null;
+        /**
+         * P0-3：**先算「分类能不能改变结果」，再决定要不要花钱**（纯函数 `shouldConsultGuardian`）。
+         *   只有「外部/不可逆副作用（effect=unknown）」且「静态层本来会放行」的动作才问模型 ——
+         *   那一种，收紧才真的把「免打扰放行」变成「问用户一次」。
+         *   已经必问的（wouldConfirm）、本地写（local-effect）、只读、规则已拒绝的，都不再先花一次调用。
+         * 跳过不是放宽：静态层原来的判定一个字不改（只少了「额外再问一次」）。
+         */
+        const gate = intentLib.shouldConsultGuardian({
+          effect,
+          capability,
+          readOnly,
+          mutatesWorkspace,
+          wouldConfirm,
+          rulesVerdict: ruleAllows === true ? 'allow' : ruleAllows === false ? 'ask' : null,
+          mode: intentCfg.actionReview,
+        });
+        if (!gate.consult) {
+          runStore.appendEvent(projectRoot, runId, 'intent_action_review', {
+            tool: String(tool || ''),
+            consulted: false,
+            reason: gate.reason,
+            effect: effect || null,
+            staticRequires: staticRequires === true,
+            wouldConfirm: wouldConfirm === true,
+          });
+          return null;
+        }
         try {
           const verdict = await classifier.classify(
             {
@@ -782,6 +839,8 @@ function register(ctx) {
           const policy = intentLib.createIntentPolicy(verdict);
           runStore.appendEvent(projectRoot, runId, 'intent_action_review', {
             tool: String(tool || ''),
+            consulted: true,
+            gateReason: gate.reason,
             source: verdict.source,
             risk: verdict.risk,
             authorization: verdict.authorization,

@@ -75,15 +75,16 @@ const bodyOf = (input) => intent.buildClassifierMessages(input)[1].content;
   {
     const defCfg = intent.parseIntentConfig({});
     check(
-      '[B] 出厂默认：动作复核 risky + 独立上限 ' + intent.DEFAULT_ACTION_MAX_CALLS_PER_RUN,
-      defCfg.actionReview === 'risky' && defCfg.actionMaxCallsPerRun === intent.DEFAULT_ACTION_MAX_CALLS_PER_RUN,
+      '[B] 出厂默认：动作复核 authorization-gap（P0-3） + 独立上限 ' + intent.DEFAULT_ACTION_MAX_CALLS_PER_RUN,
+      defCfg.actionReview === 'authorization-gap' && defCfg.actionMaxCallsPerRun === intent.DEFAULT_ACTION_MAX_CALLS_PER_RUN,
       JSON.stringify(defCfg),
     );
     check(
-      '[B] 配置口径：off | risky | every，非法值回落 risky',
+      '[B] 配置口径：off | authorization-gap | risky | every，非法值回落 authorization-gap',
       intent.parseIntentConfig({ 'agent.intent_action_review': 'every' }).actionReview === 'every' &&
         intent.parseIntentConfig({ 'agent.intent_action_review': 'off' }).actionReview === 'off' &&
-        intent.parseIntentConfig({ 'agent.intent_action_review': '乱写' }).actionReview === 'risky',
+        intent.parseIntentConfig({ 'agent.intent_action_review': 'risky' }).actionReview === 'risky' &&
+        intent.parseIntentConfig({ 'agent.intent_action_review': '乱写' }).actionReview === 'authorization-gap',
     );
 
     const cfg = intent.parseIntentConfig({

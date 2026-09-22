@@ -18,6 +18,8 @@ const crypto = require('crypto');
 const { AgentToolResult } = require('./result.cjs');
 // 跨 Agent 资源租约（多 Agent 信息完整性 P3 的「单一写者」）：资源键的推导也在那边
 const { resourceKeysFor } = require('./leases.cjs');
+// P0-3：动作级复核要不要问模型，先看这个动作的副作用类别（read/write/unknown）
+const sideEffectsLib = require('../sideEffects.cjs');
 const descriptorLib = require('./descriptor.cjs');
 
 /**
@@ -404,6 +406,32 @@ class AgentToolRegistry {
       descriptor.readOnly !== true &&
       typeof execContext.intentReview === 'function'
     ) {
+      /**
+       * P0-3：把「静态层会怎么走」一起交给复核方，让它能算出**分类到底能不能改变结果**：
+       *   - `effect`       —— 副作用类别（`unknown` = 外部/不可逆）；
+       *   - `staticRequires` —— 不带意图时这个工具是否本来就要审批；
+       *   - `wouldConfirm` —— **不带意图**时是否无论如何都会问到用户（要审批 + 没命中免打扰规则）。
+       *     已经必问的动作不再先花一次模型调用（审计原文：分类不会改变结果）。
+       *   - `ruleAllows`   —— 命中了免打扰规则（静态层会放行）→ 收紧才有意义。
+       * 判定本身是纯函数（`intent.shouldConsultGuardian`），这里只负责**如实提供事实**。
+       */
+      const staticRequires =
+        !!descriptor.requiresConfirmation &&
+        (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true);
+      let ruleAllows = null;
+      try {
+        const approvalForPreview = /** @type {any} */ (execContext.approval);
+        if (approvalForPreview && typeof approvalForPreview.preview === 'function') {
+          const preview = approvalForPreview.preview({
+            capability: descriptor.requiredCapability || null,
+            tool: name,
+            level: descriptor.requiresConfirmation || 'WRITE',
+          });
+          ruleAllows = preview.ruleAllows === true;
+        }
+      } catch {
+        ruleAllows = null;
+      }
       const review = await execContext.intentReview({
         tool: name,
         detail: (() => {
@@ -413,6 +441,13 @@ class AgentToolRegistry {
             return '';
           }
         })(),
+        effect: sideEffectsLib.classify(name),
+        capability: descriptor.requiredCapability || null,
+        readOnly: descriptor.readOnly === true,
+        mutatesWorkspace: descriptor.mutatesWorkspace === true,
+        staticRequires,
+        wouldConfirm: staticRequires && ruleAllows !== true,
+        ruleAllows,
       });
       intentTighten = !!(review && review.tighten === true);
     }

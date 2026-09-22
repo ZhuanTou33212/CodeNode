@@ -194,6 +194,41 @@ class CostLedger {
   }
 
   /** 当日（本地时区）聚合：内存账本 + 文件中的历史行（只读，不写）。 */
+  /**
+   * 全部记录（内存 + 文件，按 `ts|kind|model|total` 去重）——**只读**，与 `today()` 同源的读法。
+   * 用途：辅助调用面板（intent / compression 的请求数、输入、输出、净节省）。
+   * @returns {Array<any>}
+   */
+  records() {
+    /** @type {Array<any>} */
+    const out = [];
+    const seen = new Set();
+    const push = (entry) => {
+      if (!entry) return;
+      const key = entry.ts + '|' + entry.kind + '|' + entry.model + '|' + ((entry.tokens || {}).total);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(entry);
+    };
+    for (const entry of this.entries) push(entry);
+    if (this.file && fs.existsSync(this.file)) {
+      try {
+        for (const line of fs.readFileSync(this.file, 'utf8').split(/\r?\n/)) {
+          if (!line.trim()) continue;
+          let entry;
+          try {
+            entry = JSON.parse(line);
+          } catch {
+            continue; // 容忍损坏行
+          }
+          if (entry.type !== 'cost') continue;
+          push(entry);
+        }
+      } catch {}
+    }
+    return out;
+  }
+
   today(now = new Date()) {
     const day = now.toISOString().slice(0, 10);
     const counters = emptyCounters();

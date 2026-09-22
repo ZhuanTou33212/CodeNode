@@ -156,7 +156,12 @@ function statesOf(root, runId) {
 (async () => {
   // ---- B1 正常链路：RUNNING → WAITING_TOOL → RUNNING → COMPLETED ----
   {
-    const root = makeProject('normal');
+    /**
+     * P0-3 之后出厂档是 `ambiguous`（确定性路由判得出来就不分类）—— 本场景测的是**分类管道**本身
+     * （请求真的走 IPC、事件真的落库、不占主循环脚本），所以显式配 `always` 让分类必然发生；
+     * 「普通代码 run 不分类」这条由 intent-cost-gate 用例单独锁。
+     */
+    const root = makeProject('normal', ['agent.intent_recognition=always']);
     const h = makeHarness();
     const stub = installScriptedModel([
       { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
@@ -299,7 +304,7 @@ function statesOf(root, runId) {
    * 这条用例锁住「取消真的传到了请求层」（脚本化 fetch 在延迟期间监听 signal，被 abort 就抛 AbortError）。
    */
   {
-    const root = makeProject('intent-cancel');
+    const root = makeProject('intent-cancel', ['agent.intent_recognition=always']);
     const h = makeHarness();
     const stub = installScriptedModel([{ content: '（不该走到这一步：run 在分类阶段就被取消了）' }], { loopLast: false, intentDelayMs: 1500 });
     let out;

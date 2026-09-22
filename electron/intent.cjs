@@ -477,6 +477,73 @@ function canReplacePolicy(verdict) {
   return source !== '' && source !== 'unavailable';
 }
 
+/** 外部/不可逆副作用的能力面（`sideEffects.classify === 'unknown'` 的等价静态集合，用于解释与判据） */
+const EXTERNAL_CAPABILITIES = Object.freeze(['shell.execute', 'network.request', 'subagent.delegate', 'ui.interact']);
+
+/**
+ * 该不该为这个**动作**调 guardian（P0-3 的核心判定，纯函数）。
+ *
+ * 审计给的三条同时成立才问，这里落成四个可判定的入口参数：
+ *   ① `effect`        —— `sideEffects.classify(tool)`：`read` / `write` / `unknown`。
+ *                        只有 `unknown`（外部、不可观测、不可回放）才算「外部/不可逆副作用」；
+ *                        本地写（write_file/edit_file）由 descriptor + 审批层负责，不再花这次调用。
+ *   ② `wouldConfirm`  —— **不带意图收紧时**，这个动作是否已经要弹确认（静态层的判定）。
+ *                        已经必问 → 分类改不了结果 → **不问**（审计原文：已经必定弹确认的不再先花一次）。
+ *   ③ `rulesVerdict`  —— 审批规则的预览结论：`allow` / `ask` / `deny`（拿不到就传 null）。
+ *                        只有 `allow`（本来会放行）时，收紧才真的改变结果 → 值得问；
+ *                        `ask` 已经要问、`deny` 已经拒绝，问都白问。
+ *   ④ `mode`          —— `authorization-gap`（默认，按上面三条）/ `risky`（老口径：所有写类动作都问）
+ *                        / `every`（每个动作都问）/ `off`。
+ *
+ * **只收紧不放宽**在这里没有被削弱：跳过 guardian 只是「不加问一次」，静态层原本的判定一个字不改。
+ *
+ * @param {{effect?: string, capability?: string|null, mutatesWorkspace?: boolean, readOnly?: boolean,
+ *          wouldConfirm?: boolean, rulesVerdict?: 'allow'|'ask'|'deny'|null, mode?: string}} [input]
+ * @returns {{consult: boolean, reason: string}}
+ */
+function shouldConsultGuardian(input = {}) {
+  const i = input || {};
+  const mode = String(i.mode == null ? 'authorization-gap' : i.mode).trim().toLowerCase();
+  if (mode === 'off') return { consult: false, reason: 'mode-off' };
+  if (mode === 'every') return { consult: true, reason: 'mode-every' };
+  const effect = String(i.effect || 'unknown');
+  const capability = i.capability == null ? null : String(i.capability);
+  /**
+   * 「外部/不可逆副作用」的判定：**先看声明的 capability**（精确），
+   * 能力说不清（未注册的扩展 / MCP 工具）才退回副作用类别（`unknown` = 保守当外部）。
+   * 为什么不用 `effect` 单独判：`sideEffects.classify` 对未登记工具一律返回 `unknown`，
+   * 于是把 `remember` 这类纯本地写入也算成外部 —— 那是**多花钱**，不是更安全。
+   */
+  const external =
+    capability != null
+      ? EXTERNAL_CAPABILITIES.includes(capability)
+      : effect === 'unknown';
+  if (mode === 'risky') {
+    // 老口径：写类动作都问（不看规则预览）—— 保留给需要"最保守"的部署
+    const mutating = i.mutatesWorkspace === true || external;
+    return { consult: mutating, reason: mutating ? 'mode-risky' : 'not-mutating' };
+  }
+  /**
+   * authorization-gap（默认）：
+   *   ① 只读 → 不问；
+   *   ② 本地效果（`workspace.write` / `project.save`）→ 不问（由 descriptor + 审批层负责）；
+   *   ③ **静态层本来就会问用户**（`wouldConfirm` = 该工具本来就要审批 + 没有免打扰规则命中）→ 不问，
+   *      因为「把会放行的变成问一次」是分类唯一能改变的结果，已经必问的再问一遍不改变任何事；
+   *   ④ 规则已拒绝（`deny`）→ 不问（收紧也改不了）。
+   *
+   * 注意 ③ 的判据**不是**「有没有免打扰规则」：内置工具默认都不声明 `requiresConfirmation`
+   * （实测 `descriptorOf('execute_shell').requiresConfirmation === false`），所以「没命中规则」
+   * 并不意味着「用户会被问到」——那种情况下分类收紧恰恰是**唯一**能让它被问一次的东西，必须问。
+   * 这一条是这套判据里最容易写错的地方（第一版就写错了，会把该收紧的静默放过）。
+   */
+  if (i.readOnly === true) return { consult: false, reason: 'read-only' };
+  if (!external) return { consult: false, reason: 'local-effect' };
+  if (i.wouldConfirm === true) return { consult: false, reason: 'already-confirm' };
+  const verdict = i.rulesVerdict == null ? null : String(i.rulesVerdict);
+  if (verdict === 'deny') return { consult: false, reason: 'rules-deny' };
+  return { consult: true, reason: 'authorization-gap' };
+}
+
 /** 请求指纹：同一轮内容不重复分类（缓存键） */
 function digestInput(input) {
   const messages = buildClassifierMessages(input);
@@ -500,7 +567,12 @@ function digestInput(input) {
 function parseIntentConfig(cfg) {
   const dict = cfg || {};
   const raw = String(dict['agent.intent_recognition'] || '').trim().toLowerCase();
-  const mode = ['auto', 'always', 'never'].includes(raw) ? raw : 'auto';
+  /**
+   * P0-3：默认从 `auto`（画布为空就分类 → 普通代码 run 平均每轮一次调用）改成 **`ambiguous`** ——
+   * 只在**确定性路由判不出任务类型**时才分类（见 `taskRouter.routeTask` 与 `shouldClassify`）。
+   * `auto` 保留为兼容档（老配置照旧），`always` / `never` 语义不变。
+   */
+  const mode = ['ambiguous', 'auto', 'always', 'never'].includes(raw) ? raw : 'ambiguous';
   const positive = (value, fallback) => {
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -508,8 +580,13 @@ function parseIntentConfig(cfg) {
   const rawCalls = dict['agent.intent_max_calls_per_run'];
   const calls = Number(rawCalls);
   // 动作级复核口径：off（不做）/ risky（只对副作用工具，默认）/ every（每个工具动作都做）
+  /**
+   * P0-3：动作级复核默认从 `risky`（**每个**写类动作都问一次模型）改成 **`authorization-gap`** ——
+   * 只问「有外部/不可逆副作用 **且** 静态层本来会放行」的动作：只有这种动作，分类结果才真的能改变
+   * 「是否强制确认」。已经必定弹确认的（静态层就会问）不再先花一次调用（问也改不了结果）。
+   */
   const rawAction = String(dict['agent.intent_action_review'] || '').trim().toLowerCase();
-  const actionReview = ['off', 'risky', 'every'].includes(rawAction) ? rawAction : 'risky';
+  const actionReview = ['off', 'authorization-gap', 'risky', 'every'].includes(rawAction) ? rawAction : 'authorization-gap';
   const rawActionCalls = dict['agent.intent_action_max_calls_per_run'];
   const actionCalls = Number(rawActionCalls);
   return {
@@ -539,11 +616,21 @@ function parseIntentConfig(cfg) {
  * @param {any} canvasSummary 画布节点清单（JSON 字符串；`''` 与 `'[]'` 都算空画布）
  * @returns {boolean}
  */
-function shouldClassify(cfg, canvasSummary) {
+function shouldClassify(cfg, canvasSummary, signals = {}) {
   const raw = String((cfg && cfg.mode) == null ? '' : cfg.mode).trim().toLowerCase();
-  const mode = ['never', 'always'].includes(raw) ? raw : 'auto';
+  // 四个档都要认（`auto` 是兼容档，不能漏 —— 漏了它会静默变成 ambiguous）
+  const mode = ['ambiguous', 'auto', 'never', 'always'].includes(raw) ? raw : 'ambiguous';
   if (mode === 'never') return false;
   if (mode === 'always') return true;
+  if (mode === 'ambiguous') {
+    /**
+     * P0-3：确定性路由说「判不出来」才分类。`signals.ambiguous` 由 `taskRouter.routeTask` 给出
+     * （没有任何确定性信号 + 输入有实质长度）。漏掉一次分类的代价是「画布层少救一次」（下一轮还有
+     * 关键词/画布变化兜底），换来的是普通代码 run **不再每轮花一次调用** —— 审计验收线 <0.5 次/run。
+     */
+    return signals && signals.ambiguous === true;
+  }
+  // 兼容档 auto：只在「画布为空」时分类（那是提示词层唯一可能误判的分支）
   const summary = String(canvasSummary == null ? '' : canvasSummary).trim();
   return !summary || summary === '[]';
 }
@@ -675,5 +762,7 @@ module.exports = {
   nullPolicy,
   parseIntentConfig,
   shouldClassify,
+  shouldConsultGuardian,
+  EXTERNAL_CAPABILITIES,
   createIntentClassifier,
 };

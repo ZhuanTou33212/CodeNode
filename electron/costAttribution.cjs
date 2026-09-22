@@ -256,6 +256,51 @@ function normalizeCompression(input) {
 }
 
 /**
+ * 辅助调用面板（审计阶段 B 第 4 条）：意图识别与结果压缩的**请求数 / 输入 / 输出 / 净节省**。
+ *
+ * 两个容易算错的点，都按下面口径处理：
+ *   1. `netTokensSaved` 只在**主请求**的归因里（那是压缩账的汇总口径）——同一 run 的每一轮都会带一份
+ *      **累计值**，所以按 runId 取**最后一次**，不能逐轮相加（相加会翻好几倍）；
+ *   2. 成本口径只认账本里真实记的 `tokens`（供应商 usage）。
+ * @param {Array<any>} records `CostLedger.records()` 的结果
+ */
+function summarizeAuxiliary(records) {
+  const blank = () => ({ requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });
+  const out = { intent: blank(), compression: { ...blank(), savedTokens: 0, netTokensSaved: 0, netTokensImmediate: 0, calls: 0 } };
+  /** @type {Map<string, any>} */
+  const lastCompressionByRun = new Map();
+  for (const r of Array.isArray(records) ? records : []) {
+    if (!r) continue;
+    const kind = String(r.kind || '');
+    if (kind === 'intent' || kind === 'compression') {
+      const bucket = out[kind];
+      const t = r.tokens || {};
+      bucket.requests += 1;
+      bucket.inputTokens += Number(t.prompt) || 0;
+      bucket.outputTokens += Number(t.completion) || 0;
+      bucket.totalTokens += Number(t.total) || 0;
+      bucket.costUsd += Number(r.costUsd) || 0;
+    }
+    const comp = r.meta && r.meta.attribution && r.meta.attribution.compression;
+    if (comp) {
+      // 同一 run 取最后一次（累计值），避免逐轮相加
+      lastCompressionByRun.set(String(r.runId || ''), comp);
+    }
+  }
+  for (const comp of lastCompressionByRun.values()) {
+    out.compression.calls += Number(comp.calls) || 0;
+    out.compression.savedTokens += Number(comp.savedTokens) || 0;
+    out.compression.netTokensSaved += Number(comp.netTokensSaved) || 0;
+    out.compression.netTokensImmediate += Number(comp.netTokensImmediate) || 0;
+  }
+  for (const key of ['intent', 'compression']) {
+    const b = out[key];
+    b.costUsd = Number(b.costUsd.toFixed(6));
+  }
+  return out;
+}
+
+/**
  * 第一个**内容发生变化**的段落 id（顺序也按段落表算：新增段算变化，消失段也算）。
  * @param {Array<{id?: string, text?: string}>|null} previous
  * @param {Array<{id?: string, text?: string}>} next
@@ -283,5 +328,6 @@ module.exports = {
   firstChangedSection,
   normalizeProjection,
   normalizeCompression,
+  summarizeAuxiliary,
   messageTokens,
 };

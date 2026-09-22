@@ -191,6 +191,32 @@ class ApprovalService {
    * @param {{capability?: string|null, scope?: any, toolCallId?: string|null}} [req]
    * @returns {{valid: boolean, reason: string, token?: any}}
    */
+  /**
+   * 预览「**不带意图识别**时」这次审批会怎么走（纯查询：不弹窗、不签发令牌、无副作用）。
+   *
+   * 用途：审计 P0-3 的动作级取舍 —— 意图分类唯一能改变的是「本来会放行 → 强制问一次」。
+   *   - 命中了免打扰规则（`ruleAllows`）→ 静态层直接放行 → 分类**有意义**；
+   *   - 没命中（`wouldAsk`）→ 静态层无论如何都要问用户 → 分类改不了结果，不必先花一次调用。
+   * @param {{capability?: string|null, tool?: string|null, level?: string, scope?: any}} [req]
+   * @returns {{available: boolean, ruleAllows: boolean, wouldAsk: boolean, rule: object|null, scope: any}}
+   */
+  preview(req = {}) {
+    const r = req || {};
+    const scope = normalizeScope(r.scope);
+    const ruleHit = approvalRules.matchRule(this.rules, {
+      capability: r.capability || null,
+      tool: r.tool || null,
+      level: r.level || 'WRITE',
+    });
+    return {
+      available: !!this.confirmHandler,
+      ruleAllows: !!ruleHit,
+      wouldAsk: !ruleHit,
+      rule: ruleHit ? { capability: ruleHit.capability || null, tool: ruleHit.tool || null, level: ruleHit.level || null } : null,
+      scope,
+    };
+  }
+
   verify(tokenOrId, req) {
     const r = req || {};
     const id = typeof tokenOrId === 'string' ? tokenOrId : tokenOrId && tokenOrId.id;

@@ -257,6 +257,61 @@ agent.memory_inject=matched           # matched（默认，有命中才注入）
 把它倒过来意味着在可能完全不需要摘要的场景先付一次 LLM 调用 —— 这会削弱现有的故障恢复链。
 要改需要单独一轮、并配「压缩失败 → 仍然硬裁剪」的完整回归。
 
+## 8.5 阶段 B / P0-3：把意图模型从默认热路径移到歧义 / 高风险边界（同日）
+
+审计的问题：一份 1,258-token 的分类 prompt 同时做 intent / risk / authorization，而画布路由大多可由
+画布是否为空与关键词确定、文件写/shell/网络的风险已有 descriptor + shell guard + 审批层 ——
+**模型分类唯一不可替代的价值是处理歧义**（以及外部副作用动作的授权缺口）。
+
+### 三处口径变化
+
+| 位置 | 旧 | 新（默认） | 效果 |
+|---|---|---|---|
+| `agent.intent_recognition` | `auto`（画布为空就分类） | **`ambiguous`**（确定性路由判不出来才分类） | 普通代码 run（"读 a.txt"、"把 buildSystemPrompt 改一下"）**0 次**分类调用；只有"这个怎么弄"这类无信号输入才花一次 |
+| `agent.intent_action_review` | `risky`（每个写类动作都问） | **`authorization-gap`**（外部副作用 + 静态层会放行才问） | 本地写（write_file / edit_file / workbench_edit / save_project …）**不再问模型**；`execute_shell` 这类外部动作照旧问 |
+| 复核触发范围 | `workspace.write`/`project.save`/`shell.execute` | 加 `ui.interact` | 界面动作也是外部副作用（与 `intent.EXTERNAL_CAPABILITIES` 同口径）；它自带强制确认 → 不会多花调用 |
+
+### 确定性路由（新 `electron/taskRouter.cjs`）
+
+`routeTask({prompt, canvas, canvasSummary})` → `{task, ambiguous, profiles, reason}`。
+**它是从工具面判定派生的**：canvas / research / orchestration 直接读 `resolveToolProfiles()` 的结论，
+所以两个"路由器"不可能给出互相矛盾的答案（同一份知识只写一遍）。`ambiguous` = 没有任何确定性信号
+且输入有实质长度 —— 这正是"画布层该不该救回来"真的判不出来的场景。
+
+### 动作级准入（`intent.shouldConsultGuardian`，纯函数）
+
+只有**外部副作用**（capability ∈ shell.execute / network.request / subagent.delegate / ui.interact；
+能力说不清时按副作用类别保守处理）**且静态层本来会放行**的动作才问模型。跳过的四种情况：
+只读 / 本地效果 / **本来就会问用户** / 规则已拒绝。
+
+有个**第一版写错的地方**值得记下来：判据一度用「有没有免打扰规则命中」当「静态层会不会问」，
+但内置工具默认都**不声明** `requiresConfirmation`（实测 `descriptorOf('execute_shell').requiresConfirmation === false`），
+所以"没命中规则"≠"用户会被问到"——那种情况下分类收紧恰恰是**唯一**能让它被问一次的东西，
+按旧写法会被静默放过（该收紧的不收紧）。现在判据是 `wouldConfirm = 静态层要审批 && 没有免打扰规则命中`。
+
+### 判据 `test:intent-cost-gate`（验收线逐条对应）
+
+- **普通代码 run 的 intent 调用 = 0**（验收线 <0.5 次/run；含糊提问仍会分类一次）；
+- 四种动作取舍得端到端覆盖：外部缺口 → 咨询 / 免打扰规则命中（会放行）→ 咨询 / 本地写 → 不咨询 /
+  工具自带强制确认 → **不咨询但用户仍被问**（这一条是**安全不变量**：跳过 guardian 后静态层一个字不改）；
+- 纯函数层逐条变异 + 兼容档（`auto` / `risky` / `every` / `off` / `never`）不回退；
+- `task_route` / `intent_action_review`（含 `consulted` 与 `reason`）都落 run 事件，可回放归因。
+
+### 面板（审计阶段 B 第 4 条）
+
+`agent:metrics` 新增 `auxiliary`：意图识别与结果压缩的**请求数 / 输入 / 输出 / 净节省**
+（`costAttribution.summarizeAuxiliary`，账本新增只读的 `records()`）。净节省按 **run 取最后一次累计值** ——
+主请求每轮都带一份累计账，逐轮相加会翻好几倍。
+
+### 没做的（如实列出）
+
+- `agent.intent_model` 默认仍是「跟随主模型」：审计建议配便宜模型，但"哪个模型便宜"是部署方知识，
+  这里只提供配置项与观测，不替你选。
+- `agent.intent_max_tokens` 仍是 1024：审计的"先试 512 + JSON schema"需要在**真机**上验证
+  DeepSeek 的 reasoning 是否稳定关闭（审计自己也写了这条caveat），离线判据无法覆盖。
+- Structured Outputs / `response_format` 未接：不同网关对未知字段的处理不一致，接了得配兼容回退，
+  属下一轮。
+
 ## 9. 安全边界（为什么裁剪不会削弱门禁）
 
 - 暴露面**只影响「模型看不看得见」**：`registry.execute()` 的四道门（角色/能力门、网络门、审批门、

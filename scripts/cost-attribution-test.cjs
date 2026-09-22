@@ -156,6 +156,36 @@ console.log('\n== B. 第一个变化的区段 / 工具投影 ==');
     costAttribution.normalizeProjection(null).projectionRate === null);
 }
 
+// ============================ D. 辅助调用面板（阶段 B 第 4 条） ============================
+console.log('\n== D. 辅助调用面板：请求数 / 输入 / 输出 / 净节省 ==');
+{
+  const records = [
+    { ts: 't1', runId: 'r1', kind: 'intent', model: 'm', tokens: { prompt: 1200, completion: 40, total: 1240 }, costUsd: 0.0001 },
+    { ts: 't2', runId: 'r1', kind: 'intent', model: 'm', tokens: { prompt: 1300, completion: 45, total: 1345 }, costUsd: 0.0001 },
+    { ts: 't3', runId: 'r1', kind: 'compression', model: 'm', tokens: { prompt: 26000, completion: 300, total: 26300 }, costUsd: 0.003 },
+    // 同一 run 的主请求会**逐轮**带累计压缩账：这里故意放两份（第 2 份更大），验证按 run 取最后一次、不逐轮相加
+    { ts: 't4', runId: 'r1', kind: 'main', model: 'm', tokens: { prompt: 100, completion: 10, total: 110 }, meta: { attribution: { compression: { calls: 1, savedTokens: 30048, netTokensSaved: 63844, netTokensImmediate: 3748 } } } },
+    { ts: 't5', runId: 'r1', kind: 'main', model: 'm', tokens: { prompt: 200, completion: 20, total: 220 }, meta: { attribution: { compression: { calls: 2, savedTokens: 60096, netTokensSaved: 127688, netTokensImmediate: 7496 } } } },
+  ];
+  const sum = costAttribution.summarizeAuxiliary(records);
+  check('[D] intent 请求数 / 输入 / 输出 汇总正确',
+    sum.intent.requests === 2 && sum.intent.inputTokens === 2500 && sum.intent.outputTokens === 85,
+    JSON.stringify(sum.intent));
+  check('[D] compression 请求数 / 输入 / 输出 汇总正确',
+    sum.compression.requests === 1 && sum.compression.inputTokens === 26000 && sum.compression.outputTokens === 300,
+    JSON.stringify(sum.compression));
+  check('[D] 净节省**按 run 取最后一次累计值**（不逐轮相加 —— 相加会翻好几倍）',
+    sum.compression.netTokensSaved === 127688 && sum.compression.savedTokens === 60096 && sum.compression.calls === 2,
+    JSON.stringify({ net: sum.compression.netTokensSaved, saved: sum.compression.savedTokens, calls: sum.compression.calls }));
+  check('[D] 空输入不炸、全 0（不编造）',
+    costAttribution.summarizeAuxiliary([]).intent.requests === 0 && costAttribution.summarizeAuxiliary(null).compression.netTokensSaved === 0);
+  check('[D] 接线：agent:metrics 真的带上面板数据，且账本能读全部记录',
+    /auxiliary: costAttributionLib\.summarizeAuxiliary\(ledger\.records\(\)\)/.test(
+      fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'metrics.cjs'), 'utf8'),
+    ) &&
+      /records\(\) \{/.test(fs.readFileSync(path.join(__dirname, '..', 'electron', 'costLedger.cjs'), 'utf8')));
+}
+
 // ============================ C. 端到端：真 run + 真账本 ============================
 (async () => {
   console.log('\n== C. 端到端：账本上的主调用真的挂着归因 ==');

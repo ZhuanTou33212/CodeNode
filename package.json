@@ -144,6 +144,7 @@
     "test:compression-roi": "node scripts/compression-roi-test.cjs",
     "test:output-budget": "node scripts/output-budget-test.cjs",
     "test:compaction-tail": "node scripts/compaction-tail-test.cjs",
+    "test:intent-cost-gate": "node scripts/intent-cost-gate-test.cjs",
     "test:tool-projection": "node scripts/tool-result-projection-test.cjs"
   },
   "build": {

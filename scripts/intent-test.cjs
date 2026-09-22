@@ -193,8 +193,18 @@ async function main() {
   console.log('\n== D. createIntentClassifier：缓存 / 上限 / 失败不阻断 ==');
   {
     const cfg = intent.parseIntentConfig({});
-    check('[D] 出厂默认：auto + 8000ms + 1024 tokens + 单 run 5 次（1024 是真机取证的结果：256 会被思考链吃光）', cfg.mode === 'auto' && cfg.timeoutMs === 8000 && cfg.maxTokens === 1024 && cfg.maxCallsPerRun === 5, JSON.stringify(cfg));
-    check('[D] 非法配置回落默认（不炸）', intent.parseIntentConfig({ 'agent.intent_recognition': '乱写', 'agent.intent_timeout_ms': '-5', 'agent.intent_max_calls_per_run': 'x' }).mode === 'auto');
+    /**
+     * 2026-09-22（P0-3）：出厂默认从 `auto` 改成 `ambiguous`（确定性路由判不出来才分类），
+     * 动作复核从 `risky` 改成 `authorization-gap`（只有「外部副作用 + 静态层会放行」才问）。
+     * 老档位都还在：`auto` / `risky` 显式配了就照旧（见下面各档断言）。
+     */
+    check('[D] 出厂默认：ambiguous + 8000ms + 1024 tokens + 单 run 5 次（1024 是真机取证的结果：256 会被思考链吃光）',
+      cfg.mode === 'ambiguous' && cfg.timeoutMs === 8000 && cfg.maxTokens === 1024 && cfg.maxCallsPerRun === 5, JSON.stringify(cfg));
+    check('[D] 非法配置回落默认（不炸）', intent.parseIntentConfig({ 'agent.intent_recognition': '乱写', 'agent.intent_timeout_ms': '-5', 'agent.intent_max_calls_per_run': 'x' }).mode === 'ambiguous');
+    check('[D] 兼容档仍在：显式 auto / always / never 原样读出',
+      intent.parseIntentConfig({ 'agent.intent_recognition': 'auto' }).mode === 'auto' &&
+      intent.parseIntentConfig({ 'agent.intent_recognition': 'always' }).mode === 'always' &&
+      intent.parseIntentConfig({ 'agent.intent_recognition': 'never' }).mode === 'never');
     check('[D] max_calls_per_run=0 表示不限制（显式语义）', intent.parseIntentConfig({ 'agent.intent_max_calls_per_run': '0' }).maxCallsPerRun === 0);
     check('[D] intent_model 未配置 → null（用主模型）', intent.parseIntentConfig({}).model === null);
 
@@ -340,13 +350,26 @@ async function main() {
     fs.mkdirSync(path.join(projDir, '.codenode'), { recursive: true });
     const writeCfg = (text) => fs.writeFileSync(path.join(projDir, '.codenode', 'agent.properties'), text);
     writeCfg('');
-    check('[E] 空配置 → loader 出口是 auto', agent.loadConfig(projDir).intent.mode === 'auto');
+    check('[E] 空配置 → loader 出口是 ambiguous（P0-3 新出厂档）', agent.loadConfig(projDir).intent.mode === 'ambiguous');
     writeCfg('agent.intent_recognition=always\n');
     check('[E] 配置 always → loader 出口读到 always', agent.loadConfig(projDir).intent.mode === 'always');
     writeCfg('agent.intent_recognition=never\n');
     check('[E] 配置 never → loader 出口读到 never', agent.loadConfig(projDir).intent.mode === 'never');
-    check('[E] shouldClassify: never 永不 / always 每轮 / auto 仅空画布', intent.shouldClassify({ mode: 'never' }, '[]') === false && intent.shouldClassify({ mode: 'always' }, '[{"id":"n1"}]') === true && intent.shouldClassify({ mode: 'auto' }, '') === true && intent.shouldClassify({ mode: 'auto' }, '[]') === true && intent.shouldClassify({ mode: 'auto' }, '[{"id":"n1"}]') === false);
-    check('[E] shouldClassify: 非法 mode 与 auto 同口径（不额外花钱也不静默变 never）', intent.shouldClassify({ mode: '乱写' }, '[]') === true && intent.shouldClassify({ mode: '乱写' }, '[{"id":"n1"}]') === false);
+    check('[E] shouldClassify: never 永不 / always 每轮 / auto 仅空画布（兼容档口径不变）',
+      intent.shouldClassify({ mode: 'never' }, '[]') === false &&
+        intent.shouldClassify({ mode: 'always' }, '[{"id":"n1"}]') === true &&
+        intent.shouldClassify({ mode: 'auto' }, '') === true &&
+        intent.shouldClassify({ mode: 'auto' }, '[]') === true &&
+        intent.shouldClassify({ mode: 'auto' }, '[{"id":"n1"}]') === false);
+    check('[E] shouldClassify: 非法 mode 与 ambiguous 同口径（不额外花钱也不静默变 never）',
+      intent.shouldClassify({ mode: '乱写' }, '[]', { ambiguous: true }) === true &&
+        intent.shouldClassify({ mode: '乱写' }, '[]', { ambiguous: false }) === false);
+    check('[E] shouldClassify（P0-3 新默认）：**判得出来就不分类**，判不出来才分类',
+      intent.shouldClassify({ mode: 'ambiguous' }, '[]', { ambiguous: false }) === false &&
+        intent.shouldClassify({ mode: 'ambiguous' }, '[{"id":"n1"}]', { ambiguous: true }) === true &&
+        intent.shouldClassify({ mode: 'ambiguous' }, '[]', {}) === false);
+    check('[E] 变异/判别力：同一输入把 ambiguous 从 false 改成 true，结论必须翻转（这条真的在起作用）',
+      intent.shouldClassify({ mode: 'ambiguous' }, '[]', { ambiguous: false }) !== intent.shouldClassify({ mode: 'ambiguous' }, '[]', { ambiguous: true }));
     fs.rmSync(projDir, { recursive: true, force: true });
   }
 
@@ -418,7 +441,9 @@ async function main() {
     check('[G] ipc 用纯函数判定「要不要分类」（shouldClassify）', /intentLib\.shouldClassify\(/.test(ipcSrc));
     check('[G] ipc 把判定结果落 run 事件（可回放/审计）', /runStore\.appendEvent\(projectRoot, runId, 'intent'/.test(ipcSrc));
     check('[G] ipc 的分类调用记进成本账（kind=intent，不混进主对话）', /kind: 'intent'/.test(ipcSrc));
-    check('[G] 续跑不重新分类（resumePlan 短路）', /if \(!resumePlan\) \{[\s\S]{0,200}shouldClassify/.test(ipcSrc));
+    // 窗口放大到 2000 字符：P0-3 在 shouldClassify 之前插了确定性路由（要先把 task 路由算出来）
+    check('[G] 续跑不重新分类（resumePlan 短路）', /if \(!resumePlan\) \{[\s\S]{0,2000}shouldClassify/.test(ipcSrc));
+    check('[G] 分类前先走确定性路由（P0-3：判得出来就不花钱）', /taskRouter\.routeTask\(/.test(ipcSrc) && /shouldClassify\(intentCfg, canvasSummary, \{ ambiguous: taskRoute\.ambiguous \}\)/.test(ipcSrc));
 
     // Context：懒建的审批服务带上 riskGate
     {

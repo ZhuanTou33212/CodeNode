@@ -110,6 +110,8 @@ const CORE = [
   'test:compression-roi',
   'test:output-budget',
   'test:compaction-tail',
+  // 阶段 B / P0-3：确定性路由 + 分类门 + 动作级准入（含「跳过 guardian 不影响静态层」的安全不变量）
+  'test:intent-cost-gate',
   // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
   // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
   'test:fixture-shape',
