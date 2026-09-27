@@ -34,6 +34,9 @@ const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'codenode-agent.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-headless-'));
 fs.mkdirSync(path.join(root, 'work'), { recursive: true });
+// 项目配置优先于仓库全局配置；显式留空，避免开发机全局 API Key 让「无 Key」用例误连真服务。
+fs.mkdirSync(path.join(root, '.codenode'), { recursive: true });
+fs.writeFileSync(path.join(root, '.codenode', 'agent.properties'), 'api_key=\n');
 
 /** 进程内脚本化 mock（配合**异步** spawn 子进程使用） */
 function startScriptedServer(script) {

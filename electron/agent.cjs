@@ -901,7 +901,7 @@ const PROMPT_SECTIONS = Object.freeze([
  * 口径：
  *   - 能解析成 JSON 数组就**按节点粒度**裁（保持 JSON 合法），并留一句取回提示；
  *   - 解析不了（不是数组 / 坏 JSON）就按字符裁 + 明确标注已截断（不假装完整）；
- *   - `budgetTokens <= 0` 或本来就装得下 → **原样返回**（这是负向判据的落点）。
+ *   - `budgetTokens <= 0` 时不注入正文，留下明确的按需读取提示。
  * @param {any} canvasSummary
  * @param {number} budgetTokens
  * @returns {{text: string, dropped: number, truncated: boolean}}
@@ -910,7 +910,21 @@ function truncateCanvasSummary(canvasSummary, budgetTokens) {
   const asIs = canvasSummary == null ? '' : String(canvasSummary);
   const raw = asIs.trim();
   const budget = Math.max(0, Math.floor(Number(budgetTokens) || 0));
-  if (!raw || budget <= 0) return { text: asIs, dropped: 0, truncated: false };
+  if (!raw) return { text: asIs, dropped: 0, truncated: false };
+  if (budget <= 0) {
+    let dropped = 0;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) dropped = parsed.length;
+    } catch {
+      // 非数组摘要也完整省略；完整内容仍可通过画布工具读取。
+    }
+    return {
+      text: '（画布摘要本轮未注入' + (dropped ? '，省略 ' + dropped + ' 个节点' : '') + '；需要时用 get_workbench_model 读取完整画布。）',
+      dropped,
+      truncated: true,
+    };
+  }
   if (compactionLib.estimateTextTokens(raw) <= budget) return { text: raw, dropped: 0, truncated: false };
   try {
     const parsed = JSON.parse(raw);
@@ -955,7 +969,14 @@ function truncateCanvasSummary(canvasSummary, budgetTokens) {
 function truncateSkillsIndex(indexText, budgetTokens) {
   const raw = String(indexText == null ? '' : indexText);
   const budget = Math.max(0, Math.floor(Number(budgetTokens) || 0));
-  if (!raw || budget <= 0 || compactionLib.estimateTextTokens(raw) <= budget) return { text: raw, dropped: 0, truncated: false };
+  if (!raw || compactionLib.estimateTextTokens(raw) <= budget) return { text: raw, dropped: 0, truncated: false };
+  if (budget <= 0) {
+    return {
+      text: '（技能索引本轮未注入；需要时调用 read_skill 且省略 name 列出可用技能，再按名称读取。）',
+      dropped: raw.split('\n').filter((line) => line.trim()).length,
+      truncated: true,
+    };
+  }
   const lines = raw.split('\n');
   const kept = [];
   let tokens = 0;
@@ -970,7 +991,13 @@ function truncateSkillsIndex(indexText, budgetTokens) {
     tokens += cost;
     kept.push(line);
   }
-  if (!kept.length) return { text: raw, dropped: 0, truncated: false };
+  if (!kept.length) {
+    return {
+      text: '（技能索引超出本轮预算；需要时调用 read_skill 且省略 name 列出可用技能，再按名称读取。）',
+      dropped: lines.filter((line) => line.trim()).length,
+      truncated: true,
+    };
+  }
   return {
     text:
       kept.join('\n') +

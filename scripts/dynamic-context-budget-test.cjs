@@ -135,8 +135,10 @@ console.log('\n== B. 裁剪（画布按节点 / 技能按整行）==');
       new RegExp('另有 ' + cut.dropped + ' 个节点未列出').test(cut.text) &&
       /get_workbench_model/.test(cut.text),
     cut.text.slice(-90).replace(/\n/g, '⏎'));
-  check('[B] 预算 0 或不给 → 原样返回（不是「截成空」）',
-    agent.truncateCanvasSummary(summary, 0).text === summary && agent.truncateCanvasSummary(summary, -3).text === summary);
+  check('[B] 预算 0 → 不泄漏整份摘要并保留画布取回提示',
+    agent.truncateCanvasSummary(summary, 0).text !== summary &&
+      /get_workbench_model/.test(agent.truncateCanvasSummary(summary, 0).text) &&
+      agent.truncateCanvasSummary(summary, -3).text !== summary);
 
   const broken = '这不是 JSON {' + 'x'.repeat(2000);
   const cutBroken = agent.truncateCanvasSummary(broken, 200);
@@ -285,6 +287,7 @@ function makeHarness() {
     const ipcSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
     check('[D] ipc 用统一预算分配（纯函数）+ 只在被裁时才重建/裁剪',
       /dynamicContext\.allocateContextBudget\(/.test(ipcSrc) &&
+        /capTokens: dynCfg\.sections\.find\(\(s\) => s\.id === 'canvas'\)/.test(ipcSrc) &&
         /if \(trimOf\('canvas'\)\)/.test(ipcSrc) &&
         /if \(trimOf\('skills'\)\)/.test(ipcSrc) &&
         /if \(trimOf\('memory'\) && memCap !== memoryCap\)/.test(ipcSrc));

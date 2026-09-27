@@ -32,21 +32,28 @@ function listSkills(projectRoot) {
 function register(registry) {
   registry.register(
     'read_skill',
-    '读取项目 Skill 的完整正文（system prompt 里只给了索引；需要某个技能的详细做法时用它读取）。',
+    '读取项目 Skill 的完整正文；省略 name 可列出可用技能（system prompt 里的索引可能因预算被裁剪）。',
     {
       type: 'object',
       properties: { name: { type: 'string', description: '技能名（与索引里列出的名字完全一致）' } },
-      required: ['name'],
+      required: [],
     },
     async (context, args) => {
       const name = String((args && args.name) || '').trim();
-      if (!name) return AgentToolResult.error('缺少 name');
       const skills = listSkills(context.projectRoot());
       if (!skills.length) {
         return AgentToolResult.error('本项目没有声明任何 Skill（.codenode/extensions.json 里 kind=skills 的条目）', {
           code: 'ARG_SEMANTIC',
           tool: 'read_skill',
         });
+      }
+      if (!name) {
+        const limit = 100;
+        const visible = skills.slice(0, limit).map((s) => '- ' + s.name);
+        const omitted = skills.length - visible.length;
+        return AgentToolResult.ok(
+          '【可用 Skills】\n' + visible.join('\n') + (omitted > 0 ? '\n（另有 ' + omitted + ' 项未列出）' : ''),
+        );
       }
       const hit = skills.find((s) => s.name === name) || skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
       if (!hit) {

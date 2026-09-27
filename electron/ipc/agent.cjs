@@ -623,9 +623,21 @@ function register(ctx) {
           ? dynamicContext.allocateContextBudget({
               totalTokens: dynCfg.totalTokens,
               sections: [
-                { id: 'canvas', desiredTokens: compactionLib.estimateTextTokens(canvasSummaryRaw) },
-                { id: 'memory', desiredTokens: measureProj.tokens + measureUser.tokens },
-                { id: 'skills', desiredTokens: compactionLib.estimateTextTokens(skillsIndexFull) },
+                {
+                  id: 'canvas',
+                  desiredTokens: compactionLib.estimateTextTokens(canvasSummaryRaw),
+                  capTokens: dynCfg.sections.find((s) => s.id === 'canvas')?.capTokens,
+                },
+                {
+                  id: 'memory',
+                  desiredTokens: measureProj.tokens + measureUser.tokens,
+                  capTokens: dynCfg.sections.find((s) => s.id === 'memory')?.capTokens,
+                },
+                {
+                  id: 'skills',
+                  desiredTokens: compactionLib.estimateTextTokens(skillsIndexFull),
+                  capTokens: dynCfg.sections.find((s) => s.id === 'skills')?.capTokens,
+                },
               ],
             })
           : null;

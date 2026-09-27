@@ -84,9 +84,9 @@ function registry(extra) {
     const miss = await reg.execute('read_skill', { name: 'no-such-skill' }, context());
     check('[B] 未知名字：报错 + 列出可用项（模型能改参数重试）', miss.ok === false && /没有名为/.test(String(miss.text)) && /verify-before-commit/.test(String(miss.text)), JSON.stringify({ code: miss.data && miss.data.code }));
     const noName = await reg.execute('read_skill', {}, context());
-    // 缺 name 会被注册表的闭合 schema 先拦下（INVALID_TOOL_ARGUMENTS），工具内的判空是第二道 ——
-    // 两条都算「如实报错」，断言只锁「没执行、且有可读原因」
-    check('[B] 空 name 报错（schema 或工具内判空，任一都算）', noName.ok === false && /name/.test(String(noName.text)), String(noName.text).slice(0, 60));
+    check('[B] 省略 name 时列出技能名，支持从被裁剪的索引恢复发现',
+      noName.ok === true && /verify-before-commit/.test(String(noName.text)) && /tiny/.test(String(noName.text)),
+      String(noName.text).slice(0, 100));
     // 超限截断：把上限调到很小
     const tinyCap = new (require('../electron/tools/impl/readSkillTool.cjs').register, Object)();
     const regCap = registry();
