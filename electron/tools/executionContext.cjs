@@ -252,6 +252,13 @@ function createExecutionContext(source, descriptor, callInfo) {
     if (typeof base[method] !== 'function') continue;
     ctx[method] = (...args) => base[method](...args);
   }
+  // update_plan needs the successful tool-call IDs to ground completed steps.
+  // Keep this history out of every other tool's capability surface.
+  if (toolName === 'update_plan') {
+    if (typeof base.toolEvidence === 'function') ctx.toolEvidence = () => base.toolEvidence();
+    if (typeof base.planSessionId === 'function') ctx.planSessionId = () => safeCall(() => base.planSessionId(), '');
+    if (typeof base.planOwnerExists === 'function') ctx.planOwnerExists = (taskId) => safeCall(() => base.planOwnerExists(taskId), false) === true;
+  }
   for (const [method, rule] of Object.entries(GATED_METHODS)) {
     if (HYBRID_METHODS.includes(method)) continue;
     if (typeof base[method] !== 'function') continue;

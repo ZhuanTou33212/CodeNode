@@ -13,8 +13,20 @@ function emptyDoc(): SessionDoc {
 
 /** 计划卡里的一步（与主进程 electron/plan.cjs 的 PLAN_STATUSES 同口径） */
 export interface PlanItem {
+  id: string;
   step: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  acceptanceCriteria: string;
+  status: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
+  evidenceCallIds?: string[];
+  reason?: string;
+  dependsOn?: string[];
+  ownerTaskId?: string;
+}
+
+export interface PlanSnapshot {
+  items: PlanItem[];
+  updatedAt: string | null;
+  runId: string | null;
 }
 
 /**
@@ -87,6 +99,7 @@ interface SessionState {
     tokensAfter?: number;
     keptUserTurns?: number;
     reason?: string;
+    message?: string;
     /** kind==='context_overflow'：preflight | recovering；以及估算 token / 窗口 */
     phase?: string;
     tokens?: number;
@@ -100,9 +113,11 @@ interface SessionState {
     counts?: Record<string, number>;
     providerMessage?: string;
     /** kind==='plan'：任务清单（update_plan）的最新一份 */
-    items?: { step?: string; status?: string }[];
+    items?: { id?: string; step?: string; acceptanceCriteria?: string; status?: string; evidenceCallIds?: string[]; reason?: string; dependsOn?: string[]; ownerTaskId?: string }[];
     updatedAt?: string;
+    planVersion?: string;
     runId?: string | null;
+    sessionId?: string | null;
   }) => void;
   /**
    * 上下文压缩（照 Codex CLI）：把当前对话折叠成一张交接摘要卡 —— 旧消息标记 `compacted`
@@ -118,6 +133,8 @@ interface SessionState {
 
   setProgressIndex: (i: number) => void;
   clearProgress: () => void;
+  beginPlanRun: (sessionId: string | null) => void;
+  setPlanForSession: (sessionId: string, snapshot: PlanSnapshot | null) => void;
   /**
    * 任务清单（`update_plan` 的计划卡）：由主进程的 `kind:'plan'` 增量更新。
    * 只认主进程给的「最新一份」，不做本地推算（本地推算会与模型看到的计划漂移）。
@@ -125,6 +142,8 @@ interface SessionState {
   plan: PlanItem[] | null;
   planUpdatedAt: string | null;
   planRunId: string | null;
+  activePlanSessionId: string | null;
+  plansBySessionId: Record<string, PlanSnapshot>;
   /**
    * 意图识别的最近一次判定（`kind:'intent'` 增量）：run 级状态，写独立字段。
    * `null` = 这次 run 没有判定（功能关闭 / 未触发 / 分类失败），界面据此**不显示任何结论**。
@@ -162,6 +181,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   plan: null,
   planUpdatedAt: null,
   planRunId: null,
+  activePlanSessionId: null,
+  plansBySessionId: {},
   intentVerdict: null,
   intentUpdatedAt: null,
   intentRunId: null,
@@ -189,6 +210,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: { [id]: first },
       order: [id],
       activeId: id,
+      activePlanSessionId: id,
+      plan: null,
+      planUpdatedAt: null,
+      planRunId: null,
       streaming: false,
       messages,
       progress: null,
@@ -218,7 +243,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     sessions = { ...sessions, [id]: blank };
     order.push(id);
     loadGraph(blank.doc);
-    set({ sessions, order, activeId: id, streaming: false, progress: null });
+    set({ sessions, order, activeId: id, activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
   },
 
   switchSession: (id) => {
@@ -228,7 +253,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     get().syncActiveGraph();
     const target = s.sessions[id];
     loadGraph(target.doc);
-    set({ activeId: id, progress: null });
+    const savedPlan = s.plansBySessionId[id] || null;
+    set({
+      activeId: id,
+      activePlanSessionId: id,
+      progress: null,
+      plan: savedPlan ? savedPlan.items : null,
+      planUpdatedAt: savedPlan ? savedPlan.updatedAt : null,
+      planRunId: savedPlan ? savedPlan.runId : null,
+    });
   },
 
   syncActiveGraph: () => {
@@ -268,11 +301,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       id = best || order[order.length - 1] || null;
     }
     if (!id) {
-      set({ sessions, order, activeId: null, streaming: false, messages: messages || [], progress: null });
+      set({ sessions, order, activeId: null, activePlanSessionId: null, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
       return;
     }
     loadGraph(sessions[id].doc);
-    set({ sessions, order, activeId: id, streaming: false, messages: messages || [], progress: null });
+    set({ sessions, order, activeId: id, activePlanSessionId: id, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
   },
 
   getDocument: () => snapshotGraph(),
@@ -296,7 +329,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           createdAt: Date.now(),
           nodeCount: 0,
         };
-        set({ sessions: { [id]: first }, order: [id], activeId: id, streaming: false, progress: null });
+        set({ sessions: { [id]: first }, order: [id], activeId: id, activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
         loadGraph(emptyDoc());
         return;
       }
@@ -330,19 +363,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    if (d.kind === 'plan_warning') {
+      useUiStore.getState().setToast(String(d.message || '任务计划持久化未完整，请核对运行记录'));
+      return;
+    }
     /**
      * 计划卡：写**独立字段**而不是塞进某条消息 —— 计划是 run 级状态，
      * 塞进气泡会在压缩/续跑时跟着消息一起被折叠或错位。
      * 未知状态按 pending 处理（界面上不出现空白步骤）。
      */
     if (d.kind === 'plan') {
-      const items = (Array.isArray(d.items) ? d.items : []).slice(0, 20).map((i) => ({
+      const sessionId = String(d.sessionId || s.activePlanSessionId || s.activeId || '');
+      if (!sessionId) return;
+      const items = (Array.isArray(d.items) ? d.items : []).slice(0, 20).map((i, index) => ({
+        id: String((i && i.id) || 'step-' + (index + 1)).slice(0, 80),
         step: String((i && i.step) || '').slice(0, 300),
-        status: (['pending', 'in_progress', 'completed'].includes(String((i && i.status) || ''))
+        acceptanceCriteria: String((i && i.acceptanceCriteria) || '').slice(0, 300),
+        status: (['pending', 'in_progress', 'blocked', 'completed', 'cancelled'].includes(String((i && i.status) || ''))
           ? String(i && i.status)
           : 'pending') as PlanItem['status'],
+        evidenceCallIds: i && Array.isArray(i.evidenceCallIds) ? i.evidenceCallIds.map(String).slice(0, 8) : [],
+        reason: i && i.reason ? String(i.reason).slice(0, 300) : undefined,
+        dependsOn: i && Array.isArray(i.dependsOn) ? i.dependsOn.map(String).slice(0, 20) : [],
+        ownerTaskId: i && i.ownerTaskId ? String(i.ownerTaskId).slice(0, 120) : undefined,
       }));
-      set({ plan: items, planUpdatedAt: d.updatedAt ? String(d.updatedAt) : null, planRunId: d.runId ? String(d.runId) : null });
+      const snapshot = { items, updatedAt: d.updatedAt ? String(d.updatedAt) : null, runId: d.runId ? String(d.runId) : null };
+      const plansBySessionId = { ...s.plansBySessionId, [sessionId]: snapshot };
+      if (s.activePlanSessionId !== sessionId) set({ plansBySessionId });
+      else set({ plan: items, planUpdatedAt: snapshot.updatedAt, planRunId: snapshot.runId, plansBySessionId });
       return;
     }
     /**
@@ -593,7 +641,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearProgress: () => set({ progress: null }),
 
-  reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, intentUpdatedAt: null, intentRunId: null }),
+  beginPlanRun: (sessionId) => {
+    const id = sessionId || null;
+    const state = get();
+    if (id) {
+      const plansBySessionId = { ...state.plansBySessionId };
+      delete plansBySessionId[id];
+      set({ activePlanSessionId: id, plansBySessionId, plan: null, planUpdatedAt: null, planRunId: null });
+      return;
+    }
+    set({ activePlanSessionId: null, plan: null, planUpdatedAt: null, planRunId: null });
+  },
+
+  setPlanForSession: (sessionId, snapshot) => {
+    const state = get();
+    const plansBySessionId = { ...state.plansBySessionId };
+    if (snapshot) plansBySessionId[sessionId] = snapshot;
+    else delete plansBySessionId[sessionId];
+    if (state.activePlanSessionId !== sessionId) {
+      set({ plansBySessionId });
+      return;
+    }
+    set({
+      plansBySessionId,
+      plan: snapshot ? snapshot.items : null,
+      planUpdatedAt: snapshot ? snapshot.updatedAt : null,
+      planRunId: snapshot ? snapshot.runId : null,
+    });
+  },
+
+  reset: () => set({ sessions: {}, order: [], activeId: null, activePlanSessionId: null, plansBySessionId: {}, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, intentUpdatedAt: null, intentRunId: null }),
 }));
 
 /** 合并工具记录：流式增量按 id 去重（同一调用多次 chunk 只算一条）；最终结果按 name+args 回填到未定结果条目，保留每次真实调度 */

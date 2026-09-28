@@ -241,6 +241,11 @@ function register(ctx) {
     return runCheckpoint.planResume(projectRoot, runId, { activeIds: new Set(activeRequests.keys()), ledger });
   });
 
+  ipcMain.handle('agent:plan-read', async (_event, projectRoot, sessionId) => {
+    if (!projectRoot || !sessionId) return { ok: false, error: '缺少项目或会话编号', plan: null };
+    return { ok: true, plan: require('../plan.cjs').readSessionPlan(projectRoot, sessionId) };
+  });
+
   ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
     if (!projectRoot) return { ok: false, error: '未选择项目' };
     return runStore.markRetry(projectRoot, runId, replacementRunId);
@@ -312,7 +317,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('agent:chat', async (event, payload) => {
-    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
+    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
     const sender = event.sender;
     let runId = null;
     /** SessionStop 钩子需要的上下文：run 过程中可能抛异常，catch 里也要能补跑一次（保持外层可见） */
@@ -411,6 +416,7 @@ function register(ctx) {
       const costLedger = new CostLedger({ projectRoot, runId, prices: cfg.costPrices });
       cfg.costLedger = costLedger;
       cfg.costRunId = runId;
+      cfg.planSessionId = String(sessionId || (resumePlan && resumePlan.planSessionId) || '').slice(0, 120);
       const sideEffectLedger = new SideEffectLedger({ projectRoot, scopeRunId: resumeScope });
       const sideEffectGuard = createGuard(sideEffectLedger);
       const checkpointSink = (type, payload) => {
@@ -436,8 +442,15 @@ function register(ctx) {
         model: cfg.model,
         nodeId: nodeId || null,
         resumedFrom: resumePlan ? resumePlan.runId : null,
+        planSessionId: cfg.planSessionId || null,
         sandbox: sandbox.describe(sandboxPolicy),
       });
+      if (resumePlan && resumePlan.taskPlan && Array.isArray(resumePlan.taskPlan.items) && resumePlan.taskPlan.items.length) {
+        const inherited = runCheckpoint.inheritTaskPlan(projectRoot, runId, cfg.planSessionId, resumePlan.taskPlan, resumePlan.runId);
+        if (!inherited.ok) {
+          sendDelta({ kind: 'plan_warning', message: '续跑已加载原计划，但计划副本未能完整持久化；请在结束前核对运行记录。' });
+        }
+      }
       const onAgentDelta = (delta) => {
         sendDelta(delta);
         if (!delta || !delta.kind) return;
@@ -1041,6 +1054,8 @@ function register(ctx) {
           projectRoot,
           model,
           runId: requestId || '',
+          planSessionId: cfg.planSessionId || '',
+          planOwnerExists: (taskId) => !!(subagentManager && subagentManager.hasTask(taskId)),
           role: 'supervisor',
           signal: controller.signal,
           scalarStore,

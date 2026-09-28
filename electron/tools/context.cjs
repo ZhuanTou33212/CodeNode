@@ -50,6 +50,9 @@ class AgentToolContext {
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
     this.runIdValue = o.runId || '';
+    this.planSessionIdValue = o.planSessionId || '';
+    this.planOwnerExistsValue = typeof o.planOwnerExists === 'function' ? o.planOwnerExists : null;
+    this.toolEvidenceValue = [];
     this.taskIdValue = o.taskId || '';
     this.roleValue = o.role || 'supervisor';
     this.readOnlyValue = o.readOnly === true;
@@ -89,6 +92,17 @@ class AgentToolContext {
   }
 
   runId() { return this.runIdValue; }
+  planSessionId() { return this.planSessionIdValue; }
+  planOwnerExists(taskId) {
+    try { return !!(this.planOwnerExistsValue && this.planOwnerExistsValue(String(taskId || ''))); } catch { return false; }
+  }
+  /** 只暴露本次 run 中已成功的工具调用编号，供计划步骤引用实际执行证据。 */
+  setToolEvidence(records) {
+    this.toolEvidenceValue = (Array.isArray(records) ? records : [])
+      .filter((record) => record && record.ok === true && record.callId && record.name !== 'update_plan')
+      .map((record) => ({ callId: String(record.callId), tool: String(record.name || 'tool') }));
+  }
+  toolEvidence() { return this.toolEvidenceValue.slice(); }
   taskId() { return this.taskIdValue; }
   role() { return this.roleValue; }
   readOnly() { return this.readOnlyValue; }

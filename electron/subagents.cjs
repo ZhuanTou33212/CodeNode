@@ -289,6 +289,11 @@ class SubagentManager {
       });
   }
 
+  /** 只读验证计划步骤引用的子代理 taskId 属于本次 run。 */
+  hasTask(taskId) {
+    return this.tasks.has(String(taskId || ''));
+  }
+
   register(registry) {
     this.registry = registry;
     const roleList = roles.ROLE_NAMES.join('/');

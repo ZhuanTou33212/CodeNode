@@ -528,6 +528,7 @@ function RunsPanel() {
         failed = !res.ok;
       } else if (!command && prompt && root && window.codenode?.agentChat && ['task', 'stage', 'tool'].includes(node.type || '')) {
         const requestId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const planSessionId = useSessionStore.getState().activeId;
         const res = await window.codenode.agentChat({
           projectRoot: root,
           prompt: `执行工作流节点「${label}」：\n${prompt}\n完成后只返回本节点的执行结果与验证信息。`,
@@ -535,6 +536,7 @@ function RunsPanel() {
           canvasSummary: JSON.stringify(nodes.map((item) => ({ id: item.id, type: item.type, label: (item.data as Record<string, unknown>)?.label, status: (item.data as Record<string, unknown>)?.status }))),
           nodeId: node.id,
           requestId,
+          sessionId: planSessionId || undefined,
           document: { root: useGraphStore.getState().getDocument() },
           projectFile: useProjectStore.getState().projectFile || undefined,
         });

@@ -67,9 +67,9 @@ app.whenReady().then(async () => {
           runId: 'run-ui-1',
           updatedAt: new Date().toISOString(),
           items: [
-            { step: '读 a.txt 并统计行数', status: 'completed' },
-            { step: '写 b.txt 的结论', status: 'in_progress' },
-            { step: '跑一次 npm run verify', status: 'pending' },
+            { id: 'read', step: '读 a.txt 并统计行数', acceptanceCriteria: '读取内容已核实', status: 'completed' },
+            { id: 'write', step: '写 b.txt 的结论', acceptanceCriteria: '文件内容符合目标', status: 'in_progress' },
+            { id: 'verify', step: '跑一次 npm run verify', acceptanceCriteria: '命令成功且无失败用例', status: 'pending', dependsOn: ['write'], ownerTaskId: 'verify-task-1' },
           ],
         });
         const card = await waitFor(() => document.querySelector('.ap-plan'), 3000);
@@ -78,6 +78,8 @@ app.whenReady().then(async () => {
         out.countText = card ? (card.querySelector('.ap-plan-count') || {}).textContent : '';
         out.states = card ? Array.from(card.querySelectorAll('.ap-plan-item')).map((li) => li.className) : [];
         out.statusTexts = card ? Array.from(card.querySelectorAll('.ap-plan-status')).map((s) => s.textContent) : [];
+        out.dependencies = card ? Array.from(card.querySelectorAll('.ap-plan-dependencies')).map((s) => s.textContent) : [];
+        out.owners = card ? Array.from(card.querySelectorAll('.ap-plan-owner')).map((s) => s.textContent) : [];
         out.barWidth = card && card.querySelector('.ap-plan-progress-bar') ? card.querySelector('.ap-plan-progress-bar').style.width : '';
         out.inAgentPane = !!document.querySelector('.sp-pane-agent .ap-plan');
         out.beforeBody = !!(card && card.nextElementSibling && card.nextElementSibling.classList.contains('ap-body'));
@@ -128,7 +130,36 @@ app.whenReady().then(async () => {
         out.dirtySteps = dirty ? Array.from(dirty.querySelectorAll('.ap-plan-step')).map((s) => s.textContent) : [];
         out.storeStatuses = session.getState().plan.map((i) => i.status);
 
-        // ⑤ reset 清空计划（不留上一轮的清单）
+        step = 'stalledStatuses';
+        session.getState().streamDelta({
+          kind: 'plan', runId: 'run-ui-1', updatedAt: new Date().toISOString(),
+          items: [
+            { id: 'blocked', step: '等待接口权限', acceptanceCriteria: '接口调用成功', status: 'blocked', reason: '缺少测试凭据' },
+            { id: 'cancelled', step: '已取消的优化', acceptanceCriteria: '不再执行', status: 'cancelled', reason: '用户改了方向' },
+          ],
+        });
+        await waitFor(() => document.querySelectorAll('.ap-plan-item').length === 2, 3000);
+        const stalled = document.querySelector('.ap-plan');
+        out.stalledStatuses = stalled ? Array.from(stalled.querySelectorAll('.ap-plan-status')).map((s) => s.textContent) : [];
+        out.stalledReasons = stalled ? Array.from(stalled.querySelectorAll('.ap-plan-reason')).map((s) => s.textContent) : [];
+
+        // ⑤ 计划按画布会话隔离，非活动会话的增量不能覆盖当前卡片
+        step = 'sessionIsolation';
+        const firstSessionId = session.getState().activeId;
+        session.getState().beginWorkSession('第二个会话');
+        const secondSessionId = session.getState().activeId;
+        out.secondSessionInitiallyEmpty = session.getState().plan === null;
+        session.getState().streamDelta({
+          kind: 'plan', sessionId: firstSessionId, runId: 'run-ui-first', updatedAt: new Date().toISOString(),
+          items: [{ id: 'first', step: '第一个会话的任务', acceptanceCriteria: '结果已检查', status: 'pending' }],
+        });
+        out.inactivePlanHidden = session.getState().plan === null && !!session.getState().plansBySessionId[firstSessionId];
+        session.getState().switchSession(firstSessionId);
+        out.sessionPlanRestored = session.getState().plan?.[0]?.id === 'first';
+        session.getState().beginPlanRun(secondSessionId);
+        out.newRunClearsVisiblePlan = session.getState().plan === null;
+
+        // ⑥ reset 清空计划（不留上一轮的清单）
         step = 'reset';
         session.getState().reset();
         await waitFor(() => document.querySelectorAll('.ap-plan').length === 0, 3000);
@@ -159,6 +190,8 @@ app.whenReady().then(async () => {
     check('[UI] 头部显示完成进度与进行中项', String(result.countText).includes('1/3') && String(result.countText).includes('写 b.txt'), String(result.countText));
     check('[UI] 三种状态各自带类名（色阶靠它）', result.states.join('|') === 'ap-plan-item st-completed|ap-plan-item st-in_progress|ap-plan-item st-pending', JSON.stringify(result.states));
     check('[UI] 状态文案可读（已完成/进行中/待办）', result.statusTexts.join(',') === '已完成,进行中,待办', JSON.stringify(result.statusTexts));
+    check('[UI] 显示步骤依赖关系', result.dependencies.join(',') === '前置步骤：write', JSON.stringify(result.dependencies));
+    check('[UI] 显示负责该步骤的子代理任务', result.owners.join(',') === '子代理：verify-task-1', JSON.stringify(result.owners));
     check('[UI] 进度条按 1/3 计算宽度（33%）', String(result.barWidth).startsWith('33'), String(result.barWidth));
     check('[UI] 卡片在对话面板内、且在消息列表之上', result.inAgentPane === true && result.beforeBody === true, JSON.stringify({ inPane: result.inAgentPane, beforeBody: result.beforeBody }));
     check('[UI] 样式真的生效（边框 + 圆角）', result.hasBorder === true && parseFloat(String(result.radius)) > 0, JSON.stringify({ hasBorder: result.hasBorder, radius: result.radius }));
@@ -170,6 +203,12 @@ app.whenReady().then(async () => {
 
     check('[UI] 未知状态归一成 pending（不渲染空白步骤）', result.storeStatuses.join(',') === 'pending,pending,completed', JSON.stringify(result.storeStatuses));
     check('[UI] 脏输入不炸：3 条都渲染出来（null/缺 step 也被容错）', result.dirtySteps.length === 3 && result.dirtyStates.join('|') === 'ap-plan-item st-pending|ap-plan-item st-pending|ap-plan-item st-completed', JSON.stringify(result.dirtySteps));
+    check('[UI] 受阻/取消状态和原因都清楚展示', result.stalledStatuses.join(',') === '受阻,已取消' && result.stalledReasons.length === 2, JSON.stringify({ statuses: result.stalledStatuses, reasons: result.stalledReasons }));
+
+    check('[UI] 新会话没有旧计划卡', result.secondSessionInitiallyEmpty === true);
+    check('[UI] 后台旧会话计划只更新归属会话，不覆盖当前卡片', result.inactivePlanHidden === true);
+    check('[UI] 切回画布会话能恢复它自己的计划', result.sessionPlanRestored === true);
+    check('[UI] 新 Run 开始时先清掉当前卡片的旧任务计划', result.newRunClearsVisiblePlan === true);
 
     check('[UI] reset 后卡片消失、store 里的计划也清空', result.afterReset === 0 && result.afterReset === 0 && result.storePlanAfterReset === null, JSON.stringify({ afterReset: result.afterReset, plan: result.storePlanAfterReset }));
 

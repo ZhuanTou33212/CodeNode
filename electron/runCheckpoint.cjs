@@ -23,6 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const runStore = require('./runStore.cjs');
+const planLib = require('./plan.cjs');
 const { classify, SideEffectLedger } = require('./sideEffects.cjs');
 
 const MAX_CHECKPOINT_MESSAGES = 24;
@@ -277,6 +278,8 @@ function lastMessages(checkpoints) {
  * @property {boolean} [requiresReview]
  * @property {string|null} [warning]
  * @property {string} [runId]
+ * @property {string|null} [planSessionId]
+ * @property {any} [taskPlan]
  * @property {string} [status]
  * @property {string} [prompt]
  * @property {any} [model]
@@ -340,6 +343,7 @@ function planResume(projectRoot, runId, options = {}) {
   const base = {
     ok: true,
     runId: summary.runId,
+    planSessionId: start.planSessionId || null,
     status,
     prompt: String(start.prompt || ''),
     model: start.model || null,
@@ -352,6 +356,7 @@ function planResume(projectRoot, runId, options = {}) {
     skippedByLedger: skippable,
     unknownEffects: [...unknownSteps, ...unknownFromLedger],
     messages: lastMessages(checkpoints),
+    taskPlan: planLib.readPlan(projectRoot, summary.runId),
     checkpointCount: checkpoints.length,
     ledgerCommitted: ledgerReview.committed.length,
     warning: null,
@@ -424,6 +429,9 @@ function buildResumeMessages(plan, { systemPrompt } = {}) {
     '【断点续跑】上一次执行被中断，请从中断处继续完成任务，不要从头重复已完成的工作。',
     '原始任务：' + String(plan.prompt || '').slice(0, 2000),
   ];
+  if (plan.taskPlan && Array.isArray(plan.taskPlan.items) && plan.taskPlan.items.length) {
+    lines.push('中断前的结构化任务计划（继续沿用步骤 id；已完成项必须保留其证据编号）：\n' + planLib.renderPlan(plan.taskPlan));
+  }
   const completedSteps = Array.isArray(plan.completedSteps) ? plan.completedSteps : [];
   if (completedSteps.length) {
     lines.push('已完成步骤（不要重复执行）：' + completedSteps.map((step) => step.tool).join('、'));
@@ -442,6 +450,29 @@ function buildResumeMessages(plan, { systemPrompt } = {}) {
   lines.push('若任务其实已经完成，请直接给出最终结论，不要再调用工具。');
   messages.push({ role: 'user', content: lines.join('\n') });
   return messages;
+}
+
+/** 把续跑源 Run 的结构化计划复制到新 Run，并更新同一画布会话的最新计划。 */
+function inheritTaskPlan(projectRoot, runId, planSessionId, taskPlan, sourceRunId) {
+  if (!projectRoot || !runId || !taskPlan || !Array.isArray(taskPlan.items) || !taskPlan.items.length) {
+    return { ok: false, runFilePersisted: false, sessionFilePersisted: false, eventPersisted: false };
+  }
+  const updatedAt = new Date().toISOString();
+  const runFile = planLib.writePlan(projectRoot, runId, taskPlan.items, { updatedAt, sessionId: planSessionId });
+  const sessionFile = planSessionId
+    ? planLib.writeSessionPlan(projectRoot, planSessionId, runId, taskPlan.items, { updatedAt })
+    : null;
+  const event = runStore.appendEvent(projectRoot, runId, 'plan_inherited', {
+    sourceRunId: String(sourceRunId || taskPlan.runId || ''),
+    sessionId: planSessionId || null,
+    runFilePersisted: !!runFile,
+    sessionFilePersisted: !planSessionId || !!sessionFile,
+    items: taskPlan.items,
+  });
+  const runFilePersisted = !!runFile;
+  const sessionFilePersisted = !planSessionId || !!sessionFile;
+  const eventPersisted = !!event;
+  return { ok: runFilePersisted && sessionFilePersisted && eventPersisted, runFilePersisted, sessionFilePersisted, eventPersisted };
 }
 
 function clearCheckpoints(projectRoot, runId) {
@@ -467,6 +498,7 @@ module.exports = {
   lastMessages,
   planResume,
   buildResumeMessages,
+  inheritTaskPlan,
   clearCheckpoints,
   MAX_CHECKPOINT_MESSAGES,
 };

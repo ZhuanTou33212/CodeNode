@@ -206,6 +206,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!ss.current()) {
       ss.startOnCurrent(userText);
     }
+    const planSessionId = useSessionStore.getState().activeId;
+    useSessionStore.getState().beginPlanRun(planSessionId);
     ss.pushUser(userText, attachments);
     ss.beginTurn();
 
@@ -238,6 +240,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         canvasSummary: summarizeDoc(ctx),
         nodeId: null,
         requestId,
+        sessionId: planSessionId || undefined,
         modelId: us.modelId || undefined,
         reasoningEffort: us.effort,
         document: { root: ctx },

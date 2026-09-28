@@ -721,7 +721,7 @@ const TOOL_GUIDE = {
   read_file: '读取项目内文本文件（含 PDF 文字层提取）',
   write_file: '写入项目内文件',
   edit_file: '精确替换文件中的某段文本',
-  update_plan: '写下/更新本次任务的步骤清单（长任务先写计划）',
+  update_plan: '创建/更新多步计划（稳定步骤 ID、验收条件；完成需引用成功工具证据）',
   find_files: '按 glob 模式查找文件',
   search_files: '按正则搜索文件内容',
   list_directory: '列出项目目录',
@@ -793,6 +793,7 @@ const RUNTIME_RULE_GATES = Object.freeze([
   },
   { rule: 12, tool: 'query_scalars' },
   { rule: 19, tool: 'workbench_edit' },
+  { rule: 21, tool: 'update_plan' },
 ]);
 
 /** 工具面被裁剪时才追加的那条规则（把「怎么把能力找回来」告诉模型，否则 discover_tools 白给） */
@@ -806,7 +807,7 @@ const RUNTIME_RULE_DISCOVER =
  * 「这行算稳定段还是任务段」。两张表都指向同一批规则 —— 所以加规则时要么两处都登记，要么都不登记
  * （`prompt-prefix-stability-test` 会核对两表编号一致）。
  */
-const TASK_RULE_NUMBERS = Object.freeze([2, 6, 7, 12, 19, 20]);
+const TASK_RULE_NUMBERS = Object.freeze([2, 6, 7, 12, 19, 20, 21]);
 
 /** 任务规则段的标题（PROMPT_SECTIONS 里按前缀 '【任务相关规则' 匹配；正文用完整标题） */
 const TASK_RULES_TITLE = '【任务相关规则（与本次任务面/画布相关的规则；编号沿用上面那套，未列出的条目与本次无关）】';
@@ -1145,6 +1146,7 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
       '17. 低敏感/只读操作（如 read_file、find_files、search_files、list_directory、scan_project、analyze_project、project_info、retrieve_context、query_scalars、get_workbench_model 等）无需询问用户，直接执行；只有高风险/破坏性/不可撤销操作才需要先征求用户同意。\n' +
       '18. 读取策略（泛读/精读分层，避免逐文件空转）：看全貌优先用批量/摘要工具——scan_project、analyze_project、list_directory、find_files、search_files、read_file analyze=true；仅对少数关键文件用 read_file 单文件全文深读。需要了解多个相互没有依赖的文件时，在同一条回复里并发发起多个 read_file（一次性并行），不要一个个串行等待造成多次往返。\n' +
       '19. 大批量画布操作按「逻辑组」分批提交 operations（如先建主线、再建 scope 循环体、最后统一连线），不要把所有节点变更塞进单个超长 workbench_edit 调用，避免单次输出过大被截断；小/中量变更仍可一次 operations 提交。',
+      '21. 预计超过 3 步的任务先用 update_plan 拆解；每步写稳定 id 与可核验的验收标准，存在前置关系时用 dependsOn。只有全部前置步骤完成后才开始该步。完成前必须引用当前 run 中成功工具调用的编号，受阻/取消写明原因；修订计划时保留已有 id，移除旧步骤前先标为 cancelled 并说明原因。计划提醒独立于进度节奏，即使进度提示关闭也要遵循最新计划。',
     options.exposedTools,
     options.toolFaceTrimmed === true,
   );
@@ -1293,6 +1295,14 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
 
 /** 进度检查提示的固定前缀：与 compaction 的 MACHINE_USER_PREFIXES 对齐（机器注入，不进摘要） */
 const PROGRESS_NOTE_PREFIX = '【系统提示】进度检查（第 ';
+const PLAN_NOTE_PREFIX = '【系统提示】当前任务计划（';
+
+function buildPlanNote(plan) {
+  if (!plan || !Array.isArray(plan.items) || !plan.items.length) return '';
+  return PLAN_NOTE_PREFIX + String(plan.sessionId || plan.runId || '当前会话') + '）：\n' +
+    planLib.renderPlan(plan) +
+    '\n状态约束：完成项必须引用本次实际成功的工具调用编号及结果；受阻或取消时写明原因；若步骤、验收标准或顺序变化，保留已有 id 并调用 update_plan 更新。';
+}
 
 /**
  * 生成一条**只讲可核对事实**的进度清单（不评价、不编造）。
@@ -1317,7 +1327,6 @@ function buildProgressNote(input) {
     failures: recentFailures = [],
     tokensUsed = 0,
     tokenBudget = 0,
-    plan = null,
   } = input || {};
   const parts = [
     PROGRESS_NOTE_PREFIX + iteration + '/' + maxIterations + ' 轮）：' +
@@ -1326,16 +1335,9 @@ function buildProgressNote(input) {
   parts.push('已改动文件 ' + (changedFiles.length ? changedFiles.length + ' 个（' + changedFiles.slice(0, 6).join('、') + '）' : '0 个'));
   parts.push('失败 ' + recentFailures.length + ' 次' + (recentFailures.length ? '（最近：' + recentFailures.slice(0, 3).map((f) => f.tool + (f.code ? '/' + f.code : '')).join('、') + '）' : ''));
   if (tokensUsed > 0) parts.push('用量 ' + tokensUsed + (tokenBudget > 0 ? '/' + tokenBudget : '') + ' tokens');
-  /**
-   * 任务清单（update_plan）与进度统计共用**同一条**注入消息：进度提示是「同一时刻只保留一条、
-   * 原地替换」的，计划若单独注入就会被下一轮的替换顺手删掉（实测过同类失效）。
-   */
-  const planItems = plan && Array.isArray(plan.items) ? plan.items.filter((i) => i && i.step) : [];
-  const planText = planItems.length ? '\n' + planLib.renderPlan(plan) + '\n（如与计划不符，用 update_plan 改正，不要只在回复里说）' : '';
   return (
     parts.join('；') +
     '。' +
-    planText +
     '\n下一步先交代清楚三件事：① 当前目标（还在做哪一件事）② 已完成（以产物或命令输出为证）' +
     '③ 下一步要做的**一个**具体动作。不要重复已经成功过的调用（同参数重复会命中缓存，等于空转）。'
   );
@@ -1370,10 +1372,18 @@ function buildSkillsIndex(skills) {
 
 function readRunPlan(projectRoot, cfg) {
   try {
-    return planLib.readPlan(projectRoot, (cfg && cfg.costRunId) || '');
+    const sessionPlan = planLib.readSessionPlan(projectRoot, (cfg && cfg.planSessionId) || '');
+    if (sessionPlan && planLib.isTerminalPlan(sessionPlan) && String(sessionPlan.runId || '') !== String((cfg && cfg.costRunId) || '')) return null;
+    return sessionPlan || planLib.readPlan(projectRoot, (cfg && cfg.costRunId) || '');
   } catch {
     return null;
   }
+}
+
+/** 更新戳可能在同一毫秒重复；把规范化计划内容也纳入版本，避免漏掉连续更新。 */
+function runPlanVersion(plan) {
+  if (!plan) return '';
+  return String(plan.updatedAt || '') + '\u0000' + JSON.stringify(Array.isArray(plan.items) ? plan.items : []);
 }
 
 /**
@@ -2948,20 +2958,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           turnMaxTokens = capped;
         }
       }
-      /**
-       * 进度检查层：注入点必须在压缩/硬裁剪**之后** —— 放在前面的话，本次迭代的压缩会把这条
-       * 「机器注入的 user 消息」从重建后的历史里丢掉，等于白注（模型本轮根本看不到）。
-       * 同一时刻只保留一条：旧的那条**原地替换**（不 splice —— 缓存条目里存着消息下标，
-       * 挪动下标会让后续的缓存回填改错消息）。
-       *
-       * update_plan（任务清单）搭这条车一起回灌：计划必须被模型**反复**看到，而这条消息同一时刻
-       * 只有一条，单独注入会被下一轮替换掉。触发条件是「到进度节奏」**或**「计划刚变过」——
-       * 后者保证模型写完计划的下一轮就看得见（不必等满 progressEvery 轮）。
-       */
+      /** 所有机器提示都在压缩之后注入；计划提示有独立前缀/替换游标，不受进度提醒配置影响。 */
       const planForNote = readRunPlan(traceProjectRoot(), cfg);
-      const planStamp = planForNote && planForNote.updatedAt ? String(planForNote.updatedAt) : '';
+      const planStamp = runPlanVersion(planForNote);
       const planChanged = !!planStamp && planStamp !== lastPlanStamp;
-      if (progressEvery > 0 && iter > 0 && (iter % progressEvery === 0 || planChanged)) {
+      if (progressEvery > 0 && iter > 0 && iter % progressEvery === 0) {
         const note = buildProgressNote({
           iteration: iter + 1,
           maxIterations: maxToolIterations,
@@ -2971,16 +2972,27 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           failures: allToolCalls.filter((call) => call && call.ok === false).map((call) => ({ tool: call.name, code: (call.failure && call.failure.code) || '' })),
           tokensUsed: totalTokens,
           tokenBudget: progressTokenBudget,
-          plan: planForNote,
         });
         const previous = messages.findIndex(
           (msg) => msg && msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith(PROGRESS_NOTE_PREFIX)
         );
         if (previous >= 0) messages[previous] = { role: 'user', content: note };
         else messages.push({ role: 'user', content: note });
-        if (planChanged) lastPlanStamp = planStamp;
-        emitTrace({ kind: 'progress_check', turnId: iter, iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length, planItems: planForNote && Array.isArray(planForNote.items) ? planForNote.items.length : 0 });
+        emitTrace({ kind: 'progress_check', turnId: iter, iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
         onDelta && onDelta({ kind: 'progress_check', iteration: iter + 1, maxIterations: maxToolIterations, toolCalls: allToolCalls.length });
+      }
+
+      if (planChanged) {
+        const note = buildPlanNote(planForNote);
+        if (note) {
+          const previous = messages.findIndex(
+            (msg) => msg && msg.role === 'user' && typeof msg.content === 'string' && msg.content.startsWith(PLAN_NOTE_PREFIX)
+          );
+          if (previous >= 0) messages[previous] = { role: 'user', content: note };
+          else messages.push({ role: 'user', content: note });
+          lastPlanStamp = planStamp;
+          emitTrace({ kind: 'plan_prompt', turnId: iter, items: planForNote.items.length, updatedAt: planForNote.updatedAt || null, planVersion: planStamp });
+        }
       }
 
       /**
@@ -2988,15 +3000,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
        * 与进度提示的注入解耦 —— progressEvery=0（不注入进度提示）时界面照样能看到计划。
        */
       const planForUi = readRunPlan(traceProjectRoot(), cfg);
-      const planUiStamp = planForUi && planForUi.updatedAt ? String(planForUi.updatedAt) : '';
+      const planUiStamp = runPlanVersion(planForUi);
       if (planForUi && planUiStamp && planUiStamp !== lastPlanUiStamp) {
         lastPlanUiStamp = planUiStamp;
-        emitTrace({ kind: 'plan_card', turnId: iter, items: Array.isArray(planForUi.items) ? planForUi.items.length : 0, updatedAt: planUiStamp });
+        emitTrace({ kind: 'plan_card', turnId: iter, items: Array.isArray(planForUi.items) ? planForUi.items.length : 0, updatedAt: planForUi.updatedAt || null, planVersion: planUiStamp });
         onDelta &&
           onDelta({
             kind: 'plan',
             runId: (cfg && cfg.costRunId) || null,
-            updatedAt: planUiStamp,
+            sessionId: (cfg && cfg.planSessionId) || null,
+            updatedAt: planForUi.updatedAt ? String(planForUi.updatedAt) : null,
+            planVersion: planUiStamp,
             items: Array.isArray(planForUi.items) ? planForUi.items : [],
           });
       }
@@ -3268,7 +3282,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                   const rawText = String(item.argsText || '').trim();
                   return item.argsValid === false || (rawText !== '' && rawText !== '{}' && Object.keys(parsedArgs).length === 0);
                 },
-                execute: (item, execOptions) => tools.registry.execute(item.name, parseToolArgs(item.argsText), tools.context, execOptions),
+                execute: (item, execOptions) => {
+                  if (tools.context && typeof tools.context.setToolEvidence === 'function') tools.context.setToolEvidence(allToolCalls);
+                  return tools.registry.execute(item.name, parseToolArgs(item.argsText), tools.context, execOptions);
+                },
                 trace: (event) => emitTrace(Object.assign({ turnId: iter }, event)),
               },
             )
@@ -3354,12 +3371,14 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             } else {
               // S6：只读并行时这里直接 await 预启动的 promise（只是提前开始了，顺序不变）
               const primedPromise = primed && primed.promises ? primed.promises.get(callId) : null;
+              if (tools.context && typeof tools.context.setToolEvidence === 'function') tools.context.setToolEvidence(allToolCalls);
               result = primedPromise ? await primedPromise : await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
               // 只缓存成功结果：失败不缓存（文件/节点可能随后被创建，需允许重试时重新执行）
               if (result.ok) toolResultCache.set(cacheKey, { result, content: '' });
             }
           } else {
             const primedPromise = primed && primed.promises ? primed.promises.get(callId) : null;
+            if (tools.context && typeof tools.context.setToolEvidence === 'function') tools.context.setToolEvidence(allToolCalls);
             result = primedPromise ? await primedPromise : await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
           }
           if (signal && signal.aborted) {
@@ -3913,6 +3932,8 @@ module.exports = {
   chatBody,
   buildProgressNote,
   PROGRESS_NOTE_PREFIX,
+  buildPlanNote,
+  PLAN_NOTE_PREFIX,
   readRunPlan,
   buildSkillsIndex,
   parseReasoningEffort,

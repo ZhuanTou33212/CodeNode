@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('codenode', {
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),
   agentResumePlan: (root, runId) => ipcRenderer.invoke('agent:resume-plan', root, runId),
+  agentReadPlan: (root, sessionId) => ipcRenderer.invoke('agent:plan-read', root, sessionId),
   agentResumeStart: (root, runId, replacementRunId) => ipcRenderer.invoke('agent:resume-start', root, runId, replacementRunId),
   // 运行指标 / 成本 / 告警 / 执行隔离状态
   agentMetrics: (root) => ipcRenderer.invoke('agent:metrics', root),

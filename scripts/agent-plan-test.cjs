@@ -19,6 +19,8 @@ const path = require('path');
 
 const agent = require('../electron/agent.cjs');
 const planLib = require('../electron/plan.cjs');
+const runCheckpoint = require('../electron/runCheckpoint.cjs');
+const runStore = require('../electron/runStore.cjs');
 const sandbox = require('../electron/sandbox.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
@@ -66,14 +68,15 @@ function registry(opts) {
   console.log('\n== A. 纯函数（归一化 / 渲染 / 统计）==');
   {
     const ok = planLib.normalizePlan([
-      { step: '读 a.txt', status: 'completed' },
-      { step: '改 a.txt', status: 'in_progress' },
-      { step: '跑测试', status: 'pending' },
+      { id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['read-proof'] },
+      { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'in_progress' },
+      { id: 'test', step: '跑测试', acceptanceCriteria: '命令成功且无失败用例', status: 'pending' },
     ]);
-    check('[A] 合法计划归一化通过', ok.ok === true && ok.items.length === 3, JSON.stringify(ok));
-    check('[A] 统计口径一致', JSON.stringify(planLib.summarizePlan(ok)) === JSON.stringify({ total: 3, completed: 1, inProgress: 1, pending: 1 }), JSON.stringify(planLib.summarizePlan(ok)));
-    const text = planLib.renderPlan(ok);
-    check('[A] 渲染带三种状态标记与计数', /\[x\] 读 a\.txt/.test(text) && /\[→\] 改 a\.txt/.test(text) && /\[ \] 跑测试/.test(text) && /共 3 项/.test(text), text.replace(/\n/g, ' | '));
+    const validPlan = ok.ok === true ? ok : { items: [] };
+    check('[A] 合法计划归一化通过', ok.ok === true && validPlan.items.length === 3, JSON.stringify(ok));
+    check('[A] 统计口径一致', JSON.stringify(planLib.summarizePlan(validPlan)) === JSON.stringify({ total: 3, completed: 1, inProgress: 1, pending: 1, blocked: 0, cancelled: 0 }), JSON.stringify(planLib.summarizePlan(validPlan)));
+    const text = planLib.renderPlan(validPlan);
+    check('[A] 渲染带三种状态标记与计数', /\[x\] \[read\] 读 a\.txt/.test(text) && /\[→\] \[edit\] 改 a\.txt/.test(text) && /\[ \] \[test\] 跑测试/.test(text) && /共 3 项/.test(text), text.replace(/\n/g, ' | '));
 
     /** @type {Array<[string, any, string]>} */
     const cases = [
@@ -84,15 +87,40 @@ function registry(opts) {
       ['非法 status', { items: [{ step: 'a', status: 'done' }] }, 'ARG_SCHEMA'],
       ['step 为空', { items: [{ step: '   ', status: 'pending' }] }, 'ARG_SCHEMA'],
       ['step 超长', { items: [{ step: 'x'.repeat(planLib.MAX_STEP_CHARS + 1), status: 'pending' }] }, 'ARG_SCHEMA'],
-      ['两个 in_progress', { items: [{ step: 'a', status: 'in_progress' }, { step: 'b', status: 'in_progress' }] }, 'ARG_SEMANTIC'],
+      ['两个 in_progress', { items: [{ step: 'a', acceptanceCriteria: 'a 可核验', status: 'in_progress' }, { step: 'b', acceptanceCriteria: 'b 可核验', status: 'in_progress' }] }, 'ARG_SEMANTIC'],
     ];
     for (const [label, input, code] of cases) {
       const res = planLib.normalizePlan(input.items);
-      check('[A] 拒绝：' + label + '（' + code + '）', res.ok === false && res.code === code, JSON.stringify({ ok: res.ok, code: res.code, error: res.error }));
+      check('[A] 拒绝：' + label + '（' + code + '）', res.ok === false && res.code === code, JSON.stringify({ ok: res.ok, code: res.ok === false ? res.code : '', error: res.ok === false ? res.error : '' }));
     }
     check('[A] 空计划渲染如实说明（不编造）', planLib.renderPlan(null) === '（当前计划为空）');
+    const missingEvidence = planLib.normalizePlan([{ step: 'a', acceptanceCriteria: '可验收', status: 'completed' }]);
+    const missingBlocker = planLib.normalizePlan([{ step: 'a', acceptanceCriteria: '可验收', status: 'blocked' }]);
+    const stableStep = planLib.normalizePlan([{ id: 'read', step: '重命名后的读取步骤', acceptanceCriteria: '读出目标内容', status: 'pending' }], { previousItems: [{ id: 'read', step: '读取文件', acceptanceCriteria: '读出目标内容', status: 'pending' }] });
+    const dependencyCycle = planLib.normalizePlan([
+      { id: 'a', step: '先做 A', acceptanceCriteria: 'A 完成', status: 'pending', dependsOn: ['b'] },
+      { id: 'b', step: '再做 B', acceptanceCriteria: 'B 完成', status: 'pending', dependsOn: ['a'] },
+    ]);
+    const unfinishedPrerequisite = planLib.normalizePlan([
+      { id: 'a', step: '先做 A', acceptanceCriteria: 'A 完成', status: 'pending' },
+      { id: 'b', step: '再做 B', acceptanceCriteria: 'B 完成', status: 'in_progress', dependsOn: ['a'] },
+    ]);
+    const removedStep = planLib.normalizePlan([{ id: 'a', step: '先做 A', acceptanceCriteria: 'A 完成', status: 'pending' }], {
+      previousItems: [{ id: 'a', step: '先做 A', acceptanceCriteria: 'A 完成', status: 'pending' }, { id: 'b', step: '再做 B', acceptanceCriteria: 'B 完成', status: 'pending' }],
+    });
+    check('[A] 没有成功工具证据的 completed 会被拒绝', missingEvidence.ok === false && missingEvidence.code === 'ARG_SEMANTIC');
+    check('[A] blocked/cancelled 必须说明原因', missingBlocker.ok === false && missingBlocker.code === 'ARG_SCHEMA');
+    check('[A] 修改步骤文字时保留模型提供的稳定 ID', stableStep.ok === true && stableStep.items[0].id === 'read');
+    check('[A] 循环依赖被拒绝', dependencyCycle.ok === false && dependencyCycle.code === 'ARG_SEMANTIC');
+    check('[A] 前置步骤未完成时不能启动后续步骤', unfinishedPrerequisite.ok === false && unfinishedPrerequisite.code === 'ARG_SEMANTIC');
+    check('[A] 更新计划不能静默删除旧步骤', removedStep.ok === false && removedStep.code === 'ARG_SEMANTIC' && /cancelled/.test(removedStep.error));
     check('[A] 计划文件落在 .codenode/runs/ 且 runId 做安全化', /codenode[\\/]runs[\\/]run\.a_b\.plan\.json$/.test(planLib.planFile(root, 'run.a/b')), planLib.planFile(root, 'run.a/b'));
     check('[A] 读不到返回 null（不抛）', planLib.readPlan(root, 'no-such-run') === null);
+    const legacyFile = planLib.planFile(root, 'legacy-plan');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, JSON.stringify({ runId: 'legacy-plan', items: [{ step: '旧版已完成步骤', status: 'completed' }] }));
+    const migrated = planLib.readPlan(root, 'legacy-plan');
+    check('[A] 旧版无证据的 completed 降为受阻待核验', !!migrated && migrated.items[0].status === 'blocked' && /没有关联/.test(migrated.items[0].reason));
   }
 
   // ==================== B. 契约 ====================
@@ -105,7 +133,7 @@ function registry(opts) {
     check('[B] 不改工作区（画布/文件都不动）', d.mutatesWorkspace === false, String(d.mutatesWorkspace));
     check('[B] 不弹用户确认（Agent 内部状态）', d.requiresConfirmation === false, String(d.requiresConfirmation));
     check('[B] schema 闭合（未知字段当场拒绝）', d.inputSchema.additionalProperties === false && d.inputSchema.properties.items.items.additionalProperties === false);
-    check('[B] schema 与常量同源（maxItems/maxLength/enum）', d.inputSchema.properties.items.maxItems === planLib.MAX_PLAN_ITEMS && d.inputSchema.properties.items.items.properties.step.maxLength === planLib.MAX_STEP_CHARS && JSON.stringify(d.inputSchema.properties.items.items.properties.status.enum) === JSON.stringify(planLib.PLAN_STATUSES.slice()), JSON.stringify(d.inputSchema.properties.items.items.properties.status));
+    check('[B] schema 与常量同源（上限/状态/验收/依赖字段）', d.inputSchema.properties.items.maxItems === planLib.MAX_PLAN_ITEMS && d.inputSchema.properties.items.items.properties.step.maxLength === planLib.MAX_STEP_CHARS && d.inputSchema.properties.items.items.properties.dependsOn.maxItems === planLib.MAX_DEPENDENCIES && JSON.stringify(d.inputSchema.properties.items.items.properties.status.enum) === JSON.stringify(planLib.PLAN_STATUSES.slice()) && d.inputSchema.properties.items.items.required.includes('acceptanceCriteria'), JSON.stringify(d.inputSchema.properties.items.items.properties.status));
     check('[B] 未声明 requiresConfirmation 的工具不会被强制审批（确认策略默认沿用描述符）', d.confirmationEnforced === false);
   }
 
@@ -114,19 +142,21 @@ function registry(opts) {
   {
     const runId = 'run-plan-c1';
     const reg = registry({ toolsAllowed: ['update_plan'] });
+    const ctx = contextWith(runId, { planSessionId: 'canvas-test', planOwnerExists: (taskId) => taskId === 'child-1' });
+    ctx.setToolEvidence([{ callId: 'read-proof', name: 'read_file', ok: true }]);
     const res = await reg.execute(
       'update_plan',
-      { items: [{ step: '读 a.txt', status: 'completed' }, { step: '改 a.txt', status: 'in_progress' }] },
-      contextWith(runId)
+      { items: [{ id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['read-proof'] }, { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'in_progress' }] },
+      ctx
     );
-    check('[C] 执行成功且回显渲染后的清单', res.ok === true && /计划已更新/.test(String(res.text)) && /\[→\] 改 a\.txt/.test(String(res.text)), String(res.text || '').slice(0, 100));
-    check('[C] 结果带结构化统计（供界面/审计用）', res.data.total === 2 && res.data.completed === 1 && res.data.inProgress === 1 && res.data.persisted === true, JSON.stringify(res.data));
+    check('[C] 执行成功且回显渲染后的清单', res.ok === true && /计划已更新/.test(String(res.text)) && /\[→\].*改 a\.txt/.test(String(res.text)), String(res.text || '').slice(0, 100));
+    check('[C] 结果带结构化统计及三路持久化状态', res.data.total === 2 && res.data.completed === 1 && res.data.inProgress === 1 && res.data.persisted === true && res.data.runFilePersisted && res.data.sessionFilePersisted && res.data.eventPersisted, JSON.stringify(res.data));
     const file = planLib.planFile(root, runId);
     check('[C] 落盘到 .codenode/runs/<runId>.plan.json', fs.existsSync(file) === true, file);
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    check('[C] 落盘内容与入参一致（含 runId/updatedAt）', saved.runId === runId && saved.items.length === 2 && saved.items[0].status === 'completed' && typeof saved.updatedAt === 'string', JSON.stringify(saved).slice(0, 140));
-    const inLoop = agent.readRunPlan(root, { costRunId: runId });
-    check('[C] 主循环的读取口径能读到同一份（readRunPlan）', inLoop && inLoop.items.length === 2, JSON.stringify(inLoop));
+    check('[C] 落盘内容保留步骤 ID、验收标准及证据', saved.runId === runId && saved.items.length === 2 && saved.items[0].status === 'completed' && saved.items[0].id === 'read' && saved.items[0].acceptanceCriteria === '读取结果已确认' && saved.items[0].evidenceCallIds[0] === 'read-proof' && typeof saved.updatedAt === 'string', JSON.stringify(saved).slice(0, 220));
+    const inLoop = agent.readRunPlan(root, { costRunId: runId, planSessionId: 'canvas-test' });
+    check('[C] 主循环读取会话当前计划（readRunPlan）', inLoop && inLoop.items.length === 2 && inLoop.items[0].id === 'read', JSON.stringify(inLoop));
     const jsonl = path.join(root, '.codenode', 'runs', runId + '.jsonl');
     const lines = fs.existsSync(jsonl) ? fs.readFileSync(jsonl, 'utf8').trim().split(/\r?\n/) : [];
     const planEvents = lines.filter((l) => /"type":"plan_updated"/.test(l));
@@ -134,12 +164,72 @@ function registry(opts) {
     const eventsFile = path.join(root, '.codenode', 'events.jsonl');
     const busLines = fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8') : '';
     check('[C] 统一事件流（events.jsonl）也能看到它（S8 桥接）', /plan_updated/.test(busLines), busLines.split(/\r?\n/).filter((l) => /plan_updated/.test(l))[0] || 'none');
+    const sessionFile = planLib.sessionPlanFile(root, 'canvas-test');
+    check('[C] 会话计划有独立持久化文件', res.data.sessionFile === sessionFile && planLib.readSessionPlan(root, 'canvas-test').items[0].id === 'read', String(res.data.sessionFile));
+    const runFileSnapshot = fs.readFileSync(file, 'utf8');
+    fs.unlinkSync(file);
+    const recoveredFromEvent = planLib.readPlan(root, runId);
+    fs.writeFileSync(file, runFileSnapshot);
+    check('[C] run 计划文件缺失时从最新计划事件恢复', !!recoveredFromEvent && recoveredFromEvent.items[0].id === 'read' && recoveredFromEvent.items[0].evidenceCallIds?.[0] === 'read-proof');
+    const invalidEvidence = await reg.execute('update_plan', {
+      items: [
+        { id: 'read', step: '读取文件', acceptanceCriteria: '结果已确认', status: 'completed', evidenceCallIds: ['forged-call-id'] },
+        { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'in_progress' },
+      ],
+    }, ctx);
+    check('[C] completed 必须引用当前 run 中真实成功的工具调用', invalidEvidence.ok === false && invalidEvidence.data.code === 'ARG_SEMANTIC' && /read-proof/.test(String(invalidEvidence.text)), String(invalidEvidence.text));
+    const invalidOwner = await reg.execute('update_plan', {
+      items: [
+        { id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['read-proof'] },
+        { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'in_progress', ownerTaskId: 'missing-child' },
+      ],
+    }, ctx);
+    check('[C] 子代理归属必须引用当前 run 的真实 taskId', invalidOwner.ok === false && invalidOwner.data.code === 'ARG_SEMANTIC' && /missing-child/.test(String(invalidOwner.text)));
+    const ownedPlan = await reg.execute('update_plan', {
+      items: [
+        { id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['read-proof'] },
+        { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'in_progress', ownerTaskId: 'child-1' },
+      ],
+    }, ctx);
+    check('[C] 子代理 taskId 可关联到计划步骤', ownedPlan.ok && planLib.readSessionPlan(root, 'canvas-test').items[1].ownerTaskId === 'child-1');
+    const deletion = await reg.execute('update_plan', {
+      items: [{ id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['read-proof'] }],
+    }, ctx);
+    check('[C] 工具更新也会拒绝遗忘旧步骤', deletion.ok === false && deletion.data.code === 'ARG_SEMANTIC' && /edit/.test(String(deletion.text)), String(deletion.text));
+    ctx.setToolEvidence([{ callId: 'read-proof', name: 'read_file', ok: true }, { callId: 'write-proof', name: 'write_file', ok: true }]);
+    const completePlan = await reg.execute('update_plan', {
+      items: [
+        { id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['read-proof'] },
+        { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'completed', evidenceCallIds: ['write-proof'], ownerTaskId: 'child-1' },
+      ],
+    }, ctx);
+    check('[C] 所有步骤终结后计划可供历史归档', completePlan.ok && planLib.isTerminalPlan(planLib.readSessionPlan(root, 'canvas-test')));
+    check('[C] 新 run 不会回灌旧的已完成计划', agent.readRunPlan(root, { costRunId: 'run-plan-c1-next', planSessionId: 'canvas-test' }) === null);
+    const newRunContext = contextWith('run-plan-c1-next', { planSessionId: 'canvas-test' });
+    const newTaskPlan = await reg.execute('update_plan', { items: [{ id: 'new-task', step: '新任务', acceptanceCriteria: '新任务结果可核验', status: 'in_progress' }] }, newRunContext);
+    const freshSessionPlan = planLib.readSessionPlan(root, 'canvas-test');
+    check('[C] 新任务能在原画布会话建立新计划，不受旧终态步骤上限影响', newTaskPlan.ok && freshSessionPlan.runId === 'run-plan-c1-next' && freshSessionPlan.items.length === 1 && freshSessionPlan.items[0].id === 'new-task');
+    const sourceRunId = 'run-plan-resume-source';
+    runStore.startRun(root, sourceRunId, { prompt: '恢复该计划' });
+    planLib.writePlan(root, sourceRunId, saved.items, { sessionId: 'canvas-resume' });
+    runCheckpoint.saveMessages(root, sourceRunId, [{ role: 'assistant', content: '中断前上下文' }], { reason: 'test' });
+    const resume = runCheckpoint.planResume(root, sourceRunId, { activeIds: new Set() });
+    const resumeMessages = runCheckpoint.buildResumeMessages(resume, { systemPrompt: 'system' });
+    const recoveredPlan = resume.taskPlan || null;
+    check('[C] 续跑计划读取结构化步骤和证据', resume.ok === true && recoveredPlan !== null && recoveredPlan.items[0].evidenceCallIds.includes('read-proof') && /中断前的结构化任务计划/.test(resumeMessages[resumeMessages.length - 1].content), JSON.stringify(recoveredPlan));
+    const newRunId = 'run-plan-resume-target';
+    runStore.startRun(root, newRunId, { prompt: '恢复后的 run' });
+    const inherited = recoveredPlan ? runCheckpoint.inheritTaskPlan(root, newRunId, 'canvas-resume', recoveredPlan, sourceRunId) : { ok: false };
+    const inheritedRunPlan = planLib.readPlan(root, newRunId);
+    const inheritedSessionPlan = planLib.readSessionPlan(root, 'canvas-resume');
+    check('[C] 续跑把计划复制到新 run 与原画布会话', inherited.ok === true && inheritedRunPlan !== null && inheritedRunPlan.items[0].id === 'read' && inheritedSessionPlan !== null && inheritedSessionPlan.runId === newRunId, JSON.stringify(inherited));
+    check('[C] 计划继承事件进入新 run 日志', runStore.readRun(root, newRunId).some((event) => event.type === 'plan_inherited'));
   }
   {
     // 同参重复调用必须**真的执行两次**（状态变更不是幂等读）
     const runId = 'run-plan-c2';
     const reg = registry({ toolsAllowed: ['update_plan'] });
-    const args = { items: [{ step: 'a', status: 'pending' }] };
+    const args = { items: [{ id: 'a', step: 'a', acceptanceCriteria: 'a 可核验', status: 'pending' }] };
     const first = await reg.execute('update_plan', args, contextWith(runId));
     const second = await reg.execute('update_plan', args, contextWith(runId));
     check('[C] 同参重复调用两次都真的执行（不是缓存命中）', first.ok === true && second.ok === true && second.data.repeated !== true && second.data.persisted === true, JSON.stringify({ first: first.data && first.data.persisted, second: second.data && second.data.persisted, repeated: second.data && second.data.repeated }));
@@ -148,23 +238,23 @@ function registry(opts) {
     // 校验失败：连一个文件都不该写
     const runId = 'run-plan-c3';
     const reg = registry({ toolsAllowed: ['update_plan'] });
-    const bad = await reg.execute('update_plan', { items: [{ step: 'a', status: 'in_progress' }, { step: 'b', status: 'in_progress' }] }, contextWith(runId));
+    const bad = await reg.execute('update_plan', { items: [{ step: 'a', acceptanceCriteria: 'a 可核验', status: 'in_progress' }, { step: 'b', acceptanceCriteria: 'b 可核验', status: 'in_progress' }] }, contextWith(runId));
     check('[C] 两个 in_progress → 工具报错（ARG_SEMANTIC）且不落盘', bad.ok === false && bad.data.code === 'ARG_SEMANTIC' && fs.existsSync(planLib.planFile(root, runId)) === false, JSON.stringify({ ok: bad.ok, code: bad.data && bad.data.code }));
-    const unknown = await reg.execute('update_plan', { items: [{ step: 'a', status: 'pending', owner: 'me' }] }, contextWith(runId));
+    const unknown = await reg.execute('update_plan', { items: [{ step: 'a', acceptanceCriteria: 'a 可核验', status: 'pending', owner: 'me' }] }, contextWith(runId));
     check('[C] 步骤里的未知字段被闭合 schema 拒绝', unknown.ok === false, JSON.stringify({ ok: unknown.ok, code: unknown.data && unknown.data.code }));
   }
   {
     // 没有 run 上下文：如实说明未落盘，而不是谎报
     const reg = registry({ toolsAllowed: ['update_plan'] });
-    const res = await reg.execute('update_plan', { items: [{ step: 'a', status: 'pending' }] }, contextWith(''));
-    check('[C] 无 runId → 成功但如实标注未落盘', res.ok === true && res.data.persisted === false && /未落盘/.test(String(res.text)), String(res.text || '').slice(-40));
+    const res = await reg.execute('update_plan', { items: [{ step: 'a', acceptanceCriteria: 'a 可核验', status: 'pending' }] }, contextWith(''));
+    check('[C] 无 runId → 持久化状态如实返回', res.ok === true && res.data.persisted === false && res.data.runFilePersisted === false && /持久化未完整/.test(String(res.text)), String(res.text || '').slice(-60));
   }
   {
     // 只读上下文可用（它不改工作区）；子代理角色默认拿不到（计划是主代理的职责）
     const reg = registry({ toolsAllowed: ['update_plan'] });
     const readOnlyCtx = contextWith('run-plan-c4', { readOnly: true });
     check('[C] context.readOnly() 为真（前置）', readOnlyCtx.readOnly() === true);
-    const res = await reg.execute('update_plan', { items: [{ step: 'a', status: 'pending' }] }, readOnlyCtx);
+    const res = await reg.execute('update_plan', { items: [{ step: 'a', acceptanceCriteria: 'a 可核验', status: 'pending' }] }, readOnlyCtx);
     check('[C] 只读上下文里不被拦（不改工作区，属 Agent 内部状态）', res.ok === true, JSON.stringify({ ok: res.ok, code: res.data && res.data.code }));
 
     const sub = toolkit.filterByRole(registry(), 'explorer');
@@ -226,11 +316,15 @@ function registry(opts) {
     return list.filter((m) => m && m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(agent.PROGRESS_NOTE_PREFIX));
   }
 
+  function planNotesIn(request) {
+    return ((request && request.messages) || []).filter((m) => m && m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(agent.PLAN_NOTE_PREFIX));
+  }
+
   await runTurn(
     [
-      { toolCalls: [{ id: 'u1', name: 'update_plan', args: { items: [{ step: '读 a.txt', status: 'in_progress' }, { step: '改 a.txt', status: 'pending' }] } }] },
+      { toolCalls: [{ id: 'u1', name: 'update_plan', args: { items: [{ id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'in_progress' }, { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'pending' }] } }] },
       { toolCalls: [{ id: 'r1', name: 'read_file', args: { path: 'work/a.txt' } }] },
-      { toolCalls: [{ id: 'u2', name: 'update_plan', args: { items: [{ step: '读 a.txt', status: 'completed' }, { step: '改 a.txt', status: 'in_progress' }] } }] },
+      { toolCalls: [{ id: 'u2', name: 'update_plan', args: { items: [{ id: 'read', step: '读 a.txt', acceptanceCriteria: '读取结果已确认', status: 'completed', evidenceCallIds: ['r1'] }, { id: 'edit', step: '改 a.txt', acceptanceCriteria: '文件内容符合目标', status: 'in_progress' }] } }] },
       { content: '完成' },
     ],
     { limits: { progressEvery: 3 } }
@@ -238,20 +332,20 @@ function registry(opts) {
   check('[D] 第一轮（iter=0）不注入（还没有东西可注入）', notesIn(lastSeen[0]).length === 0, 'requests=' + lastSeen.length);
   check('[D] 计划工具的结果进了下一轮上下文（模型看得到自己的清单）', (lastSeen[1].messages || []).some((m) => m && m.role === 'tool' && /计划已更新/.test(String(m.content))), 'msgs=' + (lastSeen[1].messages || []).length);
   check(
-    '[D] 计划刚变过就立刻回灌（1 < progressEvery=3，不能等满 3 轮）',
-    notesIn(lastSeen[1]).length === 1 && /计划（共 2 项/.test(String(notesIn(lastSeen[1])[0].content)) && /\[→\] 读 a\.txt/.test(String(notesIn(lastSeen[1])[0].content)),
-    JSON.stringify(notesIn(lastSeen[1]).map((m) => String(m.content).slice(0, 80)))
+    '[D] 计划刚变过就通过独立提示立即回灌（1 < progressEvery=3）',
+    planNotesIn(lastSeen[1]).length === 1 && /计划（共 2 项/.test(String(planNotesIn(lastSeen[1])[0].content)) && /\[→\].*读 a\.txt/.test(String(planNotesIn(lastSeen[1])[0].content)),
+    JSON.stringify(planNotesIn(lastSeen[1]).map((m) => String(m.content).slice(0, 80)))
   );
-  const third = notesIn(lastSeen[2]);
+  const third = planNotesIn(lastSeen[2]);
   check('[D] 第二次更新后仍只有一条（原地替换，不堆叠）', third.length === 1, 'notes=' + third.length);
   /**
    * 注意断言取的是**最后一次请求**：iter=2 那条注入发生在模型调用 second update_plan **之前**，
    * 所以「最新计划」只在下一轮的注入里才可见（第一次写用例时正是栽在这个时序上）。
    */
-  const lastReq = notesIn(lastSeen[lastSeen.length - 1]);
-  check('[D] 最新计划在下一轮生效（[x] 读 a.txt / [→] 改 a.txt）', /\[x\] 读 a\.txt/.test(String(lastReq[0] && lastReq[0].content)) && /\[→\] 改 a\.txt/.test(String(lastReq[0] && lastReq[0].content)), String(lastReq[0] && lastReq[0].content).slice(-90));
-  check('[D] 历史里的进度清单始终只有一条（不因计划变动而变两条）', (lastSeen[lastSeen.length - 1].messages || []).filter((m) => m && typeof m.content === 'string' && m.content.startsWith(agent.PROGRESS_NOTE_PREFIX)).length === 1);
-  check('[D] 进度统计与计划在同一条消息里（共用就地替换的那条）', /进度检查/.test(String(lastReq[0] && lastReq[0].content)));
+  const lastReq = planNotesIn(lastSeen[lastSeen.length - 1]);
+  check('[D] 最新计划下一轮生效并保留证据编号', /\[x\].*读 a\.txt/.test(String(lastReq[0] && lastReq[0].content)) && /r1/.test(String(lastReq[0] && lastReq[0].content)), String(lastReq[0] && lastReq[0].content).slice(-120));
+  check('[D] 计划与进度提示各自只保留一条', (lastSeen[lastSeen.length - 1].messages || []).filter((m) => m && typeof m.content === 'string' && m.content.startsWith(agent.PROGRESS_NOTE_PREFIX)).length === 1 && planNotesIn(lastSeen[lastSeen.length - 1]).length === 1);
+  check('[D] 计划提醒独立于进度统计文案', !/进度检查/.test(String(lastReq[0] && lastReq[0].content)));
   {
     const saved = JSON.parse(fs.readFileSync(planLib.planFile(root, 'run-plan-e2e'), 'utf8'));
     check('[D] 终态落盘是第二次更新的版本', saved.items[0].status === 'completed' && saved.items[1].status === 'in_progress', JSON.stringify(saved.items));
@@ -283,7 +377,7 @@ function registry(opts) {
   {
     await runTurn(
       [
-        { toolCalls: [{ id: 'k1', name: 'update_plan', args: { items: [{ step: '第一步', status: 'in_progress' }, { step: '第二步', status: 'pending' }] } }] },
+      { toolCalls: [{ id: 'k1', name: 'update_plan', args: { items: [{ id: 'first', step: '第一步', acceptanceCriteria: '第一步有可核验结果', status: 'in_progress' }, { id: 'second', step: '第二步', acceptanceCriteria: '第二步有可核验结果', status: 'pending' }] } }] },
         { content: '好' },
       ],
       { costRunId: 'run-plan-ui', limits: { progressEvery: 3 } }
@@ -291,14 +385,14 @@ function registry(opts) {
     const plans = lastDeltas.filter((d) => d.kind === 'plan');
     check('[E] 计划一变就发 kind=plan 增量（不必等满 progressEvery 轮）', plans.length === 1, 'plans=' + plans.length + ' deltas=' + lastDeltas.map((d) => d.kind).join(','));
     check('[E] 增量里带结构化清单（界面不用去解析文本）', plans[0] && plans[0].items.length === 2 && plans[0].items[0].step === '第一步' && plans[0].items[0].status === 'in_progress', JSON.stringify(plans[0] && plans[0].items));
-    check('[E] 增量里带 updatedAt 与 runId（界面能判断是不是同一份）', !!(plans[0] && plans[0].updatedAt) && plans[0].runId === 'run-plan-ui', JSON.stringify({ updatedAt: plans[0] && plans[0].updatedAt, runId: plans[0] && plans[0].runId }));
+    check('[E] 增量里带真实时间戳及独立版本戳', Number.isFinite(Date.parse(String(plans[0] && plans[0].updatedAt))) && !!plans[0].planVersion && plans[0].runId === 'run-plan-ui', JSON.stringify({ updatedAt: plans[0] && plans[0].updatedAt, planVersion: plans[0] && plans[0].planVersion, runId: plans[0] && plans[0].runId }));
     check('[E] 同一次运行里不会重复发同一份计划', new Set(plans.map((d) => d.updatedAt)).size === plans.length);
   }
   {
     // 关键解耦：progressEvery=0（完全不注入进度提示）时，计划卡也必须照发
     await runTurn(
       [
-        { toolCalls: [{ id: 'k2', name: 'update_plan', args: { items: [{ step: '只有一步', status: 'in_progress' }] } }] },
+      { toolCalls: [{ id: 'k2', name: 'update_plan', args: { items: [{ id: 'only', step: '只有一步', acceptanceCriteria: '结果可核验', status: 'in_progress' }] } }] },
         { content: '好' },
       ],
       { costRunId: 'run-plan-ui-zero', limits: { progressEvery: 0 } }
@@ -306,6 +400,7 @@ function registry(opts) {
     const plans = lastDeltas.filter((d) => d.kind === 'plan');
     check('[E] progressEvery=0 时进度提示一条都没有（前置事实）', notesIn(lastSeen[1] || { messages: [] }).length === 0);
     check('[E] 但计划卡照样发（与进度注入解耦）', plans.length === 1 && plans[0].items.length === 1, 'plans=' + plans.length);
+    check('[E] progressEvery=0 时模型仍收到计划提醒', planNotesIn(lastSeen[1]).length === 1, 'notes=' + planNotesIn(lastSeen[1]).length);
   }
   {
     // 负向：没有计划就没有 plan 增量
@@ -325,8 +420,8 @@ function registry(opts) {
     const names = registry().listTools().map((t) => t.name);
     check('[E] update_plan 在默认注册表里（BUILTINS 已接线）', names.includes('update_plan'), 'count=' + names.length);
     const src = fs.readFileSync(path.join(__dirname, '..', 'electron', 'agent.cjs'), 'utf8');
-    check('[E] 主循环用同一个读取口径（readRunPlan 接在进度提示里）', /plan:\s*planForNote/.test(src) && /readRunPlan\(/.test(src));
-    check('[E] 出厂 progress_every 仍为 3（计划寄生在这条注入上）', agent.loadConfig(root).limits.progressEvery === 3, String(agent.loadConfig(root).limits.progressEvery));
+    check('[E] 主循环对计划使用独立提醒与计划卡读取口径', /PLAN_NOTE_PREFIX/.test(src) && /const planForNote = readRunPlan\(/.test(src) && /planForUi = readRunPlan\(/.test(src));
+    check('[E] 出厂 progress_every 仍为 3（计划提醒不依赖该配置）', agent.loadConfig(root).limits.progressEvery === 3, String(agent.loadConfig(root).limits.progressEvery));
   }
 
   try {
