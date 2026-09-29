@@ -8,19 +8,23 @@
  *     `context.confirm()` / `context.askUser()` 在界面上弹窗等待时，Run 看上去仍是 running。
  *
  * 本模块是**纯函数状态机**（不碰 IO、不抛异常），被 `agent.cjs` 主循环驱动，
- * 每次迁移通过 `onDelta({kind:'state'})` 上报，由 `ipc/agent.cjs` 落成 run 事件 `run_state`。
+ * 合法迁移通过 `onDelta({kind:'state'})` 上报并落成 `run_state`；非法迁移通过
+ * `onDelta({kind:'state_violation'})` 写入审计事件，避免只留在内存里。
  *
- * 状态语义（进入条件 / 退出条件 / 可恢复性 / 需持久化的内容）：
+ * 状态语义（进入条件 / 退出条件 / 恢复策略提示 / 关联持久化证据）：
  *
- * | 状态           | 进入条件                              | 退出条件                                   | 可恢复 | 持久化 |
- * |----------------|---------------------------------------|--------------------------------------------|--------|--------|
- * | RUNNING        | run_start 写入成功、尚未产生工具调用  | 有 tool_calls → WAITING_TOOL；纯文本 → COMPLETED；异常 → FAILED；abort → CANCELLED | —      | prompt/model/nodeId/sandbox |
- * | WAITING_TOOL   | 本轮 assistant 消息含 tool_calls      | 全部调用结算 → RUNNING；需要审批 → WAITING_USER；上限 → LIMIT_REACHED | 是（可按 toolCallId 跳过已 committed 的写） | 每次调用的 intent(prepared) |
- * | WAITING_USER   | 审批/提问已发出（等用户应答）         | 用户应答 → WAITING_TOOL；拒绝/超时 → FAILED；abort → CANCELLED | 是（审批可恢复，但不重复发起副作用） | 审批请求 id + 目标 toolCallId |
- * | COMPLETED      | 模型给出无 tool_calls 的最终文本      | —（终态）                                  | 不需要 | content/grounding/usage |
- * | FAILED         | 系统错误 / 不可重试失败 / 审批被拒    | 人工重试 → 新 Run（旧 Run superseded）     | 部分（仅只读阶段可自动续） | state+reason |
- * | CANCELLED      | 用户 abort                            | 续跑需人工复核                             | 是（必须 review） | 已 abort 的工具 id |
- * | LIMIT_REACHED  | 迭代 / 工具调用数触顶                 | 用户续跑（预算重置）                       | 是（只读阶段可 auto） | 触发维度 + 已用值 |
+ * | 状态           | 进入条件                              | 退出条件                                   | 恢复策略提示 | 持久化证据 |
+ * |----------------|---------------------------------------|--------------------------------------------|--------------|------------|
+ * | RUNNING        | run_start 写入成功、尚未产生工具调用  | 有 tool_calls → WAITING_TOOL；纯文本 → COMPLETED；异常 → FAILED；abort → CANCELLED | 依检查点和副作用账本 | run_start / checkpoint |
+ * | WAITING_TOOL   | 本轮 assistant 消息含 tool_calls      | 全部调用结算 → RUNNING；需要审批 → WAITING_USER；触顶 → LIMIT_REACHED | 依检查点和副作用账本 | tool intent / side-effect ledger |
+ * | WAITING_USER   | 审批/提问已发出（等用户应答）         | 用户应答（包括拒绝结果）回到工具流程；abort → CANCELLED | 依检查点和副作用账本 | approval audit / checkpoint |
+ * | COMPLETED      | 模型给出无 tool_calls 的最终文本      | —（终态）                                  | 不可续跑 | run_finish |
+ * | FAILED         | 系统错误 / 不可重试失败               | 根据检查点和副作用账本决定续跑方式          | 依检查点和副作用账本 | run_finish / checkpoint |
+ * | CANCELLED      | 用户 abort                            | 用户确认后续跑                             | 必须人工复核 | run_finish / checkpoint |
+ * | LIMIT_REACHED  | 迭代 / 工具 / 上下文 / 输出上限触发   | 用户续跑（预算重置或继续处理部分结果）      | 依检查点和副作用账本 | run_finish / checkpoint |
+ *
+ * `recoveryPolicy` 只是状态层提示。是否能 auto 续跑由 runCheckpoint.planResume 根据检查点和
+ * side-effect ledger 判断；单看状态本身不能证明重放副作用是安全的。
  */
 'use strict';
 
@@ -54,16 +58,17 @@ const TRANSITIONS = Object.freeze({
   [STATES.LIMIT_REACHED]: [],
 });
 
-/** 每个状态的人类可读语义 + 可恢复性（UI/续跑判定/文档共用一处定义）
- * @type {Record<string, {label: string, terminal: boolean, recoverable: boolean, persists: string[]}>} */
+/** 每个状态的人类可读语义 + 恢复策略提示（具体续跑决策由 runCheckpoint.planResume 完成）。
+ * recoverable 为兼容字段，仅表示存在续跑处理路径，不代表可以自动续跑。
+ * @type {Record<string, {label: string, terminal: boolean, recoverable: boolean, recoveryPolicy: 'never'|'checkpoint-dependent'|'review-required', persists: string[]}>} */
 const STATE_INFO = Object.freeze({
-  [STATES.RUNNING]: { label: '执行中', terminal: false, recoverable: false, persists: ['prompt', 'model', 'nodeId', 'sandbox'] },
-  [STATES.WAITING_TOOL]: { label: '等待工具', terminal: false, recoverable: true, persists: ['toolIntent(prepared)'] },
-  [STATES.WAITING_USER]: { label: '等待用户', terminal: false, recoverable: true, persists: ['approvalRequestId', 'toolCallId'] },
-  [STATES.COMPLETED]: { label: '已完成', terminal: true, recoverable: false, persists: ['content', 'grounding', 'usage'] },
-  [STATES.FAILED]: { label: '失败', terminal: true, recoverable: false, persists: ['state', 'reason'] },
-  [STATES.CANCELLED]: { label: '已取消', terminal: true, recoverable: true, persists: ['abortedToolCallIds'] },
-  [STATES.LIMIT_REACHED]: { label: '达到上限', terminal: true, recoverable: true, persists: ['limit', 'used'] },
+  [STATES.RUNNING]: { label: '执行中', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_start', 'checkpoint'] },
+  [STATES.WAITING_TOOL]: { label: '等待工具', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['toolIntent(prepared)', 'side-effect ledger'] },
+  [STATES.WAITING_USER]: { label: '等待用户', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['approval audit', 'checkpoint'] },
+  [STATES.COMPLETED]: { label: '已完成', terminal: true, recoverable: false, recoveryPolicy: 'never', persists: ['run_finish'] },
+  [STATES.FAILED]: { label: '失败', terminal: true, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
+  [STATES.CANCELLED]: { label: '已取消', terminal: true, recoverable: true, recoveryPolicy: 'review-required', persists: ['run_finish', 'checkpoint'] },
+  [STATES.LIMIT_REACHED]: { label: '达到上限', terminal: true, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
 });
 
 /**
@@ -92,7 +97,9 @@ function canTransition(from, to) {
 function classifyOutcome(outcome) {
   const o = outcome || {};
   if (o.aborted === true) return STATES.CANCELLED;
-  if (o.stopReason === 'iteration_limit' || o.stopReason === 'tool_limit') return STATES.LIMIT_REACHED;
+  if (typeof o.stopReason === 'string' && ['iteration_limit', 'tool_limit', 'context_overflow', 'length_truncated'].includes(o.stopReason)) {
+    return STATES.LIMIT_REACHED;
+  }
   if (o.error) return STATES.FAILED;
   return STATES.COMPLETED;
 }
@@ -108,7 +115,7 @@ function toRunStatus(state) {
 
 /**
  * 创建状态机。
- * @param {{ runId?: string, onTransition?: (info: {from: string, to: string, reason: string, ts: string}) => void }} [options]
+ * @param {{ runId?: string, onTransition?: (info: {from: string, to: string, reason: string, ts: string}) => void, onViolation?: (violation: object) => void }} [options]
  */
 function createStateMachine(options = {}) {
   const machine = {
@@ -119,6 +126,13 @@ function createStateMachine(options = {}) {
     startedAt: new Date().toISOString(),
   };
 
+  const recordViolation = (violation) => {
+    machine.violations.push(violation);
+    try {
+      if (typeof options.onViolation === 'function') options.onViolation({ ...violation });
+    } catch {}
+  };
+
   /**
    * 迁移到目标状态。相同状态为空操作；非法迁移被拒绝并记录（不抛异常、不改变现状）。
    * @param {string} to
@@ -127,12 +141,12 @@ function createStateMachine(options = {}) {
    */
   machine.go = (to, reason) => {
     if (!isState(to)) {
-      machine.violations.push({ type: 'unknown-state', to: String(to), reason: String(reason || '') });
+      recordViolation({ type: 'unknown-state', to: String(to), reason: String(reason || '') });
       return false;
     }
     if (to === machine.state) return false;
     if (!canTransition(machine.state, to)) {
-      machine.violations.push({ type: 'illegal-transition', from: machine.state, to, reason: String(reason || '') });
+      recordViolation({ type: 'illegal-transition', from: machine.state, to, reason: String(reason || '') });
       return false;
     }
     const info = { from: machine.state, to, reason: String(reason || ''), ts: new Date().toISOString() };
@@ -152,6 +166,7 @@ function createStateMachine(options = {}) {
     label: (STATE_INFO[machine.state] || {}).label || machine.state,
     terminal: TERMINAL.includes(machine.state),
     recoverable: !!(STATE_INFO[machine.state] || {}).recoverable,
+    recoveryPolicy: (STATE_INFO[machine.state] || {}).recoveryPolicy || 'checkpoint-dependent',
     transitions: machine.history.length,
     violations: machine.violations.slice(),
   });

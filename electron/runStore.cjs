@@ -240,6 +240,7 @@ function appendEvent(projectRoot, runId, type, data) {
         state: record.state || null,
         status: record.status || null,
         reason: record.reason || null,
+          ...(record.violation ? { violation: record.violation } : {}),
       });
     }
     return written;

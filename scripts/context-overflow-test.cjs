@@ -86,6 +86,9 @@ async function run(options) {
         /开一个新会话/.test(String(turn.result.error)) &&
         /上下文窗口/.test(String(turn.result.error)),
       String(turn.result.error).slice(0, 60));
+    check('[预检] 超窗早退写入 LIMIT_REACHED 终态',
+      turn.result.state === 'LIMIT_REACHED' && turn.deltas.some((d) => d.kind === 'state' && d.state === 'LIMIT_REACHED'),
+      JSON.stringify({ state: turn.result.state, terminalDelta: turn.deltas.filter((d) => d.kind === 'state').map((d) => d.state) }));
     const pre = turn.deltas.find((d) => d.kind === 'context_overflow' && d.phase === 'preflight');
     check('[预检] 上报 tokens/window 供界面显示', !!pre && pre.tokens > cfgWindow && pre.window === cfgWindow, JSON.stringify(pre));
   }

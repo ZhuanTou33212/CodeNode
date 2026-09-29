@@ -178,6 +178,9 @@ function makeCfg() {
     new CostLedger({ projectRoot, runId: bridgeRun }).record({ kind: 'chat', model: 'bridge-model', usage: { total: 12, cached: 5 }, costUsd: 0.002 });
     const approvalCtx = new AgentToolContext({ projectRoot, confirm: async () => true, runId: bridgeRun });
     await approvalCtx.approval().request({ capability: 'workspace.write', what: 'write_file', detail: '桥接用例', scope: ['workspace.write:a.txt'], toolCallId: 'call-apv' });
+    require('../electron/runStore.cjs').appendEvent(projectRoot, bridgeRun, 'state_violation', {
+      violation: { type: 'illegal-transition', from: 'COMPLETED', to: 'RUNNING', reason: 'replay-test' },
+    });
     eventBus.bridge(projectRoot, 'audit', { entry: '审计桥接用例（ipc 层的 auditLog 走的就是这条桥）' });
 
     const bridgeEvents = eventBus.readEvents(projectRoot);
@@ -193,6 +196,10 @@ function makeCfg() {
     check('D8 审批事件带 toolCallId（能对上具体调用）',
       !!approvalEvent && approvalEvent.toolCallId === 'call-apv',
       JSON.stringify(approvalEvent && { event: approvalEvent.event, toolCallId: approvalEvent.toolCallId }));
+    const violationEvent = bridgeEvents.find((e) => e.kind === 'run_state' && e.type === 'state_violation');
+    check('D9 状态迁移异常通过统一事件流回放',
+      !!violationEvent && violationEvent.violation && violationEvent.violation.to === 'RUNNING',
+      JSON.stringify(violationEvent && violationEvent.violation));
   }
 
   // ======================= E. 回放摘要（纯函数） =======================

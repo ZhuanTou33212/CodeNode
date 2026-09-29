@@ -186,6 +186,7 @@ async function runTurnWithCfg(reliabilityOverride, script) {
   check('[补问用尽] 只补问 1 次（配置生效，不是写死 2/4）', exhausted.calls === 2, 'calls=' + exhausted.calls);
   check('[补问用尽] 如实标注 stopReason=length_truncated',
     exhausted.result.stopReason === 'length_truncated', String(exhausted.result.stopReason));
+  check('[补问用尽] 最终状态明确为 LIMIT_REACHED', exhausted.result.state === 'LIMIT_REACHED', String(exhausted.result.state));
   check('[补问用尽] 用尽时通知界面「不再继续写」', exhausted.truncatedDeltas.some((d) => d.continuing === false),
     JSON.stringify(exhausted.truncatedDeltas));
 
@@ -194,6 +195,7 @@ async function runTurnWithCfg(reliabilityOverride, script) {
   check('[正常结束] 不带 length_truncated 标记且 finishReason=stop',
     normal.result.stopReason === undefined && normal.result.finishReason === 'stop',
     JSON.stringify({ stopReason: normal.result.stopReason, finishReason: normal.result.finishReason }));
+  check('[正常结束] 最终状态仍为 COMPLETED', normal.result.state === 'COMPLETED', String(normal.result.state));
 
   // ---- (5) 出厂配置口径：这些值决定「回答会不会被砍半」，必须锁住 ----
   const rel = agent.parseReliabilityConfig({});

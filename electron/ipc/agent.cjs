@@ -452,6 +452,11 @@ function register(ctx) {
         }
       }
       const onAgentDelta = (delta) => {
+        if (delta && delta.kind === 'state_violation') {
+          // 非法迁移是状态机异常：只写入审计事件，不发送未知 delta 给 renderer。
+          runStore.appendEvent(projectRoot, runId, 'state_violation', { violation: delta.violation || null });
+          return;
+        }
         sendDelta(delta);
         if (!delta || !delta.kind) return;
         if (delta.kind === 'tool_result' && Array.isArray(delta.toolCalls)) {

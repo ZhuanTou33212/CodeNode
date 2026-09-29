@@ -54,17 +54,25 @@ function check(label, condition, detail) {
   m2.go('WAITING_TOOL', 't');
   check('A9 WAITING_TOOL → LIMIT_REACHED 合法（上限不是「等待工具」的终局）', m2.go('LIMIT_REACHED', 'tool_limit') === true);
   check('A10 未知状态被拒绝（不污染历史）', m2.go('BOGUS', 'x') === false && m2.violations.some((v) => v.type === 'unknown-state'));
+  const reportedViolations = [];
+  const m3 = agentState.createStateMachine({ onViolation: (violation) => reportedViolations.push(violation) });
+  m3.go('BOGUS', 'callback-test');
+  check('A10b 非法迁移会调用 anomaly hook', reportedViolations.length === 1 && reportedViolations[0].type === 'unknown-state');
 
-  // 语义表：每个状态都要有标签/终态/可恢复性，避免文档与代码两处定义漂移
-  const missing = agentState.ALL_STATES.filter((s) => !agentState.STATE_INFO[s] || !agentState.STATE_INFO[s].label);
-  check('A11 七个状态全部有语义定义（label/terminal/recoverable）', missing.length === 0 && agentState.ALL_STATES.length === 7, JSON.stringify(missing));
+  // 语义表：每个状态都要有标签/终态/恢复策略提示，避免文档与代码两处定义漂移
+  const missing = agentState.ALL_STATES.filter((s) => !agentState.STATE_INFO[s] || !agentState.STATE_INFO[s].label ||
+    typeof agentState.STATE_INFO[s].terminal !== 'boolean' || !agentState.STATE_INFO[s].recoveryPolicy);
+  check('A11 七个状态全部有语义定义（label/recoveryPolicy）',
+    missing.length === 0 && agentState.ALL_STATES.length === 7 && agentState.ALL_STATES.every((s) => !!agentState.STATE_INFO[s].recoveryPolicy), JSON.stringify(missing));
   check('A12 终态集合 = 完成/失败/取消/达上限',
     ['COMPLETED', 'FAILED', 'CANCELLED', 'LIMIT_REACHED'].every((s) => agentState.canTransition(s, 'RUNNING') === false), '终态不该有出边');
 
-  check('A13 classifyOutcome：abort → CANCELLED，上限 → LIMIT_REACHED，error → FAILED，其余 → COMPLETED',
+  check('A13 classifyOutcome：取消/资源上限/错误/普通完成分别映射到正确终态',
     agentState.classifyOutcome({ aborted: true }) === 'CANCELLED' &&
     agentState.classifyOutcome({ stopReason: 'iteration_limit', error: 'x' }) === 'LIMIT_REACHED' &&
     agentState.classifyOutcome({ stopReason: 'tool_limit', error: 'x' }) === 'LIMIT_REACHED' &&
+    agentState.classifyOutcome({ stopReason: 'context_overflow', error: 'x' }) === 'LIMIT_REACHED' &&
+    agentState.classifyOutcome({ stopReason: 'length_truncated' }) === 'LIMIT_REACHED' &&
     agentState.classifyOutcome({ error: 'boom' }) === 'FAILED' &&
     agentState.classifyOutcome({}) === 'COMPLETED');
   check('A14 toRunStatus：status 取值保持既有语义（LIMIT_REACHED 仍写 error，靠 state 字段区分）',

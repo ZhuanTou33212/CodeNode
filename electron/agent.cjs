@@ -2448,11 +2448,19 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     runId: (cfg && cfg.costRunId) || null,
     onTransition: (info) =>
       onDelta && onDelta({ kind: 'state', state: info.to, previous: info.from, reason: info.reason, ts: info.ts }),
+    onViolation: (violation) => onDelta && onDelta({ kind: 'state_violation', violation }),
   });
+  const transitionState = (state, reason) => {
+    const changed = machine.go(state, reason);
+    if (!changed && machine.state !== state) {
+      throw new Error('Agent 状态迁移被拒绝：' + machine.state + ' → ' + String(state));
+    }
+    return changed;
+  };
   onDelta && onDelta({ kind: 'state', state: machine.state, previous: null, reason: 'start', ts: new Date().toISOString() });
   // 让工具上下文能把「等待用户」透传进来（子代理 fork 出的上下文不带钩子，由各自 run 自己安装）
   if (tools && tools.context && typeof tools.context.setStateNotifier === 'function') {
-    tools.context.setStateNotifier((state, reason) => machine.go(state, reason));
+    tools.context.setStateNotifier((state, reason) => transitionState(state, reason));
   }
   let content = '';
   let reasoning = '';
@@ -2791,7 +2799,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       turnContent = '';
       turnReasoning = '';
       if (signal && signal.aborted) {
-        machine.go(STATES.CANCELLED, 'aborted');
+        transitionState(STATES.CANCELLED, 'aborted');
         onDelta && onDelta({ kind: 'stopped' });
         return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
       }
@@ -2927,6 +2935,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             '③ 若模型管理里的上下文窗口值与供应商实际不符（标称大、实际小），改成真实值；④ 换窗口更大的模型。';
           emitTrace({ kind: 'context_overflow', turnId: iter, phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: preflightWindow });
           onDelta && onDelta({ kind: 'context_overflow', phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: preflightWindow });
+          transitionState(classifyOutcome({ error, stopReason: 'context_overflow' }), 'context_overflow');
           onDelta && onDelta({ kind: 'error', error });
           return {
             content,
@@ -3133,7 +3142,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const detail = String((fatal && fatal.detail) || '').slice(0, 200);
           const error =
             '模型流内错误：供应商在 HTTP 200 的流里下发了 error，且本轮没有任何产出' + (detail ? '（' + detail + '）' : '');
-          machine.go(classifyOutcome({ error, stopReason: 'stream_error' }), 'stream_error');
+          transitionState(classifyOutcome({ error, stopReason: 'stream_error' }), 'stream_error');
           emitTrace({ kind: 'stream_error', turnId: iter, detail });
           onDelta && onDelta({ kind: 'error', error });
           return {
@@ -3260,7 +3269,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         });
         let capped = false;
         let failedAny = false;
-        machine.go(STATES.WAITING_TOOL, 'tool_calls:' + toolCalls.length);
+        transitionState(STATES.WAITING_TOOL, 'tool_calls:' + toolCalls.length);
         // S6：先给这一轮里「只读且互不冲突」的调用并发启动执行（默认关闭时是空操作）。
         // 只启动、不等待 —— 下面的 for 仍按原顺序 await，因此 record / messages / 幂等账本 /
         // 检查点的顺序与串行执行时逐字节相同（写操作、需确认、参数不完整的调用一律不预启动）。
@@ -3292,7 +3301,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           : null;
         for (const tc of toolCalls) {
           if (signal && signal.aborted) {
-            machine.go(STATES.CANCELLED, 'aborted');
+            transitionState(STATES.CANCELLED, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
             return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
           }
@@ -3382,7 +3391,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             result = primedPromise ? await primedPromise : await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
           }
           if (signal && signal.aborted) {
-            machine.go(STATES.CANCELLED, 'aborted');
+            transitionState(STATES.CANCELLED, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
             return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
           }
@@ -3781,7 +3790,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           stopReason = 'tool_limit';
           break;
         }
-        machine.go(STATES.RUNNING, 'tools_settled');
+        transitionState(STATES.RUNNING, 'tools_settled');
         continue;
       }
       // P6：enforce 模式下，引用不可信的答案不允许直接交付 —— 先给一次订正机会
@@ -3824,7 +3833,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const error = stopReason === 'tool_limit' ? '已达到工具调用上限，任务未完成。' : '已达到模型迭代上限，任务未完成。';
       const wrapped = content ? content + '\n\n' + wrapUp.text : wrapUp.text;
       // 上限不是「执行失败」：状态单列为 LIMIT_REACHED（调用方可据此提示续跑而不是让用户去排查错误）
-      machine.go(classifyOutcome({ error, stopReason }), stopReason);
+      transitionState(classifyOutcome({ error, stopReason }), stopReason);
       emitTrace({ kind: 'limit_wrapup', turnId: loopIterations, stopReason, executed: wrapUp.data.executed, failed: wrapUp.data.failed, touchedFiles: wrapUp.data.touchedFiles, contextTrims: contextTrimCount });
       // 兼容既有契约：`error` delta 依然发（消费方/评测 `delta-kind: error` 锁着它，别偷偷换成别的 kind，
       // 那会让上游判据变成红墙）；结构化收尾另走 limit_reached，两者是补充关系。
@@ -3846,7 +3855,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       repeated: allToolCalls.filter((t) => t.repeated).length, iterations: loopIterations, modelTurns,
       resultLen: content.length, finishReason: lastFinishReason, grounding, streamRestarts,
     });
-    machine.go(classifyOutcome({}), stopReason === 'length_truncated' ? 'length_truncated' : 'answer_complete');
+    const finalStopReason = stopReason === 'length_truncated' ? stopReason : null;
+    transitionState(classifyOutcome({ stopReason: finalStopReason }), finalStopReason || 'answer_complete');
     return {
       content,
       reasoning,
@@ -3873,13 +3883,14 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     };
   } catch (e) {
     if (signal && signal.aborted) {
-      machine.go(STATES.CANCELLED, 'aborted');
+      if (!machine.isTerminal()) transitionState(STATES.CANCELLED, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
       return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
     }
-    machine.go(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
-    onDelta && onDelta({ kind: 'error', error: String((e && e.message) || e), state: machine.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error: String((e && e.message) || e), state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
+    if (!machine.isTerminal()) transitionState(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
+    const error = String((e && e.message) || e);
+    onDelta && onDelta({ kind: 'error', error, state: machine.state });
+    return { content, reasoning, toolCalls: allToolCalls, usage, error, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
   }
 }
 

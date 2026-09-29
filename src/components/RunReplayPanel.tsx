@@ -44,9 +44,19 @@ function describeEvent(event: ReplayEvent): string {
       if (e.attemptId) push(`尝试 ${e.attemptId}`);
       break;
     case 'run_state':
-      push(e.type || 'run');
-      push(`状态=${e.state || e.status || '未知'}`);
-      if (e.reason) push(`原因=${e.reason}`);
+      if (e.type === 'state_violation') {
+        const violation = e.violation && typeof e.violation === 'object' ? (e.violation as Record<string, unknown>) : {};
+        const from = String(violation.from || '');
+        const to = String(violation.to || '');
+        const reason = String(violation.reason || '');
+        push('状态迁移异常');
+        if (from || to) push(`${from || '未知'} → ${to || '未知'}`);
+        if (reason) push(`原因=${reason}`);
+      } else {
+        push(e.type || 'run');
+        push(`状态=${e.state || e.status || '未知'}`);
+        if (e.reason) push(`原因=${e.reason}`);
+      }
       break;
     case 'checkpoint':
       push(e.type || 'checkpoint');
@@ -90,6 +100,7 @@ function describeEvent(event: ReplayEvent): string {
 function kindTone(event: ReplayEvent): string {
   const kind = String(event.kind || '');
   if (kind === 'alert') return 'danger';
+  if (kind === 'run_state' && (event as Record<string, any>).type === 'state_violation') return 'warn';
   if (kind === 'approval') {
     const phase = String((event as Record<string, any>).event || '');
     return phase === 'approval_issued' || phase === 'approval_consumed' ? 'accent2' : 'warn';
