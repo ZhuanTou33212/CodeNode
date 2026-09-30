@@ -193,12 +193,12 @@ function createStateMachine(options = {}) {
   machine.isTerminal = () => TERMINAL.includes(machine.state);
   machine.info = () => STATE_INFO[machine.state] || null;
   machine.snapshot = () => {
-    const info = STATE_INFO[machine.state] || {};
-    const recoveryPolicy = info.recoveryPolicy || 'checkpoint-dependent';
+    const info = STATE_INFO[machine.state];
+    const recoveryPolicy = info ? info.recoveryPolicy : 'checkpoint-dependent';
     return {
       runId: machine.runId,
       state: machine.state,
-      label: info.label || machine.state,
+      label: info ? info.label : machine.state,
       terminal: TERMINAL.includes(machine.state),
       recoverable: recoveryPolicy !== 'never',
       recoveryPolicy,

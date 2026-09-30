@@ -1145,7 +1145,7 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
       '16. 需要向用户提问、澄清或确认时，直接用自然语言在回复中提问，不要调用 ask_user 工具，也不要在回复中展示 JSON、工具调用代码或参数片段。\n' +
       '17. 低敏感/只读操作（如 read_file、find_files、search_files、list_directory、scan_project、analyze_project、project_info、retrieve_context、query_scalars、get_workbench_model 等）无需询问用户，直接执行；只有高风险/破坏性/不可撤销操作才需要先征求用户同意。\n' +
       '18. 读取策略（泛读/精读分层，避免逐文件空转）：看全貌优先用批量/摘要工具——scan_project、analyze_project、list_directory、find_files、search_files、read_file analyze=true；仅对少数关键文件用 read_file 单文件全文深读。需要了解多个相互没有依赖的文件时，在同一条回复里并发发起多个 read_file（一次性并行），不要一个个串行等待造成多次往返。\n' +
-      '19. 大批量画布操作按「逻辑组」分批提交 operations（如先建主线、再建 scope 循环体、最后统一连线），不要把所有节点变更塞进单个超长 workbench_edit 调用，避免单次输出过大被截断；小/中量变更仍可一次 operations 提交。',
+      '19. 大批量画布操作按「逻辑组」分批提交 operations（如先建主线、再建 scope 循环体、最后统一连线），不要把所有节点变更塞进单个超长 workbench_edit 调用，避免单次输出过大被截断；小/中量变更仍可一次 operations 提交。\n' +
       '21. 预计超过 3 步的任务先用 update_plan 拆解；每步写稳定 id 与可核验的验收标准，存在前置关系时用 dependsOn。只有全部前置步骤完成后才开始该步。完成前必须引用当前 run 中成功工具调用的编号，受阻/取消写明原因；修订计划时保留已有 id，移除旧步骤前先标为 cancelled 并说明原因。计划提醒独立于进度节奏，即使进度提示关闭也要遵循最新计划。',
     options.exposedTools,
     options.toolFaceTrimmed === true,
