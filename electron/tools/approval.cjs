@@ -157,6 +157,9 @@ class ApprovalService {
             tool: r.what || null,
             level: r.level || 'WRITE',
             projectRoot: this.projectRoot || null,
+            toolCallId: r.toolCallId || null,
+            attemptId: r.attemptId || null,
+            scope,
           })) === true;
       }
     } catch (error) {

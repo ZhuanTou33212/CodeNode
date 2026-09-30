@@ -145,12 +145,13 @@ const ROLE_PROMPTS = Object.freeze(
  * 注意：`@type` 里的键类型必须显式写出，否则 `Object.freeze` 会把 `leases: true` 收窄成字面量
  * `true`、`leaseTtlMs` 收窄成 `120000`，随后 `this.subCfg.leases !== false` 会被 tsc 判成
  * 「number 与 boolean 不可能重叠」（checkJs 实测）。
- * @type {{maxTasksPerRun: number, maxBatchTasks: number, totalTimeoutSeconds: number,
+ * @type {{maxTasksPerRun: number, maxBatchTasks: number, maxConcurrentTasks: number, totalTimeoutSeconds: number,
  *         resultMaxChars: number, leases: boolean, leaseTtlMs: number}}
  */
 const DEFAULTS = Object.freeze({
   maxTasksPerRun: 12,
   maxBatchTasks: 8,
+  maxConcurrentTasks: 3,
   totalTimeoutSeconds: 600,
   resultMaxChars: 8000,
   /** 跨 Agent 资源租约（P3）：默认开 */
@@ -165,6 +166,28 @@ const MAX_TOTAL_TIMEOUT_MS = 3600000;
 
 function makeTaskId() {
   return 'task-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+/** 按输入顺序保存结果；单个子任务异常不会提前放走仍在运行的兄弟任务。 */
+async function runBatchTasks(tasks, concurrency, work) {
+  /** @type {any[]} */
+  const results = new Array(tasks.length);
+  const workers = Math.min(tasks.length, Math.max(1, Math.floor(Number(concurrency) || 1)));
+  let next = 0;
+  await Promise.all(Array.from({ length: workers }, async () => {
+    while (next < tasks.length) {
+      const index = next++;
+      try {
+        results[index] = await work(tasks[index]);
+      } catch (error) {
+        results[index] = AgentToolResult.error('子代理内部异常：' + String((error && error.message) || error).slice(0, 300), {
+          taskId: tasks[index].taskId,
+          status: 'failed',
+        });
+      }
+    }
+  }));
+  return results;
 }
 
 /**
@@ -389,6 +412,7 @@ class SubagentManager {
         // 只 abort 这一个子任务自己的 controller（父信号/其他子代理不受影响）
         task.cancelRequested = true;
         task.cancelReason = String(args.reason || '主 Agent 主动取消');
+        task.status = 'cancelling';
         if (task.controller && !task.controller.signal.aborted) task.controller.abort();
         context.audit(JSON.stringify({ kind: 'subagent_cancel', runId: this.runId, taskId, role: task.role, reason: task.cancelReason }));
         if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId, role: task.role, status: 'cancelling', summary: task.cancelReason });
@@ -403,7 +427,7 @@ class SubagentManager {
     );
     registry.register(
       'delegate_tasks',
-      '批量执行子代理任务（角色含义与 delegate_task 一致；全部为只读角色时并行执行，包含写角色时按顺序执行）。',
+      '批量执行子代理任务（只读角色按配置限制并发，包含写角色时按顺序执行；等待全部结算后合并）。',
       {
         type: 'object',
         properties: { tasks: { type: 'array', items: { type: 'object' } } },
@@ -418,10 +442,22 @@ class SubagentManager {
         if (tasks.some((item) => !item || !roles.roleDefinition(item.role) || !String(item.objective || '').trim())) {
           return AgentToolResult.error('tasks 中存在无效的 role 或 objective（可选角色：' + roleList + '）');
         }
-        const run = tasks.every((item) => READ_ONLY_ROLES.has(item.role))
-          ? Promise.all(tasks.map((item) => this.delegate(context, item)))
-          : tasks.reduce(async (previous, item) => [...await previous, await this.delegate(context, item)], Promise.resolve([]));
-        const results = await run;
+        const prepared = tasks.map((item) => ({ ...item, taskId: String(item.taskId || '').trim() || makeTaskId() }));
+        const taskIds = prepared.map((item) => item.taskId);
+        if (new Set(taskIds).size !== taskIds.length || taskIds.some((taskId) => this.tasks.has(taskId))) {
+          return AgentToolResult.error('批量任务的 taskId 必须互不重复，且不能复用本轮已有任务');
+        }
+        const batchId = makeTaskId().replace(/^task-/, 'batch-');
+        const projectRoot = context.projectRoot();
+        const checkpoint = projectRoot
+          ? require('./runCheckpoint.cjs').appendCheckpoint(projectRoot, this.runId, {
+              type: 'subagent_batch_start', batchId, taskIds, join: 'all_settled',
+            })
+          : null;
+        if (projectRoot && !checkpoint) return AgentToolResult.error('无法持久化子任务汇合记录，已停止派发');
+        const readOnly = prepared.every((item) => READ_ONLY_ROLES.has(item.role));
+        const concurrency = readOnly ? this.subCfg.maxConcurrentTasks : 1;
+        const results = await runBatchTasks(prepared, concurrency, (item) => this.delegate(context, item));
         /**
          * P5 确定性合并：把这一批信封里的「对世界声称了什么」合并成一份报告。
          * 合并只用贡献项自身的字段（资源键/内容/完成时刻/来源），**不看到达顺序** ——
@@ -442,12 +478,18 @@ class SubagentManager {
          * 主代理据此把半截/失败报告当证据。只要有任一子结果 `ok !== true`，整批就是失败的调用。
          */
         const failedResults = results.filter((result) => !result || result.ok !== true);
+        const finished = projectRoot
+          ? require('./runCheckpoint.cjs').appendCheckpoint(projectRoot, this.runId, {
+              type: 'subagent_batch_finish', batchId, taskIds, failedCount: failedResults.length, digest: merged.digest,
+            })
+          : null;
         const body = results.map((result) => (result && result.text) || '').join('\n') + '\n\n' + mergeLib.renderMergeReport(merged);
         const data = {
           results: results.map((result) => taskView((result && result.data) || {})),
           merged: { digest: merged.digest, counts: merged.counts, conflicts: merged.conflicts },
           failedCount: failedResults.length,
         };
+        if (projectRoot && !finished) return AgentToolResult.error(body + '\n子任务结果未能写入汇合检查点，请复核后续跑。', data);
         if (failedResults.length) {
           return AgentToolResult.error(
             body +
@@ -550,8 +592,13 @@ class SubagentManager {
       status: 'running',
       startedAt: new Date().toISOString(),
     };
-    // 先计数再登记：并发批量（Promise.all）里每个 delegate 在首个 await 前就完成计数，
-    // 配额不会被同一 tick 内的并发调用绕过。
+    // 先持久化任务身份再执行：进程中断后能识别哪些子任务的结果未知。
+    try {
+      if (context.projectRoot()) persistTaskView(context.projectRoot(), this.runId, taskView(task));
+    } catch (error) {
+      return AgentToolResult.error('子代理任务登记失败，未开始执行：' + String((error && error.message) || error).slice(0, 200));
+    }
+    // 计数与登记都在首个 await 前完成，并发批量不能绕过总配额。
     this.startedTaskCount += 1;
     this.tasks.set(task.taskId, task);
     context.audit(JSON.stringify({ kind: 'subagent_start', runId: this.runId, taskId: task.taskId, role, totalTimeoutMs: totalMs }));
@@ -573,6 +620,7 @@ class SubagentManager {
         task.status = 'failed';
         task.error = '隔离工作树创建失败（' + created.error + '）：' + created.message;
         task.finishedAt = new Date().toISOString();
+        try { persistTaskView(context.projectRoot(), this.runId, taskView(task)); } catch {}
         context.audit(JSON.stringify({ kind: 'subagent_worktree_failed', taskId: task.taskId, error: created.error }));
         await this.updateStage(context, task, 'failed', task.error);
         return AgentToolResult.error(

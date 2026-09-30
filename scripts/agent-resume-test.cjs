@@ -69,6 +69,7 @@ function makeContext(runId, /** @type {{ scopeRunId?: string, onIntent?: Functio
       if (type === 'messages') return runCheckpoint.saveMessages(root, runId, payload && payload.messages, { reason: payload && payload.reason });
       if (type === 'tool_intent') return runCheckpoint.recordIntent(root, runId, payload || {});
       if (type === 'tool_commit') return runCheckpoint.recordCommit(root, runId, payload || {});
+      if (type === 'wait_start' || type === 'wait_settle') return runCheckpoint.recordWait(root, runId, { ...(payload || {}), type });
       return null;
     },
     conversationHistory: () => [],
@@ -216,6 +217,7 @@ async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: str
     effect: 'read',
     idemKey: idempotencyKey(runWaitingUser, 'read_file', { path: 'note.txt' }),
   });
+  runCheckpoint.recordWait(root, runWaitingUser, { type: 'wait_start', waitId: 'approval-waiting-read', kind: 'approval', toolCallId: 'waiting-read' });
   runStore.appendEvent(root, runWaitingUser, 'run_state', {
     state: 'WAITING_USER',
     previous: 'WAITING_TOOL',
@@ -225,6 +227,8 @@ async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: str
     ledger: new SideEffectLedger({ projectRoot: root, scopeRunId: runWaitingUser }),
   });
   check('续跑计划保留中断时的 WAITING_USER 状态', planWaitingUser.state === 'WAITING_USER', String(planWaitingUser.state));
+  check('待审批记录关联原工具调用，重启后可供人工复核',
+    (planWaitingUser.pendingWaits || []).some((item) => item.waitId === 'approval-waiting-read' && item.toolCallId === 'waiting-read'));
   check('等待用户时中断不会因为待办只读而自动续跑',
     planWaitingUser.mode === 'review' && planWaitingUser.requiresReview === true,
     'mode=' + planWaitingUser.mode + ' reason=' + planWaitingUser.reason);

@@ -424,6 +424,7 @@ function register(ctx) {
         if (type === 'messages') return runCheckpoint.saveMessages(projectRoot, runId, payload && payload.messages, { reason: payload && payload.reason });
         if (type === 'tool_intent') return runCheckpoint.recordIntent(projectRoot, runId, payload || {});
         if (type === 'tool_commit') return runCheckpoint.recordCommit(projectRoot, runId, payload || {});
+        if (type === 'wait_start' || type === 'wait_settle') return runCheckpoint.recordWait(projectRoot, runId, { ...(payload || {}), type });
         return null;
       };
       const alertDispatcher = new AlertDispatcher({
@@ -1080,7 +1081,7 @@ function register(ctx) {
           intentReview,
           // web_search 后端配置：未启用时工具已被卸载，这里是「配了才用得上」的那份配置
           webSearchConfig: webSearchConfig(cfg),
-          confirm: (level, what, detail) => bridge.confirm(level, what, detail),
+          confirm: (level, what, detail, meta) => bridge.confirm(level, what, detail, meta),
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),
           audit: (entry) => {

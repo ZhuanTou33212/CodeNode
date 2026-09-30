@@ -226,6 +226,7 @@ soul_file=config/soul.md
 # 两个 Agent 同时写同一个文件/同一张画布会**静默互相覆盖**（谁最后写完谁赢，另一份工作凭空消失）。
 # 规则：同一个资源，同一时刻只允许一个写者。只在**写类**工具上生效（读不加锁），被占用时**不排队等待**，
 # 直接返回 RESOURCE_LOCKED（可重试，带「谁在持有、多久过期」），让 Agent 自己换顺序/换文件。
+# agent.subagent.max_concurrent_tasks=3          # 只读批量子任务同时执行的上限（1–8）；含写角色的批次仍串行
 # 租约持有到**任务结束**（子代理完成/取消）或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖。
 # agent.subagent.leases=true                       # 总开关（默认开）
 # agent.subagent.lease_ttl_ms=120000               # 兜底时长（持有者崩溃时不永久占住资源）

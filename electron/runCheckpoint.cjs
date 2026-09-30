@@ -42,15 +42,22 @@ function appendCheckpoint(projectRoot, runId, record) {
     const written = runStore.appendJsonl(checkpointFile(projectRoot, runId), entry) ? entry : null;
     // S8：检查点也进统一事件流（回放时能看到「哪一步登记了意图、哪一步提交了」）
     if (written) {
-      require('./eventBus.cjs').bridge(projectRoot, 'checkpoint', {
-        runId: entry.runId || null,
-        turnId: entry.turnId == null ? null : entry.turnId,
-        toolCallId: entry.callId || null,
-        type: entry.type || null,
-        tool: entry.tool || null,
-        ok: entry.ok === undefined ? null : entry.ok === true,
-        effect: entry.effect || null,
-      });
+      try {
+        require('./eventBus.cjs').bridge(projectRoot, 'checkpoint', {
+          runId: entry.runId || null,
+          turnId: entry.turnId == null ? null : entry.turnId,
+          toolCallId: entry.callId || entry.toolCallId || null,
+          waitId: entry.waitId || null,
+          batchId: entry.batchId || null,
+          taskIds: Array.isArray(entry.taskIds) ? entry.taskIds : null,
+          type: entry.type || null,
+          tool: entry.tool || null,
+          ok: entry.ok === undefined ? null : entry.ok === true,
+          effect: entry.effect || null,
+        });
+      } catch {
+        // 审计事件桥接失败不改变检查点已成功落盘的事实。
+      }
     }
     return written;
   } catch {
@@ -83,6 +90,48 @@ function recordCommit(projectRoot, runId, { callId, tool, ok, resultDigest, erro
     error: error ? String(error).slice(0, 400) : null,
     elapsedMs: Number(elapsedMs) || 0,
   });
+}
+
+/** 用户等待只记录关联标识与结算结果；问题正文和审批令牌都不入盘。 */
+function recordWait(projectRoot, runId, payload) {
+  const item = payload || {};
+  if (!['wait_start', 'wait_settle'].includes(item.type) || !item.waitId) return null;
+  return appendCheckpoint(projectRoot, runId, {
+    type: item.type,
+    waitId: String(item.waitId).slice(0, 100),
+    kind: item.kind === 'question' ? 'question' : 'approval',
+    toolCallId: item.toolCallId ? String(item.toolCallId).slice(0, 120) : null,
+    taskId: item.taskId ? String(item.taskId).slice(0, 120) : null,
+    ...(item.type === 'wait_settle' ? { outcome: String(item.outcome || 'unknown').slice(0, 32) } : {}),
+  });
+}
+
+/** 从检查点重建仍未结算的等待，不根据单独的 WAITING_USER 标签猜测。 */
+function pendingWaitsOf(checkpoints) {
+  const pending = new Map();
+  for (const item of Array.isArray(checkpoints) ? checkpoints : []) {
+    if (!item || !item.waitId) continue;
+    if (item.type === 'wait_start') {
+      pending.set(item.waitId, { waitId: item.waitId, kind: item.kind || 'approval', toolCallId: item.toolCallId || null, taskId: item.taskId || null, startedAt: item.ts || null });
+    } else if (item.type === 'wait_settle') {
+      pending.delete(item.waitId);
+    }
+  }
+  return [...pending.values()];
+}
+
+/** Fan-out 的开始与汇合必须成对；缺少汇合记录时不能假定子任务已结束。 */
+function pendingBatchesOf(checkpoints) {
+  const pending = new Map();
+  for (const item of Array.isArray(checkpoints) ? checkpoints : []) {
+    if (!item || !item.batchId) continue;
+    if (item.type === 'subagent_batch_start') {
+      pending.set(item.batchId, { batchId: item.batchId, taskIds: Array.isArray(item.taskIds) ? item.taskIds : [], startedAt: item.ts || null });
+    } else if (item.type === 'subagent_batch_finish') {
+      pending.delete(item.batchId);
+    }
+  }
+  return [...pending.values()];
 }
 
 /** tool_call 的稳定调用 id：agent.assignCallIds 写在 `callId`，供应商原始值在 `id`；tool 消息的
@@ -295,6 +344,9 @@ function lastMessages(checkpoints) {
  * @property {Array<any>} [completedSteps]
  * @property {Array<any>} [failedSteps]
  * @property {Array<any>} [pendingSteps]
+ * @property {Array<any>} [pendingWaits]
+ * @property {Array<any>} [pendingBatches]
+ * @property {Array<any>} [pendingSubagentTasks]
  * @property {Array<any>} [skippedByLedger]
  * @property {Array<any>} [unknownEffects]
  * @property {Array<any>} [messages]
@@ -318,6 +370,10 @@ function planResume(projectRoot, runId, options = {}) {
   const start = events.find((event) => event.type === 'run_start') || {};
   const checkpoints = readCheckpoints(projectRoot, runId);
   const steps = stepsOf(checkpoints);
+  const pendingWaits = pendingWaitsOf(checkpoints);
+  const pendingBatches = pendingBatchesOf(checkpoints);
+  const taskViews = require('./subagents.cjs').readTaskViews(projectRoot, runId);
+  const pendingSubagentTasks = taskViews.tasks.filter((task) => task && ['running', 'cancelling'].includes(task.status));
   const ledger = options.ledger || (projectRoot ? new SideEffectLedger({ projectRoot, scopeRunId: summary.runId }) : null);
   const ledgerReview = ledger ? ledger.review() : { committed: [], pending: [], unknown: [] };
 
@@ -364,6 +420,9 @@ function planResume(projectRoot, runId, options = {}) {
     completedSteps: steps.filter((step) => step.committed).map((step) => ({ tool: step.tool, idemKey: step.idemKey, at: step.commitAt || null })),
     failedSteps: steps.filter((step) => step.failed).map((step) => ({ tool: step.tool, error: step.error, at: step.commitAt || null })),
     pendingSteps: pendingSteps.map((step) => ({ tool: step.tool, effect: step.effect || classify(step.tool), idemKey: step.idemKey || null })),
+    pendingWaits,
+    pendingBatches,
+    pendingSubagentTasks: pendingSubagentTasks.map((task) => ({ taskId: task.taskId, role: task.role, status: task.status })),
     skippedByLedger: skippable,
     unknownEffects: [...unknownSteps, ...unknownFromLedger],
     messages: lastMessages(checkpoints),
@@ -374,7 +433,7 @@ function planResume(projectRoot, runId, options = {}) {
     reason: null,
   };
 
-  if (status === 'completed') {
+  if (status === 'completed' && !pendingWaits.length && !pendingBatches.length && !pendingSubagentTasks.length && taskViews.ok) {
     return { ...base, mode: 'complete', reason: 'Run 已正常完成，无需续跑' };
   }
   if (status === 'cancelled') {
@@ -390,6 +449,25 @@ function planResume(projectRoot, runId, options = {}) {
       requiresReview: true,
       reason: 'Run 的状态迁移记录不连续或包含非法迁移。',
       warning: '自动续跑已暂停。请检查 run_state 事件记录和当前项目状态，再决定是否强制续跑。',
+    };
+  }
+  if (pendingWaits.length) {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '中断时有 ' + pendingWaits.length + ' 个用户输入或审批尚未结算，原交互请求无法续接。',
+      warning: '系统不会代替用户审批；请核对待处理调用及其副作用后，再决定是否重新发起。',
+    };
+  }
+  if (!taskViews.ok || pendingBatches.length || pendingSubagentTasks.length) {
+    const count = new Set([...pendingBatches.flatMap((batch) => batch.taskIds), ...pendingSubagentTasks.map((task) => task.taskId)]).size;
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: !taskViews.ok ? '子代理任务记录不可读。' : '中断时有 ' + count + ' 个子代理任务的汇合结果尚未确认。',
+      warning: '请核对子任务状态与可能已发生的写入；系统不会仅凭旧的 running 标记重启子任务。',
     };
   }
   if (STATE_INFO[summary.state] && STATE_INFO[summary.state].recoveryPolicy === 'review-required') {
@@ -532,6 +610,9 @@ module.exports = {
   appendCheckpoint,
   recordIntent,
   recordCommit,
+  recordWait,
+  pendingWaitsOf,
+  pendingBatchesOf,
   saveMessages,
   repairToolPairing,
   isToolPairingValid,

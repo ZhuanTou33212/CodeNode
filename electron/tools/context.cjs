@@ -17,6 +17,7 @@
  */
 'use strict';
 
+const { randomUUID } = require('crypto');
 // S7：审批服务（令牌化）—— 令牌只活在内存里，模型无法自填
 const approvalLib = require('./approval.cjs');
 const ruleLib = require('../approvalRules.cjs');
@@ -152,7 +153,9 @@ class AgentToolContext {
   approval() {
     if (!this.approvalServiceValue) {
       this.approvalServiceValue = approvalLib.createApprovalService({
-        confirm: this.confirmHandler,
+        confirm: this.confirmHandler
+          ? (level, what, detail, request) => this.confirm(level, what, detail, { ...request, forcePrompt: true })
+          : null,
         ttlMs: this.approvalTtlMsValue,
         runId: this.runIdValue,
         // 持久化审批规则：从项目里读一次（`.codenode/approvals.json`），命中就不打扰用户。
@@ -188,20 +191,33 @@ class AgentToolContext {
     return this.approvalServiceValue;
   }
 
-  async confirm(level, what, detail) {
+  async confirm(level, what, detail, request = {}) {
     if (this.cancelled()) return false;
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
-    if (level === ConfirmationLevel.LOW) return true;
+    if (level === ConfirmationLevel.LOW && request.forcePrompt !== true) return true;
     if (!this.confirmHandler) return false;
+    const waitId = 'wait-' + randomUUID();
+    const toolCallId = request.toolCallId || null;
+    const started = this.checkpoint('wait_start', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null });
+    if (this.checkpointSink && !started) {
+      this.audit(JSON.stringify({ kind: 'approval_wait_persist_failed', runId: this.runIdValue, waitId, toolCallId }));
+      return false;
+    }
     // 真正在等用户：上报 WAITING_USER（等待结束后回到 WAITING_TOOL），
     // 状态机据此区分「卡在等用户」与「正在执行」，UI/续跑判定不再只能看到 running
     this.notifyState('WAITING_USER', 'confirm:' + String(what || '').slice(0, 80));
+    let outcome = 'denied';
     try {
-      const approved = await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '');
-      return !this.cancelled() && approved === true;
+      const approved = await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '', request);
+      outcome = this.cancelled() ? 'cancelled' : approved === true ? 'approved' : 'denied';
+      return outcome === 'approved';
     } catch {
+      outcome = 'error';
       return false;
     } finally {
+      if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null, outcome })) {
+        this.audit(JSON.stringify({ kind: 'approval_wait_settle_persist_failed', runId: this.runIdValue, waitId }));
+      }
       this.notifyState('WAITING_TOOL', 'confirm_settled');
     }
   }
@@ -261,14 +277,22 @@ class AgentToolContext {
     return this.saveErrorValue || null;
   }
 
-  async askUser(question, options) {
+  async askUser(question, options, request = {}) {
     if (!this.questionHandler) return '';
+    const waitId = 'wait-' + randomUUID();
+    const toolCallId = request.toolCallId || null;
+    const started = this.checkpoint('wait_start', { waitId, kind: 'question', toolCallId, taskId: this.taskIdValue || null });
+    if (this.checkpointSink && !started) throw new Error('用户提问无法持久化，未发出请求');
     this.notifyState('WAITING_USER', 'ask_user');
+    let outcome = 'answered';
     try {
       return await this.questionHandler(question, options || []);
     } catch {
+      outcome = 'error';
       return '';
     } finally {
+      if (this.cancelled()) outcome = 'cancelled';
+      if (this.checkpointSink) this.checkpoint('wait_settle', { waitId, kind: 'question', toolCallId, taskId: this.taskIdValue || null, outcome });
       this.notifyState('WAITING_TOOL', 'ask_user_settled');
     }
   }
@@ -303,7 +327,7 @@ class AgentToolContext {
     return this.ragConfigValue || {};
   }
 
-  /** 写入执行检查点（runCheckpoint.cjs）：'tool_intent' | 'tool_commit' | 'messages' */
+  /** 写入执行检查点（runCheckpoint.cjs）：工具意图/结果、对话快照及用户等待起止记录。 */
   checkpoint(type, payload) {
     if (!this.checkpointSink) return null;
     try {

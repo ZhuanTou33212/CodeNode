@@ -8,7 +8,9 @@ const { AgentToolContext } = require('../electron/tools/context.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const roles = require('../electron/tools/roles.cjs');
 const { GraphModel } = require('../electron/tools/GraphModel.cjs');
-const { SubagentManager } = require('../electron/subagents.cjs');
+const { SubagentManager, persistTaskView, readTaskViews } = require('../electron/subagents.cjs');
+const runCheckpoint = require('../electron/runCheckpoint.cjs');
+const runStore = require('../electron/runStore.cjs');
 const { CostLedger } = require('../electron/costLedger.cjs');
 const agent = require('../electron/agent.cjs');
 const sandbox = require('../electron/sandbox.cjs');
@@ -172,6 +174,9 @@ const baseCfg = { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }
     );
     for (let i = 0; i < 200 && !hangingTaskId; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.ok(hangingTaskId, '应当能拿到正在运行的子任务 taskId');
+    check('子任务开始后立即落盘，进程中断时能找回 taskId', () => {
+      assert.ok(readTaskViews(process.cwd(), 'run-cancel-one').tasks.some((item) => item.taskId === hangingTaskId && item.status === 'running'));
+    });
     const cancelResult = await cancelReg.execute('cancel_subagent_task', { taskId: hangingTaskId, reason: '测试取消' }, buildContext(model, parentAbort.signal));
     assert.strictEqual(cancelResult.ok, true, '取消应当成功：' + cancelResult.text);
     // 取消不生效时挂起的子任务永不返回 —— 判据必须**有界**：超时即断言失败（否则用例会静默挂死）
@@ -187,6 +192,70 @@ const baseCfg = { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }
     const done = await cancelReg.execute('cancel_subagent_task', { taskId: hangingTaskId }, buildContext(model, parentAbort.signal));
     assert.strictEqual(done.ok, false, '已结束的任务不能再取消');
     assert.ok(String(done.text).includes('已结束'), done.text);
+  }
+
+  // 并发批次：上限生效，失败结果仍等待兄弟任务结算；崩溃时未汇合批次须复核。
+  {
+    const batchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-subagent-batch-'));
+    const batchRunId = 'run-fanout-join';
+    runStore.startRun(batchRoot, batchRunId, { prompt: '并行探查', model: 'scripted' });
+    const batchContext = new AgentToolContext({ projectRoot: batchRoot, model, confirm: async () => true, audit: () => {} });
+    const batchRegistry = toolkit.buildDefaultRegistry();
+    let active = 0;
+    let peak = 0;
+    const batchManager = new SubagentManager({
+      agent: {
+        runAgentChat: async ({ tools }) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          active -= 1;
+          const taskId = tools.context.taskId();
+          return taskId === 'batch-fail'
+            ? { content: '', toolCalls: [], usage: null, error: '模拟子任务失败' }
+            : { content: '完成 ' + taskId, toolCalls: [], usage: null };
+        },
+      },
+      toolkit,
+      cfg: { ...baseCfg, rag: { enabled: false }, subagent: { maxConcurrentTasks: 2 } },
+      registry: batchRegistry,
+      runId: batchRunId,
+    });
+    batchManager.register(batchRegistry);
+    const batchResult = await batchRegistry.execute('delegate_tasks', {
+      tasks: [
+        { taskId: 'batch-a', role: 'explorer', objective: 'A' },
+        { taskId: 'batch-fail', role: 'explorer', objective: '失败分支' },
+        { taskId: 'batch-c', role: 'explorer', objective: 'C' },
+      ],
+    }, batchContext);
+    check('Fan-out 最多同时运行 2 项，失败分支未中止其它任务', () => {
+      assert.strictEqual(peak, 2);
+      assert.strictEqual(active, 0);
+      assert.strictEqual(batchResult.ok, false);
+      assert.deepStrictEqual(batchResult.data.results.map((item) => item.taskId), ['batch-a', 'batch-fail', 'batch-c']);
+      assert.deepStrictEqual(batchResult.data.results.map((item) => item.status), ['done', 'failed', 'done']);
+    });
+    const batchRecords = runCheckpoint.readCheckpoints(batchRoot, batchRunId);
+    check('批次开始和汇合均落盘，恢复器不误报未结算', () => {
+      assert.strictEqual(batchRecords.filter((item) => item.type === 'subagent_batch_start').length, 1);
+      assert.strictEqual(batchRecords.filter((item) => item.type === 'subagent_batch_finish').length, 1);
+      assert.deepStrictEqual(runCheckpoint.pendingBatchesOf(batchRecords), []);
+    });
+    const interruptedRunId = 'run-fanout-interrupted';
+    runStore.startRun(batchRoot, interruptedRunId, { prompt: '等待子任务', model: 'scripted' });
+    runCheckpoint.appendCheckpoint(batchRoot, interruptedRunId, {
+      type: 'subagent_batch_start', batchId: 'unfinished', taskIds: ['child-1'], join: 'all_settled',
+    });
+    persistTaskView(batchRoot, interruptedRunId, { taskId: 'child-1', runId: interruptedRunId, role: 'explorer', status: 'running' });
+    const interrupted = runCheckpoint.planResume(batchRoot, interruptedRunId);
+    check('缺少汇合记录的子任务不会被自动重放', () => {
+      assert.strictEqual(interrupted.mode, 'review');
+      assert.strictEqual(interrupted.requiresReview, true);
+      assert.deepStrictEqual(interrupted.pendingBatches[0].taskIds, ['child-1']);
+      assert.strictEqual(interrupted.pendingSubagentTasks[0].taskId, 'child-1');
+    });
+    fs.rmSync(batchRoot, { recursive: true, force: true });
   }
 
   // ---- #18：模型自选 taskId 不得覆盖已有任务；配额用独立的「曾进入 running」计数器 ----
