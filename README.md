@@ -35,7 +35,7 @@ Agent 侧不是「套一层 API」，实现要点：
 - **子代理**：角色契约（白名单/只读/能力/提示）单一来源，父子链独立 token 预算，任务总时长钳制，结构化结果契约回灌
 - **可靠性**：幂等账本（规范化参数键 + actor 归因）、请求预算与队列、成本账本（含服务端前缀缓存命中率）、断点续跑
 - **隔离与安全**：Windows Job 对象 / Linux bwrap / macOS sandbox-exec 三平台后端，网络与路径边界、SSRF 阻断、凭据脱敏、渲染层权限默认拒绝
-- **Agentic RAG**：BM25 + 本地标量精确查询 + 可插拔向量层（默认 `memory`，可切 Milvus 全库 ANN，bge-m3 1024 维 / HNSW 生产档），引用校验按「本轮真实读过的来源」判定
+- **Agentic RAG**：BM25 + 本地标量查询 + 可插拔向量层（默认 `memory`；可选无服务进程的 SQLite 持久化索引或 Milvus），引用校验按「本轮真实读过的来源」判定
 
 ## 界面预览
 
@@ -138,14 +138,16 @@ Agent 侧不是「套一层 API」，实现要点：
 ### Agentic RAG（本地项目检索）
 - Agent 可把主问题、符号名、业务词和技术词作为多个查询，一次完成 RRF 融合排序
 - 本地增量索引复用未变化分块；文件工具写入后显式失效，外部变化由 mtime 自动发现
-- BM25 + 路径/短语/覆盖率排序 + 可插拔向量层（默认 local 确定性哈希向量，可切 openai/ollama），覆盖源码符号、自然语言与中文，默认无需向量数据库或云服务
-- 向量后端可插拔（`rag.vector_store`）：默认 `memory`（进程内记忆化 + BM25 预筛打分）；可切 `milvus` 外部服务走全库 ANN（需 `npm i @zilliz/milvus2-sdk-node`，命中含纯语义结果并标注 `vector-only`；服务不可用时自动降级为纯 BM25 并在结果中显式告警）；Milvus 侧默认即生产档（HNSW `M=16`/`efConstruction=200`、检索 `ef=64`、1024 维、批量 128、`Strong` 一致性，全部由 `rag.milvus_*` 可配）
-- `retrieve_context` 支持 `mode=auto/file/vector/hybrid/scalar`：scalar 模式走本地标量精确查询，vector/hybrid 把向量余弦分融合进排序
-- 返回高/中/低可信度、查询覆盖率、候选规模与 `path#Lx-Ly` 来源锚点
-- 低可信度会驱动 Agent 改写查询、限定目录或深读文件，不会强行把弱结果当答案
+- BM25 与向量候选分别召回后用倒数排名融合；默认 local 为确定性词项哈希向量，主要利用词项重合。跨表达语义召回需按需配置 openai/ollama 嵌入，向量可存在 memory、工程本地 SQLite 或 Milvus
+- TS/JS 按函数、类与方法的语法范围切块，长函数再按行拆分；命中方法或长函数中段时，附上可单独引用的父级声明。其他格式保留标题/声明优先的 72 行、重叠 12 行切块
+- TS/JS 同时建立项目内定义、调用、引用和相对导入的静态关系；跨文件问题可用 `hops=0..2` 有界扩展，结果标明关系来源。选块会避开高度重叠片段，父级上下文也计入字符预算
+- 向量后端可插拔（`rag.vector_store`）：默认 `memory`（进程内记忆化，小型学习式嵌入项目可独立召回）；`sqlite` 将向量增量持久化到工程 `.codenode`，以本地精确近邻检索运行、无服务进程；`milvus` 供更大规模或外部集群使用。向量后端失败时当轮退回 BM25 并显式告警
+- `retrieve_context` 支持 `mode=auto/file/vector/hybrid/scalar`：文件结果由 BM25 与向量按名次融合；可显式配置 Cohere 风格的重排 URL，对候选做二次排序，服务失败时保留 RRF 结果
+- 返回高/中/低检索匹配度、查询覆盖率、候选规模与 `path#Lx-Ly` 来源锚点；匹配度不表示片段足以支持结论
+- 匹配度低时 Agent 会改写查询、限定目录或深读文件；引用校验仅确认路径和行号在本轮读过的范围内
 - 检索片段被标记为不可信数据，项目文件内的提示注入不会被当作 Agent 指令
 - 默认硬排除 `.env`、SSH/证书密钥、凭据、`.codenode` 记录、依赖与构建产物
-- `rag.include` / `rag.exclude` 可配置范围，其他 `rag.*` 控制分块、Top-K、查询数、质量门槛与向量层（`rag.embed_provider/dim/model/base/key/top_k/vector_weight`）与向量后端（`rag.vector_store/milvus_address/milvus_collection/milvus_token/milvus_username/milvus_password`）
+- `rag.include` / `rag.exclude` 可配置范围，其他 `rag.*` 控制分块、Top-K、查询数、质量门槛、嵌入模型、融合权重及 `rag.vector_store` 向量后端
 
 ### 本地标量（画布精准数据，不入云）
 - 画布节点的完整属性（name/label/prompt/goal/members/filePath 等）在画布工具执行时写入工程 `.codenode/scalars.json`，不随工具结果返回云端
@@ -235,7 +237,7 @@ electron/           Electron 主进程 / 预加载 / .cnode 编解码
   agentState.cjs    运行状态机（7 状态 + 显式迁移表）
   tools/            工具注册表 / 契约（ToolDescriptor）/ 能力面 / 子代理
   ipc/              按域拆分的 IPC 通道（models / project / metrics / agent）
-  rag/ vectorStore/ Agentic RAG 与可插拔向量后端（memory 默认 / Milvus）
+  rag/ vectorStore/ Agentic RAG 与可插拔向量后端（memory 默认 / SQLite / Milvus）
   sandbox/          跨平台执行隔离（Windows Job / bwrap / sandbox-exec）
 src/
   components/       画布、项目管理器、检查器、工具栏、状态栏、添加菜单
@@ -274,7 +276,7 @@ node scripts/rag-test.cjs
 node scripts/rag-grounding-test.cjs
 # 标量库 / 可插拔向量 / 子代理压缩 端到端测试
 node scripts/scalar-vector-test.cjs
-# 向量后端（memory 默认 + Milvus 适配器 / 降级 / vector-only）测试
+# 向量后端（memory 默认 + SQLite / Milvus 适配器 / 降级 / vector-only）测试
 node scripts/vector-store-test.cjs
 # 真嵌入 + Milvus 的语义检索验证（需 MILVUS_ADDR 与 EMBED_BASE，未设置则 SKIP）
 node scripts/vector-store-semantic-probe.cjs

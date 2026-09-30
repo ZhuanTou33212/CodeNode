@@ -74,6 +74,8 @@ assert.strictEqual(validateRagGrounding('实现见 [src/big.cjs#L150-L200]。', 
 const outOfRange = validateRagGrounding('实现见 [src/big.cjs#L8000-L8010]。', readCalls);
 assert.strictEqual(outOfRange.status, 'invalid');
 assert.deepStrictEqual(outOfRange.invalid, ['src/big.cjs#L8000-L8010']);
+assert.strictEqual(validateRagGrounding('见 [src/big.cjs#L250-L350]。', readCalls).status, 'invalid', '只读到部分引用范围不能通过');
+assert.strictEqual(validateRagGrounding('见 [src/big.cjs#L100-L150]。', readCalls).status, 'invalid', '引用起点早于实读范围不能通过');
 
 // 4. search_files 命中的行有效，未命中过的行无效
 assert.strictEqual(validateRagGrounding('见 [src/hit.cjs#L42-L42]。', readCalls).status, 'valid');
@@ -99,6 +101,7 @@ const multiRange = readCalls.concat([
   { name: 'read_file', data: { path: 'src/big.cjs', startLine: 301, endLine: 500, lineCount: 900 } },
 ]);
 assert.strictEqual(validateRagGrounding('见 [src/big.cjs#L400-L420]。', multiRange).status, 'valid');
+assert.strictEqual(validateRagGrounding('见 [src/big.cjs#L250-L350]。', multiRange).status, 'valid', '相邻实读区间合起来覆盖引用应通过');
 
 // 9. 无行号信息的读取（PDF 文字层）：整文件视为已读
 const pdfLike = readCalls.concat([
@@ -111,6 +114,10 @@ const binaryRead = readCalls.concat([
   { name: 'read_file', ok: false, data: { path: 'build/app.exe', binary: true } },
 ]);
 assert.strictEqual(validateRagGrounding('见 [build/app.exe#L1-L2]。', binaryRead).status, 'invalid');
+const failedRead = readCalls.concat([
+  { name: 'read_file', ok: false, data: { path: 'src/not-read.cjs', startLine: 1, endLine: 20 } },
+]);
+assert.strictEqual(validateRagGrounding('见 [src/not-read.cjs#L1-L5]。', failedRead).status, 'invalid', '失败的读取不能形成可信来源');
 
 const prompt = buildSystemPrompt({ raw: '' }, '[]', [{ name: 'retrieve_context', desc: '本地检索' }]);
 assert.match(prompt, /queries/);

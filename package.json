@@ -169,7 +169,8 @@
     "asarUnpack": [
       "electron/tools/fsWorker.cjs",
       "electron/tools/fsCore.cjs",
-      "electron/tools/impl/pdfText.cjs"
+      "electron/tools/impl/pdfText.cjs",
+      "node_modules/sqlite-vec-*/**/*"
     ],
     "win": {
       "target": [
@@ -214,6 +215,7 @@
     "@xyflow/react": "^12.3.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
@@ -225,8 +227,10 @@
     "cross-env": "^7.0.3",
     "electron": "^44.0.0",
     "electron-builder": "^24.13.3",
-    "typescript": "^5.7.2",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "^0.1.9"
   }
 }

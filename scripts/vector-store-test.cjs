@@ -27,10 +27,13 @@ const { BACKENDS, createVectorStore, normalizeBackend } = require('../electron/v
 const { createMemoryVectorStore } = require('../electron/vectorStore/memory.cjs');
 const milvus = require('../electron/vectorStore/milvus.cjs');
 const { createEmbedder, cosine } = require('../electron/embedder/index.cjs');
+const { parseRagConfig } = require('../electron/agent.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-vector-store-test-'));
+const semanticRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-memory-semantic-test-'));
+const sqliteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-sqlite-vector-test-'));
 
 function write(relative, content) {
   const target = path.join(root, relative);
@@ -60,6 +63,7 @@ function createFakeMilvusClient() {
     rejectConsistency: false,
     lastSearchArgs: null,
     forceHits: null,
+    failInsertAfterWrite: 0,
   };
   return {
     state,
@@ -114,6 +118,10 @@ function createFakeMilvusClient() {
         state.rows = state.rows.filter((item) => item.id !== row.id);
         state.rows.push(row);
       }
+      if (state.failInsertAfterWrite > 0) {
+        state.failInsertAfterWrite -= 1;
+        throw new Error('fake milvus 部分写入后失败');
+      }
       return { insert_cnt: data.length };
     },
     async delete({ filter }) {
@@ -136,9 +144,17 @@ function createFakeMilvusClient() {
       }
       // 真实 SDK 的失败形态：不抛异常，而是 status.error_code + 空 results（实测 "topk is required" 即如此）
       if (state.statusError) return { status: { error_code: 'UnexpectedError', reason: state.statusError, code: 65535 }, results: [] };
-      if (state.forceHits) return { results: [state.forceHits.slice()] };
+      const filterMatch = /^file in (\[.*\])$/.exec(String(args.filter || ''));
+      const allowedFiles = filterMatch ? new Set(JSON.parse(filterMatch[1])) : null;
+      if (state.forceHits) {
+        const filtered = state.forceHits.filter((hit) =>
+          !allowedFiles || state.rows.some((row) => row.id === hit.id && allowedFiles.has(row.file))
+        );
+        return { results: [filtered.slice(0, limit)] };
+      }
       const query = data[0];
       const ranked = state.rows
+        .filter((row) => !allowedFiles || allowedFiles.has(row.file))
         .map((row) => ({ id: row.id, score: cosine(query, row.vector) }))
         .sort((a, b) => b.score - a.score)
         .slice(0, limit);
@@ -154,10 +170,12 @@ async function main() {
   const embedder = createEmbedder({ embedProvider: 'local', embedDim: 256 });
 
   // ---- 1. 工厂与配置归一 ----
-  assert.deepStrictEqual(BACKENDS, ['memory', 'milvus']);
+  assert.deepStrictEqual(BACKENDS, ['memory', 'sqlite', 'milvus']);
   assert.strictEqual(normalizeBackend('MILVUS'), 'milvus');
   assert.strictEqual(normalizeBackend('weaviate'), 'memory', '未知后端应回退 memory');
   assert.strictEqual(normalizeBackend(undefined), 'memory');
+  assert.strictEqual(parseRagConfig({ 'rag.memory_semantic_max_chunks': '8' }).memorySemanticMaxChunks, 8,
+    '内存语义扫描上限应从 agent.properties 进入索引配置');
   const memoryDefault = createVectorStore({});
   assert.strictEqual(memoryDefault.kind, 'memory', '不配置时应为 memory 后端');
   assert.strictEqual(memoryDefault.prefiltered, true, 'memory 后端只对 BM25 预筛候选打分');
@@ -181,6 +199,127 @@ async function main() {
   const memoryScored = await memoryStore.scoreCandidates('refreshSessionToken 令牌', [sampleChunk], embedder);
   assert.ok(memoryScored.get(sampleChunk.id) > 0, 'memory 后端候选打分应返回余弦分');
   await memoryStore.close();
+
+  // 学习式嵌入 + 小型 memory 项目：向量可独立召回 BM25 未命中的块，并复用块嵌入。
+  fs.writeFileSync(path.join(semanticRoot, 'target.txt'), 'export const nonce = 1;\n', 'utf8');
+  fs.writeFileSync(path.join(semanticRoot, 'other.txt'), 'ordinary unrelated text\n', 'utf8');
+  const embeddedTexts = [];
+  /** @type {any} */
+  const fakeLearnedEmbedder = {
+    provider: 'openai',
+    isLocal: () => false,
+    embed: async (texts) => {
+      embeddedTexts.push(...texts);
+      return texts.map((text) => {
+        const vector = new Array(256).fill(0);
+        vector[text === 'hidden concept' || text.includes('target.txt') ? 0 : 1] = 1;
+        return vector;
+      });
+    },
+  };
+  const cappedMemory = createMemoryVectorStore();
+  const manyChunks = Array.from({ length: 2050 }, (_, i) => ({
+    id: 'many/file-' + i + ':1:1', path: 'many/file-' + i, content: 'sample content',
+  }));
+  const allScores = await cappedMemory.scoreCandidates('hidden concept', manyChunks, fakeLearnedEmbedder);
+  assert.strictEqual(allScores.size, manyChunks.length, '缓存上限不得截掉本轮全量向量结果');
+  assert.ok((await cappedMemory.stats()).vectors <= 2048, '内存缓存应有明确上限');
+  await cappedMemory.close();
+  const semanticIndex = new LocalRagIndex(semanticRoot, {
+    embedProvider: 'openai', embedDim: 256, vectorStore: 'memory', memorySemanticMaxChunks: 8,
+  });
+  semanticIndex.embedder = fakeLearnedEmbedder;
+  const fullSemantic = await semanticIndex.retrieve('hidden concept', { mode: 'vector' });
+  assert.strictEqual(fullSemantic.results[0].path, 'target.txt', '词法零命中时应能由向量独立召回');
+  assert.strictEqual(fullSemantic.results[0].vectorOnly, true);
+  assert.strictEqual(vectorStats(fullSemantic).memorySemanticFullScan, true);
+  assert.strictEqual(vectorStats(fullSemantic).prefiltered, false);
+  const targetEmbeds = embeddedTexts.filter((text) => text.includes('target.txt')).length;
+  await semanticIndex.retrieve('hidden concept', { mode: 'vector' });
+  assert.strictEqual(embeddedTexts.filter((text) => text.includes('target.txt')).length, targetEmbeds, '未变块向量应复用缓存');
+  fs.writeFileSync(path.join(semanticRoot, 'target.txt'), 'export const nonce = 2;\n', 'utf8');
+  semanticIndex.invalidate('target.txt');
+  await semanticIndex.retrieve('hidden concept', { mode: 'vector' });
+  assert.strictEqual(embeddedTexts.filter((text) => text.includes('target.txt')).length, targetEmbeds + 1, '变更文件须重新嵌入');
+  const boundedIndex = new LocalRagIndex(semanticRoot, {
+    embedProvider: 'openai', embedDim: 256, vectorStore: 'memory', memorySemanticMaxChunks: 1,
+  });
+  boundedIndex.embedder = fakeLearnedEmbedder;
+  const boundedSemantic = await boundedIndex.retrieve('hidden concept', { mode: 'vector' });
+  assert.strictEqual(boundedSemantic.results.length, 0, '超过上限时不能假称已做全库语义召回');
+  assert.strictEqual(vectorStats(boundedSemantic).memorySemanticSkipped, true);
+  for (let i = 0; i < 8; i++) {
+    fs.writeFileSync(path.join(semanticRoot, 'lexical-' + i + '.txt'), 'hidden concept appears here with ordinary words\n', 'utf8');
+  }
+  const hybridIndex = new LocalRagIndex(semanticRoot, {
+    embedProvider: 'openai', embedDim: 256, vectorStore: 'memory', memorySemanticMaxChunks: 16, topK: 6,
+  });
+  hybridIndex.embedder = fakeLearnedEmbedder;
+  const hybrid = await hybridIndex.retrieve('hidden concept', { mode: 'hybrid' });
+  assert.ok(hybrid.results.some((item) => item.path === 'target.txt' && item.vectorOnly),
+    '词法结果填满 Top-K 时，高分纯向量候选仍须进入上下文');
+
+  // ---- 2b. 可选 SQLite 后端：文件持久化、范围过滤、重启复用与旧块清理 ----
+  let sqliteAvailable = false;
+  try { require.resolve('sqlite-vec'); sqliteAvailable = true; } catch {}
+  if (sqliteAvailable) {
+    fs.writeFileSync(path.join(sqliteRoot, 'target.txt'), 'export const nonce = 1;\n', 'utf8');
+    fs.writeFileSync(path.join(sqliteRoot, 'other.txt'), 'ordinary unrelated text\n', 'utf8');
+    const sqliteOptions = { backend: 'sqlite', root: sqliteRoot, dim: 256, topK: 5, provider: 'openai', model: 'fake-learned' };
+    const target = { id: 'target.txt:1:1', path: 'target.txt', text: 'target.txt\nexport const nonce = 1;' };
+    const other = { id: 'other.txt:1:1', path: 'other.txt', text: 'other.txt\nordinary unrelated text' };
+    const sqlite = createVectorStore(sqliteOptions);
+    const firstWrite = await sqlite.applyChanges({ deleted: [], upserted: [target, other], activeIds: [target.id, other.id] }, fakeLearnedEmbedder);
+    assert.strictEqual(firstWrite.inserted, 2);
+    assert.ok(fs.existsSync(firstWrite.file), 'SQLite 索引应持久化在工程 .codenode 内');
+    const sqliteHits = await sqlite.scoreCandidates('hidden concept', null, fakeLearnedEmbedder);
+    assert.ok(sqliteHits.get(target.id) > sqliteHits.get(other.id), '本地向量库应独立排序');
+    const scopedHits = await sqlite.scoreCandidates('hidden concept', null, fakeLearnedEmbedder, { files: ['other.txt'] });
+    assert.deepStrictEqual([...scopedHits.keys()], [other.id], '文件范围应在向量检索前过滤');
+    await sqlite.close();
+
+    const reopened = createVectorStore(sqliteOptions);
+    const embedsBeforeReopen = embeddedTexts.length;
+    const reused = await reopened.applyChanges({ deleted: [], upserted: [target, other], activeIds: [target.id, other.id] }, fakeLearnedEmbedder);
+    assert.strictEqual(reused.inserted, 0, '重启后相同块不应重复嵌入');
+    assert.strictEqual(reused.reused, 2);
+    assert.strictEqual(embeddedTexts.length, embedsBeforeReopen);
+    await reopened.close();
+
+    const ghost = { id: 'ghost.txt:1:1', path: 'ghost.txt', text: 'ghost.txt\nstale data' };
+    const seeded = createVectorStore(sqliteOptions);
+    await seeded.applyChanges({ deleted: [], upserted: [ghost], activeIds: null }, fakeLearnedEmbedder);
+    await seeded.close();
+
+    const index = new LocalRagIndex(sqliteRoot, {
+      embedProvider: 'openai', embedModel: 'fake-learned', embedDim: 256, vectorStore: 'sqlite',
+    });
+    index.embedder = fakeLearnedEmbedder;
+    const indexed = await index.retrieve('hidden concept', { mode: 'vector' });
+    assert.strictEqual(indexed.results[0].path, 'target.txt', 'SQLite 后端应接入 RAG 独立召回');
+    assert.strictEqual(indexed.results[0].vectorOnly, true);
+    assert.strictEqual(vectorStats(indexed).backend, 'sqlite');
+    assert.strictEqual(vectorStats(indexed).store.vectors, 2, '重启后应清理本地文件清单之外的旧块');
+    fs.writeFileSync(path.join(sqliteRoot, 'target.txt'), 'export const nonce = 2;\n', 'utf8');
+    index.invalidate('target.txt');
+    const changedSqlite = await index.retrieve('hidden concept', { mode: 'vector' });
+    assert.ok(vectorStats(changedSqlite).applied.inserted >= 1, '文件变化应增量重嵌入');
+    fs.unlinkSync(path.join(sqliteRoot, 'other.txt'));
+    index.invalidate('other.txt');
+    const deletedSqlite = await index.retrieve('hidden concept', { mode: 'vector' });
+    assert.strictEqual(vectorStats(deletedSqlite).store.vectors, 1, '文件删除应清理持久化向量');
+    await index.vectorStore.close();
+    const atomicStore = createVectorStore(sqliteOptions);
+    await assert.rejects(() => atomicStore.applyChanges({
+      deleted: [{ relative: 'target.txt' }],
+      upserted: [{ id: target.id, path: target.path, text: 'target.txt\nchanged but embedding failed' }],
+      activeIds: [target.id],
+    }, { embed: async () => { throw new Error('fake embedding unavailable'); } }), /embedding unavailable/);
+    assert.strictEqual((await atomicStore.stats()).vectors, 1, '嵌入失败不得留下半写入索引');
+    await atomicStore.close();
+  } else {
+    console.log('[skip] 未安装可选 sqlite-vec：跳过 SQLite 文件后端集成测试');
+  }
 
   // ---- 3. Milvus 适配器（假客户端）：建表 / 索引 / 写入 / 删除 / 检索 ----
   const fake = createFakeMilvusClient();
@@ -218,6 +357,11 @@ async function main() {
   assert.strictEqual(fake.state.lastSearchArgs.consistency_level, 'Strong', '默认应以 Strong 一致性检索（否则刚删的旧块仍可见）');
   assert.strictEqual(fake.state.lastSearchArgs.metric_type, 'COSINE');
   assert.deepStrictEqual(fake.state.lastSearchArgs.params, { ef: 64 }, 'HNSW 检索参数 ef 应经简单形态 params 下发且默认 64');
+  const searchesBeforeBatchFilter = fake.state.searches;
+  await store.scoreCandidates('分批限定文件', null, embedder, {
+    files: Array.from({ length: 101 }, (_, i) => 'docs/part-' + i + '.md'),
+  });
+  assert.strictEqual(fake.state.searches, searchesBeforeBatchFilter + 2, '大范围文件过滤应分批下推');
 
   // ---- 3b. 写入批量与 flush 节流（百万级不能逐批 flushSync） ----
   const bulkClient = createFakeMilvusClient();
@@ -342,9 +486,39 @@ async function main() {
   assert.strictEqual(semantic.results[0].vectorOnly, true, '纯语义命中必须标记 vector-only');
   assert.ok(semantic.results[0].vectorScore > 0.9);
   assert.strictEqual(vectorStats(semantic).vectorOnly, 1);
+  assert.strictEqual(semantic.quality.level, 'medium', '较强的纯向量候选应标记为需要深读的中等匹配');
   const bm25Only = await index.retrieve('totallyAbsentQuantumBananaIdentifier', { mode: 'file' });
   assert.strictEqual(bm25Only.results.length, 0, '对照：关闭向量层时同一查询无结果');
   indexClient.state.forceHits = null;
+
+  // 全库 ANN 的命中仍须遵守调用方指定的目录和文件类型范围。
+  const authChunk = index.chunks.find((chunk) => chunk.path === 'src/auth/session.ts');
+  const invoiceChunk = index.chunks.find((chunk) => chunk.path === 'src/payments/invoice.ts');
+  indexClient.state.forceHits = [
+    ...Array.from({ length: 15 }, () => ({ id: invoiceChunk.id, score: 0.99 })),
+    { id: guideChunk.id, score: 0.95 },
+    { id: authChunk.id, score: 0.91 },
+  ];
+  const pathScoped = await index.retrieve('totallyAbsentQuantumBananaIdentifier', { mode: 'vector', path: 'src/auth' });
+  assert.deepStrictEqual(pathScoped.results.map((item) => item.path), ['src/auth/session.ts']);
+  assert.match(String(indexClient.state.lastSearchArgs.filter), /^file in \[/, '限定目录应下推到 Milvus 预过滤');
+  const patternScoped = await index.retrieve('totallyAbsentQuantumBananaIdentifier', { mode: 'vector', filePattern: '**/*.md' });
+  assert.deepStrictEqual(patternScoped.results.map((item) => item.path), ['docs/guide.md']);
+  assert.match(String(indexClient.state.lastSearchArgs.filter), /docs\/guide\.md/, '文件 glob 应下推允许文件集合');
+  indexClient.state.forceHits = null;
+
+  // 首次写入在服务端部分成功后报错：保留待同步文件，下一次检索应清理并重写最新块。
+  write('src/retry.ts', 'export function retryVectorWrite() { return "fresh-retry-marker"; }');
+  indexClient.state.failInsertAfterWrite = 1;
+  const failedSync = await index.retrieve('retryVectorWrite', { mode: 'vector' });
+  assert.match(String(vectorStats(failedSync).error), /部分写入后失败/, '同步失败应显式告警');
+  assert.strictEqual(vectorStats(failedSync).rankedWithVector, 0, '同步失败时不得继续使用可能过期的 ANN 结果');
+  assert.ok(index.pendingChange.deleted.some((item) => item.relative === 'src/retry.ts'), '失败文件必须保留在重试队列');
+  const retriedSync = await index.retrieve('retryVectorWrite', { mode: 'vector' });
+  assert.strictEqual(retriedSync.stats.changedFiles, 0, '重试不依赖文件再次变化');
+  assert.ok(!vectorStats(retriedSync).error, '重试成功后应清除同步错误');
+  assert.strictEqual(indexClient.state.rows.filter((row) => row.file === 'src/retry.ts').length, 1, '重试后不应留下重复块');
+  assert.strictEqual(index.pendingChange.deleted.length, 0, '重试成功后应清空待同步队列');
 
   // ---- 8. 后端不可用 → 降级为纯 BM25（不抛错、不静默） ----
   indexClient.state.failing = true;
@@ -579,4 +753,6 @@ main()
   .finally(() => {
     clearIndexCache();
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(semanticRoot, { recursive: true, force: true });
+    fs.rmSync(sqliteRoot, { recursive: true, force: true });
   });

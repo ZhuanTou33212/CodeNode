@@ -68,10 +68,12 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
       {grounding && grounding.status !== 'not_required' ? (
         <div
           className={`rag-grounding rag-grounding-${grounding.status}`}
-          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : undefined}
+          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : '仅核对引用位置是否在本轮读过的来源内，未验证结论是否得到支持'}
         >
           {grounding.status === 'valid'
-            ? `✓ 来源已校验（${grounding.used.length}/${grounding.allowed.length}）`
+            ? grounding.used.length
+              ? `✓ 引用位置可追溯（${grounding.used.length} 处）`
+              : '✓ 本轮无需文件引用'
             : grounding.status === 'missing'
               ? '△ 回答缺少来源引用'
               : `! 发现 ${grounding.invalid.length} 个无效引用`}

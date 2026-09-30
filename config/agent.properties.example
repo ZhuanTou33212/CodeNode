@@ -97,6 +97,7 @@ soul_file=config/soul.md
 # rag.top_k=6
 # rag.max_context_chars=12000
 # rag.max_queries=5
+# rag.graph_hops=1           # 跨文件问题默认最多沿定义/调用/引用/导入关系扩展 1 跳；0=关闭，最多 2
 # rag.min_coverage=0.20
 # 可选收录/排除 glob（逗号分隔）；敏感文件无论配置如何都不会收录
 # rag.include=src/**,docs/**,README*
@@ -116,17 +117,26 @@ soul_file=config/soul.md
 # 生产档（百万级 / 每条 1024 维）：二选一
 #   openai：embed_provider=openai + embed_model=text-embedding-3-small + embed_dim=1024 + embed_dimensions=1024
 #   ollama：embed_provider=ollama + embed_model=bge-m3 + embed_dim=1024（bge-m3 原生 1024 维，中文友好）
-# rag.embed_top_k=40            # 向量层只对 BM25 预筛的 Top-K 做语义余弦，保证效率
-# rag.vector_weight=0.35        # 向量分融合权重（0~1）
+# rag.embed_top_k=40            # BM25 预筛候选上限；Milvus 后端下是 ANN topK
+# rag.memory_semantic_max_chunks=128  # 学习式嵌入 + memory：块数不超过此值时独立向量召回；超出则预筛。0=关闭
+# rag.vector_weight=0.35        # BM25 与向量倒数排名融合中的向量权重（0~1）
+# 可选重排：完整 POST URL，接受 {model,query,documents,top_n}，返回 results[{index,relevance_score}]
+# 只有显式配置 URL 才会向该服务发送候选代码片段；失败时保留原 RRF 顺序
+# rag.rerank_url=
+# rag.rerank_model=
+# rag.rerank_key=
+# rag.rerank_top_k=24
+# rag.rerank_timeout_ms=10000
 # retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
 
 # ---------- 向量后端（chunk 向量存放与检索方式） ----------
-# memory（默认）：进程内记忆化 + 仅对 BM25 预筛 Top-K 打分；零外部服务、零网络。
+# memory（默认）：进程内记忆化；默认哈希向量只重排 BM25 候选。配置学习式嵌入的小项目可独立向量召回。
+# sqlite：工程 .codenode 内的持久化 sqlite-vec 索引；无服务进程，需 Node/Electron 的 node:sqlite 与可选依赖 sqlite-vec。
 # milvus：外部 Milvus 服务，chunk 向量写入 collection，检索走全库 ANN（不再受 BM25 预筛限制）。
 #   注意：milvus 是本项目唯一会把 chunk 向量落到外部服务的形态，默认关闭；
 #   需先在项目根执行 `npm i @zilliz/milvus2-sdk-node`（SDK 刻意不进默认依赖，保持零依赖与体积）；
 #   服务端自建参考 milvus standalone（docker compose）或 Zilliz Cloud。
-# rag.vector_store=memory
+# rag.vector_store=memory         # memory | sqlite | milvus
 # rag.milvus_address=http://127.0.0.1:19530
 # rag.milvus_collection=          # 留空则按工程根自动命名 codenode_rag_<目录名>_<hash8>
 # rag.milvus_token=               # Zilliz Cloud / 带鉴权的服务端

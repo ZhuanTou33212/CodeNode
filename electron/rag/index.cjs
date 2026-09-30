@@ -7,7 +7,7 @@
  * - 多查询 Reciprocal Rank Fusion；
  * - 行号来源、相关性诊断与敏感文件硬排除。
  *
- * 向量层通过 electron/vectorStore 的可插拔后端实现（memory 默认 / milvus 外部 ANN）。
+ * 向量层通过 electron/vectorStore 的可插拔后端实现（memory 默认 / sqlite 本地持久化 / milvus 外部 ANN）。
  */
 'use strict';
 
@@ -17,6 +17,8 @@ const { shouldSkipDir, isBinaryFileName } = require('../tools/toolFiles.cjs');
 const { globToRegExp } = require('../tools/impl/shared.cjs');
 const { createEmbedder, cosine } = require('../embedder/index.cjs');
 const { createVectorStore, normalizeBackend } = require('../vectorStore/index.cjs');
+const { buildCodeGraph } = require('./codeGraph.cjs');
+const { rerankCandidates } = require('./rerank.cjs');
 
 const DEFAULTS = Object.freeze({
   enabled: true,
@@ -27,6 +29,12 @@ const DEFAULTS = Object.freeze({
   topK: 6,
   maxContextChars: 12000,
   maxQueries: 5,
+  graphHops: 1,
+  rerankUrl: '',
+  rerankModel: '',
+  rerankKey: '',
+  rerankTopK: 24,
+  rerankTimeoutMs: 10000,
   minCoverage: 0.2,
   include: [],
   exclude: [],
@@ -36,6 +44,7 @@ const DEFAULTS = Object.freeze({
   embedBase: '',
   embedKey: '',
   embedTopK: 40,
+  memorySemanticMaxChunks: 128,
   vectorWeight: 0.35,
   vectorStore: 'memory',
   milvusAddress: '',
@@ -47,6 +56,10 @@ const DEFAULTS = Object.freeze({
 
 /** 纯语义命中（BM25 未召回、仅由向量后端带回）并入结果的最小 rankScore 贡献，避免灌入无关行。 */
 const VECTOR_ONLY_MIN_CONTRIBUTION = 1;
+/** 纯向量命中达到此分数时仅视作值得深读的候选，不代表内容足以支持答案。 */
+const SEMANTIC_CANDIDATE_MIN_SCORE = 0.4;
+const PARENT_CONTEXT_CHARS = 500;
+const CODE_FILE_RE = /\.(?:[cm]?[jt]s|[jt]sx)$/i;
 
 const EXTRA_IGNORED_DIRS = new Set([
   '.codenode',
@@ -123,6 +136,13 @@ function normalizeOptions(options) {
     topK: clampInteger(o.topK, DEFAULTS.topK, 1, 20),
     maxContextChars: clampInteger(o.maxContextChars, DEFAULTS.maxContextChars, 1000, 50000),
     maxQueries: clampInteger(o.maxQueries, DEFAULTS.maxQueries, 1, 8),
+    graphHops: clampInteger(o.graphHops, DEFAULTS.graphHops, 0, 2),
+    rerankUrl: String(o.rerankUrl || '').trim(),
+    rerankModel: String(o.rerankModel || '').trim(),
+    rerankKey: String(o.rerankKey || '').trim(),
+    rerankTopK: clampInteger(o.rerankTopK, DEFAULTS.rerankTopK, 4, 40),
+    rerankTimeoutMs: clampInteger(o.rerankTimeoutMs, DEFAULTS.rerankTimeoutMs, 1000, 60000),
+    rerankClient: typeof o.rerankClient === 'function' ? o.rerankClient : null,
     minCoverage: clampNumber(o.minCoverage, DEFAULTS.minCoverage, 0.05, 1),
     include: normalizePatterns(o.include),
     exclude: normalizePatterns(o.exclude),
@@ -133,6 +153,7 @@ function normalizeOptions(options) {
     embedKey: String(o.embedKey || '').trim(),
     embedDimensions: String(o.embedDimensions || '').trim(),
     embedTopK: clampInteger(o.embedTopK, DEFAULTS.embedTopK, 5, 500),
+    memorySemanticMaxChunks: clampInteger(o.memorySemanticMaxChunks, DEFAULTS.memorySemanticMaxChunks, 0, 5000),
     vectorWeight: clampNumber(o.vectorWeight, DEFAULTS.vectorWeight, 0, 1),
     vectorStore: normalizeBackend(o.vectorStore),
     milvusAddress: String(o.milvusAddress || '').trim(),
@@ -246,9 +267,29 @@ function readUtf8(file, maxBytes) {
 function splitIntoChunks(relative, text, chunkLines, overlap) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const chunks = [];
-  const step = Math.max(1, chunkLines - overlap);
-  for (let start = 0; start < lines.length; start += step) {
-    const end = Math.min(lines.length, start + chunkLines);
+  const boundaryScore = (at) => {
+    const next = lines[at] || '';
+    const previous = lines[at - 1] || '';
+    if (/^\s*#{1,6}\s+/.test(next)) return 3;
+    if (/^\s*(?:(?:export|default|async|public|private|protected|static)\s+)*(?:function|class|interface|type|enum|def)\s+[\w$]+/.test(next)) return 3;
+    if (/^\s*(?:async\s+)?[\w$]+\s*\([^)]*\)\s*(?::[^{}]+)?\s*\{\s*$/.test(next) && !/^\s*(?:if|for|while|switch|catch)\b/.test(next)) return 2;
+    if (!previous.trim() && next.trim()) return 1;
+    return 0;
+  };
+  for (let start = 0; start < lines.length;) {
+    const hardEnd = Math.min(lines.length, start + chunkLines);
+    let end = hardEnd;
+    if (hardEnd < lines.length) {
+      const minEnd = Math.min(hardEnd, start + Math.max(overlap + 1, Math.ceil(chunkLines * 0.6)));
+      let bestScore = 0;
+      for (let at = minEnd; at <= hardEnd; at++) {
+        const score = boundaryScore(at);
+        if (score >= bestScore && score > 0) {
+          bestScore = score;
+          end = at;
+        }
+      }
+    }
     const content = lines.slice(start, end).join('\n').trimEnd();
     if (content.trim().length >= 12) {
       const tokens = tokenize(relative + '\n' + content);
@@ -265,8 +306,61 @@ function splitIntoChunks(relative, text, chunkLines, overlap) {
       });
     }
     if (end >= lines.length) break;
+    start = Math.max(start + 1, end - overlap);
   }
   return chunks;
+}
+
+function splitStructuredChunks(relative, text, segments, chunkLines, overlap) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const chunks = [];
+  const step = Math.max(1, chunkLines - overlap);
+  for (const segment of segments) {
+    for (let startLine = segment.startLine; startLine <= segment.endLine; startLine += step) {
+      const endLine = Math.min(segment.endLine, startLine + chunkLines - 1);
+      const content = lines.slice(startLine - 1, endLine).join('\n').trimEnd();
+      if (content.trim().length >= 12) {
+        const contexts = [];
+        if (segment.parentContext && segment.parentContext.content &&
+            segment.parentContext.endLine < startLine) contexts.push(segment.parentContext);
+        if (startLine > segment.startLine && segment.symbol) {
+          const signatureEnd = Math.min(segment.endLine, segment.startLine + 3);
+          contexts.push({
+            startLine: segment.startLine,
+            endLine: signatureEnd,
+            content: lines.slice(segment.startLine - 1, signatureEnd).join('\n').trimEnd(),
+          });
+        }
+        const searchable = relative + '\n' + (segment.qualifiedSymbol || '') + '\n' +
+          (segment.aliases || []).join(' ') + '\n' + content;
+        const tokens = tokenize(searchable);
+        chunks.push({
+          id: relative + ':' + startLine + ':' + endLine,
+          path: relative, startLine, endLine, content,
+          lowerContent: content.toLowerCase(),
+          pathTerms: new Set(tokenize(relative)),
+          frequencies: termFrequency(tokens), length: Math.max(1, tokens.length),
+          kind: segment.kind, symbol: segment.symbol || '',
+          qualifiedSymbol: segment.qualifiedSymbol || '',
+          aliases: segment.aliases || [],
+          parentSymbol: segment.parentSymbol || '',
+          contexts, calls: segment.calls || [], references: segment.references || [],
+          exported: !!segment.exported,
+        });
+      }
+      if (endLine >= segment.endLine) break;
+    }
+  }
+  return chunks;
+}
+
+function clipSource(content, startLine, endLine, maxChars) {
+  const source = String(content || '');
+  if (source.length <= maxChars) return { excerpt: source, endLine };
+  const visible = source.slice(0, Math.max(0, maxChars - 1));
+  const visibleEndLine = Math.min(endLine,
+    startLine + (visible.match(/\n/g) || []).length - (visible.endsWith('\n') ? 1 : 0));
+  return { excerpt: visible + '…', endLine: Math.max(startLine, visibleEndLine) };
 }
 
 function walkProject(root, maxFiles) {
@@ -329,28 +423,41 @@ function normalizeQueries(primary, alternatives, maxQueries) {
 
 function confidenceFor(results, queryRuns, minCoverage) {
   if (!results.length) {
-    return { level: 'none', answerable: false, topCoverage: 0, coveredQueries: 0, queryCount: queryRuns.length, reason: '没有匹配片段' };
+    return { level: 'none', answerable: false, basis: 'none', evidenceVerified: false, topCoverage: 0, topVectorScore: 0, coveredQueries: 0, queryCount: queryRuns.length, reason: '没有匹配片段' };
   }
   const topCoverage = Math.max(...results.map((item) => item.coverage || 0));
+  const topVectorScore = Math.max(...results.map((item) => item.vectorScore || 0));
   const coveredQueries = queryRuns.filter((run) => run.ranked.some((item) => item.coverage >= minCoverage)).length;
   const queryRatio = queryRuns.length ? coveredQueries / queryRuns.length : 0;
   const exact = results.some((item) => item.exactPhrase);
   let level = 'low';
   if ((topCoverage >= 0.68 || (exact && topCoverage >= 0.5)) && queryRatio >= 0.5) level = 'high';
   else if (topCoverage >= minCoverage && queryRatio >= 0.34) level = 'medium';
+  const semanticCandidate = results.some((item) => item.vectorOnly && item.vectorScore >= SEMANTIC_CANDIDATE_MIN_SCORE);
+  if (level === 'low' && semanticCandidate) level = 'medium';
+  const basis = topCoverage >= minCoverage ? 'lexical' : semanticCandidate ? 'semantic_candidate' : 'weak_match';
   return {
     level,
     answerable: level !== 'low',
+    basis,
+    evidenceVerified: false,
     topCoverage: Number(topCoverage.toFixed(4)),
+    topVectorScore: Number(topVectorScore.toFixed(4)),
     coveredQueries,
     queryCount: queryRuns.length,
     reason:
       level === 'high'
-        ? '查询词覆盖充分，可基于来源回答'
+        ? '查询词覆盖充分，仍需核对来源是否支持结论'
         : level === 'medium'
-          ? '存在可用来源，关键结论建议继续深读原文件'
+          ? basis === 'semantic_candidate'
+            ? '有纯向量命中候选，需深读原文件核实相关性'
+            : '存在匹配候选，关键结论需继续深读原文件'
           : '查询词覆盖较弱，应改写查询或缩小范围后再检索',
   };
+}
+
+function graphIntent(query) {
+  return /跨文件|调用|依赖|引用|关系|链路|流程|谁使用|谁调用|\b(call|caller|depend|reference|flow|architecture)\b/i.test(String(query || ''));
 }
 
 class LocalRagIndex {
@@ -363,6 +470,7 @@ class LocalRagIndex {
     this.dirtyFiles = new Set();
     this.forceRefresh = false;
     this.chunks = [];
+    this.graph = null;
     this.lastRefresh = null;
     this.embedder = null;
     this.vectorStore = null;
@@ -401,6 +509,10 @@ class LocalRagIndex {
         backend: this.options.vectorStore,
         root: this.root,
         dim: this.options.embedDim,
+        provider: this.options.embedProvider,
+        model: this.options.embedModel,
+        base: this.options.embedBase,
+        dimensions: this.options.embedDimensions,
         topK: this.options.embedTopK,
         address: this.options.milvusAddress,
         token: this.options.milvusToken,
@@ -436,14 +548,31 @@ class LocalRagIndex {
     const store = this.ensureVectorStore();
     const change = this.pendingChange;
     this.pendingChange = { deleted: /** @type {any[]} */ ([]), upserted: /** @type {any[]} */ ([]) };
-    if (!store || (!change.deleted.length && !change.upserted.length)) return null;
+    if (!store || (!change.deleted.length && !change.upserted.length &&
+      !(store.kind === 'sqlite' && !store.reconciled && !this.stats.truncated))) return null;
+    // 失败后重试时，旧批次可能包含同一文件的过期块。始终以当前文件缓存构建最新版本。
+    const affected = new Set([
+      ...change.deleted.map((item) => item.relative),
+      ...change.upserted.map((item) => item.path),
+    ]);
+    const deletedFiles = new Map(change.deleted.map((item) => [item.relative, item]));
+    const current = {
+      deleted: [...deletedFiles.values()],
+      upserted: [...affected].flatMap((relative) =>
+        (this.fileCache.get(relative)?.chunks || []).map((chunk) => ({
+          id: chunk.id, path: chunk.path, text: chunk.path + '\n' + chunk.content,
+        }))
+      ),
+      activeIds: this.stats.truncated ? null : [...this.chunkById.keys()],
+    };
     try {
-      const applied = await store.applyChanges(change, this.ensureEmbedder());
+      const applied = await store.applyChanges(current, this.ensureEmbedder());
       this.vectorStoreChange = applied || this.vectorStoreChange;
       this.lastVectorError = null;
       return applied;
     } catch (error) {
-      // 运行期失败（服务不可用/维度不一致）不固化：下一次检索仍会重试，但本次降级为纯 BM25
+      // 保留失败批次的文件名；下一轮从最新文件缓存重建块，避免丢更新或重放旧版本。
+      this.pendingChange.deleted.unshift(...[...affected].map((relative) => ({ relative, chunkIds: [] })));
       this.lastVectorError = (error && error.message) || String(error);
       return null;
     }
@@ -516,9 +645,15 @@ class LocalRagIndex {
         this.dirtyFiles.delete(item.relative);
         continue;
       }
+      // TypeScript 解析器体积较大，直到首次建立文件索引时才加载。
+      const structure = CODE_FILE_RE.test(item.relative)
+        ? require('./codeStructure.cjs').analyzeCode(item.relative, text) : null;
       this.fileCache.set(item.relative, {
         signature,
-        chunks: splitIntoChunks(item.relative, text, this.options.chunkLines, this.options.chunkOverlap),
+        chunks: structure
+          ? splitStructuredChunks(item.relative, text, structure.segments, this.options.chunkLines, this.options.chunkOverlap)
+          : splitIntoChunks(item.relative, text, this.options.chunkLines, this.options.chunkOverlap),
+        imports: structure ? structure.imports : [],
       });
       // 只有「本次重新分块」的文件才需要写入外部向量后端（未变文件复用已有向量）
       const freshChunks = this.fileCache.get(item.relative).chunks;
@@ -542,10 +677,14 @@ class LocalRagIndex {
     this.forceRefresh = false;
     this.chunks = [...this.fileCache.values()].flatMap((entry) => entry.chunks);
     this.chunkById = new Map(this.chunks.map((chunk) => [chunk.id, chunk]));
+    if (!this.graph || changedFiles || removedFiles || forceAll) {
+      this.graph = buildCodeGraph(this.fileCache, this.chunks);
+    }
     this.lastRefresh = new Date().toISOString();
     this.stats = {
       indexedFiles: this.fileCache.size,
       chunks: this.chunks.length,
+      graph: this.graph.stats,
       skippedFiles,
       changedFiles,
       reusedFiles,
@@ -644,7 +783,9 @@ class LocalRagIndex {
     const started = Date.now();
     const stats = this.refresh(opts.refresh === true);
     // 外部向量后端（milvus）在 refresh 期间只收集增删，这里落库后再检索
+    const hadVectorChanges = this.pendingChange.deleted.length > 0 || this.pendingChange.upserted.length > 0;
     const vectorChange = await this.syncVectorStore();
+    const vectorSyncError = hadVectorChanges ? this.lastVectorError : null;
     const mode = String(opts.mode || 'auto').toLowerCase();
     const queries = normalizeQueries(query, opts.queries, this.options.maxQueries);
     if (!queries.length || this.chunks.length === 0) {
@@ -656,6 +797,7 @@ class LocalRagIndex {
     }
 
     const queryRuns = queries.map((item) => this.scoreQuery(item, candidates));
+    const allowedChunkIds = new Set(candidates.map((item) => item.id));
     const topK = clampInteger(opts.topK, this.options.topK, 1, 20);
     const fusionDepth = Math.max(30, topK * 6);
     const fused = new Map();
@@ -684,28 +826,42 @@ class LocalRagIndex {
       });
     });
 
-    const ranked = [...fused.values()];
+    const ranked = [...fused.values()].sort((a, b) => b.fusion - a.fusion || b.score - a.score);
     const provider = (this.options.embedProvider || 'none').toLowerCase();
-    const vectorEnabled = provider !== 'none' && (mode === 'auto' || mode === 'hybrid' || mode === 'vector');
     const vectorWeight = mode === 'vector' ? 1 : mode === 'file' ? 0 : this.options.vectorWeight;
-    // 向量层：memory 后端只对 BM25 预筛候选打分；milvus 后端走全库 ANN，命中可能不在 BM25 候选内
+    const vectorEnabled = provider !== 'none' && vectorWeight > 0 && (mode === 'auto' || mode === 'hybrid' || mode === 'vector');
+    // 学习式嵌入的小型 memory 索引独立召回；默认哈希向量仍只重排 BM25 候选。
     let vectorScoresMap = new Map();
     let vectorOnly = 0;
-    let vectorError = null;
-    const vectorStore = vectorEnabled ? this.ensureVectorStore() : null;
+    let vectorError = vectorSyncError;
+    // 写入/删除失败时服务端可能仍有旧块，本轮不要继续使用可能过期的 ANN 结果。
+    const vectorStore = vectorEnabled && !vectorSyncError ? this.ensureVectorStore() : null;
+    const memorySemanticFullScan = !!vectorStore && vectorStore.kind === 'memory' &&
+      provider !== 'local' && candidates.length <= this.options.memorySemanticMaxChunks &&
+      this.options.memorySemanticMaxChunks > 0;
+    const memorySemanticSkipped = !!vectorStore && vectorStore.kind === 'memory' && provider !== 'local' &&
+      !memorySemanticFullScan;
     if (vectorEnabled && vectorStore) {
       try {
-        if (vectorStore.prefiltered) {
+        if (vectorStore.prefiltered && !memorySemanticFullScan) {
           const topCandidates = ranked.slice(0, this.options.embedTopK).map((item) => item.chunk);
           vectorScoresMap = await vectorStore.scoreCandidates(queries[0], topCandidates, this.ensureEmbedder());
         } else {
-          vectorScoresMap = await vectorStore.scoreCandidates(queries[0], null, this.ensureEmbedder());
+          const scopedFiles = opts.path || opts.filePattern
+            ? [...new Set(candidates.map((chunk) => chunk.path))]
+            : null;
+          vectorScoresMap = await vectorStore.scoreCandidates(queries[0], memorySemanticFullScan ? candidates : null,
+            this.ensureEmbedder(), { files: scopedFiles });
+          // Milvus 在服务端预过滤，本地再次校验；memory 全量扫描也只接收本次范围内的块。
+          vectorScoresMap = new Map([...vectorScoresMap].filter(([id]) => allowedChunkIds.has(id)));
           const known = new Set(ranked.map((item) => item.chunk.id));
           for (const [id, score] of vectorScoresMap) {
             if (known.has(id)) continue;
             const chunk = this.chunkById.get(id);
-            // 纯语义命中（BM25 完全未召回）：仅在其融合贡献足够时才并入，避免灌入无关行
-            if (!chunk || score * 100 * vectorWeight < VECTOR_ONLY_MIN_CONTRIBUTION) continue;
+            // 纯向量命中必须过最低相似度/贡献门槛，避免低分块涌入上下文。
+            if (!chunk || (memorySemanticFullScan || vectorStore.kind === 'sqlite'
+              ? score < SEMANTIC_CANDIDATE_MIN_SCORE
+              : score * 100 * vectorWeight < VECTOR_ONLY_MIN_CONTRIBUTION)) continue;
             known.add(id);
             ranked.push({
               chunk,
@@ -720,55 +876,173 @@ class LocalRagIndex {
             vectorOnly += 1;
           }
         }
-        this.lastVectorError = null;
+        if (!vectorSyncError) this.lastVectorError = null;
       } catch (error) {
         vectorScoresMap = new Map();
         vectorError = (error && error.message) || String(error);
         this.lastVectorError = vectorError;
       }
     }
+    const vectorOrder = [...vectorScoresMap].filter(([, score]) => score > 0)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const vectorRank = new Map(vectorOrder.map(([id], rank) => [id, 1 / (60 + rank + 1)]));
+    const lexicalNormalizer = 1 + Math.max(0, queries.length - 1) * 0.9;
+    const lexicalWeight = vectorOrder.length === 0 ? 1 : mode === 'vector' ? 0.15 : 1 - vectorWeight;
+    const semanticWeight = vectorOrder.length === 0 ? 0 : mode === 'vector' ? 0.85 : vectorWeight;
     for (const item of ranked) {
       item.vectorScore = vectorScoresMap.get(item.chunk.id) || 0;
       item.rankScore =
-        item.fusion * 1000 +
-        Math.min(item.score, 100) * 0.02 +
-        item.coverage * 2 +
-        (item.exactPhrase ? 1 : 0) +
-        item.vectorScore * 100 * vectorWeight;
+        (item.fusion / lexicalNormalizer * lexicalWeight +
+          (vectorRank.get(item.chunk.id) || 0) * semanticWeight) * 1000 +
+        Math.min(item.score, 100) * 0.001 +
+        item.coverage * 0.1 +
+        (item.exactPhrase ? 0.05 : 0);
     }
     ranked.sort((a, b) => b.rankScore - a.rankScore || b.score - a.score || a.chunk.path.localeCompare(b.chunk.path));
+
+    const requestedHops = clampInteger(opts.hops, this.options.graphHops, 0, 2);
+    const initialCoverage = ranked.length ? Math.max(...ranked.slice(0, 3).map((item) => item.coverage || 0)) : 0;
+    const graph = this.graph;
+    const expandGraph = requestedHops > 0 && graph &&
+      (opts.hops != null || graphIntent(queries[0]) || ranked.length < Math.min(3, topK) || initialCoverage < this.options.minCoverage);
+    let graphExpanded = 0;
+    if (expandGraph && graph) {
+      const known = new Set(ranked.map((item) => item.chunk.id));
+      if (ranked.length < 3) {
+        for (const chunk of graph.symbolMatches(queries.join(' '), 3)) {
+          if (!allowedChunkIds.has(chunk.id) || known.has(chunk.id)) continue;
+          const item = { chunk, score: 0, fusion: 0, coverage: 0, exactPhrase: false,
+            matchedQueries: [], matchedTerms: new Set(), vectorScore: 0, rankScore: 8,
+            graphOnly: true, graphRelation: 'defines' };
+          ranked.push(item);
+          known.add(chunk.id);
+          graphExpanded++;
+        }
+      }
+      let frontier = ranked.slice(0, 3).map((item) => ({ id: item.chunk.id, rankScore: item.rankScore }));
+      for (let depth = 1; depth <= requestedHops && frontier.length && graphExpanded < 12; depth++) {
+        const next = [];
+        for (const seed of frontier.slice(0, 5)) {
+          for (const edge of graph.neighbors(seed.id, 8)) {
+            if (known.has(edge.id) || !allowedChunkIds.has(edge.id)) continue;
+            const chunk = this.chunkById.get(edge.id);
+            if (!chunk) continue;
+            const rankScore = Math.min(8, seed.rankScore * 0.55) / depth;
+            ranked.push({ chunk, score: 0, fusion: 0, coverage: 0, exactPhrase: false,
+              matchedQueries: [], matchedTerms: new Set(), vectorScore: 0, rankScore,
+              graphOnly: true, graphRelation: edge.relation });
+            known.add(edge.id);
+            next.push({ id: edge.id, rankScore });
+            graphExpanded++;
+            if (graphExpanded >= 12) break;
+          }
+          if (graphExpanded >= 12) break;
+        }
+        frontier = next;
+      }
+      ranked.sort((a, b) => b.rankScore - a.rankScore || b.score - a.score || a.chunk.path.localeCompare(b.chunk.path));
+    }
+
+    let rerankApplied = false;
+    let rerankError = null;
+    let rerankCount = 0;
+    if (this.options.rerankUrl || this.options.rerankClient) {
+      const shortlist = ranked.slice(0, this.options.rerankTopK);
+      for (const item of ranked) {
+        if ((item.vectorOnly || item.graphOnly) && !shortlist.includes(item) && shortlist.length < 40) shortlist.push(item);
+      }
+      try {
+        const scores = await rerankCandidates(queries[0], shortlist, {
+          url: this.options.rerankUrl, model: this.options.rerankModel,
+          key: this.options.rerankKey, timeoutMs: this.options.rerankTimeoutMs,
+          client: this.options.rerankClient,
+        });
+        if (scores) {
+          const ordered = [...scores].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+          for (let rank = 0; rank < ordered.length; rank++) {
+            const item = ranked.find((candidate) => candidate.chunk.id === ordered[rank][0]);
+            if (!item) continue;
+            item.rrfScore = item.rankScore;
+            item.rerankScore = ordered[rank][1];
+            item.rankScore = 100 + ordered.length - rank;
+          }
+          ranked.sort((a, b) => b.rankScore - a.rankScore || a.chunk.path.localeCompare(b.chunk.path));
+          rerankApplied = true;
+          rerankCount = ordered.length;
+        }
+      } catch (error) {
+        rerankError = (error && error.message) || String(error);
+      }
+    }
 
     const maxChars = clampInteger(opts.maxChars, this.options.maxContextChars, 1000, 50000);
     const chosen = [];
     const chosenIds = new Set();
+    const parentContextSeen = new Set();
     const perFile = new Map();
     let usedChars = 0;
     const addResult = (item) => {
       if (chosen.length >= topK || chosenIds.has(item.chunk.id)) return false;
+      const redundant = chosen.some((prior) => {
+        if (prior.path !== item.chunk.path) return false;
+        const overlap = Math.max(0, Math.min(prior.endLine, item.chunk.endLine) - Math.max(prior.startLine, item.chunk.startLine) + 1);
+        const shorter = Math.min(prior.endLine - prior.startLine + 1, item.chunk.endLine - item.chunk.startLine + 1);
+        return overlap / Math.max(1, shorter) >= 0.6;
+      });
+      if (redundant) return false;
       const remaining = maxChars - usedChars;
       if (remaining < 120) return false;
-      let excerpt = item.chunk.content;
-      if (excerpt.length > remaining) excerpt = excerpt.slice(0, Math.max(0, remaining - 1)) + '…';
+      const contexts = [];
+      let contextChars = 0;
+      for (const context of item.chunk.contexts || []) {
+        if (!context.content || context.endLine >= item.chunk.startLine) continue;
+        const key = item.chunk.path + ':' + context.startLine + ':' + context.endLine;
+        if (parentContextSeen.has(key) || contexts.some((part) => part.key === key)) continue;
+        const budget = Math.min(PARENT_CONTEXT_CHARS - contextChars, remaining - contextChars - 120);
+        if (budget < 24) break;
+        const clipped = clipSource(context.content, context.startLine, context.endLine, budget);
+        contexts.push({ key, citation: item.chunk.path + '#L' + context.startLine + '-L' + clipped.endLine,
+          path: item.chunk.path, startLine: context.startLine, endLine: clipped.endLine, excerpt: clipped.excerpt });
+        contextChars += clipped.excerpt.length;
+      }
+      const clipped = clipSource(item.chunk.content, item.chunk.startLine, item.chunk.endLine, remaining - contextChars);
       chosen.push({
-        citation: item.chunk.path + '#L' + item.chunk.startLine + '-L' + item.chunk.endLine,
+        citation: item.chunk.path + '#L' + item.chunk.startLine + '-L' + clipped.endLine,
         path: item.chunk.path,
+        kind: item.chunk.kind || 'text',
+        symbol: item.chunk.qualifiedSymbol || undefined,
         startLine: item.chunk.startLine,
-        endLine: item.chunk.endLine,
+        endLine: clipped.endLine,
         score: Number(item.score.toFixed(4)),
-        fusionScore: Number(item.rankScore.toFixed(4)),
+        fusionScore: Number((item.rrfScore == null ? item.rankScore : item.rrfScore).toFixed(4)),
+        rerankScore: item.rerankScore == null ? undefined : Number(item.rerankScore.toFixed(4)),
+        selectionScore: Number(item.rankScore.toFixed(4)),
         coverage: Number(item.coverage.toFixed(4)),
         exactPhrase: item.exactPhrase,
         vectorOnly: item.vectorOnly === true,
         vectorScore: Number(item.vectorScore.toFixed(4)),
+        graphOnly: item.graphOnly === true,
+        graphRelation: item.graphRelation || undefined,
         matchedQueries: [...new Set(item.matchedQueries)],
         matchedTerms: [...item.matchedTerms].slice(0, 16),
-        excerpt,
+        excerpt: clipped.excerpt,
+        contexts: contexts.map(({ key, ...context }) => context),
       });
       chosenIds.add(item.chunk.id);
+      for (const context of contexts) parentContextSeen.add(context.key);
       perFile.set(item.chunk.path, (perFile.get(item.chunk.path) || 0) + 1);
-      usedChars += excerpt.length;
+      usedChars += clipped.excerpt.length + contextChars;
       return true;
     };
+    // 至多预留三分之一席位给高分纯向量命中，避免词法 Top-K 占满上下文。
+    const semanticReserve = rerankApplied ? 0 : Math.min(2, Math.floor(topK / 3));
+    for (const item of ranked.filter((entry) => entry.vectorOnly && entry.vectorScore >= SEMANTIC_CANDIDATE_MIN_SCORE).slice(0, semanticReserve)) {
+      addResult(item);
+    }
+    if (!rerankApplied && topK >= 4) {
+      const graphCandidate = ranked.find((entry) => entry.graphOnly);
+      if (graphCandidate) addResult(graphCandidate);
+    }
     for (const item of ranked) {
       if ((perFile.get(item.chunk.path) || 0) >= 2) continue;
       addResult(item);
@@ -780,6 +1054,7 @@ class LocalRagIndex {
         if (chosen.length >= topK || maxChars - usedChars < 120) break;
       }
     }
+    chosen.sort((a, b) => b.selectionScore - a.selectionScore || a.path.localeCompare(b.path));
 
     const quality = confidenceFor(chosen, queryRuns, this.options.minCoverage);
     const vectorStats = await this.vectorDiagnostics();
@@ -792,10 +1067,16 @@ class LocalRagIndex {
         ...stats,
         candidateChunks: candidates.length,
         fusedCandidates: ranked.length,
+        graph: { ...(graph ? graph.stats : {}), expanded: graphExpanded, hops: expandGraph ? requestedHops : 0 },
+        rerank: { enabled: !!(this.options.rerankUrl || this.options.rerankClient), applied: rerankApplied,
+          candidates: rerankCount, error: rerankError || undefined },
         vector: {
           provider: vectorEnabled ? this.options.embedProvider : 'none',
           backend: vectorEnabled && this.vectorStore ? this.vectorStore.kind : 'none',
-          prefiltered: vectorEnabled && this.vectorStore ? this.vectorStore.prefiltered : null,
+          prefiltered: vectorEnabled && this.vectorStore ? this.vectorStore.prefiltered && !memorySemanticFullScan : null,
+          memorySemanticFullScan,
+          memorySemanticSkipped,
+          memorySemanticMaxChunks: this.options.memorySemanticMaxChunks,
           weight: vectorWeight,
           rankedWithVector: vectorScoresMap.size,
           vectorOnly,
@@ -815,6 +1096,7 @@ function cacheKey(root, options) {
   const normalized = normalizeOptions(options);
   // 注入的测试客户端不参与缓存键（同一工程 + 同一配置应复用同一索引）
   delete normalized.vectorStoreClient;
+  delete normalized.rerankClient;
   return path.resolve(root || '.') + '\n' + JSON.stringify(normalized);
 }
 

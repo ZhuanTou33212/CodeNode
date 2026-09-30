@@ -1,7 +1,7 @@
 # Agentic RAG 标量化 + 向量化方案
 
 > 目标：让本地 Agentic RAG 在「需要精准数据时走标量查询，需要语义联想时走向量查询，混合场景自动融合」，
-> 全程零云端索引，精准数据（画布节点 prompt/属性等）不随上下文返回云端。
+> 默认零云端索引；画布节点属性先保留在本地，Agent 按需查询后才进入模型上下文。
 
 ## 1. 现状与问题
 
@@ -42,11 +42,11 @@
 - **存储**：`electron/scalars/index.cjs` → `<root>/.codenode/scalars.json`，原子写入，按工程根缓存单例。
 - **写入**：画布工具（`get_workbench_model` / `workbench_edit` / `bulk_edit` / `write_analysis_md`）执行时，
   把节点完整属性（`name/label/prompt/goal/members/filePath/role/status/position` 等）写成标量
-  `node:<id>`（完整对象）与 `node:<id>:<attr>`（单属性），**不随工具结果返回上下文/云端**。
+  `node:<id>`（完整对象）与 `node:<id>:<attr>`（单属性），默认不随画布工具结果返回；Agent 按需查询后，命中的值会进入模型上下文。
 - **读取**：
   - `query_scalars`：`key=node:n1` / `key=node:n1:prompt` / `prefix=node:` 精确查询。
   - `retrieve_context mode=scalar`：标量精确/语义命中，来源以 `scalar:<key>` 引用。
-  - `retrieve_context mode=auto`：**自动路由**，查询含节点名字/prompt/具体数据/属性时按语义在标量库查找（无需精确 key）。
+  - `retrieve_context mode=auto`：同时查文件与标量，并标明优先来源；标量按 key 或文本匹配（无需精确 key）。
 - **隔离**：`.codenode/` 被 RAG 硬排除（`EXTRA_IGNORED_DIRS`），标量内容永不进入文件检索索引。
 
 ### 2.2 向量层（语义联想，可插拔）
@@ -56,8 +56,9 @@
   - `openai`：`rag.embed_base + embed_key + embed_model`，走 `/v1/embeddings`。
   - `ollama`：`rag.embed_base + embed_model`，走 `/api/embeddings`。
   - `none`：关闭向量层，退化为纯 BM25。
-- **融合策略（agentic）**：BM25 先做**预筛**（`rag.embed_top_k`，默认 40），只对预筛候选做向量余弦，
-  兼顾效率与召回；向量分 `vectorScore * 100 * weight` 并入 `rankScore`，`mode` 决定权重：
+- **融合策略（agentic）**：默认哈希向量只重排 BM25 预筛候选（`rag.embed_top_k`，默认 40）；
+  学习式嵌入 + `memory` 且块数不超过 `rag.memory_semantic_max_chunks` 时独立扫描块向量；SQLite 在工程本地持久化向量，Milvus 走外部 ANN。
+  BM25 与向量各自排序后按倒数排名融合，并为高分纯向量命中保留少量 Top-K 席位；`mode` 决定权重：
   - `file`：weight=0（纯词法）
   - `auto`/`hybrid`：weight=`rag.vector_weight`（默认 0.35）
   - `vector`：weight=1（语义优先）
@@ -66,16 +67,18 @@
 
 | 后端 | 位置 | 检索方式 | 外部依赖 |
 | --- | --- | --- | --- |
-| `memory`（默认） | 进程内 `Map`（记忆化） | 仅对 BM25 预筛 Top-K 打余弦 | 无 |
+| `memory`（默认） | 进程内 `Map`（有界记忆化） | 默认哈希向量重排 BM25；学习式嵌入的小项目可独立召回 | 无额外向量库 |
+| `sqlite` | 工程 `.codenode/rag-vectors-*.sqlite` | 本地精确近邻检索，文件范围在查询前过滤 | 可选 `sqlite-vec`，无需服务进程 |
 | `milvus` | 外部 Milvus collection | **全库 ANN**（不受 BM25 预筛限制），命中并回 BM25 结果一起融合 | Milvus 服务 + `@zilliz/milvus2-sdk-node` |
 
-- 实现：`electron/vectorStore/{index,memory,milvus}.cjs`；`LocalRagIndex` 只依赖统一契约
-  （`prefiltered / applyChanges / scoreCandidates / dropLocal / stats / close`），两种后端可互换。
+- 实现：`electron/vectorStore/{index,memory,sqlite,milvus}.cjs`；`LocalRagIndex` 只依赖统一契约
+  （`prefiltered / applyChanges / scoreCandidates / dropLocal / stats / close`），三种后端可互换。
+- SQLite 后端依赖当前 Electron 的 `node:sqlite` 与 `sqlite-vec` 扩展，默认不启用；它减少进程内向量缓存并保留跨会话索引，当前使用精确扫描。较大项目应按实际数据量测延迟，再决定是否使用 Milvus ANN。
 - **写入时机**：`refresh()` 只收集「本次重新分块的文件」与「变更/删除文件的旧块」，
   `retrieve()` 开头调用 `syncVectorStore()` 落库（先按 `file` 过滤删除旧块，再写入新块），
   未变文件不重写——向量写入天然是增量的。
-- **纯语义命中**：milvus 后端命中的块若 BM25 完全未召回，会以 `vector-only` 并入结果
-  （要求向量贡献 ≥ 1 分，避免灌入无关行），工具文本中标注 `vector-only（BM25 未召回，仅语义命中）`。
+- **纯向量命中**：SQLite、Milvus 或 memory 全量扫描命中的块若 BM25 完全未召回，会以 `vector-only` 并入结果；
+  SQLite/memory 要求余弦分 ≥ 0.4，Milvus 要求向量分达到最低门槛，工具文本会标明来源。
 - **检索一致性默认 `strong`**（`rag.milvus_consistency`，可选 bounded/eventually/session/default）：
   默认 Bounded 时**按文件删除的旧块有几秒仍会被召回**（实测 ~3s），刚改完文件就问会出现旧内容；
   Strong 让刚写入/刚删除立即可见（真机探针 4/4 稳定）。服务端不支持该级别时（部分云托管只支持 Bounded）
@@ -155,31 +158,35 @@ minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/mini
 ### 2.3 自动路由（名字/具体数据 → 标量库；代码/语义 → 向量库）
 
 `retrieve_context.mode`：
-- `auto`（默认）：**自动路由**。`ScalarStore.search` 对标量库做语义检索（无需精确 key），
-  名字/prompt/具体数据/属性类查询或形如 `node:` 的 key 命中时并入 `scalar:<key>` 来源并提升可信度；
-  代码/文档/语义联想查询走文件 BM25(+向量) 检索（`path#Lx-Ly`）。
-  混合场景两类来源都返回，并在结果中给出 `routing` 决策（`标量库优先 / 向量库优先 / 混合`）说明应优先采信哪一类。
+- `auto`（默认）：同时检索标量与项目文件；`ScalarStore.search` 按 key/文本匹配节点属性，
+  文件走 BM25 和已配置的向量层。结果中的 `routing` 标明优先查看哪类来源。
 - `hybrid`：标量语义 + 文件向量按配置权重融合（标量命中阈值比 auto 更宽松）。
 - `scalar`：仅本地标量（精确 key + 语义匹配）。
 - `file` / `vector`：仅文件检索。
 
 路由判定由 `routeIntent`（查询关键词打分 + 实际命中情况）完成，全部本地、零网络。
 
+### 2.4 结构索引、关系扩展与结果整理
+
+- TS/JS 使用 TypeScript AST 将函数、类、方法等声明分块；长声明再按行拆分。命中方法或长函数中段时，单独附上可引用的父级声明。其他语言保留原有行级策略。
+- 索引项目内符号定义、静态调用、标识符引用和相对导入。跨文件问题或弱匹配时默认沿关系扩展 1 跳；工具参数 `hops` 可限定为 0–2。关系是静态近似，动态分派需深读原文。
+- 选块时去掉高度重叠的片段；主片段和父级上下文共用 `rag.max_context_chars` 预算。可选重排器只处理前排候选，发送查询与候选片段到显式配置的 URL；失败时保留 RRF 排序。
+
 ## 3. 数据流（一次典型问答）
 
 ```
 1. Agent 需要画布节点详情
    └─► query_scalars key=node:n1:prompt      → 本地精确值（scalar:n1:prompt）
-2. Agent 需要相关源码
-   └─► retrieve_context mode=auto query=…    → BM25 预筛 → local 向量余弦 → RRF 融合
-3. 低可信度时
-   └─► 改写查询 / 缩小 path / retrieve_context mode=vector / 标量精确查询
+ 2. Agent 需要相关源码
+    └─► retrieve_context mode=auto query=…    → AST/行级块 + BM25/向量 → RRF → 有界关系扩展 → 去重/可选重排
+ 3. 低匹配度时
+    └─► 关系扩展候选 / 改写查询 / 缩小 path / read_file 深读 / 标量精确查询
 ```
 
 ## 4. 安全与成本
 
 - 索引、向量、标量全部本地；向量 API 提供方只在显式配置后启用。
-- 画布节点 prompt 等精准数据不发送云端（标量层落地）；文件检索结果仍受 `path#Lx-Ly` 引用白名单校验。
+- 画布节点 prompt 等数据先存于本地标量库，按需查询后才进入模型上下文；文件引用校验核对本轮读过的路径与行号范围。
 - `retrieve_context` / `query_scalars` 结果默认不经过子代理压缩（保证引用/值保真），由 `agent.compression.exclude` 控制。
 
 ## 5. 配置速查
@@ -192,9 +199,16 @@ rag.embed_model=                  # openai: text-embedding-3-small / ollama: nom
 rag.embed_base=                   # openai: https://api.openai.com/v1 / ollama: http://localhost:11434
 rag.embed_key=
 rag.embed_top_k=40
+rag.graph_hops=1                 # 0=关闭，最多 2
+rag.memory_semantic_max_chunks=128  # 学习式嵌入 + memory 的全量扫描上限；超出后回到 BM25 预筛
 rag.vector_weight=0.35
+rag.rerank_url=                  # 可选完整 POST URL；默认空，使用时发送查询和候选代码
+rag.rerank_model=
+rag.rerank_key=
+rag.rerank_top_k=24
+rag.rerank_timeout_ms=10000
 # 向量后端
-rag.vector_store=memory           # memory（默认）| milvus（外部服务，需 npm i @zilliz/milvus2-sdk-node）
+rag.vector_store=memory           # memory（默认）| sqlite（本地持久化）| milvus（外部服务）
 rag.milvus_address=http://127.0.0.1:19530
 rag.milvus_collection=            # 留空 = codenode_rag_<目录名>_<hash8>
 rag.milvus_token=
@@ -221,10 +235,8 @@ agent.compression.max_calls=8
 
 ## 6. 后续演进（未在本期实现）
 
-1. **向量增量失效**：文件变更时同步失效对应 chunk 向量，避免本地 API 向量重算全量。
-   （已部分落地：milvus 后端按文件 delete+insert；chunk 级复用仍未实现）
-2. **索引内存换磁盘**：chunk 向量/词频持久化，支持大仓库内存可控。
-   （已部分落地：milvus 后端把向量外置到服务端持久化；memory 后端仍全内存）
+1. **更细粒度的增量更新**：当前文件级失效与 SQLite 块哈希复用已落地；后续可减少变更文件内未变化块的重嵌入。
+2. **更大规模索引**：SQLite 已持久化向量，Milvus 可外置；词法块与关系图仍在进程内，需实测大仓库内存与延迟。
 3. **标量命名空间化**：`node:`/`edge:`/`tool:`/`project:` 独立命名空间 + TTL，支持过期清理。
 4. ~~**混合路由自动打分**~~ ✅ **已落地**：`ScalarStore.search` 语义检索 + `retrieve_context` 的 `routeIntent` 关键词路由，Agent 无需预判来源。
 5. **跨工程标量**：项目模板/共享模块的标量只读复用。

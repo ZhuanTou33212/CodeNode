@@ -108,6 +108,12 @@ async function main() {
   const sr = await registry.execute('retrieve_context', { query: 'node:' + createdId, mode: 'scalar' }, ctx2);
   assert.strictEqual(sr.ok, true);
   assert.ok(sr.data.sources.some((s) => s.citation === 'scalar:node:' + createdId), '标量模式应返回 scalar:<key> 来源');
+  assert.strictEqual(sr.data.quality.level, 'high', '精确 key 命中可标记为高');
+  const weakScalar = await registry.execute('retrieve_context', {
+    query: '登录模块 ' + Array.from({ length: 20 }, (_, i) => 'qqqzz' + i).join(' '), mode: 'scalar',
+  }, ctx2);
+  assert.ok(weakScalar.data.sources.length > 0, '弱文本匹配仍可返回候选');
+  assert.strictEqual(weakScalar.data.quality.level, 'low', '弱文本匹配不得标记为高可信');
 
   // ---- 5b. 标量语义搜索（无需精确 key）+ auto 自动路由 ----
   const searchHits = getScalarStore(root).search({ query: '登录模块的 prompt', max: 5 });
