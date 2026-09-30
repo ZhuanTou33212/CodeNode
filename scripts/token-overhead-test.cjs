@@ -166,7 +166,8 @@ async function runTurn(registry, script) {
    * 画布那一档的上界**没有**达到审计文档的 6,000 估算：文档的画布 profile 是「core + 画布工具」，
    * 而 core 只留 8 个工具；本实现把 `retrieve_context` / `execute_shell` / `find_files` /
    * `list_directory` 等都留在常驻面（常驻运行规则直接点名它们，裁掉会让规则悬空），
-   * 并且画布轮仍带 code 面（同因）。实测 8,723。要更激进可显式配 `agent.tool_profile=core,canvas`。
+   * 并且画布轮仍带 code 面（同因）；固定规则压缩后实测 8,873 tokens，回到 9,000 以内。
+   * 要更激进可显式配 `agent.tool_profile=core,canvas`。
    * 这里的上界是**棘轮**：只允许随「有意新增能力」抬高，且必须在注释里写明理由。
    */
   check('[B] 画布固定输入 ≤9,000 tokens（文档估算的 6,000 未达，理由见本文件注释）', canvasFace.fixed <= 9000, 'fixed=' + canvasFace.fixed);
@@ -229,13 +230,13 @@ async function runTurn(registry, script) {
   check('[D] 纯代码面：核心规则一条不少（读写文件 / 低敏感免问 / 读取策略）',
     codeSystem.includes('读写文件用 read_file / write_file / edit_file') &&
     codeSystem.includes('低敏感/只读操作') && codeSystem.includes('读取策略（泛读/精读分层'));
-  check('[D] 纯代码面：追加了 discover_tools 那条（20）', codeSystem.includes('discover_tools 搜功能词'));
+  check('[D] 纯代码面：追加了 discover_tools 那条（21）', codeSystem.includes('discover_tools 搜功能词'));
   check('[D] 画布面：画布规则 2 与建模规则 a–h 都在（工具在面里 → 规则一条不收敛）',
     canvasFace.system.includes('需要读取画布时调用 get_workbench_model') &&
     canvasFace.system.includes(agent.CANVAS_RULES.slice(0, 60)) &&
     canvasFace.system.includes('【画布建模规则本次未注入】') === false,
     'len=' + canvasFace.system.length);
-  check('[D] 未裁剪时一条规则都不收敛、也不追加规则 20',
+  check('[D] 未裁剪时一条规则都不收敛、也不追加规则 21',
     !pureNoTrim.includes('discover_tools 搜功能词') && pureNoTrim.includes('需要读取画布时调用 get_workbench_model'));
 
   // ============================ E. 变异校验（用例有判别力） ============================

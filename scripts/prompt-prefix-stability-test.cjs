@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const agent = require('../electron/agent.cjs');
+const profiles = require('../electron/tools/profiles.cjs');
 
 let failures = 0;
 function check(label, condition, detail) {
@@ -124,11 +125,11 @@ console.log('\n== B. 规则块拆两段：只搬整行、正文零改字 ==');
     return JSON.stringify(u) === JSON.stringify(v);
   })());
 
-  // B2：真 prompt —— 编号并集完整（1..19 连续），缺号只能来自门控
+  // B2：真 prompt —— 完整规则为 1..20；21 专供裁剪后 discover_tools 提示
   const full = build({ canvas: '' , canvasMode: 'auto' });
   const fullNums = [...new Set(promptRuleNumbers(full))].sort((a, b) => a - b);
-  check('[B] 未裁剪时规则编号并集 = 1..19 连续（一行都不能丢）',
-    JSON.stringify(fullNums) === JSON.stringify(Array.from({ length: 19 }, (_, i) => i + 1)), JSON.stringify(fullNums));
+  check('[B] 未裁剪时规则编号并集 = 1..20 连续（一行都不能丢）',
+    JSON.stringify(fullNums) === JSON.stringify(Array.from({ length: 20 }, (_, i) => i + 1)), JSON.stringify(fullNums));
   check('[B] 任务段与稳定段各非空（真的分了两段）',
     agent.splitPromptSections(full).filter((s) => s.id === 'task-rules' || s.id === 'runtime-rules').every((s) => s.text.length > 200));
   const trimmed = build({
@@ -137,12 +138,12 @@ console.log('\n== B. 规则块拆两段：只搬整行、正文零改字 ==');
   });
   const trimmedNums = [...new Set(promptRuleNumbers(trimmed))].sort((a, b) => a - b);
   // 这次给的暴露面是 core 子集（没有 workbench_edit / query_scalars）→ 规则 2/6/12/19 被门控摘掉，
-  // 并追加规则 20（告诉模型用 discover_tools 把能力找回来）。
-  check('[B] 裁剪时：点名未暴露工具的规则（2/6/12/19）消失、并追加规则 20（取回入口）',
-    JSON.stringify(trimmedNums) === JSON.stringify([1, 3, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20]), JSON.stringify(trimmedNums));
+  // 并追加规则 21（告诉模型用 discover_tools 把能力找回来）。
+  check('[B] 裁剪时：点名未暴露工具的规则（2/6/12/19/20）消失、并追加规则 21（取回入口）',
+    JSON.stringify(trimmedNums) === JSON.stringify([1, 3, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 21]), JSON.stringify(trimmedNums));
   const taskNumsReal = ruleNumbers(agent.splitPromptSections(trimmed).find((s) => s.id === 'task-rules').text);
   check('[B] 真 prompt 上任务段只收「按面变化」的那几条（7 的剩余部分 / 14 画布块 / 20）',
-    JSON.stringify(taskNumsReal) === JSON.stringify([7, 14, 20]), JSON.stringify(taskNumsReal));
+    JSON.stringify(taskNumsReal) === JSON.stringify([7, 14, 21]), JSON.stringify(taskNumsReal));
   check('[B] 稳定段里不含任何任务规则编号', (() => {
     const stableNums = ruleNumbers(agent.splitPromptSections(trimmed).find((s) => s.id === 'runtime-rules').text);
     return stableNums.every((n) => !agent.TASK_RULE_NUMBERS.includes(n));
@@ -155,7 +156,8 @@ console.log('\n== C. 稳定前缀：动态内容变化不动前缀 ==');
   const base = build({ canvas: CANVAS_A });
   const boundary = agent.splitPromptSections(base).find((s) => !s.stable).start;
   const stablePrefix = base.slice(0, boundary);
-  check('[C] 稳定前缀非空且不算窄（≥2,000 字符）', boundary >= 2000, 'prefix=' + boundary);
+  // 固定规则精简后仍保留约 1.8k 字符稳定前缀；其余预算用于减少每轮 system 开销。
+  check('[C] 稳定前缀保持 ≥1,800 字符', boundary >= 1800, 'prefix=' + boundary);
   check('[C] 稳定前缀里不含任何动态段标题',
     !['【任务相关规则', '【项目 Skills', '【项目长期记忆', '【用户级记忆', '【当前画布节点清单'].some((t) => stablePrefix.includes(t)));
 
@@ -192,16 +194,18 @@ console.log('\n== C. 稳定前缀：动态内容变化不动前缀 ==');
 // ============================ E. 跨任务类型 + 接线 ============================
 console.log('\n== E. 跨任务类型前缀（棘轮）+ 接线 ==');
 {
-  // 真实装配下跨类型：画布轮带画布层与画布面，纯代码轮不带 —— 前缀到「工具引导/任务规则」为止
-  const code = build({ canvas: '', canvasMode: 'auto', guide: agent.buildToolGuide([{ name: 'read_file', description: '读' }]) });
-  const canvas = build({ canvas: CANVAS_A, canvasMode: 'always', guide: agent.buildToolGuide([{ name: 'read_file', description: '读' }, { name: 'workbench_edit', description: '画' }]) });
+  // 真实装配下跨类型：两面共享 core/code 工具引导，画布面再追加画布工具。
+  const commonTools = [...new Set([...profiles.PROFILE_TOOLS.core, ...profiles.PROFILE_TOOLS.code])];
+  const canvasTools = [...new Set([...commonTools, ...profiles.PROFILE_TOOLS.canvas])];
+  const guideFor = (names) => agent.buildToolGuide(names.map((name) => ({ name })));
+  const code = build({ canvas: '', canvasMode: 'auto', guide: guideFor(commonTools) });
+  const canvas = build({ canvas: CANVAS_A, canvasMode: 'always', guide: guideFor(canvasTools) });
   const common = commonPrefix(code, canvas);
   /**
    * 跨任务类型的公共前缀止于**工具引导段**（面不同 → 引导不同），而引导段按审计给的顺序属稳定区。
-   * 实测 2,325（重排前是 344）。这条棘轮只允许涨：要再涨就得把引导段也移到边界之后
-   * （那会让「同一任务类型的稳定前缀」短 288 字符，按现口径不划算）。
+   * 用实际共享工具面量测；专用画布工具排在共享工具之后，避免短测试样例低估可缓存前缀。
    */
-  check('[E] 跨任务类型公共前缀 ≥2,300 字符（重排前实测 344）', common >= 2300, 'common=' + common);
+  check('[E] 跨任务类型公共前缀 ≥2,300 字符（基于实际共享工具面）', common >= 2300, 'common=' + common);
   check('[E] 跨类型前缀的边界落在**任务规则/画布层**附近（不是被记忆/画布清单打断）',
     common >= agent.splitPromptSections(code).find((s) => s.id === 'runtime-rules').start + 1000, 'common=' + common);
 
@@ -213,8 +217,10 @@ console.log('\n== E. 跨任务类型前缀（棘轮）+ 接线 ==');
   check('[E] 两段都在登记表里（稳定段 runtime-rules / 任务段 task-rules）',
     agent.PROMPT_SECTIONS.find((s) => s.id === 'runtime-rules').stable === true &&
     agent.PROMPT_SECTIONS.find((s) => s.id === 'task-rules').stable === false);
-  check('[E] 任务段编号表与工具面门控表指向同一批编号（加规则时两处都要登记）',
-    JSON.stringify(agent.TASK_RULE_NUMBERS) === JSON.stringify([2, 6, 7, 12, 19, 20]));
+  const gatedNumbers = agent.RUNTIME_RULE_GATES.map((rule) => rule.rule);
+  const discoverNumber = Number(/^(\d+)\./.exec(agent.RUNTIME_RULE_DISCOVER)[1]);
+  check('[E] 任务段编号表 = 工具门控规则 + 裁剪后追加规则（加规则时同步登记）',
+    JSON.stringify(agent.TASK_RULE_NUMBERS) === JSON.stringify([...new Set([...gatedNumbers, discoverNumber])].sort((a, b) => a - b)));
 }
 
 console.log('\n' + (failures === 0 ? 'PROMPT PREFIX STABILITY TEST: PASS（稳定内容前置、规则按面分层且零改字）' : 'PROMPT PREFIX STABILITY TEST: FAIL —— ' + failures + ' 项断言未通过'));
