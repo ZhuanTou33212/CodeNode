@@ -205,6 +205,33 @@ async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: str
   check('未完成的只读步骤进入待办清单', (planRead.pendingSteps || []).some((step) => step.tool === 'read_file' && step.effect === 'read'), JSON.stringify(planRead.pendingSteps));
   check('自动续跑不会被误判为需要人工复核', planRead.requiresReview !== true);
 
+  // ---- 场景 1c：中断在等待用户确认/回答时，即使待办只读也不能无视交互状态自动续跑 ----
+  console.log('\n== 场景 1c：等待用户时中断 → 必须人工复核 ==');
+  const runWaitingUser = 'run-resume-waiting-user';
+  runStore.startRun(root, runWaitingUser, { prompt: '读取 note.txt', model: 'scripted-model' });
+  runCheckpoint.recordIntent(root, runWaitingUser, {
+    callId: 'waiting-read',
+    tool: 'read_file',
+    argsDigest: digest({ path: 'note.txt' }),
+    effect: 'read',
+    idemKey: idempotencyKey(runWaitingUser, 'read_file', { path: 'note.txt' }),
+  });
+  runStore.appendEvent(root, runWaitingUser, 'run_state', {
+    state: 'WAITING_USER',
+    previous: 'WAITING_TOOL',
+    reason: 'confirm:write_file',
+  });
+  const planWaitingUser = runCheckpoint.planResume(root, runWaitingUser, {
+    ledger: new SideEffectLedger({ projectRoot: root, scopeRunId: runWaitingUser }),
+  });
+  check('续跑计划保留中断时的 WAITING_USER 状态', planWaitingUser.state === 'WAITING_USER', String(planWaitingUser.state));
+  check('等待用户时中断不会因为待办只读而自动续跑',
+    planWaitingUser.mode === 'review' && planWaitingUser.requiresReview === true,
+    'mode=' + planWaitingUser.mode + ' reason=' + planWaitingUser.reason);
+  check('复核提示说明原交互无法续接且不会代用户审批',
+    /无法续接/.test(String(planWaitingUser.reason)) && /不会代替用户/.test(String(planWaitingUser.warning)),
+    String(planWaitingUser.warning));
+
   // ---------------------------------------------------------------- 场景 2：未提交的写操作 → review
   console.log('\n== 场景 2：写操作未提交 → 必须人工复核（不自动重放） ==');
   const runC = 'run-resume-c';

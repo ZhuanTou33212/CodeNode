@@ -278,6 +278,7 @@ function lastMessages(checkpoints) {
  * @property {boolean} [requiresReview]
  * @property {string|null} [warning]
  * @property {string} [runId]
+ * @property {string|null} [state]
  * @property {string|null} [planSessionId]
  * @property {any} [taskPlan]
  * @property {string} [status]
@@ -343,6 +344,7 @@ function planResume(projectRoot, runId, options = {}) {
   const base = {
     ok: true,
     runId: summary.runId,
+    state: summary.state || null,
     planSessionId: start.planSessionId || null,
     status,
     prompt: String(start.prompt || ''),
@@ -371,6 +373,15 @@ function planResume(projectRoot, runId, options = {}) {
   }
   if (status === 'running' && isActive) {
     return { ...base, mode: 'complete', reason: '该 Run 仍在运行中' };
+  }
+  if (summary.state === 'WAITING_USER') {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '该 Run 在等待用户输入或审批时中断，原交互请求无法续接。',
+      warning: '请先核对当前项目状态和待处理操作；系统不会代替用户作出审批决定。确认后才能强制续跑。',
+    };
   }
   if (!checkpoints.length) {
     return { ...base, mode: 'review', requiresReview: true, reason: '没有可用检查点（可能来自旧版本或被清理），无法判断副作用状态', warning: '缺少检查点：只能人工确认后重新发起，不能自动续跑。' };

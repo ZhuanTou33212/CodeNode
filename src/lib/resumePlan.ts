@@ -21,6 +21,7 @@ export interface ResumeStepLike {
 export interface ResumePlanLike {
   ok?: boolean;
   runId?: string;
+  state?: string | null;
   mode?: 'complete' | 'auto' | 'review' | 'unknown' | string;
   reason?: string | null;
   warning?: string | null;

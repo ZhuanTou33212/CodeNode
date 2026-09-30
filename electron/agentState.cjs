@@ -17,7 +17,7 @@
  * |----------------|---------------------------------------|--------------------------------------------|--------------|------------|
  * | RUNNING        | run_start 写入成功、尚未产生工具调用  | 有 tool_calls → WAITING_TOOL；纯文本 → COMPLETED；异常 → FAILED；abort → CANCELLED | 依检查点和副作用账本 | run_start / checkpoint |
  * | WAITING_TOOL   | 本轮 assistant 消息含 tool_calls      | 全部调用结算 → RUNNING；需要审批 → WAITING_USER；触顶 → LIMIT_REACHED | 依检查点和副作用账本 | tool intent / side-effect ledger |
- * | WAITING_USER   | 审批/提问已发出（等用户应答）         | 用户应答（包括拒绝结果）回到工具流程；abort → CANCELLED | 依检查点和副作用账本 | approval audit / checkpoint |
+ * | WAITING_USER   | 审批/提问已发出（等用户应答）         | 用户应答（包括拒绝结果）回到工具流程；中断后需复核；abort → CANCELLED | 中断后需复核 | approval audit / checkpoint |
  * | COMPLETED      | 模型给出无 tool_calls 的最终文本      | —（终态）                                  | 不可续跑 | run_finish |
  * | FAILED         | 系统错误 / 不可重试失败               | 根据检查点和副作用账本决定续跑方式          | 依检查点和副作用账本 | run_finish / checkpoint |
  * | CANCELLED      | 用户 abort                            | 用户确认后续跑                             | 必须人工复核 | run_finish / checkpoint |
@@ -64,7 +64,7 @@ const TRANSITIONS = Object.freeze({
 const STATE_INFO = Object.freeze({
   [STATES.RUNNING]: { label: '执行中', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_start', 'checkpoint'] },
   [STATES.WAITING_TOOL]: { label: '等待工具', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['toolIntent(prepared)', 'side-effect ledger'] },
-  [STATES.WAITING_USER]: { label: '等待用户', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['approval audit', 'checkpoint'] },
+  [STATES.WAITING_USER]: { label: '等待用户', terminal: false, recoverable: true, recoveryPolicy: 'review-required', persists: ['approval audit', 'checkpoint'] },
   [STATES.COMPLETED]: { label: '已完成', terminal: true, recoverable: false, recoveryPolicy: 'never', persists: ['run_finish'] },
   [STATES.FAILED]: { label: '失败', terminal: true, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
   [STATES.CANCELLED]: { label: '已取消', terminal: true, recoverable: true, recoveryPolicy: 'review-required', persists: ['run_finish', 'checkpoint'] },
