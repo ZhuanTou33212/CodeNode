@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { redact } = require('./redaction.cjs');
+const { STATES, isState, canTransition } = require('./agentState.cjs');
 
 const MAX_RUN_EVENTS = 4000;
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
@@ -240,7 +241,12 @@ function appendEvent(projectRoot, runId, type, data) {
         state: record.state || null,
         status: record.status || null,
         reason: record.reason || null,
-          ...(record.violation ? { violation: record.violation } : {}),
+        ...(record.previous != null ? { previous: record.previous } : {}),
+        ...(record.sequence != null ? { sequence: record.sequence } : {}),
+        ...(record.outcome ? { outcome: record.outcome } : {}),
+        ...(record.limitKind ? { limitKind: record.limitKind } : {}),
+        ...(record.stopReason ? { stopReason: record.stopReason } : {}),
+        ...(record.violation ? { violation: record.violation } : {}),
       });
     }
     return written;
@@ -279,15 +285,63 @@ function summarizeRun(events) {
   const retry = [...list].reverse().find((event) => event.type === 'run_retry_started');
   // 状态机终态（agentState.STATES.*）：附加字段，status 的取值与语义保持原样
   const lastState = [...list].reverse().find((event) => event.type === 'run_state');
+  const finishOutcome = finish && finish.outcome && typeof finish.outcome === 'object' ? finish.outcome : null;
+  const stateHistory = inspectStateHistory(list);
   return {
     runId: (finish || start || {}).runId || null,
     status: retry ? 'superseded' : finish ? finish.status : start ? 'interrupted' : 'unknown',
     state: (finish && finish.state) || (lastState && lastState.state) || (start ? 'RUNNING' : null),
+    outcome: finishOutcome,
+    limitKind: (finish && finish.limitKind) || (finishOutcome && finishOutcome.limitKind) || null,
+    stopReason: (finish && finish.stopReason) || null,
+    stateHistoryValid: stateHistory.valid,
+    stateHistoryIssues: stateHistory.issues,
     startedAt: start ? start.ts : null,
     finishedAt: finish ? finish.ts : null,
     eventCount: list.length,
     lastEvent: list[list.length - 1] || null,
   };
+}
+
+/** 检查持久化状态事件是否形成合法且连续的迁移链；旧日志缺字段时保留可读性，不补造序号。 */
+function inspectStateHistory(events) {
+  const list = Array.isArray(events) ? events : [];
+  const history = list.filter((event) => event && event.type === 'run_state' && event.state != null);
+  const violationEvents = list
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event && event.type === 'state_violation');
+  const issues = [];
+  let previousEvent = null;
+  let previousSequence = null;
+  for (let index = 0; index < history.length; index++) {
+    const event = history[index];
+    const state = event.state;
+    const from = event.previous == null ? null : event.previous;
+    const sequence = event.sequence;
+    if (!isState(state)) issues.push({ index, type: 'unknown-state', state });
+    if (previousEvent && from !== previousEvent.state) {
+      issues.push({ index, type: 'previous-state-mismatch', expected: previousEvent.state, actual: from });
+    }
+    if (from == null) {
+      if (state !== STATES.RUNNING) issues.push({ index, type: 'invalid-initial-state', state });
+    } else if (!canTransition(from, state)) {
+      issues.push({ index, type: 'illegal-transition', from, to: state });
+    }
+    if (sequence != null) {
+      if (!Number.isInteger(sequence) || sequence < 0) issues.push({ index, type: 'invalid-sequence', sequence });
+      else if (previousSequence != null && sequence !== previousSequence + 1) {
+        issues.push({ index, type: 'sequence-gap', expected: previousSequence + 1, actual: sequence });
+      } else if (index === 0 && from == null && sequence !== 0) {
+        issues.push({ index, type: 'invalid-initial-sequence', expected: 0, actual: sequence });
+      }
+    }
+    previousEvent = event;
+    previousSequence = Number.isInteger(sequence) ? sequence : null;
+  }
+  for (const { event, index } of violationEvents) {
+    issues.push({ index, type: 'state-violation', violation: event.violation || null });
+  }
+  return { valid: history.length || violationEvents.length ? issues.length === 0 : null, issues };
 }
 
 function markRetry(projectRoot, runId, replacementRunId) {

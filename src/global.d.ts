@@ -164,6 +164,11 @@ interface CodenodeApi {
     status: string;
     /** 终态细分：LIMIT_REACHED（跑到上限）与 FAILED 都写 status='error'，靠它区分 */
     state?: string | null;
+    outcome?: { state: string; kind: string; reason: string | null; limitKind: string | null } | null;
+    limitKind?: string | null;
+    stopReason?: string | null;
+    stateHistoryValid?: boolean | null;
+    stateHistoryIssues?: { index: number; type: string; [key: string]: unknown }[];
     startedAt: string | null;
     finishedAt: string | null;
     eventCount: number;
@@ -173,6 +178,11 @@ interface CodenodeApi {
     mode?: 'complete' | 'auto' | 'review' | 'unknown';
     requiresReview?: boolean;
     runId?: string;
+    state?: string | null;
+    stateHistoryValid?: boolean | null;
+    stateHistoryIssues?: { index: number; type: string; [key: string]: unknown }[];
+    limitKind?: string | null;
+    stopReason?: string | null;
     prompt?: string;
     model?: string | null;
     nodeId?: string | null;
@@ -353,8 +363,11 @@ interface CodenodeApi {
       invalid: string[];
     };
     error?: string;
+    state?: string | null;
+    outcome?: { state: string; kind: string; reason: string | null; limitKind: string | null };
     /** 交付形态：'length_truncated' = 回答触到长度上限被截断（不是完整答案） */
     stopReason?: string | null;
+    limitKind?: string;
     /** 流式中断后整轮重发的次数（网络/代理中途掉线时 > 0） */
     streamRestarts?: number;
     document?: { root?: unknown };

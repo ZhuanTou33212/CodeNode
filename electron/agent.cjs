@@ -24,7 +24,7 @@ const costAttribution = require('./costAttribution.cjs');
 const costLedgerLib = require('./costLedger.cjs');
 // 上下文预算：每次请求前把最旧的超大工具结果裁成占位符（见 electron/contextBudget.cjs 顶部注释）
 const contextBudget = require('./contextBudget.cjs');
-const { STATES, classifyOutcome, createStateMachine } = require('./agentState.cjs');
+const { STATES, TERMINAL_STATES, describeOutcome, createStateMachine } = require('./agentState.cjs');
 // 工具的只读/缓存/变更语义只有一份来源（electron/tools/descriptor.cjs），不再各文件各留一份名单
 const TOOL_SEMANTICS = require('./tools/descriptor.cjs');
 const { parsePrices: parseCostPrices } = require('./costLedger.cjs');
@@ -2435,7 +2435,7 @@ function buildLimitWrapUp(options = {}) {
  *                 cfg.reliability.turnTimeoutMs，出厂 600s）。「停滞」与「重发次数」分别由
  *                 cfg.reliability.streamIdleTimeoutMs / streamMaxAttempts 控制。
  *   forceCompaction true = /compact（照 Codex 的手动压缩命令）：无视阈值立刻压一次
- * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number, compacted?: number, contextSummary?: string, contextSummaryEnvelope?: string, overflowRecoveries?: number, steeringInjected?: number}>}
+ * @returns {Promise<{content: any, reasoning: any, toolCalls: any, usage: any, error?: any, aborted?: boolean, stopReason?: string, finishReason?: string|null, state?: string, outcome?: {state: string, kind: string, reason: string|null, limitKind: string|null}, stateHistory?: Array<any>, grounding?: any, groundingBlocked?: boolean, groundingRetries?: number, contextTrims?: number, contextTrimmedChars?: number, wrapUp?: any, steps?: number, toolCount?: number, iterations?: number, streamRestarts?: number, compacted?: number, contextSummary?: string, contextSummaryEnvelope?: string, overflowRecoveries?: number, steeringInjected?: number}>}
  */
 async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs = null, forceCompaction = false, steering = null }) {
   // 单轮总时长：调用方显式传值优先（子代理按任务总时长钳制），否则读配置。
@@ -2447,7 +2447,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   const machine = createStateMachine({
     runId: (cfg && cfg.costRunId) || null,
     onTransition: (info) =>
-      onDelta && onDelta({ kind: 'state', state: info.to, previous: info.from, reason: info.reason, ts: info.ts }),
+      onDelta && onDelta({ kind: 'state', state: info.to, previous: info.from, sequence: info.sequence, reason: info.reason, ts: info.ts }),
     onViolation: (violation) => onDelta && onDelta({ kind: 'state_violation', violation }),
   });
   const transitionState = (state, reason) => {
@@ -2457,7 +2457,14 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     }
     return changed;
   };
-  onDelta && onDelta({ kind: 'state', state: machine.state, previous: null, reason: 'start', ts: new Date().toISOString() });
+  const finalizeState = (outcome, reason) => {
+    const details = describeOutcome(outcome);
+    if (!TERMINAL_STATES.includes(details.state)) throw new Error('Run 终态无效：' + String(details.state));
+    if (!machine.isTerminal()) transitionState(details.state, reason || details.reason || details.kind);
+    else if (machine.state !== details.state) transitionState(details.state, reason || details.reason || details.kind);
+    return details;
+  };
+  onDelta && onDelta({ kind: 'state', state: machine.state, previous: null, sequence: 0, reason: 'start', ts: new Date().toISOString() });
   // 让工具上下文能把「等待用户」透传进来（子代理 fork 出的上下文不带钩子，由各自 run 自己安装）
   if (tools && tools.context && typeof tools.context.setStateNotifier === 'function') {
     tools.context.setStateNotifier((state, reason) => transitionState(state, reason));
@@ -2799,9 +2806,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       turnContent = '';
       turnReasoning = '';
       if (signal && signal.aborted) {
-        transitionState(STATES.CANCELLED, 'aborted');
+        const outcome = finalizeState({ aborted: true }, 'aborted');
         onDelta && onDelta({ kind: 'stopped' });
-        return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
+        return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: outcome.state, outcome, iterations: modelTurns };
       }
       const turnActor = {
         taskId: tools && tools.context && typeof tools.context.taskId === 'function' ? tools.context.taskId() : '',
@@ -2935,7 +2942,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             '③ 若模型管理里的上下文窗口值与供应商实际不符（标称大、实际小），改成真实值；④ 换窗口更大的模型。';
           emitTrace({ kind: 'context_overflow', turnId: iter, phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: preflightWindow });
           onDelta && onDelta({ kind: 'context_overflow', phase: 'preflight', tokens: estimate, reserve: turnMaxTokens, window: preflightWindow });
-          transitionState(classifyOutcome({ error, stopReason: 'context_overflow' }), 'context_overflow');
+          const outcome = finalizeState({ error, stopReason: 'context_overflow' }, 'context_overflow');
           onDelta && onDelta({ kind: 'error', error });
           return {
             content,
@@ -2944,7 +2951,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             usage,
             error,
             stopReason: 'context_overflow',
-            state: machine.state,
+            state: outcome.state,
+            outcome,
             iterations: modelTurns,
             contextTrims: contextTrimCount,
             contextTrimmedChars,
@@ -3142,7 +3150,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const detail = String((fatal && fatal.detail) || '').slice(0, 200);
           const error =
             '模型流内错误：供应商在 HTTP 200 的流里下发了 error，且本轮没有任何产出' + (detail ? '（' + detail + '）' : '');
-          transitionState(classifyOutcome({ error, stopReason: 'stream_error' }), 'stream_error');
+          const outcome = finalizeState({ error, stopReason: 'stream_error' }, 'stream_error');
           emitTrace({ kind: 'stream_error', turnId: iter, detail });
           onDelta && onDelta({ kind: 'error', error });
           return {
@@ -3152,7 +3160,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             usage,
             error,
             stopReason: 'stream_error',
-            state: machine.state,
+            state: outcome.state,
+            outcome,
             iterations: modelTurns,
             contextTrims: contextTrimCount,
             contextTrimmedChars,
@@ -3301,9 +3310,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           : null;
         for (const tc of toolCalls) {
           if (signal && signal.aborted) {
-            transitionState(STATES.CANCELLED, 'aborted');
+            const outcome = finalizeState({ aborted: true }, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
-            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: outcome.state, outcome, iterations: modelTurns };
           }
           if (totalToolCalls >= maxTotalToolCalls) {
             capped = true;
@@ -3391,9 +3400,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             result = primedPromise ? await primedPromise : await tools.registry.execute(tc.name, args, tools.context, { turnId: iter, toolCallId: callId });
           }
           if (signal && signal.aborted) {
-            transitionState(STATES.CANCELLED, 'aborted');
+            const outcome = finalizeState({ aborted: true }, 'aborted');
             onDelta && onDelta({ kind: 'stopped' });
-            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns };
+            return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: outcome.state, outcome, iterations: modelTurns };
           }
           // 缓存失效按「只读白名单」判定：只要本轮执行的不是纯只读工具（execute_shell / poll_job /
           // delegate_task / 扩展与 MCP 工具 / 任何变更类工具），就整表清空，保证随后读取拿到最新状态。
@@ -3833,13 +3842,13 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const error = stopReason === 'tool_limit' ? '已达到工具调用上限，任务未完成。' : '已达到模型迭代上限，任务未完成。';
       const wrapped = content ? content + '\n\n' + wrapUp.text : wrapUp.text;
       // 上限不是「执行失败」：状态单列为 LIMIT_REACHED（调用方可据此提示续跑而不是让用户去排查错误）
-      transitionState(classifyOutcome({ error, stopReason }), stopReason);
+      const outcome = finalizeState({ error, stopReason }, stopReason);
       emitTrace({ kind: 'limit_wrapup', turnId: loopIterations, stopReason, executed: wrapUp.data.executed, failed: wrapUp.data.failed, touchedFiles: wrapUp.data.touchedFiles, contextTrims: contextTrimCount });
       // 兼容既有契约：`error` delta 依然发（消费方/评测 `delta-kind: error` 锁着它，别偷偷换成别的 kind，
       // 那会让上游判据变成红墙）；结构化收尾另走 limit_reached，两者是补充关系。
-      onDelta && onDelta({ kind: 'error', error, stopReason, state: machine.state });
-      onDelta && onDelta({ kind: 'limit_reached', error, stopReason, state: machine.state, wrapUp: wrapUp.data, text: wrapUp.text });
-      return { content: wrapped, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: machine.state, iterations: modelTurns, wrapUp: wrapUp.data, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
+      onDelta && onDelta({ kind: 'error', error, stopReason, state: outcome.state });
+      onDelta && onDelta({ kind: 'limit_reached', error, stopReason, state: outcome.state, limitKind: outcome.limitKind, wrapUp: wrapUp.data, text: wrapUp.text });
+      return { content: wrapped, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: outcome.state, outcome, iterations: modelTurns, wrapUp: wrapUp.data, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
     }
     const grounding = validateRagGrounding(content, allToolCalls);
     const warning = groundingWarning(grounding);
@@ -3856,7 +3865,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       resultLen: content.length, finishReason: lastFinishReason, grounding, streamRestarts,
     });
     const finalStopReason = stopReason === 'length_truncated' ? stopReason : null;
-    transitionState(classifyOutcome({ stopReason: finalStopReason }), finalStopReason || 'answer_complete');
+    const outcome = finalizeState({ stopReason: finalStopReason }, finalStopReason || 'answer_complete');
     return {
       content,
       reasoning,
@@ -3864,7 +3873,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       usage,
       grounding,
       finishReason: lastFinishReason,
-      state: machine.state,
+      state: outcome.state,
+      outcome,
       stateHistory: machine.history.slice(),
       iterations: modelTurns,
       streamRestarts,
@@ -3883,14 +3893,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     };
   } catch (e) {
     if (signal && signal.aborted) {
-      if (!machine.isTerminal()) transitionState(STATES.CANCELLED, 'aborted');
+      const outcome = machine.isTerminal()
+        ? describeOutcome({ state: machine.state, stopReason: 'aborted' })
+        : finalizeState({ aborted: true }, 'aborted');
       onDelta && onDelta({ kind: 'stopped' });
-      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
+      return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: outcome.state, outcome, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
     }
-    if (!machine.isTerminal()) transitionState(STATES.FAILED, 'exception:' + String((e && e.message) || e).slice(0, 120));
     const error = String((e && e.message) || e);
-    onDelta && onDelta({ kind: 'error', error, state: machine.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error, state: machine.state, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
+    const outcome = machine.isTerminal()
+      ? describeOutcome({ state: machine.state })
+      : finalizeState({ error }, 'exception:' + error.slice(0, 120));
+    onDelta && onDelta({ kind: 'error', error, state: outcome.state });
+    return { content, reasoning, toolCalls: allToolCalls, usage, error, state: outcome.state, outcome, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
   }
 }
 

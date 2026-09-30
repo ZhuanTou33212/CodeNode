@@ -35,7 +35,8 @@ function check(label, condition, detail) {
 {
   const m = agentState.createStateMachine({ runId: 'r1' });
   check('A1 初始状态为 RUNNING', m.state === 'RUNNING' && m.history.length === 0, m.state);
-  check('A2 RUNNING → WAITING_TOOL 合法', m.go('WAITING_TOOL', 'tool_calls:1') === true && m.state === 'WAITING_TOOL');
+  check('A2 RUNNING → WAITING_TOOL 合法并从序号 1 开始',
+    m.go('WAITING_TOOL', 'tool_calls:1') === true && m.state === 'WAITING_TOOL' && m.history[0].sequence === 1, JSON.stringify(m.history));
   check('A3 相同状态重复 go 是空操作（不产生历史）', m.go('WAITING_TOOL', 'again') === false && m.history.length === 1);
   check('A4 WAITING_TOOL → WAITING_USER 合法（工具在等用户确认）', m.go('WAITING_USER', 'confirm') === true && m.state === 'WAITING_USER');
   check('A5 WAITING_USER → WAITING_TOOL 合法（用户应答后回到工具执行）', m.go('WAITING_TOOL', 'confirm_settled') === true);
@@ -64,6 +65,9 @@ function check(label, condition, detail) {
     typeof agentState.STATE_INFO[s].terminal !== 'boolean' || !agentState.STATE_INFO[s].recoveryPolicy);
   check('A11 七个状态全部有语义定义（label/recoveryPolicy）',
     missing.length === 0 && agentState.ALL_STATES.length === 7 && agentState.ALL_STATES.every((s) => !!agentState.STATE_INFO[s].recoveryPolicy), JSON.stringify(missing));
+  check('A11b recoverable 由 recoveryPolicy 推导，不在状态表重复维护',
+    agentState.ALL_STATES.every((s) => !Object.prototype.hasOwnProperty.call(agentState.STATE_INFO[s], 'recoverable')) &&
+      agentState.createStateMachine().snapshot().recoverable === true);
   check('A12 终态集合 = 完成/失败/取消/达上限',
     ['COMPLETED', 'FAILED', 'CANCELLED', 'LIMIT_REACHED'].every((s) => agentState.canTransition(s, 'RUNNING') === false), '终态不该有出边');
 
@@ -75,6 +79,34 @@ function check(label, condition, detail) {
     agentState.classifyOutcome({ stopReason: 'length_truncated' }) === 'LIMIT_REACHED' &&
     agentState.classifyOutcome({ error: 'boom' }) === 'FAILED' &&
     agentState.classifyOutcome({}) === 'COMPLETED');
+  check('A13b LIMIT_REACHED 细分原因稳定映射',
+    agentState.limitKindForStopReason('iteration_limit') === 'iterations' &&
+    agentState.limitKindForStopReason('tool_limit') === 'tool_calls' &&
+    agentState.limitKindForStopReason('context_overflow') === 'context_window' &&
+    agentState.limitKindForStopReason('length_truncated') === 'output_tokens' &&
+    agentState.limitKindForStopReason('other') === null);
+  check('A13c 终态结果携带结构化类别与细分原因',
+    agentState.describeOutcome({ error: 'x', stopReason: 'context_overflow' }).kind === 'limit_reached' &&
+    agentState.describeOutcome({ error: 'x', stopReason: 'context_overflow' }).limitKind === 'context_window' &&
+    agentState.describeOutcome({ error: 'x' }).kind === 'failed' &&
+    agentState.describeOutcome({}).kind === 'completed');
+  const invalidStateHistory = runStore.summarizeRun([
+    { type: 'run_start', runId: 'run-invalid-history', ts: '2026-09-30T00:00:00.000Z' },
+    { type: 'run_state', state: 'RUNNING', previous: null, sequence: 0 },
+    { type: 'run_state', state: 'COMPLETED', previous: 'WAITING_TOOL', sequence: 2 },
+  ]);
+  check('A13d 回放检测非法前态与序号缺口',
+    invalidStateHistory.stateHistoryValid === false &&
+      invalidStateHistory.stateHistoryIssues.some((issue) => issue.type === 'previous-state-mismatch') &&
+      invalidStateHistory.stateHistoryIssues.some((issue) => issue.type === 'sequence-gap'),
+    JSON.stringify(invalidStateHistory.stateHistoryIssues));
+  const recordedStateViolation = runStore.summarizeRun([
+    { type: 'run_start', runId: 'run-state-violation', ts: '2026-09-30T00:00:00.000Z' },
+    { type: 'run_state', state: 'RUNNING', previous: null, sequence: 0 },
+    { type: 'state_violation', violation: { type: 'illegal-transition', from: 'COMPLETED', to: 'RUNNING' } },
+  ]);
+  check('A13e 持久化的状态异常也会使状态历史标为需复核',
+    recordedStateViolation.stateHistoryValid === false && recordedStateViolation.stateHistoryIssues.some((issue) => issue.type === 'state-violation'));
   check('A14 toRunStatus：status 取值保持既有语义（LIMIT_REACHED 仍写 error，靠 state 字段区分）',
     agentState.toRunStatus('COMPLETED') === 'completed' && agentState.toRunStatus('CANCELLED') === 'cancelled' &&
     agentState.toRunStatus('FAILED') === 'error' && agentState.toRunStatus('LIMIT_REACHED') === 'error');
@@ -183,12 +215,16 @@ function statesOf(root, runId) {
     }
     const runId = runStore.normalizeRunId('run-normal');
     const states = statesOf(root, runId);
-    check('B1.1 正常链路返回 ok 且终态 COMPLETED', out.ok === true && out.reply === '读完了。', JSON.stringify({ ok: out.ok, reply: out.reply }));
+    check('B1.1 正常链路返回 ok 且结构化终态 COMPLETED',
+      out.ok === true && out.reply === '读完了。' && out.state === 'COMPLETED' && out.outcome && out.outcome.kind === 'completed',
+      JSON.stringify({ ok: out.ok, reply: out.reply, state: out.state, outcome: out.outcome }));
     check('B1.2 run_state 事件序列 = RUNNING → WAITING_TOOL → RUNNING → COMPLETED',
       JSON.stringify(states) === JSON.stringify(['RUNNING', 'WAITING_TOOL', 'RUNNING', 'COMPLETED']), JSON.stringify(states));
     const summary = runStore.summarizeRun(runStore.readRun(root, runId));
     check('B1.3 summarizeRun 暴露 state=COMPLETED 且 status 仍为 completed', summary.state === 'COMPLETED' && summary.status === 'completed',
       JSON.stringify({ state: summary.state, status: summary.status }));
+    check('B1.3a 持久化状态历史序号连续且迁移合法', summary.stateHistoryValid === true && summary.stateHistoryIssues.length === 0,
+      JSON.stringify({ valid: summary.stateHistoryValid, issues: summary.stateHistoryIssues }));
     const listed = await h.handlers.get('agent:runs')({ sender: h.sender }, root);
     check('B1.4 agent:runs 列出的 Run 带 state 字段', listed.length >= 1 && listed[0].state === 'COMPLETED', JSON.stringify(listed.map((r) => r.state)));
     check('B1.5 工具调用有 state 事件包裹（WAITING_TOOL 出现在 tool_result 之前）', deltasIndex(h.deltas) > -1, JSON.stringify(h.deltas.filter((d) => d.kind === 'state').map((d) => d.state)));
@@ -249,6 +285,8 @@ function statesOf(root, runId) {
     check('B3.3 status 保持既有取值 error（兼容既有读取路径）', summary.status === 'error', summary.status);
     check('B3.4 run_finish 里带上 stopReason 便于续跑判定', /iteration_limit/.test(JSON.stringify(runStore.readRun(root, runId).find((e) => e.type === 'run_finish') || {})),
       JSON.stringify((runStore.readRun(root, runId).find((e) => e.type === 'run_finish') || {}).stopReason));
+    check('B3.5 run_finish 同时带 limit outcome 和可读细分原因',
+      summary.outcome && summary.outcome.kind === 'limit_reached' && summary.limitKind === 'iterations', JSON.stringify(summary.outcome));
   }
 
   // ---- B4 用户取消：CANCELLED ----
@@ -279,7 +317,8 @@ function statesOf(root, runId) {
     }
     const runId = runStore.normalizeRunId('run-cancel');
     const summary = runStore.summarizeRun(runStore.readRun(root, runId));
-    check('B4.1 返回 aborted=true', out.aborted === true, JSON.stringify({ aborted: out.aborted, ok: out.ok }));
+    check('B4.1 返回 CANCELLED 结构化终态', out.aborted === true && out.state === 'CANCELLED' && out.outcome && out.outcome.kind === 'cancelled',
+      JSON.stringify({ aborted: out.aborted, state: out.state, outcome: out.outcome }));
     check('B4.2 终态是 CANCELLED 且 status=cancelled', summary.state === 'CANCELLED' && summary.status === 'cancelled',
       JSON.stringify({ state: summary.state, status: summary.status }));
     check('B4.3 取消没有把工具结果误报成最终答复', !String(out.reply || '').includes('不该走到这里'), JSON.stringify(String(out.reply || '').slice(0, 40)));
@@ -299,7 +338,8 @@ function statesOf(root, runId) {
     }
     const runId = runStore.normalizeRunId('run-failed');
     const summary = runStore.summarizeRun(runStore.readRun(root, runId));
-    check('B5.1 返回 ok=false 且带错误', out.ok === false && !!out.error, JSON.stringify({ ok: out.ok, error: String(out.error || '').slice(0, 60) }));
+    check('B5.1 返回 FAILED 结构化终态且带错误', out.ok === false && !!out.error && out.state === 'FAILED' && out.outcome && out.outcome.kind === 'failed',
+      JSON.stringify({ ok: out.ok, state: out.state, outcome: out.outcome, error: String(out.error || '').slice(0, 60) }));
     check('B5.2 终态是 FAILED 且 status=error', summary.state === 'FAILED' && summary.status === 'error',
       JSON.stringify({ state: summary.state, status: summary.status }));
   }

@@ -14,7 +14,13 @@ import type { Node } from '@xyflow/react';
 
 type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
 type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
-type AgentRun = { runId: string | null; status: string; state?: string | null; startedAt: string | null; eventCount: number };
+type AgentRun = { runId: string | null; status: string; state?: string | null; limitKind?: string | null; stateHistoryValid?: boolean | null; startedAt: string | null; eventCount: number };
+const LIMIT_KIND_LABELS: Record<string, string> = {
+  iterations: '模型迭代次数',
+  tool_calls: '工具调用次数',
+  context_window: '上下文窗口',
+  output_tokens: '输出 token 数',
+};
 /** §4.2 回滚计划（与 electron/runRollback.cjs 的 planRollback 返回形状一致） */
 type RollbackPlan = {
   ok: boolean;
@@ -575,7 +581,11 @@ function RunsPanel() {
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
         <strong>可续跑的 Agent 运行（中断 / 达到步数上限）</strong>
         {agentRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
-          <span>{run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
+          <span>
+            {run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}
+            {run.limitKind ? ' · 上限：' + (LIMIT_KIND_LABELS[run.limitKind] || run.limitKind) : ''}
+            {run.stateHistoryValid === false ? ' · 状态历史异常，需复核' : ''}
+          </span>
           <button onClick={() => run.runId && void inspectResume(run.runId)} disabled={recoveryBusy}>查看恢复计划</button>
         </div>)}
         {resumePlan && view && <div className="dock-recovery-plan">

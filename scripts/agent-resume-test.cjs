@@ -232,6 +232,54 @@ async function runTurn(/** @type {{ runId: string, script: any, scopeRunId?: str
     /无法续接/.test(String(planWaitingUser.reason)) && /不会代替用户/.test(String(planWaitingUser.warning)),
     String(planWaitingUser.warning));
 
+  // ---- 场景 1d：状态事件链损坏时，即使检查点只含只读步骤也必须停自动续跑 ----
+  console.log('\n== 场景 1d：状态历史不合法 → 必须人工复核 ==');
+  const runInvalidHistory = 'run-resume-invalid-state-history';
+  runStore.startRun(root, runInvalidHistory, { prompt: '读取 note.txt', model: 'scripted-model' });
+  runCheckpoint.recordIntent(root, runInvalidHistory, {
+    callId: 'history-read',
+    tool: 'read_file',
+    argsDigest: digest({ path: 'note.txt' }),
+    effect: 'read',
+    idemKey: idempotencyKey(runInvalidHistory, 'read_file', { path: 'note.txt' }),
+  });
+  runStore.appendEvent(root, runInvalidHistory, 'run_state', { state: 'RUNNING', previous: null, sequence: 0 });
+  runStore.appendEvent(root, runInvalidHistory, 'run_state', { state: 'COMPLETED', previous: 'WAITING_TOOL', sequence: 2 });
+  const planInvalidHistory = runCheckpoint.planResume(root, runInvalidHistory, {
+    ledger: new SideEffectLedger({ projectRoot: root, scopeRunId: runInvalidHistory }),
+  });
+  check('非法或断号的状态历史被识别', planInvalidHistory.stateHistoryValid === false && planInvalidHistory.stateHistoryIssues.length > 0,
+    JSON.stringify(planInvalidHistory.stateHistoryIssues));
+  check('状态历史损坏时只读步骤也不得自动续跑',
+    planInvalidHistory.mode === 'review' && planInvalidHistory.requiresReview === true,
+    'mode=' + planInvalidHistory.mode + ' reason=' + planInvalidHistory.reason);
+
+  // ---- 场景 1e：上下文窗口上限需要先调整请求，不允许原样自动重发 ----
+  console.log('\n== 场景 1e：上下文窗口上限 → 调整上下文后再续跑 ==');
+  const runContextLimit = 'run-resume-context-limit';
+  runStore.startRun(root, runContextLimit, { prompt: '读取 note.txt', model: 'scripted-model' });
+  runCheckpoint.recordIntent(root, runContextLimit, {
+    callId: 'context-read',
+    tool: 'read_file',
+    argsDigest: digest({ path: 'note.txt' }),
+    effect: 'read',
+    idemKey: idempotencyKey(runContextLimit, 'read_file', { path: 'note.txt' }),
+  });
+  runStore.finishRun(root, runContextLimit, 'error', {
+    state: 'LIMIT_REACHED',
+    stopReason: 'context_overflow',
+    limitKind: 'context_window',
+    outcome: { state: 'LIMIT_REACHED', kind: 'limit_reached', reason: 'context_overflow', limitKind: 'context_window' },
+  });
+  const planContextLimit = runCheckpoint.planResume(root, runContextLimit, {
+    ledger: new SideEffectLedger({ projectRoot: root, scopeRunId: runContextLimit }),
+  });
+  check('上下文窗口上限不会按只读待办自动重发',
+    planContextLimit.mode === 'review' && planContextLimit.requiresReview === true && planContextLimit.limitKind === 'context_window',
+    'mode=' + planContextLimit.mode + ' limitKind=' + planContextLimit.limitKind);
+  check('复核提示先要求调整上下文或模型', /缩短保留上下文/.test(String(planContextLimit.warning)) && /更大的模型/.test(String(planContextLimit.warning)),
+    String(planContextLimit.warning));
+
   // ---------------------------------------------------------------- 场景 2：未提交的写操作 → review
   console.log('\n== 场景 2：写操作未提交 → 必须人工复核（不自动重放） ==');
   const runC = 'run-resume-c';

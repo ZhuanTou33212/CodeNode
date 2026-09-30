@@ -469,6 +469,7 @@ function register(ctx) {
           runStore.appendEvent(projectRoot, runId, 'run_state', {
             state: delta.state,
             previous: delta.previous || null,
+            sequence: Number.isInteger(delta.sequence) ? delta.sequence : null,
             reason: delta.reason || null,
           });
         } else if (delta.kind === 'subagent_state') {
@@ -1175,12 +1176,15 @@ function register(ctx) {
       });
       // 终态由状态机给出（LIMIT_REACHED 与真正的 FAILED 分开记在 state 字段里）；
       // status 取值保持既有语义不变（UI 与续跑判定按它过滤），避免影响既有读取路径
-      const terminalState = result.state || null;
+      const terminalOutcome = agentState.describeOutcome({ ...result, state: result.state });
+      const terminalState = result.state || terminalOutcome.state;
       const runStatus = terminalState
         ? agentState.toRunStatus(terminalState)
         : result.error ? 'error' : result.aborted ? 'cancelled' : 'completed';
       runStore.finishRun(projectRoot, runId, runStatus, {
         state: terminalState,
+        outcome: terminalOutcome,
+        limitKind: terminalOutcome.limitKind,
         stopReason: result.stopReason || null,
         toolCount: Array.isArray(result.toolCalls) ? result.toolCalls.length : 0,
         usage: result.usage || null,
@@ -1210,6 +1214,8 @@ function register(ctx) {
         toolCalls: result.toolCalls,
         usage: result.usage,
         grounding: result.grounding,
+        state: terminalState,
+        outcome: terminalOutcome,
       };
       out.cost = costLedger.summary(runId);
       out.alerts = alertDispatcher.recent(5);
@@ -1219,6 +1225,7 @@ function register(ctx) {
       if (result.error) out.error = result.error;
       // 交付形态要如实传给界面：被长度上限截断 / 中途重发过，用户有权知道
       out.stopReason = result.stopReason || null;
+      if (terminalOutcome.limitKind) out.limitKind = terminalOutcome.limitKind;
       out.streamRestarts = result.streamRestarts || 0;
       // 第 2 项：上限中止时带上结构化收尾（界面据此把阶段性结果交付给用户，而不是只弹一个报错），
       // 并让「续跑」入口能认出这类 Run（status 仍是 error，靠 state 区分）。

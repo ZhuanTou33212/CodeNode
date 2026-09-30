@@ -3,6 +3,13 @@ import { useProjectStore } from '../store/projectStore';
 import { useReplayStore } from '../store/replayStore';
 import type { ReplayEvent } from '../store/replayStore';
 
+const LIMIT_KIND_LABELS: Record<string, string> = {
+  iterations: '模型迭代次数',
+  tool_calls: '工具调用次数',
+  context_window: '上下文窗口',
+  output_tokens: '输出 token 数',
+};
+
 /** 审批事件的相位 → 中文（S7 的 ApprovalService 写入的 `event` 字段）。 */
 function approvalPhase(event: unknown): string {
   switch (String(event || '')) {
@@ -54,8 +61,25 @@ function describeEvent(event: ReplayEvent): string {
         if (reason) push(`原因=${reason}`);
       } else {
         push(e.type || 'run');
-        push(`状态=${e.state || e.status || '未知'}`);
+        if (e.type === 'run_state' && e.previous) push(`${e.previous} → ${e.state || '未知'}`);
+        else if (e.state) push(`状态=${e.state}`);
+        else if (e.status) push(`status=${e.status}`);
+        if (e.sequence === 0 && !e.previous) push('初始状态');
+        else if (e.sequence !== undefined && e.sequence !== null) push(`迁移 #${e.sequence}`);
         if (e.reason) push(`原因=${e.reason}`);
+        const outcome = e.outcome && typeof e.outcome === 'object' ? (e.outcome as Record<string, unknown>) : null;
+        if (outcome) {
+          if (outcome.kind === 'limit_reached' && outcome.limitKind) {
+            const limitKind = String(outcome.limitKind);
+            push(`上限=${LIMIT_KIND_LABELS[limitKind] || limitKind}`);
+          }
+          if (outcome.reason && !e.reason) push(`结果原因=${String(outcome.reason)}`);
+        }
+        if (e.limitKind && !outcome) {
+          const limitKind = String(e.limitKind);
+          push(`上限=${LIMIT_KIND_LABELS[limitKind] || limitKind}`);
+        }
+        if (e.stopReason && !(outcome && outcome.reason)) push(`stop=${e.stopReason}`);
       }
       break;
     case 'checkpoint':
@@ -101,6 +125,8 @@ function kindTone(event: ReplayEvent): string {
   const kind = String(event.kind || '');
   if (kind === 'alert') return 'danger';
   if (kind === 'run_state' && (event as Record<string, any>).type === 'state_violation') return 'warn';
+  const outcome = (event as Record<string, any>).outcome;
+  if (kind === 'run_state' && outcome && (outcome.kind === 'limit_reached' || outcome.kind === 'failed')) return 'warn';
   if (kind === 'approval') {
     const phase = String((event as Record<string, any>).event || '');
     return phase === 'approval_issued' || phase === 'approval_consumed' ? 'accent2' : 'warn';

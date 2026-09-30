@@ -25,6 +25,7 @@ const path = require('path');
 const runStore = require('./runStore.cjs');
 const planLib = require('./plan.cjs');
 const { classify, SideEffectLedger } = require('./sideEffects.cjs');
+const { STATE_INFO } = require('./agentState.cjs');
 
 const MAX_CHECKPOINT_MESSAGES = 24;
 const MAX_MESSAGE_CHARS = 6000;
@@ -279,6 +280,10 @@ function lastMessages(checkpoints) {
  * @property {string|null} [warning]
  * @property {string} [runId]
  * @property {string|null} [state]
+ * @property {boolean|null} [stateHistoryValid]
+ * @property {Array<any>} [stateHistoryIssues]
+ * @property {string|null} [limitKind]
+ * @property {string|null} [stopReason]
  * @property {string|null} [planSessionId]
  * @property {any} [taskPlan]
  * @property {string} [status]
@@ -345,6 +350,10 @@ function planResume(projectRoot, runId, options = {}) {
     ok: true,
     runId: summary.runId,
     state: summary.state || null,
+    stateHistoryValid: summary.stateHistoryValid,
+    stateHistoryIssues: summary.stateHistoryIssues || [],
+    limitKind: summary.limitKind || null,
+    stopReason: summary.stopReason || null,
     planSessionId: start.planSessionId || null,
     status,
     prompt: String(start.prompt || ''),
@@ -374,13 +383,35 @@ function planResume(projectRoot, runId, options = {}) {
   if (status === 'running' && isActive) {
     return { ...base, mode: 'complete', reason: '该 Run 仍在运行中' };
   }
-  if (summary.state === 'WAITING_USER') {
+  if (summary.stateHistoryValid === false) {
     return {
       ...base,
       mode: 'review',
       requiresReview: true,
-      reason: '该 Run 在等待用户输入或审批时中断，原交互请求无法续接。',
-      warning: '请先核对当前项目状态和待处理操作；系统不会代替用户作出审批决定。确认后才能强制续跑。',
+      reason: 'Run 的状态迁移记录不连续或包含非法迁移。',
+      warning: '自动续跑已暂停。请检查 run_state 事件记录和当前项目状态，再决定是否强制续跑。',
+    };
+  }
+  if (STATE_INFO[summary.state] && STATE_INFO[summary.state].recoveryPolicy === 'review-required') {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: summary.state === 'WAITING_USER'
+        ? '该 Run 在等待用户输入或审批时中断，原交互请求无法续接。'
+        : '该 Run 的状态要求人工复核后才能续跑：' + summary.state,
+      warning: summary.state === 'WAITING_USER'
+        ? '请先核对当前项目状态和待处理操作；系统不会代替用户作出审批决定。确认后才能强制续跑。'
+        : '请先核对当前项目状态和副作用，再决定是否强制续跑。',
+    };
+  }
+  if (summary.state === 'LIMIT_REACHED' && summary.limitKind === 'context_window') {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '该 Run 因上下文窗口上限停止；原请求不变时，自动续跑会再次撞到同一上限。',
+      warning: '请先缩短保留上下文、开始新会话或切换到窗口更大的模型，再确认续跑。',
     };
   }
   if (!checkpoints.length) {

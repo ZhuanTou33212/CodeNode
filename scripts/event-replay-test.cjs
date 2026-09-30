@@ -169,6 +169,14 @@ function makeCfg() {
     const bridgeRun = 'run-bridge';
 
     require('../electron/runStore.cjs').startRun(projectRoot, bridgeRun, { goal: 'bridge-test' });
+    require('../electron/runStore.cjs').appendEvent(projectRoot, bridgeRun, 'run_state', { state: 'RUNNING', previous: null, sequence: 0 });
+    require('../electron/runStore.cjs').appendEvent(projectRoot, bridgeRun, 'run_state', { state: 'LIMIT_REACHED', previous: 'RUNNING', sequence: 1, reason: 'context_overflow' });
+    require('../electron/runStore.cjs').finishRun(projectRoot, bridgeRun, 'error', {
+      state: 'LIMIT_REACHED',
+      outcome: { state: 'LIMIT_REACHED', kind: 'limit_reached', reason: 'context_overflow', limitKind: 'context_window' },
+      limitKind: 'context_window',
+      stopReason: 'context_overflow',
+    });
     require('../electron/runCheckpoint.cjs').recordIntent(projectRoot, bridgeRun, { callId: 'call-cp', tool: 'write_file', argsDigest: 'digest-cp', effect: 'write', idemKey: 'idem-cp' });
     const { SideEffectLedger } = require('../electron/sideEffects.cjs');
     const ledger = new SideEffectLedger({ projectRoot, scopeRunId: bridgeRun });
@@ -200,6 +208,12 @@ function makeCfg() {
     check('D9 状态迁移异常通过统一事件流回放',
       !!violationEvent && violationEvent.violation && violationEvent.violation.to === 'RUNNING',
       JSON.stringify(violationEvent && violationEvent.violation));
+    const transitionEvent = bridgeEvents.find((e) => e.kind === 'run_state' && e.type === 'run_state' && e.sequence === 1);
+    check('D10 状态迁移序号进入统一事件流', !!transitionEvent && transitionEvent.previous === 'RUNNING', JSON.stringify(transitionEvent));
+    const outcomeEvent = bridgeEvents.find((e) => e.kind === 'run_state' && e.type === 'run_finish');
+    check('D11 Run 回放保留 LIMIT_REACHED 的结构化原因',
+      !!outcomeEvent && outcomeEvent.limitKind === 'context_window' && outcomeEvent.outcome && outcomeEvent.outcome.reason === 'context_overflow',
+      JSON.stringify(outcomeEvent && { limitKind: outcomeEvent.limitKind, outcome: outcomeEvent.outcome }));
   }
 
   // ======================= E. 回放摘要（纯函数） =======================

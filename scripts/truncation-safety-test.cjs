@@ -187,6 +187,8 @@ async function runTurnWithCfg(reliabilityOverride, script) {
   check('[补问用尽] 如实标注 stopReason=length_truncated',
     exhausted.result.stopReason === 'length_truncated', String(exhausted.result.stopReason));
   check('[补问用尽] 最终状态明确为 LIMIT_REACHED', exhausted.result.state === 'LIMIT_REACHED', String(exhausted.result.state));
+  check('[补问用尽] 结构化原因细分为 output_tokens',
+    exhausted.result.outcome && exhausted.result.outcome.limitKind === 'output_tokens', JSON.stringify(exhausted.result.outcome));
   check('[补问用尽] 用尽时通知界面「不再继续写」', exhausted.truncatedDeltas.some((d) => d.continuing === false),
     JSON.stringify(exhausted.truncatedDeltas));
 

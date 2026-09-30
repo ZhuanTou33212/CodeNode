@@ -46,6 +46,14 @@ const ALL = Object.freeze(Object.values(STATES));
  * @type {readonly string[]} */
 const TERMINAL = Object.freeze([STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED, STATES.LIMIT_REACHED]);
 
+/** LIMIT_REACHED 的细分原因，供 Run、UI 和回放复用。 */
+const LIMIT_KIND_BY_STOP_REASON = Object.freeze({
+  iteration_limit: 'iterations',
+  tool_limit: 'tool_calls',
+  context_overflow: 'context_window',
+  length_truncated: 'output_tokens',
+});
+
 /** 允许的迁移（未列出的迁移一律拒绝并记为 anomaly，避免状态静默跳变）
  * @type {Record<string, string[]>} */
 const TRANSITIONS = Object.freeze({
@@ -59,16 +67,16 @@ const TRANSITIONS = Object.freeze({
 });
 
 /** 每个状态的人类可读语义 + 恢复策略提示（具体续跑决策由 runCheckpoint.planResume 完成）。
- * recoverable 为兼容字段，仅表示存在续跑处理路径，不代表可以自动续跑。
- * @type {Record<string, {label: string, terminal: boolean, recoverable: boolean, recoveryPolicy: 'never'|'checkpoint-dependent'|'review-required', persists: string[]}>} */
+ * snapshot 的兼容布尔字段 recoverable 从 recoveryPolicy 推导，避免两份可恢复性定义漂移。
+ * @type {Record<string, {label: string, terminal: boolean, recoveryPolicy: 'never'|'checkpoint-dependent'|'review-required', persists: string[]}>} */
 const STATE_INFO = Object.freeze({
-  [STATES.RUNNING]: { label: '执行中', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_start', 'checkpoint'] },
-  [STATES.WAITING_TOOL]: { label: '等待工具', terminal: false, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['toolIntent(prepared)', 'side-effect ledger'] },
-  [STATES.WAITING_USER]: { label: '等待用户', terminal: false, recoverable: true, recoveryPolicy: 'review-required', persists: ['approval audit', 'checkpoint'] },
-  [STATES.COMPLETED]: { label: '已完成', terminal: true, recoverable: false, recoveryPolicy: 'never', persists: ['run_finish'] },
-  [STATES.FAILED]: { label: '失败', terminal: true, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
-  [STATES.CANCELLED]: { label: '已取消', terminal: true, recoverable: true, recoveryPolicy: 'review-required', persists: ['run_finish', 'checkpoint'] },
-  [STATES.LIMIT_REACHED]: { label: '达到上限', terminal: true, recoverable: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
+  [STATES.RUNNING]: { label: '执行中', terminal: false, recoveryPolicy: 'checkpoint-dependent', persists: ['run_start', 'checkpoint'] },
+  [STATES.WAITING_TOOL]: { label: '等待工具', terminal: false, recoveryPolicy: 'checkpoint-dependent', persists: ['toolIntent(prepared)', 'side-effect ledger'] },
+  [STATES.WAITING_USER]: { label: '等待用户', terminal: false, recoveryPolicy: 'review-required', persists: ['approval audit', 'checkpoint'] },
+  [STATES.COMPLETED]: { label: '已完成', terminal: true, recoveryPolicy: 'never', persists: ['run_finish'] },
+  [STATES.FAILED]: { label: '失败', terminal: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
+  [STATES.CANCELLED]: { label: '已取消', terminal: true, recoveryPolicy: 'review-required', persists: ['run_finish', 'checkpoint'] },
+  [STATES.LIMIT_REACHED]: { label: '达到上限', terminal: true, recoveryPolicy: 'checkpoint-dependent', persists: ['run_finish', 'checkpoint'] },
 });
 
 /**
@@ -97,11 +105,35 @@ function canTransition(from, to) {
 function classifyOutcome(outcome) {
   const o = outcome || {};
   if (o.aborted === true) return STATES.CANCELLED;
-  if (typeof o.stopReason === 'string' && ['iteration_limit', 'tool_limit', 'context_overflow', 'length_truncated'].includes(o.stopReason)) {
-    return STATES.LIMIT_REACHED;
-  }
+  if (limitKindForStopReason(o.stopReason)) return STATES.LIMIT_REACHED;
   if (o.error) return STATES.FAILED;
   return STATES.COMPLETED;
+}
+
+/**
+ * 将终态归一为稳定的结构化结果；调用方可保留 status 字符串兼容旧读取路径。
+ * @param {{ state?: string, error?: any, aborted?: boolean, stopReason?: string|null }} outcome
+ */
+function describeOutcome(outcome = {}) {
+  const explicitState = isState(outcome.state) ? outcome.state : null;
+  const state = explicitState || classifyOutcome(outcome);
+  const stopReason = typeof outcome.stopReason === 'string' ? outcome.stopReason : null;
+  if (state === STATES.LIMIT_REACHED) {
+    return {
+      state,
+      kind: 'limit_reached',
+      reason: stopReason,
+      limitKind: limitKindForStopReason(stopReason),
+    };
+  }
+  if (state === STATES.FAILED) return { state, kind: 'failed', reason: stopReason || 'error', limitKind: null };
+  if (state === STATES.CANCELLED) return { state, kind: 'cancelled', reason: stopReason || 'aborted', limitKind: null };
+  return { state, kind: 'completed', reason: stopReason, limitKind: null };
+}
+
+/** @param {string|null|undefined} stopReason */
+function limitKindForStopReason(stopReason) {
+  return typeof stopReason === 'string' ? LIMIT_KIND_BY_STOP_REASON[stopReason] || null : null;
 }
 
 /** 从状态推出 run 的持久化状态串（runStore.finishRun 的 status），保持既有取值不变 */
@@ -115,7 +147,7 @@ function toRunStatus(state) {
 
 /**
  * 创建状态机。
- * @param {{ runId?: string, onTransition?: (info: {from: string, to: string, reason: string, ts: string}) => void, onViolation?: (violation: object) => void }} [options]
+ * @param {{ runId?: string, onTransition?: (info: {from: string, to: string, sequence: number, reason: string, ts: string}) => void, onViolation?: (violation: object) => void }} [options]
  */
 function createStateMachine(options = {}) {
   const machine = {
@@ -149,7 +181,7 @@ function createStateMachine(options = {}) {
       recordViolation({ type: 'illegal-transition', from: machine.state, to, reason: String(reason || '') });
       return false;
     }
-    const info = { from: machine.state, to, reason: String(reason || ''), ts: new Date().toISOString() };
+    const info = { from: machine.state, to, sequence: machine.history.length + 1, reason: String(reason || ''), ts: new Date().toISOString() };
     machine.state = to;
     machine.history.push(info);
     try {
@@ -160,16 +192,20 @@ function createStateMachine(options = {}) {
 
   machine.isTerminal = () => TERMINAL.includes(machine.state);
   machine.info = () => STATE_INFO[machine.state] || null;
-  machine.snapshot = () => ({
-    runId: machine.runId,
-    state: machine.state,
-    label: (STATE_INFO[machine.state] || {}).label || machine.state,
-    terminal: TERMINAL.includes(machine.state),
-    recoverable: !!(STATE_INFO[machine.state] || {}).recoverable,
-    recoveryPolicy: (STATE_INFO[machine.state] || {}).recoveryPolicy || 'checkpoint-dependent',
-    transitions: machine.history.length,
-    violations: machine.violations.slice(),
-  });
+  machine.snapshot = () => {
+    const info = STATE_INFO[machine.state] || {};
+    const recoveryPolicy = info.recoveryPolicy || 'checkpoint-dependent';
+    return {
+      runId: machine.runId,
+      state: machine.state,
+      label: info.label || machine.state,
+      terminal: TERMINAL.includes(machine.state),
+      recoverable: recoveryPolicy !== 'never',
+      recoveryPolicy,
+      transitions: machine.history.length,
+      violations: machine.violations.slice(),
+    };
+  };
 
   return machine;
 }
@@ -178,11 +214,14 @@ module.exports = {
   STATES,
   ALL_STATES: ALL,
   TERMINAL_STATES: TERMINAL,
+  LIMIT_KIND_BY_STOP_REASON,
   TRANSITIONS,
   STATE_INFO,
   isState,
   canTransition,
   classifyOutcome,
+  describeOutcome,
+  limitKindForStopReason,
   toRunStatus,
   createStateMachine,
 };
