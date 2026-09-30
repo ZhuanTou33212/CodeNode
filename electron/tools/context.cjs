@@ -217,6 +217,7 @@ class AgentToolContext {
     } finally {
       if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null, outcome })) {
         this.audit(JSON.stringify({ kind: 'approval_wait_settle_persist_failed', runId: this.runIdValue, waitId }));
+        throw new Error('审批结算无法持久化，拒绝继续执行');
       }
       this.notifyState('WAITING_TOOL', 'confirm_settled');
     }
@@ -292,7 +293,9 @@ class AgentToolContext {
       return '';
     } finally {
       if (this.cancelled()) outcome = 'cancelled';
-      if (this.checkpointSink) this.checkpoint('wait_settle', { waitId, kind: 'question', toolCallId, taskId: this.taskIdValue || null, outcome });
+      if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'question', toolCallId, taskId: this.taskIdValue || null, outcome })) {
+        throw new Error('用户答复结算无法持久化，需复核');
+      }
       this.notifyState('WAITING_TOOL', 'ask_user_settled');
     }
   }

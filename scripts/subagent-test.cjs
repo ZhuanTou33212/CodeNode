@@ -48,6 +48,7 @@ const buildContext = (model, signal) =>
 const baseCfg = { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }, rag: { enabled: true } };
 
 (async () => {
+  await require('./lib/subagent-lifecycle-checks.cjs')();
   const builder = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true, role: 'builder' });
   assert.strictEqual(builder.contains('write_file'), true);
   assert.strictEqual(builder.contains('execute_shell'), false);
@@ -233,6 +234,9 @@ const baseCfg = { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }
       assert.strictEqual(peak, 2);
       assert.strictEqual(active, 0);
       assert.strictEqual(batchResult.ok, false);
+      assert.strictEqual(batchResult.data.batchOutcome, 'partial_success');
+      assert.deepStrictEqual(batchResult.data.successfulTaskIds, ['batch-a', 'batch-c']);
+      assert.deepStrictEqual(batchResult.data.failedTaskIds, ['batch-fail']);
       assert.deepStrictEqual(batchResult.data.results.map((item) => item.taskId), ['batch-a', 'batch-fail', 'batch-c']);
       assert.deepStrictEqual(batchResult.data.results.map((item) => item.status), ['done', 'failed', 'done']);
     });

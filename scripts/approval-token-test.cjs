@@ -118,6 +118,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.strictEqual(await unavailableCheckpoint.approval().request({ what: 'guarded_write', level: 'WRITE' }), null);
   assert.strictEqual(unsafePrompts, 0, '审批等待无法持久化时不得先弹窗并继续写入');
   ok('审批等待检查点写入失败时拒绝执行');
+  let writeCount = 0;
+  const settleFailure = new AgentToolContext({
+    projectRoot: root, runId: 'run-settle-failed', confirm: async () => true,
+    checkpoint: () => ++writeCount === 1 ? {} : null,
+  });
+  assert.strictEqual(await settleFailure.approval().request({ what: 'guarded_write', level: 'WRITE' }), null,
+    '用户已同意但结算记录丢失时也不能签发可执行令牌');
+  ok('用户同意后结算写入失败仍阻止副作用');
 
   // ---- G. 声明层：确认类写工具都声明了确认且真的强制 ----
   const declRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false });

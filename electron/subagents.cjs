@@ -32,8 +32,10 @@ const roles = require('./tools/roles.cjs');
 const subagentPrompt = require('./subagentPrompt.cjs');
 const { createSubagentBudget } = require('./requestBudget.cjs');
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 const path = require('path');
 const { atomicWriteFile } = require('./atomicFile.cjs');
+const { SubagentScheduler, transitionTask } = require('./subagentScheduler.cjs');
 
 /**
  * 子代理任务视图的**持久化**（§4.2 的第一件事）。
@@ -65,12 +67,15 @@ function persistTaskView(projectRoot, runId, view) {
   try {
     if (fs.existsSync(file)) {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (Array.isArray(parsed.tasks)) list = parsed.tasks;
+      if (!Array.isArray(parsed.tasks)) throw new Error('任务视图格式无效');
+      list = parsed.tasks;
     }
-  } catch {
-    // 旧文件损坏：以本次记录重写（不让它挡住写入），但**不删**别的 run 的文件
+  } catch (error) {
+    throw new Error('任务视图不可读，拒绝覆盖：' + String(error.message || error));
   }
   const record = {
+    lifecycleVersion: 2,
+    executionId: view.executionId || null,
     taskId: view.taskId,
     runId: view.runId || runId || null,
     role: view.role || null,
@@ -83,11 +88,20 @@ function persistTaskView(projectRoot, runId, view) {
     toolCalls: Array.isArray(view.toolCalls) ? view.toolCalls.length : undefined,
     startedAt: view.startedAt || null,
     finishedAt: view.finishedAt || null,
+    queuedAt: view.queuedAt || null,
+    deadline: view.deadline || null,
+    executionSettled: view.executionSettled === true,
+    requiresReview: view.requiresReview === true,
+    cancelReason: view.cancelReason || null,
+    outcomeReason: view.outcomeReason || null,
+    version: Number(view.version) || 0,
   };
   const index = list.findIndex((item) => item && item.taskId === record.taskId);
   if (index >= 0) list[index] = { ...list[index], ...record };
   else list.push(record);
-  if (list.length > MAX_PERSISTED_TASKS) list = list.slice(list.length - MAX_PERSISTED_TASKS);
+  const protectedItems = list.filter((item) => ['queued', 'running', 'cancelling'].includes(item.status) || item.requiresReview);
+  const settled = list.filter((item) => !protectedItems.includes(item));
+  list = [...protectedItems, ...settled.slice(-Math.max(1, MAX_PERSISTED_TASKS - protectedItems.length))];
   atomicWriteFile(file, JSON.stringify({ runId: String(runId || ''), updatedAt: new Date().toISOString(), tasks: list }, null, 2));
   return record;
 }
@@ -101,6 +115,7 @@ function readTaskViews(projectRoot, runId) {
   try {
     if (!fs.existsSync(file)) return { ok: true, runId: String(runId || ''), updatedAt: null, tasks: [] };
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(parsed.tasks) || parsed.tasks.some((item) => !item || !item.taskId || !['queued', 'running', 'cancelling', 'done', 'failed', 'blocked', 'cancelled'].includes(item.status))) throw new Error('任务视图格式无效');
     return { ok: true, runId: String(runId || ''), updatedAt: parsed.updatedAt || null, tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [] };
   } catch (error) {
     return { ok: false, runId: String(runId || ''), updatedAt: null, tasks: [], error: '任务视图损坏：' + String((error && error.message) || error) };
@@ -255,6 +270,7 @@ function renderWorktreeSummary(info) {
 
 function taskView(task) {
   return {
+    executionId: task.executionId || null,
     taskId: task.taskId,
     runId: task.runId,
     role: task.role,
@@ -271,6 +287,13 @@ function taskView(task) {
     worktree: task.worktree || null,
     startedAt: task.startedAt,
     finishedAt: task.finishedAt || null,
+    queuedAt: task.queuedAt || null,
+    deadline: task.deadline || null,
+    executionSettled: task.executionSettled === true,
+    requiresReview: task.requiresReview === true,
+    cancelReason: task.cancelReason || null,
+    outcomeReason: task.outcomeReason || null,
+    version: Number(task.version) || 0,
   };
 }
 
@@ -298,6 +321,8 @@ class SubagentManager {
     this.startedTaskCount = 0;
     /** @type {Record<string, number>} 子代理配置（agent.subagent.*），缺项用默认值 */
     this.subCfg = Object.assign({}, DEFAULTS, (o.cfg && o.cfg.subagent) || {});
+    this.scheduler = new SubagentScheduler(this.subCfg.maxConcurrentTasks);
+    this.reservations = new Map();
     /**
      * 跨 Agent 资源租约：**必须与主代理共享同一个实例**（由 ipc 按 run 建好传进来），
      * 否则每个子代理各有一份注册表 = 谁也没锁住谁。没传进来时自己建一个（单测/独立使用场景）。
@@ -314,7 +339,7 @@ class SubagentManager {
 
   /** 只读验证计划步骤引用的子代理 taskId 属于本次 run。 */
   hasTask(taskId) {
-    return this.tasks.has(String(taskId || ''));
+    return this.tasks.has(String(taskId || '')) || this.reservations.has(String(taskId || ''));
   }
 
   register(registry) {
@@ -362,7 +387,7 @@ class SubagentManager {
       },
       // 这里**需要** context（拿 projectRoot 与画布模型做接收侧核验），所以用实名参数
       async (context, args) => {
-        const task = this.tasks.get(String(args.taskId || ''));
+        const task = this.tasks.get(String(args.taskId || '')) || this.reservations.get(String(args.taskId || ''))?.task;
         if (!task) return AgentToolResult.error('子代理任务不存在：' + String(args.taskId || ''));
         const view = taskView(task);
         /**
@@ -406,13 +431,15 @@ class SubagentManager {
       },
       async (context, args) => {
         const taskId = String(args.taskId || '');
-        const task = this.tasks.get(taskId);
+        const reservation = this.reservations.get(taskId);
+        const task = this.tasks.get(taskId) || (reservation && reservation.task);
         if (!task) return AgentToolResult.error('子代理任务不存在：' + taskId);
-        if (task.status !== 'running') return AgentToolResult.error('子代理任务已结束（status=' + task.status + '），无需取消');
+        if (!reservation && task.status !== 'running') return AgentToolResult.error('子代理任务已结束（status=' + task.status + '），无需取消');
         // 只 abort 这一个子任务自己的 controller（父信号/其他子代理不受影响）
         task.cancelRequested = true;
         task.cancelReason = String(args.reason || '主 Agent 主动取消');
-        task.status = 'cancelling';
+        transitionTask(task, 'cancelling');
+        if (reservation) reservation.controller.abort();
         if (task.controller && !task.controller.signal.aborted) task.controller.abort();
         context.audit(JSON.stringify({ kind: 'subagent_cancel', runId: this.runId, taskId, role: task.role, reason: task.cancelReason }));
         if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId, role: task.role, status: 'cancelling', summary: task.cancelReason });
@@ -422,12 +449,12 @@ class SubagentManager {
         } catch {
           /* 落盘失败不影响取消本身 */
         }
-        return AgentToolResult.ok('已取消子代理任务 ' + taskId + '（' + task.role + '）', { taskId, role: task.role, status: 'cancelling' });
+        return AgentToolResult.ok('已请求取消子代理任务 ' + taskId + '，等待执行退出；已发生的写入不会自动回滚。', { taskId, role: task.role, status: 'cancelling', executionSettled: false });
       }
     );
     registry.register(
       'delegate_tasks',
-      '批量执行子代理任务（只读角色按配置限制并发，包含写角色时按顺序执行；等待全部结算后合并）。',
+      '批量执行子代理任务（共享并发上限；只读并行、写任务独占；全部结算后返回成功和失败清单）。',
       {
         type: 'object',
         properties: { tasks: { type: 'array', items: { type: 'object' } } },
@@ -444,7 +471,7 @@ class SubagentManager {
         }
         const prepared = tasks.map((item) => ({ ...item, taskId: String(item.taskId || '').trim() || makeTaskId() }));
         const taskIds = prepared.map((item) => item.taskId);
-        if (new Set(taskIds).size !== taskIds.length || taskIds.some((taskId) => this.tasks.has(taskId))) {
+        if (new Set(taskIds).size !== taskIds.length || taskIds.some((taskId) => this.tasks.has(taskId) || this.reservations.has(taskId))) {
           return AgentToolResult.error('批量任务的 taskId 必须互不重复，且不能复用本轮已有任务');
         }
         const batchId = makeTaskId().replace(/^task-/, 'batch-');
@@ -455,15 +482,14 @@ class SubagentManager {
             })
           : null;
         if (projectRoot && !checkpoint) return AgentToolResult.error('无法持久化子任务汇合记录，已停止派发');
-        const readOnly = prepared.every((item) => READ_ONLY_ROLES.has(item.role));
-        const concurrency = readOnly ? this.subCfg.maxConcurrentTasks : 1;
-        const results = await runBatchTasks(prepared, concurrency, (item) => this.delegate(context, item));
+        // 所有入口都进入管理器级 FIFO；相邻只读任务可并行，写任务作为独占屏障。
+        const results = await runBatchTasks(prepared, prepared.length, (item) => this.delegate(context, item));
         /**
          * P5 确定性合并：把这一批信封里的「对世界声称了什么」合并成一份报告。
          * 合并只用贡献项自身的字段（资源键/内容/完成时刻/来源），**不看到达顺序** ——
          * 同一批工作无论谁先返回，digest 逐字节相同。冲突不会被默认消解（requiresArbitration）。
          */
-        const envelopes = results.map((r) => r && r.data && r.data.envelope).filter(Boolean);
+        const envelopes = results.filter((r) => r && r.ok === true).map((r) => r.data && r.data.envelope).filter(Boolean);
         const contributions = envelopes.reduce((acc, env) => acc.concat(mergeLib.contributionsFromEnvelope(env)), []);
         const merged = mergeLib.merge({ contributions });
         context.audit(
@@ -485,6 +511,9 @@ class SubagentManager {
           : null;
         const body = results.map((result) => (result && result.text) || '').join('\n') + '\n\n' + mergeLib.renderMergeReport(merged);
         const data = {
+          batchOutcome: failedResults.length === 0 ? 'success' : failedResults.length === results.length ? 'failed' : 'partial_success',
+          successfulTaskIds: results.flatMap((result, index) => result && result.ok === true ? [taskIds[index]] : []),
+          failedTaskIds: results.flatMap((result, index) => !result || result.ok !== true ? [taskIds[index]] : []),
           results: results.map((result) => taskView((result && result.data) || {})),
           merged: { digest: merged.digest, counts: merged.counts, conflicts: merged.conflicts },
           failedCount: failedResults.length,
@@ -525,7 +554,7 @@ class SubagentManager {
       async (context, args) => {
         const wanted = Array.isArray(args.taskIds) && args.taskIds.length ? args.taskIds.map(String) : null;
         const tasks = [...this.tasks.values()].filter(
-          (task) => task.envelope && (!wanted || wanted.includes(task.taskId))
+          (task) => task.status === 'done' && !task.requiresReview && task.envelope && (!wanted || wanted.includes(task.taskId))
         );
         if (!tasks.length) {
           return AgentToolResult.error('没有可合并的子代理结果（信封只在任务完成后生成；taskIds 可能写错了）');
@@ -551,6 +580,100 @@ class SubagentManager {
   }
 
   async delegate(context, args) {
+    if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
+    const taskId = String(args.taskId || '').trim() || makeTaskId();
+    if (this.tasks.has(taskId) || this.reservations.has(taskId)) return AgentToolResult.error('taskId 已被占用：' + taskId);
+    if (!roles.roleDefinition(args.role) || !String(args.objective || '').trim()) return AgentToolResult.error('无效的 role 或 objective');
+    const parent = typeof context.signal === 'function' ? context.signal() : null;
+    const controller = new AbortController();
+    const totalMs = clampTotalTimeout(args.timeoutSeconds, this.subCfg.totalTimeoutSeconds);
+    const queuedAt = new Date().toISOString();
+    const lifecycle = {
+      controller, timedOut: false,
+      task: { taskId, executionId: randomUUID(), runId: this.runId, role: args.role, objective: args.objective, status: 'queued', queuedAt,
+        deadline: new Date(Date.now() + totalMs).toISOString(), executionSettled: false },
+    };
+    const cancel = () => {
+      const task = this.tasks.get(taskId) || lifecycle.task;
+      task.cancelReason = task.cancelReason || (lifecycle.timedOut ? 'deadline_exceeded' : 'parent_cancelled');
+      transitionTask(task, 'cancelling');
+      try { persistTaskView(context.projectRoot(), this.runId, taskView(task)); } catch {}
+    };
+    controller.signal.addEventListener('abort', cancel, { once: true });
+    const onParentAbort = () => controller.abort();
+    if (parent) parent.addEventListener('abort', onParentAbort, { once: true });
+    this.reservations.set(taskId, lifecycle);
+    let release = null;
+    let result;
+    const timer = setTimeout(() => { lifecycle.timedOut = true; controller.abort(); }, totalMs);
+    try {
+      persistTaskView(context.projectRoot(), this.runId, taskView(lifecycle.task));
+      if ((parent && parent.aborted) || (typeof context.cancelled === 'function' && context.cancelled())) controller.abort();
+      release = await this.scheduler.acquire(READ_ONLY_ROLES.has(args.role), controller.signal);
+      if (controller.signal.aborted) throw new Error('子任务已取消');
+      const executionContext = context.fork({ signal: controller.signal, readOnly: context.readOnly() });
+      result = await this.executeTask(executionContext, { ...args, taskId }, lifecycle);
+    } catch (error) {
+      result = AgentToolResult.error(String((error && error.message) || error), { taskId, status: 'failed' });
+    } finally {
+      clearTimeout(timer);
+      if (parent) parent.removeEventListener('abort', onParentAbort);
+      controller.signal.removeEventListener('abort', cancel);
+      const task = this.tasks.get(taskId) || lifecycle.task;
+      const started = !!task.startedAt;
+      if (controller.signal.aborted) {
+        transitionTask(task, lifecycle.timedOut ? 'blocked' : 'cancelled');
+        task.outcomeReason = lifecycle.timedOut ? 'deadline_exceeded' : task.cancelReason || 'parent_cancelled';
+        task.requiresReview = started && !READ_ONLY_ROLES.has(args.role);
+        task.error = (task.cancelRequested ? '子代理任务被主动取消；' : '') + '子任务执行已返回，原因：' + task.outcomeReason + '；已发生的副作用不会回滚。';
+        task.envelope = null;
+        result = AgentToolResult.error(task.error, taskView(task));
+      } else if (!result || !result.ok) {
+        transitionTask(task, ['failed', 'blocked', 'cancelled'].includes(task.outcomeStatus) ? task.outcomeStatus : 'failed');
+        task.error = task.error || (result && result.text) || '子任务执行失败';
+        task.outcomeReason = 'task_failed';
+        task.requiresReview = started && !READ_ONLY_ROLES.has(args.role);
+      } else {
+        transitionTask(task, 'done');
+      }
+      task.queuedAt = lifecycle.task.queuedAt;
+      task.deadline = lifecycle.task.deadline;
+      task.executionSettled = true; // 只确认本地执行 Promise 退出，不宣称外部副作用已撤销。
+      task.finishedAt = new Date().toISOString();
+      this.tasks.set(taskId, task);
+      try {
+        if (this.leases) {
+          const released = this.leases.releaseAll(taskId);
+          if (released) context.audit(JSON.stringify({ kind: 'subagent_leases_released', taskId, released }));
+        }
+        const settled = require('./runCheckpoint.cjs').appendCheckpoint(context.projectRoot(), this.runId, {
+          type: 'subagent_task_settled', taskId, task: {
+            taskId, executionId: task.executionId, role: task.role, status: task.status, executionSettled: true,
+            requiresReview: task.requiresReview === true, outcomeReason: task.outcomeReason || null,
+          },
+        });
+        if (!settled) throw new Error('任务结算检查点写入失败');
+        persistTaskView(context.projectRoot(), this.runId, taskView(task));
+      } catch (error) {
+        task.requiresReview = true;
+        result = AgentToolResult.error('子任务收尾记录失败，必须复核：' + String(error.message || error), taskView(task));
+      } finally {
+        this.reservations.delete(taskId);
+        if (release) release();
+      }
+      if (result) result.data = { ...(result.data || {}), ...taskView(task) };
+      try { context.audit(JSON.stringify({ kind: 'subagent_end', runId: this.runId, taskId, role: task.role, status: task.status })); } catch {}
+      if (this.onDelta) {
+        try { this.onDelta({ kind: 'subagent_state', taskId, role: task.role, status: task.status, summary: String(task.error || task.summary || '').slice(0, 200) }); } catch {}
+      }
+    }
+    const finishedTask = this.tasks.get(taskId);
+    try { await this.updateStage(context, finishedTask, finishedTask.status, String((result && result.text) || finishedTask.error || finishedTask.summary || '').slice(0, 4000)); } catch {}
+    if (result && result.data) result.data.stageWarning = finishedTask.stageWarning || null;
+    return result;
+  }
+
+  async executeTask(context, args, lifecycle) {
     if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
     // #18：配额按「曾进入 running」计数，不按 tasks.size（模型复用同一 taskId 会让后者恒为 1）
     if (this.startedTaskCount >= this.subCfg.maxTasksPerRun) {
@@ -580,8 +703,12 @@ class SubagentManager {
     }
 
     const totalMs = clampTotalTimeout(args.timeoutSeconds, this.subCfg.totalTimeoutSeconds);
+    const controller = lifecycle.controller;
     const task = {
       taskId: requestedTaskId || makeTaskId(),
+      executionId: lifecycle.task.executionId,
+      queuedAt: lifecycle.task.queuedAt,
+      deadline: lifecycle.task.deadline,
       runId: this.runId,
       role,
       objective,
@@ -589,9 +716,12 @@ class SubagentManager {
       acceptanceCriteria: Array.isArray(args.acceptanceCriteria) ? args.acceptanceCriteria.map(String) : [],
       stageNodeId: String(args.stageNodeId || ''),
       totalTimeoutMs: totalMs,
-      status: 'running',
+      status: 'queued',
+      version: lifecycle.task.version || 0,
       startedAt: new Date().toISOString(),
+      controller,
     };
+    transitionTask(task, 'running');
     // 先持久化任务身份再执行：进程中断后能识别哪些子任务的结果未知。
     try {
       if (context.projectRoot()) persistTaskView(context.projectRoot(), this.runId, taskView(task));
@@ -617,10 +747,9 @@ class SubagentManager {
         { context, policy: typeof context.sandbox === 'function' ? context.sandbox() : null }
       );
       if (!created.ok) {
-        task.status = 'failed';
+        task.outcomeStatus = 'failed';
         task.error = '隔离工作树创建失败（' + created.error + '）：' + created.message;
         task.finishedAt = new Date().toISOString();
-        try { persistTaskView(context.projectRoot(), this.runId, taskView(task)); } catch {}
         context.audit(JSON.stringify({ kind: 'subagent_worktree_failed', taskId: task.taskId, error: created.error }));
         await this.updateStage(context, task, 'failed', task.error);
         return AgentToolResult.error(
@@ -638,23 +767,11 @@ class SubagentManager {
     // 总时长预算：组合父信号 + 自己的定时器。
     // 注意定时器**不能 unref** —— 被 unref 的 timer 不维持事件循环，被测/被中止场景下
     // 超时分支可能永不执行（S3 踩过同一个坑）。
-    const parentSignal = typeof context.signal === 'function' ? context.signal() : null;
-    const controller = new AbortController();
-    // 单任务取消通道（第 6 项）：cancel_subagent_task 靠它只 abort 这一个子任务
-    task.controller = controller;
-    const onParentAbort = () => controller.abort();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, totalMs);
-    if (parentSignal) {
-      if (parentSignal.aborted) controller.abort();
-      else parentSignal.addEventListener('abort', onParentAbort, { once: true });
-    }
+    // 排队、准备工作树与执行共用同一个截止时间和取消控制器。
 
     let result = null;
     try {
+      if (controller.signal.aborted) throw new Error('子任务已请求取消，未调用模型');
       const childRegistry = this.toolkit.buildDefaultRegistryWithConfig({
         ...this.cfg.tools,
         ragEnabled: this.cfg.rag.enabled && !!context.projectRoot(),
@@ -712,19 +829,19 @@ class SubagentManager {
       // #5：把主循环的收尾原因如实带出来 —— 信封据此判定「这是不是完整结论」
       task.stopReason = result.stopReason || null;
       task.finishReason = result.finishReason || null;
-      if (timedOut) {
-        task.status = 'blocked';
+      if (lifecycle.timedOut) {
+        task.outcomeStatus = 'blocked';
         task.error = '子代理任务达到总时长上限（约 ' + Math.round(totalMs / 1000) + 's），已中止';
       } else if (result.error) {
-        task.status = 'failed';
+        task.outcomeStatus = 'failed';
         task.error = String(result.error);
       } else if (result.aborted) {
         if (task.cancelRequested) {
           // 第 6 项：主动取消要如实说清是「被谁取消的」，而不是统一报成「信号中断」
-          task.status = 'cancelled';
+          task.outcomeStatus = 'cancelled';
           task.error = '子代理任务被主动取消：' + (task.cancelReason || '未说明原因') + '（已提交的写操作不会回滚）';
         } else {
-          task.status = 'blocked';
+          task.outcomeStatus = 'blocked';
           task.error = '子代理被取消（主 Agent 停止或信号中断）';
         }
       } else if (result.stopReason) {
@@ -735,26 +852,24 @@ class SubagentManager {
          * 主代理拿它当完整证据。截断/未自然结束 = 未完成：状态必须离开 done，
          * 信封才会是 `kind:'error'`（见 subagentEnvelope.buildEnvelope）。
          */
-        task.status = 'failed';
+        task.outcomeStatus = 'failed';
         task.error =
           result.stopReason === 'length_truncated'
             ? '子代理输出被 max_tokens 截断（finish_reason=length，续写补问已用尽），返回的是**半截内容**：' +
               '不得当作完整结论采信。请缩小 objective 的范围、分段委派，或提高该模型的 max_tokens 后重做。'
             : '子代理未自然结束（stopReason=' + String(result.stopReason) + '）：结果不完整，不得当作完整结论采信。';
       } else {
-        task.status = 'done';
+        task.outcomeStatus = 'done';
       }
       // #6（成本双重记账）：这里**不再**用 result.usage（逐轮 mergeUsage 的累加值）汇总记第二次账 ——
       // 子代理每一轮已按 childCfg.costKind='subagent' 在 agent.cjs 里如实记过一条，再记一次就是同一笔用量的第二份。
       // task.usage 仍保留（信封与 taskView 需要它展示真实消耗）。
     } catch (error) {
-      task.status = timedOut ? 'blocked' : 'failed';
-      task.error = timedOut
+      task.outcomeStatus = lifecycle.timedOut ? 'blocked' : 'failed';
+      task.error = lifecycle.timedOut
         ? '子代理任务达到总时长上限（约 ' + Math.round(totalMs / 1000) + 's），已中止'
         : String(error && error.message ? error.message : error);
     } finally {
-      clearTimeout(timer);
-      if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
       task.controller = null; // 释放取消引用（任务已结束）
     }
 
@@ -762,12 +877,7 @@ class SubagentManager {
     this.tasks.set(task.taskId, task);
     // 任务结束（成功/失败都算）→ 释放它持有的全部资源租约。
     // 释放点放在这里而不是「每次写完」：写完就放，另一个 Agent 会基于过期的读去覆盖（丢更新）。
-    if (this.leases && typeof this.leases.releaseAll === 'function') {
-      const released = this.leases.releaseAll(task.taskId);
-      if (released > 0) {
-        context.audit(JSON.stringify({ kind: 'subagent_leases_released', taskId: task.taskId, released }));
-      }
-    }
+    // 租约与并发槽统一由 delegate 的 finally 释放，包含准备/信封阶段抛错的路径。
 
     /**
      * 隔离工作树的收尾统计：数出「改了什么、提交了几个」，供主代理决定合并还是移除。
@@ -784,37 +894,30 @@ class SubagentManager {
       );
     }
 
-    const body = task.status === 'done' ? (task.summary || '（子代理未返回文本）') : (task.error || '子代理任务未完成');
+    const body = task.outcomeStatus === 'done' ? (task.summary || '（子代理未返回文本）') : (task.error || '子代理任务未完成');
     const cap = this.subCfg.resultMaxChars;
     const clipped = body.length > cap;
     const summaryText = clipped ? body.slice(0, cap) : body;
     // 单一 JSON 信封（P1）：字段齐全、带世界状态快照、产物真实哈希、截断自报 lossy。
     // 契约违约 → 下面的工具结果会是 error（**拒收**），主代理不得把它的结论当证据。
     const built = subagentEnvelope.buildEnvelope({
-      task,
+      task: { ...task, status: task.outcomeStatus },
       projectRoot: context.projectRoot(),
       model: typeof context.model === 'function' ? context.model() : null,
       inReplyTo: task.parentToolCallId || null,
       changedFiles: changedFiles(task.toolCalls),
-      summary: task.status === 'done' ? summaryText : '',
-      error: task.status === 'done' ? '' : summaryText,
+      summary: task.outcomeStatus === 'done' ? summaryText : '',
+      error: task.outcomeStatus === 'done' ? '' : summaryText,
       clipped: clipped ? { droppedChars: body.length - cap } : null,
     });
     task.envelope = built.envelope;
     // view 必须在信封建好之后再取：view.envelope 要带上它（回放不改哈希）
-    const view = taskView(task);
+    const view = taskView({ ...task, status: task.outcomeStatus });
     // §4.2：任务结束即落盘（跨 run 可查）—— 此前只有进程内 Map + 两行 delta，重启即失忆
-    try {
-      persistTaskView(context.projectRoot(), this.runId, view);
-    } catch (error) {
-      context.audit(JSON.stringify({ kind: 'subagent_view_persist_failed', taskId: task.taskId, error: String((error && error.message) || error) }));
-    }
+    // 终态落盘由 delegate 集中完成，避免信封未验收时提前展示 done。
     const text =
       subagentEnvelope.renderEnvelopeText(built.envelope, built.violations) +
       (worktreeInfo ? '\n\n' + renderWorktreeSummary(worktreeInfo) : '');
-    await this.updateStage(context, task, task.status, text.slice(0, 4000));
-    context.audit(JSON.stringify({ kind: 'subagent_end', runId: this.runId, taskId: task.taskId, role, status: task.status }));
-    if (this.onDelta) this.onDelta({ kind: 'subagent_state', taskId: task.taskId, role, status: task.status, summary: summaryText.slice(0, 200) });
     if (built.violations.length) {
       // 拒收：契约不完整的结果**不能**当结论用（这正是「信任放大」的闸门）
       context.audit(
@@ -829,7 +932,7 @@ class SubagentManager {
         view
       );
     }
-    return task.status === 'done'
+    return task.outcomeStatus === 'done'
       ? AgentToolResult.ok(text, view)
       : AgentToolResult.error(
           text + '\n请勿用相同 objective 原样重试（同参数会再执行一次）：先按上面的原因缩小范围或换角色（只读探查用 explorer、验证用 verifier），或由主代理直接完成这一步。',

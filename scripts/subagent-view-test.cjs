@@ -22,6 +22,7 @@ const ROOT = path.resolve(__dirname, '..');
 const subagents = require(path.join(ROOT, 'electron', 'subagents.cjs'));
 const toolkit = require(path.join(ROOT, 'electron', 'tools', 'toolkit.cjs'));
 const { AgentToolContext } = require(path.join(ROOT, 'electron', 'tools', 'context.cjs'));
+const { GraphModel } = require('../electron/tools/GraphModel.cjs');
 const sandbox = require(path.join(ROOT, 'electron', 'sandbox.cjs'));
 
 let failures = 0;
@@ -49,6 +50,7 @@ const baseCfg = {
 function buildContext(projectRoot, policy) {
   return new AgentToolContext({
     projectRoot,
+    model: new GraphModel({ root: { nodes: [], edges: [] } }),
     confirm: async () => true,
     audit: () => {},
     ragConfig: { enabled: false },
@@ -135,7 +137,7 @@ function buildContext(projectRoot, policy) {
   check('[E] preload 暴露 subagentViews', /subagentViews:\s*\(root, options\)/.test(preloadSrc));
   check('[E] IPC 白名单登记 agent:subagents', whitelist.includes("'agent:subagents'"));
   check('[E] 界面上有子代理任务面板（跨运行留存）', dock.includes('dock-subagents') && dock.includes('subagentViews('));
-  check('[E] 主循环路径上也接了落盘（manager 结束分支）', /persistTaskView\(context\.projectRoot\(\), this\.runId, view\)/.test(fs.readFileSync(path.join(ROOT, 'electron', 'subagents.cjs'), 'utf8')));
+  check('[E] 真实管理器收尾后，落盘视图已结算且无待复核项', viewA.tasks[0].executionSettled === true && viewA.tasks[0].requiresReview === false);
 
   for (const dir of [rootA, rootB, rootC, rootD]) {
     try {

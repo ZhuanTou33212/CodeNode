@@ -373,7 +373,18 @@ function planResume(projectRoot, runId, options = {}) {
   const pendingWaits = pendingWaitsOf(checkpoints);
   const pendingBatches = pendingBatchesOf(checkpoints);
   const taskViews = require('./subagents.cjs').readTaskViews(projectRoot, runId);
-  const pendingSubagentTasks = taskViews.tasks.filter((task) => task && ['running', 'cancelling'].includes(task.status));
+  // 结算事件是恢复依据，视图是展示投影；崩溃发生在结算与视图刷新之间时以事件为准。
+  const persistedTasks = new Map(taskViews.tasks.map((task) => [task.taskId, task]));
+  const recoveredTasks = new Map(persistedTasks);
+  for (const entry of checkpoints) {
+    const persisted = persistedTasks.get(entry.taskId);
+    if (persisted && persisted.executionId && (!entry.task || entry.task.executionId !== persisted.executionId)) continue;
+    if (entry.type === 'subagent_task_settled' && entry.taskId && entry.task && entry.task.executionSettled === true &&
+        entry.task.taskId === entry.taskId && ['done', 'failed', 'blocked', 'cancelled'].includes(entry.task.status)) recoveredTasks.set(entry.taskId, entry.task);
+  }
+  const pendingSubagentTasks = [...recoveredTasks.values()].filter((task) => task &&
+    (['queued', 'running', 'cancelling'].includes(task.status) || task.requiresReview ||
+      (task.lifecycleVersion === 2 && task.executionSettled !== true)));
   const ledger = options.ledger || (projectRoot ? new SideEffectLedger({ projectRoot, scopeRunId: summary.runId }) : null);
   const ledgerReview = ledger ? ledger.review() : { committed: [], pending: [], unknown: [] };
 
@@ -422,7 +433,8 @@ function planResume(projectRoot, runId, options = {}) {
     pendingSteps: pendingSteps.map((step) => ({ tool: step.tool, effect: step.effect || classify(step.tool), idemKey: step.idemKey || null })),
     pendingWaits,
     pendingBatches,
-    pendingSubagentTasks: pendingSubagentTasks.map((task) => ({ taskId: task.taskId, role: task.role, status: task.status })),
+    pendingSubagentTasks: pendingSubagentTasks.map((task) => ({ taskId: task.taskId, role: task.role, status: task.status,
+      executionSettled: task.executionSettled === true, requiresReview: task.requiresReview === true, reason: task.outcomeReason || null })),
     skippedByLedger: skippable,
     unknownEffects: [...unknownSteps, ...unknownFromLedger],
     messages: lastMessages(checkpoints),
@@ -433,9 +445,6 @@ function planResume(projectRoot, runId, options = {}) {
     reason: null,
   };
 
-  if (status === 'completed' && !pendingWaits.length && !pendingBatches.length && !pendingSubagentTasks.length && taskViews.ok) {
-    return { ...base, mode: 'complete', reason: 'Run 已正常完成，无需续跑' };
-  }
   if (status === 'cancelled') {
     return { ...base, mode: 'review', reason: '该 Run 由用户主动停止，自动续跑前需要你确认', requiresReview: true };
   }
@@ -469,6 +478,9 @@ function planResume(projectRoot, runId, options = {}) {
       reason: !taskViews.ok ? '子代理任务记录不可读。' : '中断时有 ' + count + ' 个子代理任务的汇合结果尚未确认。',
       warning: '请核对子任务状态与可能已发生的写入；系统不会仅凭旧的 running 标记重启子任务。',
     };
+  }
+  if (status === 'completed') {
+    return { ...base, mode: 'complete', reason: 'Run 已正常完成，无需续跑' };
   }
   if (STATE_INFO[summary.state] && STATE_INFO[summary.state].recoveryPolicy === 'review-required') {
     return {
