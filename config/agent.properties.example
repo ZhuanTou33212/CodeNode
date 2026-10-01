@@ -177,6 +177,9 @@ soul_file=config/soul.md
 # agent.compression.budget_chars=1500      # 压缩摘要目标长度
 # agent.compression.max_calls=8            # 单轮最多压缩调用次数
 # agent.compression.exclude=               # 追加不压缩的工具（默认已有 retrieve_context,query_scalars,ask_user）
+# 工具结果会按当前 run 汇总为有界 Observation 视口，附在最后一条 tool 消息中。
+# agent.observation.enabled=true
+# agent.observation.budget_chars=2400
 # 压缩配额按**请求数**计（每请求最多 batch_max_items 条）：配额用尽后原文会进上下文，
 # 兜底交给下面的上下文预算（agent.context.*），两者互补 —— 压缩保质量、预算保上限。
 

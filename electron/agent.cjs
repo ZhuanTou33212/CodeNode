@@ -44,6 +44,7 @@ const schedulerLib = require('./tools/scheduler.cjs');
 const planLib = require('./plan.cjs');
 // 钩子（对照 Claude Code 的 hooks）：工具执行完之后按配置跑用户声明的命令（lint/测试/自定义脚本）
 const hooksLib = require('./hooks.cjs');
+const observationState = require('./observationState.cjs');
 // 意图识别 / 授权判定（照 Codex guardian 分类器，见 electron/intent.cjs 顶部注释）
 const intentLib = require('./intent.cjs');
 const { parseThresholds: parseAlertThresholds } = require('./alerts.cjs');
@@ -163,6 +164,7 @@ function loadConfig(projectRoot) {
     intent: intentLib.parseIntentConfig(cfg),
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
+    observation: observationState.parseConfig(cfg),
     subagent: parseSubagentConfig(cfg),
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
@@ -2530,6 +2532,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let steerCount = 0;
   const allToolCalls = [];
   const toolResultCache = new Map();
+  // 一次 run 一份 Blackboard；工具结果经适配器按逻辑调用顺序合入。
+  const observationBoard = observationState.createBlackboard();
   /** @type {Record<string, number>} 每个 toolCallId 已发出的失败提示次数（S5：同一调用最多 NUDGE_MAX_PER_CALL 次） */
   const nudgeCounts = {};
   // S6：只读并行调度器（默认关闭 → prime() 返回空计划，主循环行为与串行完全一致）
@@ -3186,7 +3190,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         const carriedMessage = messages.find(
           (msg) => msg && msg.role === 'tool' && msg.tool_call_id === carry.toolCallId,
         );
-        if (!carriedMessage || carriedMessage.content !== carry.summary) {
+        if (!carriedMessage || typeof carriedMessage.content !== 'string' || !carriedMessage.content.startsWith(carry.summary)) {
           carry.active = false;
           continue;
         }
@@ -3364,6 +3368,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       if (tools && tools.registry && toolCalls.length) {
         /** @type {Array<{toolName: string, content: string, contentTokens: number, record: any, cacheKey: string|null, messageIndex: number, toolCallId: string, expectedReuseRounds?: number}>} */
         const pendingCompression = [];
+        /** @type {Array<{record: any, messageIndex: number}>} */
+        const roundObservations = [];
         // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
         assignCallIds(toolCalls, iter);
         messages.push({
@@ -3628,6 +3634,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             }
           }
           if (!toolContent) toolContent = result.text || '';
+          roundObservations.push({ record, messageIndex: messages.length });
           messages.push({
             role: 'tool',
             // 带上工具名（#22）：上下文硬裁剪的占位符要写清「原本是哪次调用的结果」。
@@ -3891,6 +3898,17 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
          */
         if (!pendingCompression.length && roundCompressionSkips.size) {
           emitTrace({ kind: 'compression_skipped', turnId: iter, skips: Object.fromEntries(roundCompressionSkips) });
+        }
+        // 只在本 run 内合并工具结果；追加到最后一条 tool 消息以保持协议配对和信任级别。
+        if (cfg && cfg.observation && cfg.observation.enabled && roundObservations.length) {
+          const patches = roundObservations.map(({ record, messageIndex }) =>
+            observationState.adaptToolResult(record, messages[messageIndex] && messages[messageIndex].content),
+          );
+          observationState.reduceToolResults(observationBoard, patches);
+          const view = observationState.synthesizeObservation(observationBoard, cfg.observation);
+          const lastToolMessage = messages[roundObservations[roundObservations.length - 1].messageIndex];
+          if (lastToolMessage && lastToolMessage.role === 'tool') lastToolMessage.content += '\n\n' + view;
+          emitTrace({ kind: 'observation', turnId: iter, toolCalls: patches.length, revision: observationBoard.revision, chars: view.length });
         }
         // 失败按**类别**分派提示（S5）：参数错 → 改参数重试；权限/用户拒绝 → 别原样重试、要人介入；
         // 超时 → 缩小范围；副作用未知 → 先只读核对；认不出来的码按最保守处理。
