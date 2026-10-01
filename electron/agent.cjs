@@ -1747,9 +1747,14 @@ function shouldCompress(compression, toolName, contentLength, usedCalls) {
   return contentLength > compression.thresholdChars;
 }
 
+// 配置的最大迭代数只是停止上限，不能当成摘要一定会被复用的次数。
+const MAX_COMPRESSION_FORECAST_ROUNDS = 2;
+// 预留压缩器 system prompt、JSON 封装和分段标记的固定输入开销。
+const COMPRESSION_ESTIMATED_FIXED_OVERHEAD_TOKENS = 512;
+
 /**
- * 压缩收益判据（P1-3）：压一次要花「原文 R + 摘要 S」，只在**预计剩余轮数**足够多、
- * 后续每轮省下的 (R − S) 能把这一次的成本赚回来时才值得压。
+ * 压缩收益判据（P1-3）：压一次要花「原文 R + 摘要 S」。
+ * 决策最多只预测 2 个后续复用轮次；真实净节省另按成功请求实际携带摘要的次数累计。
  *
  * 审计给的算式就是这条：回本所需轮数 `> (R + S) / (R − S)`。原实现用字符阈值（2,400 字符）判，
  * 于是刚过线的结果要再被用 4~5 轮才回本 —— 短任务里反而更贵。
@@ -1779,10 +1784,11 @@ function compressionRoi(input = {}) {
  * 顺序（每一条都有明确理由）：
  *   ① 旧粗筛（开关 / exclude / max_calls / 旧字符下界）—— 保持既有语义与既有用例；
  *   ② **token 阈值**（出厂 8,000）：先做确定性投影/分页/句柄，投影后还这么大才轮到 LLM 摘要；
- *   ③ **预计剩余轮数**：未知或不 > 1 → 不压（最后一轮压了必然亏）；
+ *   ③ **预计复用轮数**：剩余上限未知或不 > 1 → 不压；
  *   ④ **同类工具长期净亏** → 本 run 内改用确定性裁剪（自动降级，见 `stats`）；
- *   ⑤ **净收益判据** `剩余轮数 × (R − S) > (R + S)`。
- * @returns {{compress: boolean, reason: string, roi?: object}}
+ *   ⑤ **净收益判据** `min(剩余上限, 2) × (R − S) > (R + S)`。
+ * @returns {{compress: false, reason: string, roi?: object}|
+ *           {compress: true, reason: string, roi: object, expectedReuseRounds: number, maximumRemainingRounds: number}}
  */
 function compressionDecision(input = {}) {
   const comp = input.compression || {};
@@ -1792,20 +1798,21 @@ function compressionDecision(input = {}) {
   }
   const thresholdTokens = Number(comp.thresholdTokens) > 0 ? Number(comp.thresholdTokens) : 8000;
   if (!(Number(input.contentTokens) >= thresholdTokens)) return { compress: false, reason: 'below-token-threshold' };
-  const remaining = Number(input.remainingRounds);
-  if (!Number.isFinite(remaining) || remaining <= 1) return { compress: false, reason: 'last-round' };
+  const maximumRemaining = Number(input.remainingRounds);
+  if (!Number.isFinite(maximumRemaining) || maximumRemaining <= 1) return { compress: false, reason: 'last-round' };
   const stats = input.stats && typeof input.stats.get === 'function' ? input.stats.get(input.toolName) : null;
   if (stats && Number(stats.calls) >= 2 && Number(stats.netTokensSaved) < 0) {
     return { compress: false, reason: 'negative-net' };
   }
+  const expectedReuseRounds = Math.min(maximumRemaining, MAX_COMPRESSION_FORECAST_ROUNDS);
   const roi = compressionRoi({
     contentTokens: input.contentTokens,
     summaryTokens: Number(comp.summaryTokens) > 0 ? Number(comp.summaryTokens) : 1500,
-    remainingRounds: remaining,
-    costTokens: 0,
+    remainingRounds: expectedReuseRounds,
+    costTokens: COMPRESSION_ESTIMATED_FIXED_OVERHEAD_TOKENS,
   });
   if (!roi.profitable) return { compress: false, reason: 'roi-negative', roi };
-  return { compress: true, reason: 'profitable', roi };
+  return { compress: true, reason: 'profitable', roi, expectedReuseRounds, maximumRemainingRounds: maximumRemaining };
 }
 
 /** 压缩结果的内容级缓存（同一份原文 + 同一预算只压一次，命中即零 token） */
@@ -2614,11 +2621,13 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
   let truncationBumps = 0;
   /**
    * P1-3：本 run 的压缩账（按工具累计 原始/摘要/成本/净收益）。
-   * 用途一：记账（`netTokensSaved` 进账本与归因，回答「压缩到底赚不赚」）；
+   * `netTokensSaved` 只在后续主模型请求成功携带摘要后增加；两轮 forecast 只供压缩决策使用。
    * 用途二：**自动降级** —— 某类工具累计净亏且已压过 ≥2 次，本次 run 内不再对它调压缩模型，
    *         改走确定性裁剪（`data_truncate_cap` / 投影 / 分页）。
    */
   const compressionStats = new Map();
+  /** 成功压缩后的 tool_call_id 与摘要；只在后续主模型请求确实带上它时兑现节省。 */
+  const compressedCarryEntries = [];
   /** 本 run 被跳过的压缩次数（按原因计数），进 trace 与归因，别让「没压」变成不可观测的静默 */
   const compressionSkips = new Map();
   /** 本轮跳过的压缩原因（每轮清零）—— 用于「一条都没压」时也留一条 trace */
@@ -3170,6 +3179,51 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       };
       const res = await sendTurn();
       modelTurns += 1;
+      /** 只在模型请求成功返回后计数；允许迭代上限不代表这份摘要实际被后续请求复用。 */
+      const realizedCompressionCarries = [];
+      for (const carry of compressedCarryEntries) {
+        if (carry.active === false) continue;
+        const carriedMessage = messages.find(
+          (msg) => msg && msg.role === 'tool' && msg.tool_call_id === carry.toolCallId,
+        );
+        if (!carriedMessage || carriedMessage.content !== carry.summary) {
+          carry.active = false;
+          continue;
+        }
+        carry.carries += 1;
+        const stat = compressionStats.get(carry.toolName);
+        if (stat) {
+          stat.realizedSavedTokens += carry.savedTokens;
+          stat.realizedCarryRequests += 1;
+          stat.costKnown = stat.costKnown && carry.costKnown;
+          stat.netTokensSaved = stat.costKnown ? stat.realizedSavedTokens - stat.costTokens : null;
+          stat.netTokensImmediate = stat.costKnown ? stat.savedTokens - stat.costTokens : null;
+          carry.record.netTokensSaved = stat.netTokensSaved == null ? null : Math.round(stat.netTokensSaved);
+          carry.record.realizedCarryRequests = carry.carries;
+          carry.record.realizedSavedTokens = Math.round(carry.savedTokens * carry.carries);
+        }
+        realizedCompressionCarries.push(carry.toolName);
+      }
+      if (realizedCompressionCarries.length) {
+        const compressionTotals = [...compressionStats.values()].reduce(
+          (totals, stat) => ({
+            saved: totals.saved + (Number(stat.realizedSavedTokens) || 0),
+            carries: totals.carries + (Number(stat.realizedCarryRequests) || 0),
+            net: totals.net + (Number(stat.netTokensSaved) || 0),
+          }),
+          { saved: 0, carries: 0, net: 0 },
+        );
+        emitTrace({
+          kind: 'compression_realization',
+          turnId: iter,
+          items: realizedCompressionCarries.length,
+          tools: realizedCompressionCarries,
+          realizedSavedTokens: compressionTotals.saved,
+          realizedCarryRequests: compressionTotals.carries,
+          costKnown: [...compressionStats.values()].every((stat) => stat.costKnown !== false),
+          netTokensSaved: compressionTotals.net,
+        });
+      }
       // 本轮结束：本轮缓冲交还（content/reasoning 里已经含它，不需要再留着回滚）
       turnContent = '';
       turnReasoning = '';
@@ -3308,7 +3362,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         continue;
       }
       if (tools && tools.registry && toolCalls.length) {
-        /** @type {Array<{toolName: string, content: string, contentTokens: number, record: any, cacheKey: string|null, messageIndex: number}>} */
+        /** @type {Array<{toolName: string, content: string, contentTokens: number, record: any, cacheKey: string|null, messageIndex: number, toolCallId: string, expectedReuseRounds?: number}>} */
         const pendingCompression = [];
         // 注意：content 已在 onEvent 流式累加，此处不能重复累加（否则每轮带内容的工具调用会重复叠加）
         assignCallIds(toolCalls, iter);
@@ -3543,7 +3597,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             // 当场逐个压缩时，N 份结果要付 N 遍 system 前缀 + N 次请求固定开销（而 system 是常量）。
             // max_calls 的额度按「已用调用数 + 本条占用的调用数」预判，避免一轮内无上限地登记。
             /**
-             * P1-3：这次该不该压 —— 先看投影后的 token 是否还大到值得压，再看**预计剩余轮数**够不够回本。
+     * P1-3：先看投影后的 token 是否够大，再以最多 2 个后续复用轮次做保守 ROI 预测。
              * 跳过的原因要计数（`compressionSkips`），否则「该压没压」和「不值得压」在账上没法区分。
              */
             const contentTokens = compactionLib.estimateTextTokens(toolContent);
@@ -3568,6 +3622,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                 record,
                 cacheKey: cacheKey && result.ok ? cacheKey : null,
                 messageIndex: messages.length,
+                toolCallId: callId,
+                expectedReuseRounds: compressDecision.expectedReuseRounds,
               });
             }
           }
@@ -3729,13 +3785,9 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             }
           });
           /**
-           * P1-3 记账：这一次压缩的净收益 = 本轮省下的 (原文 − 摘要) − 这次调用实花的 (输入 + 输出)。
-           *
-           * 两个口径要如实：
-           *   - 省下的部分是**每后续轮各省一次**（所以它随剩余轮数放大，ROI 判据在前面已经用它做过决策）；
-           *     这里记的 `netTokensSaved` 是**单轮口径**（更保守），并同时记 `savedTokens` 供换算。
-           *   - 成本来自供应商**实报的 usage**（账本 delta）。拿不到就记 0 并标 `costKnown: false`，
-           *     绝不拿「估算成本」冒充实报成本。
+           * P1-3 预测和实绩分开：`estimatedNetTokensSaved` 按最多 2 个未来轮估算；
+           * `netTokensSaved` 只在后续主请求成功携带这份摘要后增加。压缩调用成本按供应商实报 usage
+           * 分摊；拿不到成本时标 `costKnown: false`，不把估算伪装成真实净收益。
            */
           const rawTokens = pendingCompression.reduce((sum, entry) => sum + (Number(entry.contentTokens) || 0), 0);
           const newTokens = pendingCompression.reduce(
@@ -3744,17 +3796,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           );
           const ledger = cfg && cfg.costLedger && Array.isArray(cfg.costLedger.entries) ? cfg.costLedger.entries : null;
           const fresh = ledger ? ledger.slice(ledgerCursor) : [];
+          const freshCompressionCalls = fresh.filter((entry) => entry && entry.kind === 'compression');
           const costTokens = fresh
             .filter((entry) => entry && entry.kind === 'compression')
             .reduce((sum, entry) => sum + (Number(entry.tokens && entry.tokens.prompt) || 0) + (Number(entry.tokens && entry.tokens.completion) || 0), 0);
+          const costEntries = pendingCompression.filter((entry, index) => outs[index] && outs[index].cacheHit !== true);
+          const costBasisTokens = costEntries.reduce((sum, entry) => sum + (Number(entry.contentTokens) || 0), 0);
+          const costKnown = costEntries.length === 0 ||
+            (freshCompressionCalls.length > 0 && freshCompressionCalls.every((entry) => entry.estimated !== true));
           const savedTokens = Math.max(0, rawTokens - newTokens);
-          /**
-           * 剩余轮数（**本轮的压缩收益还没兑现**，从下一轮起才每轮省一次）。
-           * `netTokensSaved` 用**收益口径**：`每轮省 × 剩余轮数 − 成本` —— 这才是「值不值得压」的账，
-           * 也是自动降级（同类工具长期净亏）该看的数。单轮口径另记 `netTokensImmediate`，两个都给，不混用。
-           */
           const remainingAfter = Math.max(0, maxToolIterations - iter - 1);
-          const netTokensSaved = savedTokens * remainingAfter - costTokens;
+          const estimatedReuseRounds = Math.min(remainingAfter, MAX_COMPRESSION_FORECAST_ROUNDS);
+          const estimatedNetTokensSaved = savedTokens * estimatedReuseRounds - costTokens;
           const netTokensImmediate = savedTokens - costTokens;
           pendingCompression.forEach((entry, i) => {
             const raw = Number(entry.contentTokens) || 0;
@@ -3762,21 +3815,43 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             const saved = Math.max(0, raw - outTokens);
             const stat = compressionStats.get(entry.toolName) || {
               calls: 0, rawTokens: 0, summaryTokens: 0, savedTokens: 0, costTokens: 0,
+              realizedSavedTokens: 0, realizedCarryRequests: 0, costKnown: true,
               netTokensSaved: 0, netTokensImmediate: 0,
             };
             stat.calls += 1;
             stat.rawTokens += raw;
             stat.summaryTokens += outTokens;
             stat.savedTokens += saved;
-            // 一批压缩 N 条：成本按原文 token 占比分摊（否则按工具看净收益会失真）
-            const share = rawTokens > 0 ? (costTokens * raw) / rawTokens : 0;
+            // 一批压缩 N 条：成本按原文 token 占比分摊；实际净节省只计成功后续请求确实携带的次数。
+            const share = costBasisTokens > 0 && (!outs[i] || outs[i].cacheHit !== true)
+              ? (costTokens * raw) / costBasisTokens
+              : 0;
             stat.costTokens += share;
-            stat.netTokensSaved = stat.savedTokens * remainingAfter - stat.costTokens;
-            stat.netTokensImmediate = stat.savedTokens - stat.costTokens;
+            stat.costKnown = stat.costKnown && costKnown;
+            stat.netTokensSaved = stat.costKnown ? stat.realizedSavedTokens - stat.costTokens : null;
+            stat.netTokensImmediate = stat.costKnown ? stat.savedTokens - stat.costTokens : null;
             compressionStats.set(entry.toolName, stat);
-            entry.record.netTokensSaved = Math.round(stat.netTokensSaved);
+            entry.record.netTokensSaved = stat.netTokensSaved == null ? null : Math.round(stat.netTokensSaved);
+            entry.record.estimatedNetTokensSaved = Math.round(saved * Math.min(entry.expectedReuseRounds || 0, remainingAfter) - share);
+            entry.record.realizedCarryRequests = 0;
             entry.record.compressedTokens = { from: raw, to: outTokens };
+            if (outs[i] && outs[i].degraded !== true) {
+              compressedCarryEntries.push({
+                toolName: entry.toolName,
+                toolCallId: entry.toolCallId,
+                summary: String(outs[i].text || ''),
+                savedTokens: saved,
+                costKnown,
+                carries: 0,
+                active: true,
+                record: entry.record,
+              });
+            }
           });
+          const netTokensSaved = [...compressionStats.values()].reduce(
+            (sum, stat) => sum + (Number(stat.netTokensSaved) || 0),
+            0,
+          );
           emitTrace(
             {
               kind: 'compression',
@@ -3791,8 +3866,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               newTokens,
               savedTokens,
               costTokens,
-              costKnown: fresh.some((entry) => entry && entry.kind === 'compression' && entry.estimated !== true),
-              remainingRounds: remainingAfter,
+              costKnown,
+              maxRemainingRounds: remainingAfter,
+              estimatedReuseRounds,
+              estimatedNetTokensSaved,
+              realizedCarryRequests: [...compressionStats.values()].reduce(
+                (sum, stat) => sum + (Number(stat.realizedCarryRequests) || 0),
+                0,
+              ),
+              realizedSavedTokens: [...compressionStats.values()].reduce(
+                (sum, stat) => sum + (Number(stat.realizedSavedTokens) || 0),
+                0,
+              ),
               netTokensSaved,
               netTokensImmediate,
               skips: Object.fromEntries(compressionSkips),

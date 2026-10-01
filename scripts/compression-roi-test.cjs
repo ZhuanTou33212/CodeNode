@@ -8,10 +8,10 @@
  *
  * 现在的口径：
  *   ① 先做确定性投影/分页/句柄，**投影后**还大到超过 token 阈值（出厂 8,000）才轮到 LLM 摘要；
- *   ② 预计剩余轮数 ≤1 → 永不压缩（最后一轮压了必然亏）；
- *   ③ 净收益判据 `剩余轮数 × (R − S) > (R + S)`；
+ *   ② 最多按 2 个未来复用轮估算；剩余上限 ≤1 → 永不压缩；
+ *   ③ 实际净节省按成功的后续主请求携带摘要的次数累计；
  *   ④ 同类工具**累计净亏**且已压过 ≥2 次 → 本 run 内自动降级为确定性裁剪；
- *   ⑤ 记 `netTokensSaved`（收益口径）与 `netTokensImmediate`（单轮差），成本只用供应商**实报** usage。
+ *   ⑤ 预测值与实际携带次数分开记录；成本只用供应商**实报** usage。
  */
 'use strict';
 
@@ -67,8 +67,10 @@ console.log('== A. 收益算式（审计原文那条） ==');
 console.log('\n== B. compressionDecision 各路 ==');
 {
   const base = { compression: COMP, toolName: 'read_file', contentTokens: 20000, contentChars: 80000, usedCalls: 0, remainingRounds: 3 };
-  check('[B] 大结果 + 剩 3 轮 → 压（reason=profitable）',
-    agent.compressionDecision(base).compress === true && agent.compressionDecision(base).reason === 'profitable');
+  const profitableDecision = agent.compressionDecision(base);
+  check('[B] 大结果 + 剩 3 轮 → 按最多 2 个复用轮压（reason=profitable）',
+    profitableDecision.compress === true && profitableDecision.reason === 'profitable' &&
+    profitableDecision.expectedReuseRounds === 2);
   check('[B] 变异/判别力：同一输入只把剩余轮数改成 1 → 立刻不压（证明这条判据真在起作用）',
     agent.compressionDecision({ ...base, remainingRounds: 1 }).compress === false &&
     agent.compressionDecision({ ...base, remainingRounds: 1 }).reason === 'last-round');
@@ -81,12 +83,12 @@ console.log('\n== B. compressionDecision 各路 ==');
     agent.compressionDecision({ ...base, usedCalls: 8 }).reason === 'legacy-gate' &&
     agent.compressionDecision({ ...base, compression: { ...COMP, enabled: false } }).reason === 'legacy-gate' &&
     agent.compressionDecision({ ...base, contentChars: 100 }).reason === 'legacy-gate');
-  // ROI 为负必须构造在**过了 token 阈值之后**：R=9000 / S=8000 → 每轮只省 1000，成本 17000，剩 2 轮不够
+  // ROI 为负必须构造在**过了 token 阈值之后**：R=9000 / S=8000 → 每轮只省 1000，成本 17,512（含固定开销），剩 2 轮不够
   const roiNeg = agent.compressionDecision({
     ...base, contentTokens: 9000, contentChars: 40000, remainingRounds: 2, compression: { ...COMP, summaryTokens: 8000 },
   });
-  check('[B] 净收益为负（剩 2 轮 × 1000 = 2000 < 成本 17000）→ 不压，且给出算式',
-    roiNeg.compress === false && roiNeg.reason === 'roi-negative' && roiNeg.roi.roundsToBreakEven === 17,
+  check('[B] 净收益为负（剩 2 轮 × 1000 = 2000 < 成本 17512）→ 不压，且给出算式',
+    roiNeg.compress === false && roiNeg.reason === 'roi-negative' && roiNeg.roi.roundsToBreakEven === 17.512,
     JSON.stringify({ reason: roiNeg.reason, roi: roiNeg.roi }));
   check('[B] 同类工具累计净亏且压过 ≥2 次 → 自动降级为确定性裁剪（不再调模型）',
     agent.compressionDecision({ ...base, stats: new Map([['read_file', { calls: 2, netTokensSaved: -500 }]]) }).reason === 'negative-net');
@@ -149,8 +151,8 @@ console.log('\n== B. compressionDecision 各路 ==');
     return { ledger, traces };
   }
 
-  /** read_file 默认只读 200 行（≈600 token，远不够阈值）→ 显式 maxLines 取满，得到 ≈22k token 的结果 */
-  const bigRead = { toolCalls: [{ name: 'read_file', args: { path: 'work/big.txt', maxLines: 9000 } }], usage: { prompt_tokens: 900, completion_tokens: 20, total_tokens: 920, prompt_cache_miss_tokens: 900 } };
+  /** read_file 默认只读 200 行 / 24k 字符（约 6k token）→ 提高到单次上限，确保越过 8k token 压缩门槛 */
+  const bigRead = { toolCalls: [{ name: 'read_file', args: { path: 'work/big.txt', maxLines: 500, maxChars: 48000 } }], usage: { prompt_tokens: 900, completion_tokens: 20, total_tokens: 920, prompt_cache_miss_tokens: 900 } };
 
   // C1：还有 3 个后续轮 → 应该压（成本用供应商实报 usage）
   const c1 = await runTurn(
@@ -165,16 +167,24 @@ console.log('\n== B. compressionDecision 各路 ==');
   const comp1 = c1.ledger.entries.filter((e) => e.kind === 'compression');
   check('[C] 大结果 + 剩 3 轮 → 真的调了压缩模型（账本上有 compression 一笔）', comp1.length === 1, 'compression=' + comp1.length);
   const compTrace = c1.traces.filter((t) => t.kind === 'compression').pop();
-  check('[C] 压缩 trace 记了净收益（收益口径 + 单轮口径都给）',
+  check('[C] 压缩 trace 分开记录预计收益与单轮成本口径',
     !!compTrace && compTrace.savedTokens > 0 && compTrace.costTokens === 26300 &&
-    compTrace.netTokensSaved === compTrace.savedTokens * compTrace.remainingRounds - compTrace.costTokens &&
+    compTrace.estimatedNetTokensSaved === compTrace.savedTokens * compTrace.estimatedReuseRounds - compTrace.costTokens &&
     compTrace.netTokensImmediate === compTrace.savedTokens - compTrace.costTokens,
-    compTrace ? JSON.stringify({ saved: compTrace.savedTokens, cost: compTrace.costTokens, net: compTrace.netTokensSaved, imm: compTrace.netTokensImmediate, rounds: compTrace.remainingRounds }) : 'missing');
+    compTrace ? JSON.stringify({ saved: compTrace.savedTokens, cost: compTrace.costTokens, estimatedNet: compTrace.estimatedNetTokensSaved, reuseRounds: compTrace.estimatedReuseRounds, imm: compTrace.netTokensImmediate }) : 'missing');
+  const realizationTrace = c1.traces.filter((t) => t.kind === 'compression_realization').pop();
+  check('[C] 后续请求实际带上摘要后才记兑现的节省',
+    !!realizationTrace && realizationTrace.realizedCarryRequests === 1 &&
+    realizationTrace.realizedSavedTokens === compTrace.savedTokens &&
+    realizationTrace.netTokensSaved === compTrace.savedTokens - compTrace.costTokens,
+    realizationTrace ? JSON.stringify(realizationTrace) : 'missing');
   check('[C] 成本口径来自**实报** usage（costKnown=true），不是估算', compTrace && compTrace.costKnown === true);
   const mainAfter = c1.ledger.entries.filter((e) => e.kind === 'main').map((e) => e.meta && e.meta.attribution).filter(Boolean).pop();
   check('[C] 压缩账进了归因（P1-3 → P2-2：costTokens 换来了多少 futureSavedTokens）',
     !!mainAfter && mainAfter.compression.calls === 1 && mainAfter.compression.byTool.read_file &&
-    mainAfter.compression.costTokens > 0 && mainAfter.compression.savedTokens > 0,
+    mainAfter.compression.costTokens > 0 && mainAfter.compression.savedTokens > 0 &&
+    mainAfter.compression.realizedCarryRequests === 1 &&
+    mainAfter.compression.netTokensSaved === mainAfter.compression.realizedSavedTokens - mainAfter.compression.costTokens,
     mainAfter ? JSON.stringify(mainAfter.compression.byTool) : 'missing');
 
   // C2：最后一轮（maxToolIterations=1）→ 永不压缩

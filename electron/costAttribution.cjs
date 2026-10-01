@@ -207,8 +207,9 @@ function normalizeProjection(input) {
 }
 
 /**
- * 压缩账归一化（P1-3 → P2-2）：回答「每次压缩的 `costTokens` 换来了多少 `futureSavedTokens`」。
- * `netTokensSaved` 是**收益口径**（每轮省 × 剩余轮数 − 成本）；`netTokensImmediate` 是单轮差，两者都给。
+ * 压缩账归一化（P1-3 → P2-2）：回答「实际有后续请求复用的节省，是否抵过压缩成本」。
+ * `netTokensSaved` 只计成功后续主请求实际携带摘要的次数；预测值单独留在工具记录中。
+ * compaction 或其他非主请求中的复用未计入，因此这是保守下界。
  * @param {Map<string, object>|object|null} input
  */
 function normalizeCompression(input) {
@@ -221,6 +222,9 @@ function normalizeCompression(input) {
   let costTokens = 0;
   let netTokensSaved = 0;
   let netTokensImmediate = 0;
+  let realizedSavedTokens = 0;
+  let realizedCarryRequests = 0;
+  let costKnown = true;
   const entries = input instanceof Map ? [...input.entries()] : Object.entries(input || {});
   for (const [name, stat] of entries) {
     if (!stat) continue;
@@ -229,6 +233,9 @@ function normalizeCompression(input) {
       rawTokens: Number(stat.rawTokens) || 0,
       summaryTokens: Number(stat.summaryTokens) || 0,
       savedTokens: Number(stat.savedTokens) || 0,
+      realizedSavedTokens: Number(stat.realizedSavedTokens) || 0,
+      realizedCarryRequests: Number(stat.realizedCarryRequests) || 0,
+      costKnown: stat.costKnown !== false,
       costTokens: Number(stat.costTokens) || 0,
       netTokensSaved: Number(stat.netTokensSaved) || 0,
       netTokensImmediate: Number(stat.netTokensImmediate) || 0,
@@ -238,8 +245,11 @@ function normalizeCompression(input) {
     rawTokens += item.rawTokens;
     summaryTokens += item.summaryTokens;
     savedTokens += item.savedTokens;
+    realizedSavedTokens += item.realizedSavedTokens;
+    realizedCarryRequests += item.realizedCarryRequests;
+    costKnown = costKnown && item.costKnown;
     costTokens += item.costTokens;
-    // 顶层就是各工具累加和的再汇总；两个口径分别汇总，不互相顶替（收益口径≠单轮差）
+    // 顶层是各工具实绩的累加；单轮预测保留为独立字段，不冒充已兑现收益。
     netTokensSaved += item.netTokensSaved;
     netTokensImmediate += item.netTokensImmediate;
   }
@@ -248,6 +258,9 @@ function normalizeCompression(input) {
     rawTokens,
     summaryTokens,
     savedTokens,
+    realizedSavedTokens,
+    realizedCarryRequests,
+    costKnown,
     costTokens,
     netTokensSaved: Math.round(netTokensSaved),
     netTokensImmediate: Math.round(netTokensImmediate),
@@ -266,7 +279,19 @@ function normalizeCompression(input) {
  */
 function summarizeAuxiliary(records) {
   const blank = () => ({ requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });
-  const out = { intent: blank(), compression: { ...blank(), savedTokens: 0, netTokensSaved: 0, netTokensImmediate: 0, calls: 0 } };
+  const out = {
+    intent: blank(),
+    compression: {
+      ...blank(),
+      savedTokens: 0,
+      realizedSavedTokens: 0,
+      realizedCarryRequests: 0,
+      costKnown: true,
+      netTokensSaved: 0,
+      netTokensImmediate: 0,
+      calls: 0,
+    },
+  };
   /** @type {Map<string, any>} */
   const lastCompressionByRun = new Map();
   for (const r of Array.isArray(records) ? records : []) {
@@ -290,6 +315,9 @@ function summarizeAuxiliary(records) {
   for (const comp of lastCompressionByRun.values()) {
     out.compression.calls += Number(comp.calls) || 0;
     out.compression.savedTokens += Number(comp.savedTokens) || 0;
+    out.compression.realizedSavedTokens += Number(comp.realizedSavedTokens) || 0;
+    out.compression.realizedCarryRequests += Number(comp.realizedCarryRequests) || 0;
+    out.compression.costKnown = out.compression.costKnown && comp.costKnown !== false;
     out.compression.netTokensSaved += Number(comp.netTokensSaved) || 0;
     out.compression.netTokensImmediate += Number(comp.netTokensImmediate) || 0;
   }

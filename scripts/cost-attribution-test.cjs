@@ -101,9 +101,10 @@ console.log('== A. 层归属（system 段落 / 历史角色 / schema / 附件）
    * 上面注入的 schemaTokens（那份不在 system 文本里）。
    */
   const systemOnly = compaction.estimateTokens([{ role: 'system', content: system }], null);
-  const bySectionTotal = attr.layers.system_static + attr.layers.system_dynamic + attr.toolSchema.guideTokens;
+  const bySectionTotal = Object.values(attr.bySection).reduce((sum, section) => sum + section.tokens, 0);
   /**
-   * 容差取 ±5%：差别只来自「按段取整（每段 <1 token）+ 段间分隔符 + 每条消息 +8 开销」这类零头。
+   * 全部 system 段只算一次（含记忆、画布、工具引导），不含独立的工具 schema。
+   * 容差取 ±5%：差别只来自「按段取整 + 段间分隔符 + 每条消息 +8 开销」这类零头。
    * 这条判据防的是**把 system 重复计一遍**（那会差近 2 倍），不是去卡零头。
    */
   check('[A] system 按段落计一次就够（与「当成一条 system 消息」的估算同量级，±5%）',
