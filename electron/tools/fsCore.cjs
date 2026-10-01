@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // 同目录下的兄弟模块（同样在 build.asarUnpack 里）；worker 自包含约束见文件头。
 const { extractPdfText } = require('./impl/pdfText.cjs');
 
@@ -389,6 +390,7 @@ function searchFilesTask(payload) {
   const onProgress = typeof p.onProgress === 'function' ? p.onProgress : null;
   /** @type {string[]} */
   const matches = [];
+  const sourceVersions = Object.create(null);
   let scanned = 0;
   let stopped = false;
   let cancelled = false;
@@ -410,10 +412,12 @@ function searchFilesTask(payload) {
       if (onProgress && scanned % PROGRESS_EVERY === 0) onProgress(scanned);
       if (size > maxFileBytes) return;
       let lines;
+      let sourceHash;
       try {
         const buf = fs.readFileSync(abs);
         if (buf.includes(0)) return;
         lines = buf.toString('utf-8').split('\n');
+        sourceHash = 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
       } catch {
         return;
       }
@@ -421,6 +425,9 @@ function searchFilesTask(payload) {
         if (matches.length >= maxCollect) return;
         if (regex.test(lines[i])) {
           matches.push(relative + ':' + (i + 1) + ': ' + lines[i].trim());
+          if (!sourceVersions[relative]) sourceVersions[relative] = { sha256: sourceHash, ranges: {} };
+          sourceVersions[relative].ranges[i + 1] = 'sha256:' + crypto.createHash('sha256')
+            .update(lines[i].replace(/\r$/, ''), 'utf8').digest('hex');
         }
       }
     },
@@ -437,7 +444,7 @@ function searchFilesTask(payload) {
       return false;
     },
   );
-  return { matches, stopped, cancelled, scanned };
+  return { matches, sourceVersions, stopped, cancelled, scanned };
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +473,7 @@ function readTextFileSafe(filePath, maxBytes) {
   if (buf.includes(0)) return { ok: false, error: '二进制文件不能用 read_file 读取' };
   const text = buf.toString('utf-8');
   if (text.includes('\uFFFD')) return { ok: false, error: '非 UTF-8 文本文件，无法直接读取' };
-  return { ok: true, text };
+  return { ok: true, text, sha256: 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex') };
 }
 
 /**
@@ -672,7 +679,8 @@ function readPdfTextTask(payload) {
   }
   const parsed = extractPdfText(buf);
   if (!parsed) return { ok: false, cancelled: false, errorKind: 'unreadable' };
-  return { ok: true, cancelled: false, text: parsed.text, printable: parsed.printable };
+  return { ok: true, cancelled: false, text: parsed.text, printable: parsed.printable,
+    sha256: 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex') };
 }
 
 // 任务结果契约：每个任务的返回值都必须带 `cancelled`（布尔）。

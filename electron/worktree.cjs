@@ -28,6 +28,7 @@ const { safeEnvironment } = require('./envPolicy.cjs');
 const MAX_WORKTREES = 5;
 const GIT_TIMEOUT_MS = 60000;
 const MAX_OUTPUT_CHARS = 8000;
+const worktreeCreationQueues = new Map();
 
 /**
  * 路径归一化：realpath 展开 + Windows 大小写归一。
@@ -168,7 +169,7 @@ async function managedWorktrees(projectRoot, options) {
  * @param {{name?: string, base?: string|null}} options
  * @param {{context?: any, policy?: any}} [helpers] 隔离层所需的上下文/策略
  */
-async function createWorktree(projectRoot, options, helpers) {
+async function createWorktreeUnlocked(projectRoot, options, helpers) {
   const opts = /** @type {any} */ (Object.assign({}, options || {}, helpers || {}));
   const root = path.resolve(projectRoot || '.');
   if (!(await isGitRepo(root, opts))) {
@@ -202,6 +203,22 @@ async function createWorktree(projectRoot, options, helpers) {
     return { ok: false, error: 'GIT_FAILED', message: 'git worktree add 失败：' + String(added.stderr || added.stdout || '').trim().slice(0, 400) };
   }
   return { ok: true, path: target, relativePath: path.relative(root, target), branch, base, created: true };
+}
+
+/** 同一仓库串行创建工作树；否则并发批次可能同时通过 MAX_WORKTREES 检查而超过磁盘副本上限。 */
+function createWorktree(projectRoot, options, helpers) {
+  const key = normalizePath(projectRoot || '.');
+  const previous = worktreeCreationQueues.get(key) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const queued = previous.then(() => gate);
+  worktreeCreationQueues.set(key, queued);
+  return previous
+    .then(() => createWorktreeUnlocked(projectRoot, options, helpers))
+    .finally(() => {
+      release();
+      if (worktreeCreationQueues.get(key) === queued) worktreeCreationQueues.delete(key);
+    });
 }
 
 /** 收集工作树里未提交的改动（供主代理判断「要不要合并」） */

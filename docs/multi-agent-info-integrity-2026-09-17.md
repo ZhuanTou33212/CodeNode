@@ -124,7 +124,8 @@
                "toolCallCount", "summaryChars", "stageNodeId?", "totalTimeoutMs?" },
   "refs": [ { "kind": "changed_file", "path": "a/b.txt" } ],
   "evidence": { "files": [ { "path", "exists", "bytes", "sha256" } ],
-                "commands": [ { "cmd", "ok" } ], "warnings": [ "…" ] },
+                "commands": [ { "cmd", "toolOk", "exitCode", "passed", "status", "outputSummary" } ],
+                "warnings": [ "…" ] },
   "trust": "derived",                   // verified 只能由独立复跑产物的核验方给
   "lossy": { "isLossy": true, "droppedChars": 19507, "originalRef": "get_subagent_task(taskId=…)" }
 }
@@ -229,5 +230,49 @@
   同时落 run 事件 `subagent_merge` 与 delta `subagent_merge`（UI 在**有待裁决冲突**时提示用户，
   其余情况不打扰）。
 - `merge_subagent_results({taskIds?, decisions?})`：主代理可随时重放合并；带 `decisions` 时应用裁决。
+
+## 13. 候选结果与确认共享内容（父代理审查门）
+
+P1–P5 已让子代理结果带来源、快照、产物哈希，并可确定性合并；但**合并报告本身仍是候选**，不能因为
+任务成功、文件哈希有效或冲突已裁决就自动变成所有下游任务都信任的事实。新增的两级流程是：
+
+```text
+子代理私有结果（candidate / derived）
+        ↓ 主代理读取、核验并整理 confirmedSummary
+review_subagent_result(confirm) → 确认共享内容（来源、快照、核验记录一并保存）
+        ↓ 下游 delegate_task(dependsOnTaskIds=[...])
+带来源与证据的已确认摘要
+        ↓ 若后来发现错误
+review_subagent_result(retract) → 依赖任务 needs_recheck
+```
+
+- 子代理结果默认 `review.status=candidate`。`review_subagent_result` 只注册在父任务工具面；确认要求提供
+  `confirmedSummary` 与核验说明。产物哈希不符时拒绝确认；若只有画布快照变了，父代理需先复核当前状态，
+  并把当前快照记为本次确认基线。确认可指定 `validationBasis`：`filesystem` 绑定 live read/search 与产物文件的
+  内容/行范围哈希，避免无关画布变化使文件结论过期；`canvas` 适用于没有文件来源的画布结论；`manual` 由父代理
+  记录外部/非版本化依据；默认 `all` 同时检查文件与画布。信封仍保持 `trust=derived`，
+  这里的 `confirmed` 表示父代理审查后允许共享，不伪称独立测试已验证。
+- `verifier` 子任务可用 `verifiesTaskId` 绑定候选任务。它收到带来源摘要的**不可信核验目标**，必须自己读取当前
+  文件并运行验收命令；信封记录实际 `exitCode/passed`。父代理确认时可传 `verificationTaskId`，系统会核对 verifier
+  角色、绑定 task、候选信封摘要和命令退出码。单有子代理自报的“测试通过”不能充当独立验证。
+- 下游只能用 `dependsOnTaskIds` 读取父代理确认过的摘要。执行前会重新核验来源；信封 id、快照、摘要、证据
+  和审查说明随任务上下文传递。任意普通 `inputs` 不会自动升级为共享事实。
+- 撤回或来源变成 stale/invalid 时，显式依赖它的任务会沿依赖边递归标成 `needs_recheck`；不靠时间顺序猜测
+  哪个结果依赖哪个结果。可重新核验的来源由父代理确认后再创建下游任务；已撤回或产物哈希失配的来源要重做，
+  并以新 task id 重新委派依赖任务。
+- `.codenode/runs/<runId>.subagents.json` 现在同时保存结果信封、确认/撤回记录、依赖 id 和工件根目录；恢复
+  同一 run 时可以重新加载并继续审查。缺失信封的旧记录不会被自动当作已确认结果。
+- 父上下文默认收到短候选卡（摘要、来源、有限文件哈希与真实命令退出码）；完整摘要由
+  `get_subagent_task(detail="full", summaryOffset, summaryChars)` 按页展开。工具的完整 `text/data` 仍保留给 UI、
+  审计与恢复，但通过 `modelContent` 不再和候选卡重复灌入模型上下文。截断或落盘截断会明确显示字符数与未保存量。
+- `read_file` 与 `search_files` 的 live 来源在实际读取时记录文件哈希，文本读取另记行范围哈希；同一任务读到不同版本会标记冲突，
+  后续核验用当前内容与读取时的哈希比较。RAG `retrieve_context` 当前只有索引引用，没有
+  和该 excerpt 同版本的文件快照，因此仍须父代理按 citation 复核，不能冒充自动版本核验。
+- `execute_shell` 的 `ok` 代表工具调用完成，不代表测试通过；信封同时记录真实 `exitCode` 和 `passed`。
+  后台执行由对应 `poll_job` 回填最终状态。子 Agent 自己报告的成功仍是候选，父代理/ verifier 需独立复跑后才可据此确认。
+- 共享文件写入仍通过 `resolveInRoot` 做项目边界检查、`expectedSha256` 做乐观并发校验、确认框展示内容摘要，
+  成功后记录实际内容哈希。worktree 只隔离文件，canvas 角色不能使用此模式，builder 的共享画布写工具会禁用；
+  隔离的非 canvas 子任务可并行运行，创建阶段按仓库串行以兑现工作树数量上限。证据从实际工作树取哈希，工作树
+  结果仍需主代理审查，代码不会自动合并。
 - 判先后的唯一依据是信封的 `at.startedAt/finishedAt`（合并**看不到**任何到达时间）；信封没有时刻时
   `at` 字段整体不写，合并如实按「判不出先后」处理。

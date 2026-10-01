@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // 第 9 项：文本分支的读取上限（含原因区分报错）。2MB 是量测后的取舍：同步读 2MB 实测 7ms，
 // worker 固定往返约 24ms —— 搬 worker 是净变慢，所以这里用上限把最坏情况钉住。
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
@@ -163,6 +164,7 @@ function register(registry) {
           );
         }
         text = pdfResult.text;
+        meta.sourceSha256 = pdfResult.sha256;
       } else {
         const read = readTextFile(file, MAX_TEXT_BYTES);
         if (!read.ok) {
@@ -182,6 +184,7 @@ function register(registry) {
           return AgentToolResult.error(relative + ' 是二进制或不可读文件，不能用 read_file 读取（' + reason + '）；请按建议解析：' + binarySuggestion(relative), meta);
         }
         text = read.text;
+        meta.sourceSha256 = read.sha256;
       }
       const lines = text.split('\n');
       meta.lineCount = lines.length;
@@ -219,6 +222,10 @@ function register(registry) {
       meta.offset = offset;
       meta.startLine = Math.min(lines.length, startIdx + 1);
       meta.endLine = endIdx;
+      if (meta.sourceSha256 && !isPdf) {
+        meta.sourceRangeSha256 = 'sha256:' + crypto.createHash('sha256')
+          .update(lines.slice(startIdx, endIdx).join('\n').replace(/\r(?=\n|$)/g, ''), 'utf8').digest('hex');
+      }
       let suffix = '';
       if (truncated) {
         suffix = '\n…（已显示第 ' + meta.startLine + '-' + meta.endLine + ' 行，共 ' + lines.length + ' 行，用 offset=' + (endIdx + 1) + ' 继续读取剩余）';

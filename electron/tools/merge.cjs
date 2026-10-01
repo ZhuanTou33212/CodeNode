@@ -44,6 +44,7 @@ function sortKeyOf(contribution) {
     String(contribution.actor || ''),
     String(contribution.value === undefined ? '' : contribution.value),
     String(contribution.kind || ''),
+    String(contribution.source || ''),
   ];
 }
 
@@ -81,7 +82,7 @@ function canonicalize(contributions) {
   const unique = [];
   let duplicatesRemoved = 0;
   for (const c of list) {
-    const key = stableStringify([c.resourceKey, c.actor, c.startedAt, c.finishedAt, c.value, c.kind]);
+    const key = stableStringify([c.resourceKey, c.actor, c.startedAt, c.finishedAt, c.value, c.kind, c.source]);
     if (seen.has(key)) {
       duplicatesRemoved += 1;
       continue;
@@ -129,7 +130,14 @@ function contributionsFromEnvelope(envelope) {
 }
 
 function briefOf(c) {
-  return { actor: c.actor, role: c.role, value: c.value, kind: c.kind, finishedAt: c.finishedAt || null };
+  return {
+    actor: c.actor,
+    role: c.role,
+    value: c.value,
+    kind: c.kind,
+    finishedAt: c.finishedAt || null,
+    source: c.source || null,
+  };
 }
 
 /**
@@ -179,6 +187,7 @@ function merge(input = {}) {
         entry.status = 'superseded';
         entry.value = winner.value;
         entry.winner = winner.actor;
+        entry.winnerSource = winner.source || null;
         entry.supersedes = list.slice(0, -1).map((c) => ({
           actor: c.actor,
           value: c.value,
@@ -193,6 +202,7 @@ function merge(input = {}) {
             entry.status = 'arbitrated';
             entry.value = chosen.value;
             entry.winner = chosen.actor;
+            entry.winnerSource = chosen.source || null;
             entry.decidedBy = String(decision.decidedBy || 'supervisor');
             if (decision.note) entry.decisionNote = String(decision.note);
           } else {
@@ -274,17 +284,21 @@ function renderMergeReport(merged, options = {}) {
     if (r.status === 'superseded') {
       lines.push(
         '- [被覆盖] ' + r.resourceKey + '：' +
-          (r.supersedes || []).map((s) => s.actor + ' → ' + s.supersededBy).join('、') +
-          '（两份都留痕；当前生效值 ' + String(r.value) + '，来源 ' + String(r.winner) + '）'
+          (r.supersedes || []).map((s) => {
+            const source = (r.contributions || []).find((item) => item.actor === s.actor && item.value === s.value);
+            return s.actor + ' [' + String(source && source.source || '?') + '] → ' + s.supersededBy;
+          }).join('、') +
+          '（两份都留痕；当前生效值 ' + String(r.value) + '，来源 ' + String(r.winner) + ' [' + String(r.winnerSource || '?') + ']）'
       );
     } else if (r.status === 'conflict') {
       lines.push(
         '- [待裁决] ' + r.resourceKey + '：' +
-          (r.contributions || []).map((c) => c.actor + ' 声称 ' + String(c.value)).join('；') +
+          (r.contributions || []).map((c) => c.actor + ' [' + String(c.source || '?') + '] 声称 ' + String(c.value)).join('；') +
           ' —— 不得默认取胜者，请先裁决（决定了再合并，或用 merge_subagent_results 带 decisions）'
       );
     } else if (r.status === 'arbitrated') {
-      lines.push('- [已裁决] ' + r.resourceKey + '：按 ' + String(r.decidedBy || 'supervisor') + ' 的决定取 ' + String(r.winner) + ' 的值');
+      lines.push('- [已裁决] ' + r.resourceKey + '：按 ' + String(r.decidedBy || 'supervisor') + ' 的决定取 ' +
+        String(r.winner) + ' [' + String(r.winnerSource || '?') + '] 的值');
     }
   }
   for (const rej of detail ? m.rejectedDecisions || [] : []) {

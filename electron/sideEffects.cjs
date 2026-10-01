@@ -30,7 +30,7 @@ const READ_TOOLS = new Set([
 /** 写工具：本地状态变更，幂等键可去重（含 create_nodes / workbench_connect 这两个遗留未接入的名字，见 descriptor.cjs 同处注释） */
 const WRITE_TOOLS = new Set([
   'write_file', 'edit_file', 'bulk_edit', 'write_analysis_md', 'create_nodes', 'workbench_edit',
-  'workbench_connect', 'save_project', 'memory_save', 'user_memory_save', 'apply_patch', 'rename_file',
+  'workbench_connect', 'save_project', 'memory_save', 'user_memory_save', 'apply_patch', 'rename_file', 'review_subagent_result',
 ]);
 
 /** 外部副作用（不可完全观测）：永不自动重放，只做人工核对 */

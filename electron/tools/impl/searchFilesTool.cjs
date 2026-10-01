@@ -95,7 +95,8 @@ function register(registry) {
         '找到 ' + total + ' 处匹配' +
         (truncated ? '，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : '：') +
         '\n' + page.join('\n');
-      return AgentToolResult.ok(text, { count: total, offset, matches: page }, { modelContent: text });
+      return AgentToolResult.ok(text, { count: total, offset, matches: page,
+        sourceVersions: outcome.result.sourceVersions || {} }, { modelContent: text });
     }
   );
 }

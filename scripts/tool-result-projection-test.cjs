@@ -134,10 +134,11 @@ function makeContext() {
   }
 
   // ============================ G. 子代理视图（静态接线 + 结果契约） ============================
-  console.log('\n== G. get_subagent_task：JSON 视图不再各发一遍 ==');
+  console.log('\n== G. get_subagent_task：紧凑候选卡只投影一份 ==');
   const subSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'subagents.cjs'), 'utf8');
-  check('[G] get_subagent_task 的成功路径已改为单份投影',
-    /const viewJson = JSON\.stringify\(view\);\s*return AgentToolResult\.ok\(viewJson, view, \{ modelContent: viewJson \}\);/.test(subSrc));
+  check('[G] get_subagent_task 的成功路径使用紧凑候选卡且只投影一份',
+    /renderTaskModelCard\(view\)/.test(subSrc)
+    && /return AgentToolResult\.ok\(modelContent, view, \{ modelContent \}\);/.test(subSrc));
   const viewLike = { taskId: 't1', role: 'explorer', summary: 'x'.repeat(500), envelope: { artifacts: [{ path: 'a', sha256: 'deadbeef' }] } };
   const viewJson = JSON.stringify(viewLike);
   const projected = agent.buildToolContent(AgentToolResult.ok(viewJson, viewLike, { modelContent: viewJson }), 'get_subagent_task', false, false, CAP);

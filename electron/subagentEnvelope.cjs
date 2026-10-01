@@ -46,9 +46,11 @@ const REQUIRED_PATHS = [
 ];
 const MAX_EVIDENCE_FILES = 24;
 const MAX_EVIDENCE_FILE_BYTES = 1024 * 1024;
+const MAX_EVIDENCE_SOURCES = 24;
+const MAX_EVIDENCE_SOURCE_BYTES = 20 * 1024 * 1024;
 const MAX_EVIDENCE_COMMANDS = 20;
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'bulk_edit', 'write_analysis_md']);
-const SHELL_TOOLS = new Set(['execute_shell']);
+const SHELL_TOOLS = new Set(['execute_shell', 'poll_job']);
 
 /** 键排序的稳定序列化：同一份内容永远得到同一个哈希（比较哈希才有意义） */
 function stableStringify(value) {
@@ -60,6 +62,13 @@ function stableStringify(value) {
 
 function sha256Of(text) {
   return 'sha256:' + crypto.createHash('sha256').update(String(text), 'utf8').digest('hex');
+}
+
+function sha256OfLines(lines, startLine, endLine) {
+  if (!Array.isArray(lines)) return null;
+  const start = Math.max(1, Number(startLine) || 1);
+  const end = Math.min(lines.length, Math.max(start, Number(endLine) || start));
+  return sha256Of(lines.slice(start - 1, end).join('\n'));
 }
 
 /** 画布/文档 → 内容哈希（null/undefined 不算「有个快照」） */
@@ -99,7 +108,7 @@ function resolveArtifactPath(projectRoot, p) {
 }
 
 /**
- * 收集可核验产物：**改过的文件的真实哈希** + 执行过的命令及其成败。
+ * 收集可核验产物：改过的文件哈希、live read/search 的文件/行范围哈希，以及执行命令的真实退出码。
  * @param {{toolCalls?: Array<any>, projectRoot?: string}} [input]
  * 只给「我们真的能看到的东西」——看不到就如实 `exists:false`，不编造哈希。
  */
@@ -107,8 +116,68 @@ function collectEvidence(input = {}) {
   const { toolCalls, projectRoot } = input;
   const warnings = [];
   const files = [];
+  const sources = [];
   const commands = [];
   const seenFile = new Set();
+  const sourceByPath = new Map();
+  const backgroundCommandIndex = new Map();
+  const addSource = (rawPath, meta = {}) => {
+    const abs = resolveArtifactPath(projectRoot, rawPath);
+    if (!abs) {
+      warnings.push('引用来源不在工程内或路径无效，未纳入版本证据：' + String(rawPath || ''));
+      return;
+    }
+    const rel = path.relative(path.resolve(projectRoot), abs).split(path.sep).join('/');
+    let source = sourceByPath.get(rel);
+    if (!source) {
+      if (sources.length >= MAX_EVIDENCE_SOURCES) {
+        warnings.push('引用来源超过 ' + MAX_EVIDENCE_SOURCES + ' 个，其余未纳入 sources');
+        return;
+      }
+      let stat = null;
+      try { stat = fs.statSync(abs); } catch {}
+      const exists = !!(stat && stat.isFile());
+      const bytes = exists ? stat.size : 0;
+      const hash = /^sha256:[0-9a-f]{64}$/.test(String(meta.sha256 || '')) ? meta.sha256 : null;
+      if (exists && bytes > MAX_EVIDENCE_SOURCE_BYTES) {
+        warnings.push('引用来源超过 ' + MAX_EVIDENCE_SOURCE_BYTES + ' 字节，只记录存在性/长度，不能自动确认版本：' + rel);
+      }
+      source = { path: rel, exists, bytes, sha256: hash, versioned: !!hash, wholeFile: false, ranges: [], citations: [] };
+      if (exists && bytes > MAX_EVIDENCE_FILE_BYTES) {
+        source.wholeFile = true;
+        warnings.push('引用文件超过范围哈希阈值，使用整个文件哈希核验：' + rel);
+      }
+      sources.push(source);
+      sourceByPath.set(rel, source);
+    } else if (meta.sha256 && source.sha256 && meta.sha256 !== source.sha256) {
+      source.observedConflict = true;
+      source.versioned = false;
+      warnings.push('同一任务读取了不同版本的来源文件，需重新读取并核对：' + rel);
+    } else if (meta.sha256 && !source.sha256 && !source.observedConflict) {
+      source.sha256 = meta.sha256;
+      source.versioned = true;
+    }
+    const startLine = Number.isInteger(meta.startLine) && meta.startLine > 0 ? meta.startLine : null;
+    const endLine = Number.isInteger(meta.endLine) && meta.endLine > 0 ? meta.endLine : null;
+    if (meta.wholeFile === true || (!startLine && !endLine)) source.wholeFile = true;
+    if (startLine || endLine) {
+      const range = {
+        startLine,
+        endLine,
+        sha256: /^sha256:[0-9a-f]{64}$/.test(String(meta.rangeSha256 || '')) ? meta.rangeSha256 : null,
+      };
+      if (!source.ranges.some((item) => item.startLine === range.startLine && item.endLine === range.endLine)) {
+        if (source.ranges.length < 32) source.ranges.push(range);
+        else {
+          source.wholeFile = true;
+          warnings.push('来源行范围超过 32 处，改用整个文件哈希核验：' + rel);
+        }
+      }
+      source.versioned = !source.observedConflict && (!!source.sha256 || (source.ranges.length > 0 && source.ranges.every((item) => !!item.sha256)));
+    }
+    const citation = String(meta.citation || '');
+    if (citation && !source.citations.includes(citation) && source.citations.length < 12) source.citations.push(citation);
+  };
   for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
     if (!call) continue;
     let args = null;
@@ -116,6 +185,25 @@ function collectEvidence(input = {}) {
       args = typeof call.args === 'string' ? JSON.parse(call.args || '{}') : call.args;
     } catch {
       args = null;
+    }
+    const callData = call.data && typeof call.data === 'object' ? call.data : {};
+    if (call.ok !== false && call.name === 'read_file') {
+      addSource(callData.matched || callData.path || (args && args.path), {
+        startLine: callData.startLine,
+        endLine: callData.endLine,
+        sha256: callData.sourceSha256,
+        rangeSha256: callData.sourceRangeSha256,
+        wholeFile: callData.truncated !== true && (Number(callData.offset) || 1) === 1 && (Number(callData.charOffset) || 0) === 0,
+      });
+    } else if (call.ok !== false && call.name === 'search_files') {
+      for (const match of Array.isArray(callData.matches) ? callData.matches : []) {
+        const parsed = /^(.*):(\d+): /.exec(String(match || ''));
+        if (!parsed) continue;
+        const line = Number(parsed[2]);
+        const version = callData.sourceVersions && callData.sourceVersions[parsed[1]] || {};
+        addSource(parsed[1], { startLine: line, endLine: line, sha256: version.sha256,
+          rangeSha256: version.ranges && version.ranges[line], citation: parsed[1] + '#L' + line + '-L' + line });
+      }
     }
     if (WRITE_TOOLS.has(call.name)) {
       // 写失败 = 没写成，不进产物清单
@@ -154,12 +242,47 @@ function collectEvidence(input = {}) {
       files.push({ path: rel, exists: true, bytes: stat.size, sha256: hash });
       continue;
     }
-    if (SHELL_TOOLS.has(call.name) && commands.length < MAX_EVIDENCE_COMMANDS) {
-      const cmd = args && (args.command || args.cmd);
-      if (cmd) commands.push({ cmd: String(cmd).slice(0, 400), ok: call.ok !== false });
+    if (SHELL_TOOLS.has(call.name)) {
+      const data = callData;
+      const jobId = String(data.jobId || (call.name === 'poll_job' && args && args.jobId) || '');
+      const cmd = args && (args.command || args.cmd) || data.command || '';
+      const exitCode = Number.isInteger(data.exitCode) ? data.exitCode : null;
+      const toolOk = call.ok !== false;
+      if (exitCode == null && !jobId && Object.keys(data).length === 0) {
+        if (commands.length < MAX_EVIDENCE_COMMANDS && cmd) commands.push({ cmd: String(cmd).slice(0, 400), ok: toolOk });
+        continue;
+      }
+      const status = String(data.status || (exitCode == null ? 'unknown' : 'done'));
+      const passed = exitCode === 0 && toolOk && !['timeout', 'cancelled', 'error'].includes(status);
+      const output = String(data.output || call.result || '');
+      const commandEvidence = {
+        cmd: String(cmd).slice(0, 400),
+        ok: exitCode == null ? toolOk : passed,
+        toolOk,
+        exitCode,
+        passed: exitCode == null ? null : passed,
+        status,
+        outputSummary: output.slice(-400),
+        outputTruncated: data.outputTruncated === true || data.hasMore === true || Number(data.droppedOutputChars) > 0,
+      };
+      const priorIndex = call.name === 'poll_job' && jobId ? backgroundCommandIndex.get(jobId) : null;
+      if (Number.isInteger(priorIndex) && commands[priorIndex]) {
+        const prior = commands[priorIndex];
+        commands[priorIndex] = {
+          ...prior,
+          ...(exitCode != null ? { ok: passed, exitCode, passed } : {}),
+          toolOk: prior.toolOk && toolOk,
+          status,
+          outputSummary: commandEvidence.outputSummary || prior.outputSummary,
+          outputTruncated: prior.outputTruncated || commandEvidence.outputTruncated,
+        };
+      } else if (commands.length < MAX_EVIDENCE_COMMANDS && (cmd || jobId)) {
+        commands.push(commandEvidence);
+        if (call.name === 'execute_shell' && jobId) backgroundCommandIndex.set(jobId, commands.length - 1);
+      }
     }
   }
-  return { files, commands, warnings };
+  return { files, ...(sources.length ? { sources } : {}), commands, warnings };
 }
 
 /**
@@ -178,7 +301,7 @@ function buildEnvelope(input = {}) {
   const bodyChars = String(summary || '').length;
   const refs = (Array.isArray(changedFiles) ? changedFiles : []).map((p) => ({ kind: 'changed_file', path: String(p) }));
   // 可选字段**空则省**（缺省即空，不写 null/[] 占体积）：必填字段见 REQUIRED_PATHS，永远在。
-  // 目的是让信封进主上下文时不至于比原来的字段头文本胖太多 —— 又保留全部可校验信息。
+  // 信封是完整审计/恢复数据；父 Agent 默认只收到短候选卡，需要时再按页取完整摘要。
   const envelope = {
     v: ENVELOPE_VERSION,
     msgId: 'm_' + ((task && task.taskId) || 'unknown'),
@@ -220,6 +343,7 @@ function buildEnvelope(input = {}) {
     ...(refs.length ? { refs } : {}),
     evidence: {
       files: evidence.files,
+      ...(evidence.sources && evidence.sources.length ? { sources: evidence.sources } : {}),
       ...(evidence.commands.length ? { commands: evidence.commands } : {}),
       ...(evidence.warnings.length ? { warnings: evidence.warnings } : {}),
     },
@@ -269,16 +393,46 @@ function validateEnvelope(envelope) {
   if (env.kind === 'error' && !String((env.payload && env.payload.error) || '').trim()) {
     violations.push({ path: 'payload.error', message: 'error 却没有原因' });
   }
+  if (env.evidence && env.evidence.sources != null && !Array.isArray(env.evidence.sources)) {
+    violations.push({ path: 'evidence.sources', message: '必须是数组' });
+  }
+  const sourceList = Array.isArray(env.evidence && env.evidence.sources) ? env.evidence.sources : [];
+  if (sourceList.length > MAX_EVIDENCE_SOURCES) {
+    violations.push({ path: 'evidence.sources', message: '超过 ' + MAX_EVIDENCE_SOURCES + ' 个来源上限' });
+  }
+  for (const [index, source] of sourceList.entries()) {
+    if (!source || !String(source.path || '').trim()) {
+      violations.push({ path: 'evidence.sources[' + index + '].path', message: '缺少来源路径' });
+      continue;
+    }
+    if (source.sha256 && !/^sha256:[0-9a-f]{64}$/.test(String(source.sha256))) {
+      violations.push({ path: 'evidence.sources[' + index + '].sha256', message: '不是 sha256:… 形式' });
+    }
+    if (source.ranges != null && !Array.isArray(source.ranges)) {
+      violations.push({ path: 'evidence.sources[' + index + '].ranges', message: '必须是数组' });
+      continue;
+    }
+    if (Array.isArray(source.ranges) && source.ranges.length > 32) {
+      violations.push({ path: 'evidence.sources[' + index + '].ranges', message: '超过 32 个范围上限' });
+    }
+    for (const [rangeIndex, range] of (Array.isArray(source.ranges) ? source.ranges : []).entries()) {
+      if (!range || !Number.isInteger(range.startLine) || range.startLine < 1 ||
+          !Number.isInteger(range.endLine) || range.endLine < range.startLine ||
+          (range.sha256 && !/^sha256:[0-9a-f]{64}$/.test(String(range.sha256)))) {
+        violations.push({ path: 'evidence.sources[' + index + '].ranges[' + rangeIndex + ']', message: '范围或哈希无效' });
+      }
+    }
+  }
   return violations;
 }
 
 /**
  * **接收侧核验**（P2 尾 + P4 的地基）：把信封里的「声称」跟**当前**世界对一次账。
  *
- * 为什么必须在接收侧做：信封里的 `evidence.files[].sha256` 与 `snapshot.hash` 都是**报告那一刻**
+ * 为什么必须在接收侧做：信封里的 `evidence.files/sources` 哈希与 `snapshot.hash` 都是**报告那一刻**
  * 测出来的。报告之后文件可能被改、画布可能被改 —— 只看信封是看不出来的，必须重算再比。
  *
- * - 逐条重算产物哈希（路径按工程根解析）→ 不符即「产物已变」
+ * - 逐条重算改动文件与读取来源的哈希（路径按工程根解析）→ 不符即「来源已变」
  * - 重算当前画布哈希 → 与 `snapshot.hash` 不一致即「报告之后世界又变过」
  *
  * 判定分三档（不是只有对/错）：
@@ -288,12 +442,13 @@ function validateEnvelope(envelope) {
  *
  * @param {any} envelope
  * @param {{projectRoot?: string, model?: any}} [world]
- * @returns {{verdict: 'valid'|'stale'|'invalid', checkedAt: number, files: Array<any>, snapshot: any, reasons: string[]}}
+ * @returns {{verdict: 'valid'|'stale'|'invalid', checkedAt: number, files: Array<any>, sources: Array<any>, snapshot: any, reasons: string[]}}
  */
 function verifyEnvelope(envelope, world = {}) {
   const { projectRoot, model } = world;
   const reasons = [];
   const files = [];
+  const sources = [];
   const declaredFiles = (envelope && envelope.evidence && envelope.evidence.files) || [];
   for (const entry of declaredFiles) {
     const rel = entry && entry.path ? String(entry.path) : '';
@@ -317,7 +472,7 @@ function verifyEnvelope(envelope, world = {}) {
     }
     // 有哈希就比哈希；没有哈希（超大文件/不存在）就比存在性，别用「都算过」放过去
     const ok = declared ? actual === declared : exists === (entry.exists === true);
-    files.push({ path: rel, declared, actual, exists, bytes, ok });
+    files.push({ path: rel, declared, actual, exists, bytes, ok, versioned: !!declared });
     if (!ok) {
       reasons.push(
         declared
@@ -326,17 +481,75 @@ function verifyEnvelope(envelope, world = {}) {
       );
     }
   }
+  const declaredSources = (envelope && envelope.evidence && envelope.evidence.sources) || [];
+  const sourceLinesByPath = new Map();
+  for (const entry of Array.isArray(declaredSources) ? declaredSources : []) {
+    const rel = entry && entry.path ? String(entry.path) : '';
+    if (!rel) continue;
+    const declared = entry.sha256 || null;
+    const expectedRanges = Array.isArray(entry.ranges) ? entry.ranges : [];
+    const useRanges = entry.wholeFile !== true && expectedRanges.length > 0 && expectedRanges.every((range) => range && range.sha256);
+    const abs = resolveArtifactPath(projectRoot, rel);
+    let exists = false;
+    let bytes = 0;
+    let actual = null;
+    if (abs) {
+      try {
+        const stat = fs.statSync(abs);
+        if (stat.isFile()) {
+          exists = true;
+          bytes = stat.size;
+          if (stat.size <= MAX_EVIDENCE_SOURCE_BYTES) {
+            let lines = sourceLinesByPath.get(abs);
+            if (!lines) {
+              const buffer = fs.readFileSync(abs);
+              actual = 'sha256:' + crypto.createHash('sha256').update(buffer).digest('hex');
+              if (useRanges) {
+                lines = buffer.toString('utf8').split(/\r?\n/);
+                sourceLinesByPath.set(abs, lines);
+              }
+            } else {
+              actual = 'sha256:' + crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
+            }
+            if (lines) sourceLinesByPath.set(abs, lines);
+          }
+        }
+      } catch {
+        exists = false;
+      }
+    }
+    const ranges = useRanges
+      ? expectedRanges.map((range) => {
+          let lines = abs && sourceLinesByPath.get(abs);
+          if (!lines && abs && exists && bytes <= MAX_EVIDENCE_SOURCE_BYTES) {
+            try { lines = fs.readFileSync(abs, 'utf8').split(/\r?\n/); sourceLinesByPath.set(abs, lines); } catch {}
+          }
+          const rangeActual = sha256OfLines(lines, range.startLine, range.endLine);
+          return { startLine: range.startLine, endLine: range.endLine, declared: range.sha256, actual: rangeActual,
+            ok: !!rangeActual && rangeActual === range.sha256 };
+        })
+      : [];
+    const versioned = !entry.observedConflict && (useRanges || !!declared);
+    const ok = !entry.observedConflict && (useRanges
+      ? exists && ranges.every((range) => range.ok)
+      : declared ? actual === declared : exists === (entry.exists === true) && bytes === (Number(entry.bytes) || 0));
+    sources.push({ path: rel, declared, actual, exists, bytes, ok, versioned, wholeFile: entry.wholeFile === true,
+      checkedBy: useRanges ? 'ranges' : declared ? 'whole_file_hash' : 'existence_and_size',
+      ranges, citations: Array.isArray(entry.citations) ? entry.citations : [] });
+    if (!ok) reasons.push('引用来源与报告时版本不一致或无法读取：' + rel);
+  }
   const snapshotNow = buildSnapshot(model);
   const declaredHash = (envelope && envelope.snapshot && envelope.snapshot.hash) || null;
   const snapshot = { declared: declaredHash, actual: snapshotNow.hash, revision: snapshotNow.revision, ok: !declaredHash || declaredHash === snapshotNow.hash };
   if (!snapshot.ok) reasons.push('报告之后画布（世界状态）又变过：结论可能已过期，需按最新状态重新核对');
-  const verdict = files.some((f) => !f.ok) ? 'invalid' : snapshot.ok ? 'valid' : 'stale';
-  return { verdict, checkedAt: Date.now(), files, snapshot, reasons };
+  const verdict = files.some((f) => !f.ok) || sources.some((source) => !source.ok)
+    ? 'invalid' : snapshot.ok ? 'valid' : 'stale';
+  return { verdict, checkedAt: Date.now(), files, sources, snapshot, reasons };
 }
 
 /**
- * 给模型看的**单一信封文本**：只有一段引导语 + 一个 JSON 对象。
- * 引导语只做两件事：告诉接收方「这是契约」与「违约了就别采信」，不夹带第二份数据。
+ * UI/阶段记录用的**单一信封文本**：只有一段引导语 + 一个 JSON 对象。
+ * 主循环用 modelContent 投影成短候选卡，不会把此全文与结构化 data 重复送进上下文。
  */
 function renderEnvelopeText(envelope, violations = []) {
   /**
@@ -351,7 +564,9 @@ function renderEnvelopeText(envelope, violations = []) {
       ? '[子代理结果] 契约 v' + ENVELOPE_VERSION + ' 的 kind=error：子代理**未自然完成**（payload.stopReason=' +
         String((envelope.payload && envelope.payload.stopReason) || (envelope.payload && envelope.payload.status) || '未标注') +
         '）→ 这不是结论，**半截内容不得当完整结论使用**；失败原因见 payload.error，处置方式见工具结果末尾。'
-      : '[子代理结果] 契约 v' + ENVELOPE_VERSION + '（信封即全部结论）。' +
+      : '[子代理结果] 契约 v' + ENVELOPE_VERSION + '（信封是该候选交付的完整记录）。' +
+        '这是**候选结果**（trust=derived），带有来源、快照和产物证据；它不会自动成为共享事实。' +
+        '主代理核验后用 review_subagent_result 明确确认/撤回；下游只能通过 dependsOnTaskIds 读取确认摘要。' +
         '核验方式：get_subagent_task(taskId=…) 会**重算**产物哈希与画布快照并返回 verification（valid/stale/invalid）——' +
         'invalid 的结果不得作为结论证据，stale 说明报告之后世界又变过、需按最新状态核对。';
   // 有损必须**显式**说出来，不能让人以为读到的是全文
