@@ -51,6 +51,7 @@ class AgentToolContext {
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
     this.runIdValue = o.runId || '';
+    this.sourceMessageIdValue = o.sourceMessageId || '';
     this.planSessionIdValue = o.planSessionId || '';
     this.planOwnerExistsValue = typeof o.planOwnerExists === 'function' ? o.planOwnerExists : null;
     this.toolEvidenceValue = [];
@@ -93,6 +94,7 @@ class AgentToolContext {
   }
 
   runId() { return this.runIdValue; }
+  sourceMessageId() { return this.sourceMessageIdValue; }
   planSessionId() { return this.planSessionIdValue; }
   planOwnerExists(taskId) {
     try { return !!(this.planOwnerExistsValue && this.planOwnerExistsValue(String(taskId || ''))); } catch { return false; }
@@ -456,6 +458,7 @@ class AgentToolContext {
       undo: this.undoAction,
       redo: this.redoAction,
       runId: o.runId || this.runIdValue,
+      sourceMessageId: o.sourceMessageId || this.sourceMessageIdValue,
       taskId: o.taskId || this.taskIdValue,
       role: o.role || this.roleValue,
       readOnly: o.readOnly === true,

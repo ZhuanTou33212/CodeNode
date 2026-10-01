@@ -100,6 +100,7 @@ Agent 侧不是「套一层 API」，实现要点：
 - 工作流节点：task/stage/tool 有 Prompt 时调用 Agent，无命令或 Agent 配置时明确阻塞；失败/停止后可从 run-state 继续
 - 检查点：工作流运行前后自动保存到 `.cnode`，同时保留最近 30 个本地项目检查点
 - 长期记忆：Agent 可用 `remember` / `recall` 管理项目 `.codenode/memory.json`
+- 记忆版本：`remember` 指定相同 `scope + kind + key` 时，经确认用新记录取代旧记录；旧版仍可用 `recall includeHistory=true` 查到。项目槽位在本项目内覆盖同名用户级默认值；本轮临时要求不会自动写入长期库
 - 扩展：内置工具、项目进程扩展、MCP stdio JSON-RPC、Skills 上下文和 before/after Hooks 统一接入
 
 项目扩展清单示例：

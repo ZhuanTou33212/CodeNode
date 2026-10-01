@@ -285,16 +285,18 @@ function makeHarness() {
   console.log('\n== D. 接线 ==');
   {
     const ipcSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
+    const promptContextSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'promptContext.cjs'), 'utf8');
     check('[D] ipc 用统一预算分配（纯函数）+ 只在被裁时才重建/裁剪',
-      /dynamicContext\.allocateContextBudget\(/.test(ipcSrc) &&
-        /capTokens: dynCfg\.sections\.find\(\(s\) => s\.id === 'canvas'\)/.test(ipcSrc) &&
-        /if \(trimOf\('canvas'\)\)/.test(ipcSrc) &&
-        /if \(trimOf\('skills'\)\)/.test(ipcSrc) &&
-        /if \(trimOf\('memory'\) && memCap !== memoryCap\)/.test(ipcSrc));
+      /promptContextLib\.buildPromptContext\(/.test(ipcSrc) &&
+        /dynamicContext\.allocateContextBudget\(/.test(promptContextSrc) &&
+        /capTokens: dynCfg\.sections\.find\(\(s\) => s\.id === 'canvas'\)/.test(promptContextSrc) &&
+        /if \(trimOf\('canvas'\)\)/.test(promptContextSrc) &&
+        /if \(trimOf\('skills'\)\)/.test(promptContextSrc) &&
+        /if \(trimOf\('memory'\) && memoryCapGranted !== storedMemoryCap\)/.test(promptContextSrc));
     check('[D] 注入给模型的是裁剪后的画布摘要（完整摘要仍留给分类/工具侧）',
       /buildSystemPrompt\(soul, canvasSummaryForPrompt,/.test(ipcSrc));
     check('[D] 两类记忆共用一个池子的口径没变（用户级拿剩余额度）',
-      /budgetTokens: Math\.max\(0, memCap - rebuiltProj\.tokens\)/.test(ipcSrc));
+      /budgetTokens: Math\.max\(0, memoryCapGranted - rebuiltProject\.tokens\)/.test(promptContextSrc));
   }
 
   console.log('\n' + (failures === 0 ? 'DYNAMIC CONTEXT BUDGET TEST: PASS（统一预算 + 优先级裁剪 + 不触发时逐字节不变）' : 'DYNAMIC CONTEXT BUDGET TEST: FAIL —— ' + failures + ' 项断言未通过'));

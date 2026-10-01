@@ -80,9 +80,15 @@ console.log('== A. 段落登记表：稳定段全在动态段之前 ==');
 
   const prompt = build({ canvas: CANVAS_A });
   const secs = agent.splitPromptSections(prompt);
-  check('[A] 实际装配顺序 = 登记顺序', JSON.stringify(secs.map((s) => s.id)) === JSON.stringify(table.map((s) => s.id)),
+  const presentByDefault = table.filter((s) => s.id !== 'session-memory');
+  check('[A] 实际装配顺序 = 本轮出现的登记段落顺序', JSON.stringify(secs.map((s) => s.id)) === JSON.stringify(presentByDefault.map((s) => s.id)),
     JSON.stringify(secs.map((s) => s.id)));
-  check('[A] 切分能定位全部段落（不漏段、不重复）', secs.length === table.length, 'found=' + secs.length);
+  check('[A] 切分能定位全部出现的段落（不漏段、不重复）', secs.length === presentByDefault.length, 'found=' + secs.length);
+  const withSession = agent.buildSystemPrompt(soul, CANVAS_A, guide, '记忆：构建入口是 npm run verify', 'my-skill: 做 X 时先 Y', {
+    prompt: '把 add 改成加法', canvasMode: 'always', userMemoryText: '用户偏好：中文', sessionMemoryText: '本轮临时改用 pnpm',
+  });
+  check('[A] 有本轮记忆覆盖时按登记顺序插入动态段',
+    JSON.stringify(agent.splitPromptSections(withSession).map((s) => s.id)) === JSON.stringify(table.map((s) => s.id)));
   // 画布建模规则 f) 里**引用了**【当前画布节点清单】这个名字；若切分按子串匹配，就会把规则块中间
   // 当成画布段的起点（整段厚度与顺序全错）。这里要证明：那个名字所在的位置没有被当成段落起始。
   const taskSec = secs.find((s) => s.id === 'task-rules');

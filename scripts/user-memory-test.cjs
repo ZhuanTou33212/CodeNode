@@ -5,8 +5,8 @@
  * 跨项目偏好每换一个项目都要重讲（Java 版有 UserMemoryStore，Electron 版没有）。
  *
  * 判据：
- *   A 文件与容错：路径在 $CODENODE_HOME 下（可隔离）、缺文件/坏文件一律当空而不是抛
- *   B 写入语义：去重（同内容不重复写）、上限 200（丢最旧）
+ *   A 文件与容错：区分缺文件/损坏/读取失败；坏文件拒写并原样保留，自动注入仍可用
+ *   B 写入语义：去重、上限 200（淘汰明细与审计）、落盘脱敏、原子写入失败保护
  *   C 检索：按提问**打分**（高分条目故意放在数组更靠后，锁住「不是按写入顺序」）、无命中退回最近并标 matched=false
  *   D 工具接线：`remember scope=user` 写用户级、`recall scope=user/all` 读得回、默认（不传 scope）行为不变
  *   E 注入：用户级记忆出现在 system prompt 的独立段落；不传时零痕迹
@@ -56,10 +56,41 @@ function registry() {
   console.log('\n== A. 文件与容错 ==');
   {
     check('[A] 路径落在 $CODENODE_HOME 下（可隔离，不污染真实家目录）', userMemory.userMemoryPath().startsWith(home), userMemory.userMemoryPath());
-    check('[A] 文件不存在 → 空记忆（不是抛异常）', userMemory.readUserMemory().entries.length === 0);
+    const missing = userMemory.readUserMemory();
+    check('[A] 文件不存在 → ok=true/exists=false（允许首次写入）', missing.ok && !missing.exists && missing.entries.length === 0);
     fs.mkdirSync(path.dirname(userMemory.userMemoryPath()), { recursive: true });
-    fs.writeFileSync(userMemory.userMemoryPath(), '{坏 JSON', 'utf8');
-    check('[A] 坏文件 → 当空处理（不挡住 Agent）', userMemory.readUserMemory().entries.length === 0);
+    const reg = registry();
+    for (const brokenText of ['{坏 JSON', '{}', '{"entries":null}']) {
+      fs.writeFileSync(userMemory.userMemoryPath(), brokenText, 'utf8');
+      const broken = userMemory.readUserMemory();
+      check('[A] 损坏 JSON / 缺失 entries → 明确报 MEMORY_CORRUPT', !broken.ok && broken.exists && broken.code === 'MEMORY_CORRUPT');
+      const added = userMemory.addUserMemory({ content: '不能覆盖坏文件' });
+      check('[A] addUserMemory 拒绝覆盖坏文件', !added.ok && added.code === 'MEMORY_CORRUPT');
+      let refused = false;
+      try { userMemory.writeUserMemory([]); } catch (error) { refused = /拒绝写入/.test(error.message); }
+      check('[A] 直接 writeUserMemory 也不能清空坏文件', refused);
+      const saved = await reg.execute('remember', { content: '不能覆盖坏文件', scope: 'user' }, context());
+      check('[A] remember scope=user 如实失败', !saved.ok && saved.data.code === 'MEMORY_CORRUPT');
+      for (const scope of ['user', 'all']) {
+        const recalled = await reg.execute('recall', { query: '偏好', scope }, context());
+        check('[A] recall scope=' + scope + ' 报损坏而不是伪装无匹配', !recalled.ok && recalled.data.code === 'MEMORY_CORRUPT');
+      }
+      check('[A] 所有写入尝试后原文件逐字节保留', fs.readFileSync(userMemory.userMemoryPath(), 'utf8') === brokenText);
+      check('[A] 坏文件不挡自动注入', userMemory.buildUserMemoryInjection('偏好').text === '' && userMemory.buildUserMemoryText('偏好') === '');
+    }
+    const readFileSync = fs.readFileSync;
+    try {
+      fs.readFileSync = function(file, ...args) {
+        if (file === userMemory.userMemoryPath()) throw Object.assign(new Error('模拟权限不足'), { code: 'EACCES' });
+        return readFileSync.call(fs, file, ...args);
+      };
+      const unreadable = userMemory.readUserMemory();
+      check('[A] 读取失败与文件缺失区分，禁止追加', !unreadable.ok && unreadable.code === 'MEMORY_READ_FAILED'
+        && userMemory.addUserMemory({ content: '不能覆盖不可读文件' }).ok === false);
+      let refused = false;
+      try { userMemory.writeUserMemory([]); } catch { refused = true; }
+      check('[A] 直接写入也拒绝覆盖不可读文件', refused);
+    } finally { fs.readFileSync = readFileSync; }
     fs.rmSync(userMemory.userMemoryPath());
   }
 
@@ -129,17 +160,62 @@ function registry() {
     const without = agent.buildSystemPrompt({ raw: '' }, '', [], '项目记忆内容', '', {});
     check('[E] 不传时零痕迹（不出现用户级段落）', !/用户级记忆/.test(without));
     const src = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
+    const promptContext = fs.readFileSync(path.join(__dirname, '..', 'electron', 'promptContext.cjs'), 'utf8');
     // A4（token 效率审计 §4 P1-2）：注入入口从 buildUserMemoryText 换成 buildUserMemoryInjection
     // —— 前者是选择器口径（无命中退回最近 N 条），后者是**自动注入**口径（有命中才注入 + 预算）。
     // 接线判据同时锁住「用的是剩余预算」：两类记忆共用一个预算池，谁都不能以为自己只占一点。
-    check('[E] ipc 真的把用户级记忆传进了 buildSystemPrompt（接线 + 共用预算池）',
+    check('[E] ipc 通过 promptContext 注入用户级记忆并共用预算池',
       /userMemoryText,/.test(src) &&
-      /userMemoryStore\.buildUserMemoryInjection\(prompt, \{/.test(src) &&
-      // P1-2 之后：预算额度由统一分配器给出（量测用 memoryCap、被裁时用授予的 memCap），
-      // 但「两类共用一个池子」的口径不变 —— 用户级永远拿**剩余额度**。
-      /budgetTokens: Math\.max\(0, Number\(memoryCap \|\| 0\) - measureProj\.tokens\)/.test(src) &&
-      /budgetTokens: Math\.max\(0, memCap - rebuiltProj\.tokens\)/.test(src),
-      'injection=' + /buildUserMemoryInjection/.test(src) + ' budget=' + /measureProj\.tokens/.test(src));
+      /promptContextLib\.buildPromptContext\(/.test(src) &&
+      /userStore\.buildUserMemoryInjection\(prompt, \{/.test(promptContext) &&
+      /budgetTokens: Math\.max\(0, storedMemoryCap - measureProject\.tokens\)/.test(promptContext) &&
+      /budgetTokens: Math\.max\(0, memoryCapGranted - rebuiltProject\.tokens\)/.test(promptContext),
+      'injection=' + /buildUserMemoryInjection/.test(promptContext) + ' budget=' + /measureProject\.tokens/.test(promptContext));
+  }
+
+  // ==================== F. 脱敏、淘汰审计与失败保护 ====================
+  console.log('\n== F. 安全持久化 ==');
+  {
+    const file = userMemory.userMemoryPath();
+    const secret = 'sk-abcdefghijklmnopqrstuvwx';
+    const record = { id: 'safe-id', key: 'api-design', tags: ['security'], createdAt: '2026-09-28T00:00:00Z',
+      content: 'Authorization: Bearer ' + secret + ' password=hunter2' };
+    const written = userMemory.writeUserMemory([record]);
+    const disk = fs.readFileSync(file, 'utf8');
+    check('[F] 写入返回值保持数组；磁盘正文脱敏', Array.isArray(written) && !disk.includes(secret) && !disk.includes('hunter2') && disk.includes('[REDACTED]'));
+    const back = userMemory.readUserMemory().entries[0];
+    check('[F] 脱敏保持结构字段与检索语义', back.id === record.id && back.key === record.key && back.tags[0] === record.tags[0]
+      && back.createdAt === record.createdAt && userMemory.selectRelevant([back], 'api-design security').matched);
+    const dup = userMemory.addUserMemory(record);
+    check('[F] 原始内容脱敏后仍能正确去重', dup.ok && dup.duplicate && dup.entries === 1);
+    const many = Array.from({ length: userMemory.MAX_USER_MEMORY_ENTRIES + 3 }, (_, i) => ({ id: 'old-' + i, content: '偏好 ' + i }));
+    const kept = userMemory.writeUserMemory(many);
+    const auditFile = path.join(home, 'audit.jsonl');
+    const audits = fs.readFileSync(auditFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const last = audits[audits.length - 1];
+    check('[F] 直接写入淘汰最旧三条并留用户级审计', kept.length === 200 && kept[0].id === 'old-3'
+      && last.type === 'memory_evicted' && last.scope === 'user' && last.count === 3 && last.remained === 200
+      && last.evicted.join(',') === 'old-0,old-1,old-2' && !('content' in last));
+    const res = await registry().execute('remember', { content: '新偏好', scope: 'user' }, context());
+    check('[F] remember 返回淘汰明细且文本告知', res.ok && res.data.evicted === 1 && res.data.evictedIds[0] === 'old-3' && /已淘汰最旧 1 条/.test(res.text));
+    const before = fs.readFileSync(file, 'utf8');
+    const auditBefore = fs.readFileSync(auditFile, 'utf8');
+    for (const method of ['fsyncSync', 'renameSync']) {
+      const original = fs[method];
+      try {
+        fs[method] = () => { throw new Error('模拟原子写失败'); };
+        const failed = await registry().execute('remember', { content: '失败后不能保存', scope: 'user' }, context());
+        check('[F] ' + method + ' 失败时工具不能报成功', !failed.ok);
+      } finally { fs[method] = original; }
+      check('[F] ' + method + ' 失败保留旧库、不留临时文件、不记虚假淘汰', fs.readFileSync(file, 'utf8') === before
+        && fs.readFileSync(auditFile, 'utf8') === auditBefore && !fs.readdirSync(home).some((name) => name.endsWith('.tmp')));
+    }
+    check('[F] 失败后可再次正常写入', userMemory.addUserMemory({ content: '恢复后的偏好' }).ok);
+    const appendJsonl = require('../electron/runStore.cjs').appendJsonl;
+    try {
+      require('../electron/runStore.cjs').appendJsonl = () => { throw new Error('模拟审计失败'); };
+      check('[F] 审计旁路失败不把已经成功的记忆写入报成失败', userMemory.addUserMemory({ content: '审计旁路失败后的偏好' }).ok);
+    } finally { require('../electron/runStore.cjs').appendJsonl = appendJsonl; }
   }
 
   try {

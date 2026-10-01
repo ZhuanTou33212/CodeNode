@@ -45,6 +45,7 @@ const { parseWebSearchConfig } = require('../tools/impl/webSearchTool.cjs');
 const compactionLib = require('../compaction.cjs');
 // 动态上下文段落的统一 token 预算（审计 §4 P1-2）
 const dynamicContext = require('../dynamicContextBudget.cjs');
+const promptContextLib = require('../promptContext.cjs');
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
 function webSearchConfig(cfg) {
@@ -601,110 +602,27 @@ function register(ctx) {
        * 正文等模型真需要时用 `read_skill` 去读。此前是把 instructions 整段常驻注入 ——
        * 无论本次任务用不用得上都在付固定开销（每轮都发）。
        */
-      // 索引由纯函数生成（可判据直锁）：prompt 只放名字 + 一句话，正文走 read_skill
-      const skillsIndexFull = agent.buildSkillsIndex(skills);
-
-      /**
-       * P1-2 动态上下文预算：**先量「想要多少」，再定「能拿多少」**。
-       *
-       * 各段先用**自己的 cap** 跑一遍当预算（所以 desired 天然 ≤ cap，cap 与总量是仅有的两个约束），
-       * 然后由统一预算按优先级分配 —— 这样「每段都不大但加起来很高」这件事第一次有了唯一的出口，
-       * 而且能如实回答「这一轮把多少额度花在了哪一段、被谁吃掉了」。
-       *
-       * 同一段要构建两次（量一次、按额度再建一次）：都是纯函数、无 IO、无模型调用，代价可忽略。
-       * `granted === desired` 时**不重建、不裁剪** —— 常见项目下输出与没有这套预算时逐字节一致。
-       */
-      /**
-       * 记忆段的量测预算 = `min(agent.memory_budget_tokens, agent.dynamic_context_memory_tokens)`：
-       * 两个键都保留语义（前者是记忆自己的池子，后者是统一预算给的 cap），取小 = 谁紧听谁的，
-       * 出厂默认两者都是 2000 → 与加这套预算之前**逐字节一致**。
-       */
-      const dynMemoryCap = dynCfg.sections.find((s) => s.id === 'memory')
-        ? dynCfg.sections.find((s) => s.id === 'memory').capTokens
-        : memoryCfg.budgetTokens;
-      const memoryCap = Math.min(Math.max(0, Number(memoryCfg.budgetTokens) || 0), Math.max(0, Number(dynMemoryCap) || 0));
-      const measureProj = memoryStore.buildMemoryInjection(memory.entries, prompt, {
-        limit: memoryCfg.topK,
-        maxEntryChars: memoryCfg.maxEntryChars,
-        budgetTokens: memoryCap,
-        requireMatch: memoryCfg.requireMatch,
-        label: '此项目',
+      // 桌面与 CLI 共用同一个动态上下文预算，避免入口之间的提示词开销漂移。
+      const promptContext = promptContextLib.buildPromptContext({
+        prompt,
+        canvasSummary,
+        skills,
+        projectMemoryEntries: memory.entries,
+        memoryConfig: memoryCfg,
+        dynamicContextConfig: dynCfg,
+        userMemoryStore,
+        buildSkillsIndex: agent.buildSkillsIndex,
+        truncateCanvasSummary: agent.truncateCanvasSummary,
+        truncateSkillsIndex: agent.truncateSkillsIndex,
       });
-      const measureUser = userMemoryStore.buildUserMemoryInjection(prompt, {
-        limit: memoryCfg.userTopK,
-        maxEntryChars: memoryCfg.maxEntryChars,
-        budgetTokens: Math.max(0, Number(memoryCap || 0) - measureProj.tokens),
-        requireMatch: memoryCfg.requireMatch,
-        label: '用户级（跨项目）记忆',
-      });
-      const canvasSummaryRaw = String(canvasSummary == null ? '' : canvasSummary);
-      const contextBudget =
-        dynCfg.totalTokens > 0
-          ? dynamicContext.allocateContextBudget({
-              totalTokens: dynCfg.totalTokens,
-              sections: [
-                {
-                  id: 'canvas',
-                  desiredTokens: compactionLib.estimateTextTokens(canvasSummaryRaw),
-                  capTokens: dynCfg.sections.find((s) => s.id === 'canvas')?.capTokens,
-                },
-                {
-                  id: 'memory',
-                  desiredTokens: measureProj.tokens + measureUser.tokens,
-                  capTokens: dynCfg.sections.find((s) => s.id === 'memory')?.capTokens,
-                },
-                {
-                  id: 'skills',
-                  desiredTokens: compactionLib.estimateTextTokens(skillsIndexFull),
-                  capTokens: dynCfg.sections.find((s) => s.id === 'skills')?.capTokens,
-                },
-              ],
-            })
-          : null;
-      /** 各段最终文本：默认（`granted === desired` 或预算关闭）就是量出来的那一次，逐字节不改 */
-      let memoryText = measureProj.text;
-      let userMemoryText = measureUser.text;
-      let skillsText = skillsIndexFull;
-      let canvasSummaryForPrompt = canvasSummaryRaw;
+      const {
+        memoryText,
+        userMemoryText,
+        skillsText,
+        canvasSummaryForPrompt,
+        contextBudget,
+      } = promptContext;
       if (contextBudget) {
-        const grantOf = (id) => {
-          const row = contextBudget.trace.find((t) => t.id === id);
-          return row ? Number(row.granted) || 0 : 0;
-        };
-        const trimOf = (id) => {
-          const row = contextBudget.trace.find((t) => t.id === id);
-          return !row || row.reason === 'full' || row.reason === 'empty' ? null : row;
-        };
-        // 记忆：额度变小才重建（项目级先占，剩下的给用户级 —— 沿用「两类共用一个池」的口径）
-        const memCap = grantOf('memory');
-        if (trimOf('memory') && memCap !== memoryCap) {
-          const rebuiltProj = memoryStore.buildMemoryInjection(memory.entries, prompt, {
-            limit: memoryCfg.topK,
-            maxEntryChars: memoryCfg.maxEntryChars,
-            budgetTokens: memCap,
-            requireMatch: memoryCfg.requireMatch,
-            label: '此项目',
-          });
-          const rebuiltUser = userMemoryStore.buildUserMemoryInjection(prompt, {
-            limit: memoryCfg.userTopK,
-            maxEntryChars: memoryCfg.maxEntryChars,
-            budgetTokens: Math.max(0, memCap - rebuiltProj.tokens),
-            requireMatch: memoryCfg.requireMatch,
-            label: '用户级（跨项目）记忆',
-          });
-          memoryText = rebuiltProj.text;
-          userMemoryText = rebuiltUser.text;
-        }
-        // 画布：按**节点粒度**裁剪（保持 JSON 合法）并留取回提示
-        if (trimOf('canvas')) {
-          const cut = agent.truncateCanvasSummary(canvasSummaryRaw, grantOf('canvas'));
-          canvasSummaryForPrompt = cut.text;
-        }
-        // 技能索引：按整行裁（留「用 read_skill 查」的提示）
-        if (trimOf('skills')) {
-          const cut = agent.truncateSkillsIndex(skillsIndexFull, grantOf('skills'));
-          skillsText = cut.text;
-        }
         runStore.appendEvent(projectRoot, runId, 'context_budget', {
           totalTokens: contextBudget.totalTokens,
           used: contextBudget.used,
@@ -910,6 +828,7 @@ function register(ctx) {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
         userMemoryText,
+        sessionMemoryText: promptContext.sessionMemoryText,
         // 意图识别的提示词路由信号（只在「本来会省画布层」时把层救回来；null = 不改变既有判定）
         intentHint: intentPolicy ? intentPolicy.routeHint : null,
         // 工具面同源：按暴露面收敛运行规则（null = 未裁剪 → 规则一个不动，逐字节一致）
@@ -1061,6 +980,7 @@ function register(ctx) {
           projectRoot,
           model,
           runId: requestId || '',
+          sourceMessageId: requestId || '',
           planSessionId: cfg.planSessionId || '',
           planOwnerExists: (taskId) => !!(subagentManager && subagentManager.hasTask(taskId)),
           role: 'supervisor',

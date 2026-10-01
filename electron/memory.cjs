@@ -3,10 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 const { atomicWriteFile } = require('./atomicFile.cjs');
+const { withFileLock } = require('./fileLock.cjs');
 const { redact } = require('./redaction.cjs');
+const resolution = require('./memoryResolution.cjs');
 
-/** 项目记忆条数上限（#16：超出后**显式**淘汰最旧条目并留审计，不再静默 slice） */
+/** 项目记忆条数上限（含已取代的历史；超出后显式淘汰最旧条目并留审计）。 */
 const MAX_MEMORY_ENTRIES = 200;
+const MAX_MEMORY_HISTORY_ENTRIES = 2000;
 
 function memoryPath(projectRoot) {
   return path.join(path.resolve(projectRoot || '.'), '.codenode', 'memory.json');
@@ -31,7 +34,7 @@ function readMemory(projectRoot) {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
     if (error && error.code === 'ENOENT') {
-      return { ok: true, exists: false, entries: [], error: null, file };
+      return { ok: true, exists: false, version: 3, revision: 0, entries: [], activeEntries: [], historyEntries: [], error: null, file };
     }
     return {
       ok: false,
@@ -44,10 +47,19 @@ function readMemory(projectRoot) {
   }
   try {
     const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) {
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.entries) ||
+        (Number(parsed.version) >= 3 && parsed.history != null && !Array.isArray(parsed.history))) {
       throw new Error('缺少 entries 数组');
     }
-    return { ok: true, exists: true, entries: parsed.entries, error: null, file };
+    const all = parsed.entries.concat(Array.isArray(parsed.history) ? parsed.history : []);
+    if (all.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry))) {
+      throw new Error('entries/history 中存在非对象记录');
+    }
+    const activeEntries = all.filter((entry) => entry && resolution.memoryStatus(entry) === 'active');
+    const historyEntries = all.filter((entry) => entry && resolution.memoryStatus(entry) !== 'active');
+    return { ok: true, exists: true, version: Number(parsed.version) || 1,
+      revision: Number.isInteger(parsed.revision) ? parsed.revision : 0,
+      entries: historyEntries.concat(activeEntries), activeEntries, historyEntries, error: null, file };
   } catch (error) {
     return {
       ok: false,
@@ -88,6 +100,23 @@ function auditMemoryEviction(projectRoot, evicted, remained) {
   }
 }
 
+function auditMemoryHistoryPruned(projectRoot, pruned, remained) {
+  try {
+    const root = path.resolve(projectRoot || '.');
+    const dir = path.join(root, '.codenode');
+    fs.mkdirSync(dir, { recursive: true });
+    const ids = pruned.map((entry) => String((entry && entry.id) || '?'));
+    require('./runStore.cjs').appendJsonl(path.join(dir, 'audit.jsonl'), {
+      ts: new Date().toISOString(), type: 'memory_history_pruned',
+      entry: '项目记忆历史超出上限（' + MAX_MEMORY_HISTORY_ENTRIES + '），已清理最旧 ' + pruned.length + ' 条：' + ids.join(', '),
+      pruned: ids,
+    });
+    require('./eventBus.cjs').bridge(projectRoot, 'memory_history_pruned', {
+      count: pruned.length, remained, limit: MAX_MEMORY_HISTORY_ENTRIES, pruned: ids,
+    });
+  } catch {}
+}
+
 /**
  * 写项目记忆（#16 + #15）。三条显式约束：
  *   1. **写入前复核磁盘**：文件存在但不可解析 → 抛错拒绝，原文件一字节不动（绝不静默清空整库）；
@@ -95,27 +124,78 @@ function auditMemoryEviction(projectRoot, evicted, remained) {
  *   3. 落盘前按 `redaction.redact` 脱敏（与 runStore 同一口径）—— `id/key/tags/createdAt`
  *      等结构与统计字段原样保留，检索打分口径不变。
  */
-function writeMemory(projectRoot, entries) {
+function writeMemoryUnlocked(projectRoot, entries, options = {}) {
   const file = memoryPath(projectRoot);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const current = readMemory(projectRoot);
   if (current.exists && !current.ok) {
     throw new Error('拒绝写入项目记忆：' + current.error + '（原文件已保留，请先修复或删除再重试）');
   }
+  if (options.expectedRevision != null && current.revision !== options.expectedRevision) {
+    const error = new Error('项目记忆在确认期间已变化，请重新读取后再保存');
+    error.code = 'MEMORY_CONFLICT';
+    throw error;
+  }
   const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry && typeof entry === 'object');
-  const overflow = list.length - MAX_MEMORY_ENTRIES;
-  const evicted = overflow > 0 ? list.slice(0, overflow) : [];
-  const kept = overflow > 0 ? list.slice(overflow) : list;
-  const persisted = kept.map((entry) => redact(entry));
-  atomicWriteFile(file, JSON.stringify({ version: 1, entries: persisted }, null, 2) + '\n', 'utf8');
-  if (evicted.length) auditMemoryEviction(projectRoot, evicted, persisted.length);
+  const active = list.filter((entry) => resolution.memoryStatus(entry) === 'active');
+  const history = list.filter((entry) => resolution.memoryStatus(entry) !== 'active');
+  const overflow = Math.max(0, active.length - MAX_MEMORY_ENTRIES);
+  const evicted = active.slice(0, overflow);
+  const keptActive = active.slice(overflow);
+  const historyOverflow = Math.max(0, history.length - MAX_MEMORY_HISTORY_ENTRIES);
+  const historyPruned = history.slice(0, historyOverflow);
+  const keptHistory = history.slice(historyOverflow);
+  const persistedActive = keptActive.map((entry) => redact(entry));
+  const persistedHistory = keptHistory.map((entry) => redact(entry));
+  const revision = current.revision + 1;
+  atomicWriteFile(file, JSON.stringify({ version: 3, revision, entries: persistedActive, history: persistedHistory }, null, 2) + '\n', 'utf8');
+  if (evicted.length) auditMemoryEviction(projectRoot, evicted, persistedActive.length);
+  if (historyPruned.length) auditMemoryHistoryPruned(projectRoot, historyPruned, persistedHistory.length);
   return {
     ok: true,
     file,
-    written: persisted.length,
+    written: persistedActive.length + persistedHistory.length,
+    active: persistedActive.length,
+    history: persistedHistory.length,
+    revision,
     evicted: evicted.length,
     evictedIds: evicted.map((entry) => (entry && entry.id) || null),
+    historyPruned: historyPruned.length,
+    historyPrunedIds: historyPruned.map((entry) => (entry && entry.id) || null),
   };
+}
+
+function writeMemory(projectRoot, entries, options = {}) {
+  return withFileLock(memoryPath(projectRoot), () => writeMemoryUnlocked(projectRoot, entries, options));
+}
+
+/** 确认后按 key + kind 写入新版本；旧有效版本保留在历史中。 */
+function addProjectMemory(projectRoot, entry, options = {}) {
+  try {
+    return withFileLock(memoryPath(projectRoot), () => {
+      const current = readMemory(projectRoot);
+      if (!current.ok) return { ok: false, code: current.code, error: current.error, file: current.file };
+      const input = {
+        ...entry,
+        key: redact(String((entry && entry.key) || '').trim()),
+        content: redact(String((entry && entry.content) || '').trim()),
+        value: entry && entry.value != null ? redact(String(entry.value)) : undefined,
+        tags: Array.isArray(entry && entry.tags) ? entry.tags.map((tag) => redact(String(tag))) : [],
+      };
+      const next = resolution.upsertMemory(current.entries, input, { scope: 'project', ...options });
+      if (!next.ok) return next;
+      if (next.duplicate) return { ok: true, duplicate: true, id: next.record.id, version: next.record.version || 1,
+        total: current.activeEntries.length, replacedIds: [], evicted: 0, evictedIds: [] };
+      const written = writeMemoryUnlocked(projectRoot, next.entries, { expectedRevision: current.revision });
+      return { ok: true, duplicate: false, id: next.record.id, version: next.record.version,
+        total: written.active, history: written.history, replacedIds: next.replacedIds,
+        evicted: written.evicted, evictedIds: written.evictedIds,
+        historyPruned: written.historyPruned, historyPrunedIds: written.historyPrunedIds, file: written.file };
+    });
+  } catch (error) {
+    return { ok: false, code: error && error.code || 'MEMORY_WRITE_FAILED',
+      error: String((error && error.message) || error), file: memoryPath(projectRoot) };
+  }
 }
 
 /**
@@ -152,7 +232,7 @@ function scoreEntry(entry, terms) {
 }
 
 /**
- * 挑出这次请求要注入的记忆（第 5 项缺陷的修复）。
+ * 挑出这次请求要注入的记忆。先按槽位/版本筛出有效记录，再按提问相关度排序。
  *
  * 旧实现是 `entries.slice(-30)` —— **纯按写入时间取最近 30 条**，key/tags 完全不参与：
  * 项目约定写在第 31 条之前就永远进不了提示（等于「写了但读不到」），而最新的 30 条
@@ -162,13 +242,15 @@ function scoreEntry(entry, terms) {
  * limit 条**（保持旧行为，不编造相关性）。返回 matched 字段让调用方能如实标注。
  */
 function selectRelevant(entries, query, options = {}) {
-  const list = Array.isArray(entries) ? entries.filter((entry) => entry && entry.content) : [];
+  const resolved = resolution.resolveMemory(entries, options);
+  const list = resolved.entries;
   const limit = Math.max(1, Number(options.limit) || 30);
   const terms = tokenize(query);
   const scored = list.map((entry, index) => ({ entry, index, score: scoreEntry(entry, terms) }));
   const matched = scored.filter((item) => item.score > 0);
   if (!matched.length) {
-    return { entries: list.slice(-limit), matched: false, terms, scores: [] };
+    return { entries: list.slice(-limit), matched: false, terms, scores: [],
+      suppressed: resolved.suppressed.length, conflicts: resolved.conflicts };
   }
   matched.sort((a, b) => (b.score - a.score) || (b.index - a.index));
   return {
@@ -176,6 +258,8 @@ function selectRelevant(entries, query, options = {}) {
     matched: true,
     terms,
     scores: matched.slice(0, limit).map((item) => ({ id: item.entry.id || null, score: item.score })),
+    suppressed: resolved.suppressed.length,
+    conflicts: resolved.conflicts,
   };
 }
 
@@ -235,7 +319,7 @@ function buildMemoryInjection(entries, query, options = {}) {
   const empty = { text: '', tokens: 0, count: 0, matched: false, dropped: 0, truncated: 0 };
   if (limit === 0 || budgetTokens === 0) return empty;
 
-  const picked = selectRelevant(entries, query, { limit });
+  const picked = selectRelevant(entries, query, { ...opt, limit });
   if (!picked.entries.length) return empty;
   if (requireMatch && !picked.matched) return Object.assign({}, empty, { matched: false });
 
@@ -247,7 +331,8 @@ function buildMemoryInjection(entries, query, options = {}) {
   let dropped = 0;
   let truncated = 0;
   for (const entry of picked.entries) {
-    let body = (entry.key ? '[' + entry.key + '] ' : '') + String(entry.content || '');
+    const slot = entry.key ? '[' + entry.key + (entry.value ? '=' + String(entry.value) : '') + '] ' : '';
+    let body = slot + String(entry.content || '');
     if (maxEntryChars > 0 && body.length > maxEntryChars) {
       body = body.slice(0, maxEntryChars) + '…（本条已截断）';
       truncated += 1;
@@ -275,11 +360,11 @@ function buildMemoryInjection(entries, query, options = {}) {
   return { text, tokens, count: lines.length, matched: picked.matched, dropped, truncated };
 }
 
-/** 注入到 system prompt 的记忆文本（ipc/agent.cjs 直接用这个，保证与测试同一条代码路径） */
+/** 手动读取记忆的文本格式；自动注入使用带预算的 buildMemoryInjection。 */
 function buildMemoryText(entries, query, options = {}) {
   const picked = selectRelevant(entries, query, options);
   if (!picked.entries.length) return '';
-  const lines = picked.entries.map((entry) => `- ${entry.key ? '[' + entry.key + '] ' : ''}${entry.content}`);
+  const lines = picked.entries.map((entry) => `- ${entry.key ? '[' + entry.key + (entry.value ? '=' + String(entry.value) : '') + '] ' : ''}${entry.content}`);
   if (!picked.matched) {
     // 没有任何关键词命中：如实说明这是「最近的记忆」，别让模型以为这是检索结果。
     // `options.label` 让调用方说明范围（项目级 / 用户级跨项目）—— 文案说错范围会误导模型，
@@ -293,13 +378,18 @@ function buildMemoryText(entries, query, options = {}) {
 module.exports = {
   readMemory,
   writeMemory,
+  addProjectMemory,
   memoryPath,
   MAX_MEMORY_ENTRIES,
+  MAX_MEMORY_HISTORY_ENTRIES,
   MEMORY_INJECTION_DEFAULTS,
   estimateTextTokens,
   tokenize,
   scoreEntry,
   selectRelevant,
+  resolveMemory: resolution.resolveMemory,
+  memorySlot: resolution.memorySlot,
+  currentSlot: resolution.currentSlot,
   buildMemoryText,
   buildMemoryInjection,
 };

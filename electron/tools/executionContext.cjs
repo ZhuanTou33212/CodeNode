@@ -34,7 +34,7 @@ const executionContextBases = new WeakMap();
 
 /** 所有能力都可用的方法（跨切面） */
 const COMMON_METHODS = Object.freeze([
-  'projectRoot', 'model', 'runId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
+  'projectRoot', 'model', 'runId', 'sourceMessageId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
   'confirm', 'notifyState', 'setStateNotifier', 'conversationHistory', 'ragConfig',
   'checkpointMessages', 'beginSideEffect', 'commitSideEffect', 'failSideEffect', 'skillMaxChars', 'webSearchConfig',
 ]);
@@ -173,6 +173,7 @@ function createExecutionContext(source, descriptor, callInfo) {
   const allow = (...caps) => caps.some((cap) => granted.has(cap));
 
   const runId = safeCall(() => base.runId(), '') || '';
+  const sourceMessageId = safeCall(() => base.sourceMessageId(), '') || '';
   const taskId = safeCall(() => base.taskId(), '') || '';
   const turnId = info.turnId == null ? null : String(info.turnId);
   const toolCallId = info.toolCallId == null ? null : String(info.toolCallId);
@@ -187,6 +188,7 @@ function createExecutionContext(source, descriptor, callInfo) {
   // ---- 面 1：标识与运行信息（每个动作都能带回 runId/turnId/toolCallId/attemptId） ----
   ctx.exec = Object.freeze({
     runId,
+    sourceMessageId,
     taskId,
     turnId,
     toolCallId,
