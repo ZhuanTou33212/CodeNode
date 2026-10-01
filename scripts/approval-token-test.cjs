@@ -129,9 +129,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // ---- G. 声明层：确认类写工具都声明了确认且真的强制 ----
   const declRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false });
-  // 注意：create_nodes 已不在 BUILTINS 里（画布写入口统一到 workbench_edit），所以按**实际注册**的工具断言；
-  // 它的模块里同样加了 declareContract，将来若重新注册就自带审批。
-  const declared = ['save_project', 'workbench_edit', 'create_nodes', 'ui_control'].filter((name) => declRegistry.descriptorOf(name));
+  const declared = ['save_project', 'workbench_edit', 'ui_control'].filter((name) => declRegistry.descriptorOf(name));
   assert.ok(declared.length >= 3, '至少三个确认类写工具在注册表里（实际 ' + declared.join(',') + '）');
   for (const name of declared) {
     const descriptor = declRegistry.descriptorOf(name);

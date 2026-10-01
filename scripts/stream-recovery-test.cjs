@@ -165,9 +165,18 @@ function baseCfg(port, reliability) {
 }
 
 async function runChat(port, reliability, options = {}) {
-  const { sink, onDelta } = makeUiSink();
+  const { sink, onDelta: collectDelta } = makeUiSink();
   const controller = new AbortController();
   if (options.abortAfterMs) setTimeout(() => controller.abort(), options.abortAfterMs);
+  const onDelta = (delta) => {
+    collectDelta(delta);
+    // Cancellation cases should synchronize on observable stream progress rather than
+    // wall-clock time: under a loaded test suite the request may not reach the mock
+    // before a short timer fires, turning a cancellation test into a connection test.
+    if (options.abortOnFirstContent && delta && delta.kind === 'content' && delta.text && !controller.signal.aborted) {
+      controller.abort();
+    }
+  };
   const startedAt = Date.now();
   const result = await agent.runAgentChat({
     cfg: baseCfg(port, reliability),
@@ -252,10 +261,11 @@ const RECOVERY = { maxAttempts: 1, retryBaseMs: 5, retryMaxMs: 10, turnTimeoutMs
   {
     const mock = startMock([{ mode: 'ok', text: 'x'.repeat(400), chunkDelayMs: 60 }]);
     const port = await mock.listen();
-    const { result, sink } = await runChat(port, RECOVERY, { abortAfterMs: 160 });
+    const { result, sink } = await runChat(port, RECOVERY, { abortOnFirstContent: true });
     mock.close();
     check('[用户取消] 只发了 1 次请求（不重发）', mock.state.requests === 1, 'requests=' + mock.state.requests);
     check('[用户取消] 归类为 aborted 而不是错误', result.aborted === true && !result.error, JSON.stringify({ aborted: result.aborted, error: result.error }));
+    check('[用户取消] 在收到首段回答后才取消（确实覆盖已建立流的取消路径）', sink.content.length > 0, 'received=' + sink.content.length + ' chars');
     check('[用户取消] 界面不会收到 content_reset（内容没被抽走）', sink.resets === 0, 'resets=' + sink.resets);
   }
 
