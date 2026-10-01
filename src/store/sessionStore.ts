@@ -510,6 +510,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         result: t.result,
         ok: t.ok,
         data: t.data,
+        callId: t.callId,
+        actor: t.actor,
       }));
       last.tools = mergeTools(last.tools || [], list);
     }

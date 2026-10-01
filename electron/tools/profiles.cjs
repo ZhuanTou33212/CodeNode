@@ -57,7 +57,7 @@ const PROFILE_TOOLS = Object.freeze({
   ]),
   /** 调研面：出网 + 记忆检索 */
   research: Object.freeze([
-    'fetch_url', 'web_search', 'recall', 'retrieve_context', 'view_image',
+    'fetch_url', 'web_search', 'dify_call', 'recall', 'retrieve_context', 'view_image',
   ]),
   /** 编排面：子代理与工作树隔离（单价最贵的一组，实测 delegate_task 557 tokens + worktree 201） */
   orchestration: Object.freeze([
@@ -86,7 +86,7 @@ function profilesForTool(name) {
  * 只按「有没有提到」判断，命中才加 —— 漏加的代价是一次 `discover_tools` 往返（可恢复），
  * 多加的代价是每轮固定税（不可恢复）。所以这里**故意宽进**：只要沾边就加上。
  */
-const RESEARCH_RE = /联网|搜索|搜一下|查一下|查资料|调研|最新的?资料|网上|浏览器|抓取|爬取|文档站|web|http/i;
+const RESEARCH_RE = /联网|搜索|搜一下|查一下|查资料|调研|最新的?资料|网上|浏览器|抓取|爬取|文档站|web|http|dify/i;
 const ORCHESTRATION_RE = /子代理|子任务|并行|分工|多个\s*(agent|代理)|delegate|工作树|worktree/i;
 const SIMPLE_EDIT_ACTION_RE = /修改|改(?:一下|动|成)|替换|更新|修复|编辑|新增|添加|插入|删除|移除|去掉|\b(rename|change|edit|replace|update|fix|add|remove|delete)\b/i;
 const BROAD_EDIT_RE = /重构|批量|所有|每个|全局|整个项目|多个文件|跨文件|项目整体|架构|报错|错误|异常|堆栈|问题|故障|\b(bug|error|debug|issue|test|tests)\b|分析|审查|调研|联网|搜索|查找|部署|发布/i;

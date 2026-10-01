@@ -22,7 +22,8 @@ interface UiState {
   modelManagerOpen: boolean;
   hoverScopeId: string | null;
   dockOpen: boolean;
-  dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
+  dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions' | 'rag';
+  editorTarget: { path: string; line: number } | null;
   /** 启动引导是否完成（恢复上次工程结束）。false 时先显示启动占位，避免门禁页闪现 */
   booted: boolean;
   /**
@@ -48,6 +49,7 @@ interface UiState {
   openDock: (tab?: UiState['dockTab']) => void;
   closeDock: () => void;
   setDockTab: (tab: UiState['dockTab']) => void;
+  setEditorTarget: (target: UiState['editorTarget']) => void;
   setBooted: (v: boolean) => void;
   /** 记录「需要人工复核」的续跑计划（同时给 toast/aria-live 一句含工具名的人话提示） */
   setResumePlanNotice: (plan: ResumePlanLike | null, prompt?: string) => void;
@@ -68,6 +70,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   hoverScopeId: null,
   dockOpen: false,
   dockTab: 'editor',
+  editorTarget: null,
   booted: false,
   resumePlanNotice: null,
 
@@ -95,6 +98,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   openDock: (tab) => set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
   closeDock: () => set({ dockOpen: false }),
   setDockTab: (tab) => set({ dockOpen: true, dockTab: tab }),
+  setEditorTarget: (editorTarget) => set({ editorTarget }),
   setBooted: (v) => set({ booted: v }),
   setResumePlanNotice: (plan, prompt) => {
     if (!plan) {

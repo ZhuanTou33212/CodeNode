@@ -7,6 +7,20 @@ export type BaseData = {
   subtitle?: string;
   goal?: string;
   prompt?: string;
+  /** 运行契约：需要至少一个有输出的上游节点。旧画布缺省为 false。 */
+  requiresInput?: boolean;
+  /** 本节点交付结果的名称，供下游识别。 */
+  outputName?: string;
+  /** 用户可核对的完成条件；Agent 执行时也会收到它。 */
+  completionCondition?: string;
+  /** 可能改动的项目文件或画布对象范围。 */
+  writeScope?: string;
+  /** 运行前要求用户确认该节点的写入范围。 */
+  confirmWrite?: boolean;
+  /** 模板导入时核对的工具、模型、项目相对路径。 */
+  requiredTools?: string;
+  requiredModel?: string;
+  requiredPaths?: string;
   status: NodeStatus;
   accent?: string;
   /** 所属 scope（唯一父，null=顶层） */
@@ -89,6 +103,8 @@ export type FlowResult = {
 /** Agent 工具调用记录 */
 export type ToolRecord = {
   id?: string;
+  callId?: string;
+  actor?: { role?: string; taskId?: string };
   name: string;
   args?: unknown;
   result?: string;

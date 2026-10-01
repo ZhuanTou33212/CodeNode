@@ -683,6 +683,7 @@ class LocalRagIndex {
     this.lastRefresh = new Date().toISOString();
     this.stats = {
       indexedFiles: this.fileCache.size,
+      indexedAt: this.lastRefresh,
       chunks: this.chunks.length,
       graph: this.graph.stats,
       skippedFiles,

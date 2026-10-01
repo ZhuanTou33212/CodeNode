@@ -317,7 +317,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       let tools: ToolRecord[] = [];
       if (res.ok && res.reply != null) {
         const rawTools = (res.toolCalls as ToolRecord[] | null) || null;
-        tools = (rawTools || []).map((t) => ({ name: t.name || 'tool', args: t.args, result: t.result, ok: t.ok, data: t.data }));
+        tools = (rawTools || []).map((t) => ({ name: t.name || 'tool', args: t.args, result: t.result, ok: t.ok, data: t.data, callId: t.callId, actor: t.actor }));
         useSessionStore.getState().finishTurn(res.reply, res.reasoning || '', tools, res.grounding);
         // 画布是独立工作系统：turn 结束后当前画布始终是工作画布，保持 active（不被标记为 completed）
         useSessionStore.getState().markActive();
@@ -337,7 +337,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // 达到迭代/工具调用上限（第 2 项）：不是「调用失败」，而是「没跑完但有事可交付」——
         // 结构化收尾（已完成/失败/涉及文件/怎么续跑）必须让用户看见，不能只弹一个报错把结果丢掉。
         const rawTools = (res.toolCalls as ToolRecord[] | null) || null;
-        tools = (rawTools || []).map((t) => ({ name: t.name || 'tool', args: t.args, result: t.result, ok: t.ok, data: t.data }));
+        tools = (rawTools || []).map((t) => ({ name: t.name || 'tool', args: t.args, result: t.result, ok: t.ok, data: t.data, callId: t.callId, actor: t.actor }));
         useSessionStore.getState().finishTurn(res.reply, res.reasoning || '', tools, res.grounding);
         useSessionStore.getState().markActive();
         useUiStore.getState().setToast('本次运行达到步数上限（任务未完成）：已列出阶段性结果，可在「工作流运行」里续跑');

@@ -10,10 +10,13 @@ import { useSending } from '../lib/useSending';
 import { fireAndReport, reportError } from '../lib/reportError';
 import { summarizeResumePlan } from '../lib/resumePlan';
 import RunReplayPanel from './RunReplayPanel';
+import RagSettingsPanel from './RagSettingsPanel';
+import { prepareTemplate, missingTemplateDeps, parseTemplateDeps, type TemplateDeps } from '../lib/workflowTemplate';
+import type { Graph } from '../types';
 import type { Node } from '@xyflow/react';
 
-type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
-type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
+type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions' | 'rag';
+type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string; input?: string; attempts?: number; failure?: string };
 type AgentRun = { runId: string | null; status: string; state?: string | null; limitKind?: string | null; stateHistoryValid?: boolean | null; startedAt: string | null; eventCount: number };
 const LIMIT_KIND_LABELS: Record<string, string> = {
   iterations: '模型迭代次数',
@@ -83,6 +86,7 @@ const TABS: { id: DockTab; label: string }[] = [
   { id: 'runs', label: '工作流运行' },
   { id: 'checkpoints', label: '检查点' },
   { id: 'extensions', label: '扩展' },
+  { id: 'rag', label: '检索设置' },
 ];
 
 function lineDiff(before: string, after: string) {
@@ -190,6 +194,22 @@ function EditorPanel() {
   const [showCompletions, setShowCompletions] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const editorTarget = useUiStore((s) => s.editorTarget);
+
+  useEffect(() => {
+    if (!selected || !editorTarget || selected.relPath !== editorTarget.path) return;
+    const line = Math.max(1, Math.min(editorTarget.line, draft.split('\n').length));
+    const offset = draft.split('\n').slice(0, line - 1).reduce((sum, part) => sum + part.length + 1, 0);
+    requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      editor.setSelectionRange(offset, offset);
+      editor.scrollTop = Math.max(0, (line - 4) * 18.6);
+      if (highlightRef.current) highlightRef.current.scrollTop = editor.scrollTop;
+      useUiStore.getState().setEditorTarget(null);
+    });
+  }, [selected?.relPath, editorTarget, draft]);
 
   // 幂等追加：不能在依赖里再读 tabs，否则 StrictMode 双次执行 / 陈旧闭包会重复插入同一路径
   useEffect(() => {
@@ -338,6 +358,7 @@ function RunsPanel() {
   // §4.2：子代理任务视图（跨 run，落盘可查）
   const [subagentRuns, setSubagentRuns] = useState<SubagentRunView[]>([]);
   const [metrics, setMetrics] = useState<{ cost?: MetricsView; sandbox?: { description: string; backend: string; degraded: string[] }; alerts?: AlertDto[] } | null>(null);
+  const [templatePreview, setTemplatePreview] = useState<{ filePath: string; graph: Graph; deps: TemplateDeps; missing: string[] } | null>(null);
   const sendChat = useChatStore((s) => s.send);
   const stopAll = useChatStore((s) => s.stopAll);
   // #7：续跑按钮必须和输入框共用同一个忙碌守卫 —— 修复前它绕过 `busy` 直接 `sendChat`，
@@ -348,8 +369,10 @@ function RunsPanel() {
   const view = resumePlan ? summarizeResumePlan(resumePlan, resumePlan.prompt) : null;
 
   useEffect(() => {
-    setItems(nodes.map((n) => ({ id: n.id, label: String((n.data as Record<string, unknown>)?.label || n.id), type: n.type || 'task', status: String((n.data as Record<string, unknown>)?.status || 'pending') as RunItem['status'] })));
-    try { setResumeAvailable(!!localStorage.getItem(runStateKey)); } catch {}
+    let saved: { completed?: string[]; outputs?: Record<string, string>; attempts?: Record<string, number> } = {};
+    try { saved = JSON.parse(localStorage.getItem(runStateKey) || '{}'); setResumeAvailable(!!localStorage.getItem(runStateKey)); } catch {}
+    const completed = new Set(saved.completed || []);
+    setItems(nodes.map((n) => ({ id: n.id, label: String((n.data as Record<string, unknown>)?.label || n.id), type: n.type || 'task', status: completed.has(n.id) ? 'done' : String((n.data as Record<string, unknown>)?.status || 'pending') as RunItem['status'], output: saved.outputs?.[n.id], attempts: saved.attempts?.[n.id] || 0 })));
   }, [nodes.length, runStateKey]);
 
   useEffect(() => {
@@ -507,22 +530,87 @@ function RunsPanel() {
     if (!ids.length) report('当前没有正在运行的 Agent 请求');
   };
 
+  const exportTemplate = async () => {
+    if (!window.codenode || !nodes.length) return;
+    const portable = prepareTemplate(useGraphStore.getState().getDocument(), root);
+    const result = await window.codenode.saveGraph({
+      graph: { revision: 1, nodes: portable.graph.nodes, edges: portable.graph.edges },
+      manifest: { name: 'CodeNode 工作流模板', template: portable.deps },
+    });
+    if (result.ok) report('已导出模板：' + result.filePath);
+    else if (result.error) report('导出模板失败：' + result.error);
+  };
+
+  const inspectTemplate = async () => {
+    if (!root || !window.codenode) return;
+    const api = window.codenode;
+    const opened = await api.openGraph();
+    if (!opened.ok || !opened.data || !opened.filePath) {
+      if (opened.error) report('读取模板失败：' + opened.error);
+      return;
+    }
+    const deps = parseTemplateDeps(opened.data.manifest?.template);
+    if (!deps || !Array.isArray(opened.data.graph?.nodes) || !Array.isArray(opened.data.graph?.edges)) { report('所选 .cnode 不是有效的工作流模板'); return; }
+    const [toolsResult, cfg] = await Promise.all([api.agentTools(root), api.agentConfig(root)]);
+    const availableModels = [cfg.model, ...(cfg.models || []).flatMap((model) => [model.id, model.label, model.model])];
+    const missing = missingTemplateDeps(deps, {
+      tools: (toolsResult.tools || []).map((tool) => tool.name),
+      models: availableModels,
+      tree: useProjectStore.getState().tree,
+    });
+    setTemplatePreview({ filePath: opened.filePath, graph: opened.data.graph as Graph, deps, missing });
+  };
+
+  const importTemplate = () => {
+    if (!templatePreview) return;
+    createCheckpoint('导入模板前');
+    useGraphStore.getState().loadDocument(templatePreview.graph);
+    useGraphStore.getState().runFlow();
+    try { localStorage.removeItem(runStateKey); } catch {}
+    setResumeAvailable(false);
+    setTemplatePreview(null);
+    void saveProject();
+    report('模板已导入当前画布；请补齐标记的依赖后运行');
+  };
+
   const start = async () => {
     if (running || !nodes.length) return;
     cancel.current = false;
     createCheckpoint('运行前自动检查点');
     const order = topoNodes(nodes, edges);
-    let saved: { completed?: string[]; outputs?: Record<string, string> } = {};
+    let saved: { completed?: string[]; outputs?: Record<string, string>; attempts?: Record<string, number> } = {};
     try { saved = JSON.parse(localStorage.getItem(runStateKey) || '{}'); } catch {}
     const completed = new Set(saved.completed || []);
+    const outputs = { ...(saved.outputs || {}) };
+    const attempts = { ...(saved.attempts || {}) };
     setRunning(true);
-    setItems(order.map((node) => ({ id: node.id, label: String((node.data as Record<string, unknown>)?.label || node.id), type: node.type || 'task', status: completed.has(node.id) ? 'done' : 'pending', output: saved.outputs?.[node.id] })));
+    setItems(order.map((node) => ({ id: node.id, label: String((node.data as Record<string, unknown>)?.label || node.id), type: node.type || 'task', status: completed.has(node.id) ? 'done' : 'pending', output: outputs[node.id], attempts: attempts[node.id] || 0 })));
     for (const node of order) {
       if (cancel.current) break;
       if (completed.has(node.id)) continue;
       const label = String((node.data as Record<string, unknown>)?.label || node.id);
+      const contract = node.data as Record<string, unknown>;
+      const upstream = edges.filter((edge) => edge.target === node.id).map((edge) => ({ id: edge.source, label: String((nodes.find((item) => item.id === edge.source)?.data as Record<string, unknown> | undefined)?.label || edge.source), output: outputs[edge.source] || '' }));
+      const input = upstream.map((item) => `${item.label} (${item.id}): ${item.output || '尚无输出'}`).join('\n');
+      const missing = upstream.filter((item) => !completed.has(item.id) || !item.output);
+      if (contract.requiresInput && (!upstream.length || missing.length)) {
+        const failure = !upstream.length ? '需要上游输出，但没有连入节点' : '缺少上游输出：' + missing.map((item) => item.label).join('、');
+        updateNodeData(node.id, { status: 'blocked' });
+        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure } : item));
+        break;
+      }
+      if (contract.confirmWrite && !window.confirm(`即将执行「${label}」\n可能写入：${String(contract.writeScope || '未声明范围')}\n继续执行？`)) {
+        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure: '用户取消写入确认' } : item));
+        updateNodeData(node.id, { status: 'blocked' });
+        break;
+      }
+      if ((attempts[node.id] || 0) > 0 && ['task', 'stage', 'tool'].includes(node.type || '') && !window.confirm(`正在重跑「${label}」。上次尝试可能已经写入文件或画布；请先检查当前状态。\n已声明范围：${String(contract.writeScope || '未声明')}\n继续重跑？`)) {
+        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure: '重跑前需要复核副作用' } : item));
+        break;
+      }
+      attempts[node.id] = (attempts[node.id] || 0) + 1;
       updateNodeData(node.id, { status: 'running' });
-      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: 'running' } : x));
+      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: 'running', input, attempts: attempts[node.id] } : x));
       const command = commandFromNode(node);
       const prompt = String((node.data as Record<string, unknown>)?.prompt || '').trim();
       let output = command ? `运行：${command}` : '';
@@ -538,7 +626,7 @@ function RunsPanel() {
         const planSessionId = useSessionStore.getState().activeId;
         const res = await window.codenode.agentChat({
           projectRoot: root,
-          prompt: `执行工作流节点「${label}」：\n${prompt}\n完成后只返回本节点的执行结果与验证信息。`,
+          prompt: `执行工作流节点「${label}」：\n${prompt}\n上游结果：\n${input.slice(0, 6000) || '无'}\n输出名称：${String(contract.outputName || label)}\n完成条件：${String(contract.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(contract.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
           history: [],
           canvasSummary: JSON.stringify(nodes.map((item) => ({ id: item.id, type: item.type, label: (item.data as Record<string, unknown>)?.label, status: (item.data as Record<string, unknown>)?.status }))),
           nodeId: node.id,
@@ -557,9 +645,10 @@ function RunsPanel() {
         failed = true;
       }
       updateNodeData(node.id, { status: failed ? 'failed' : 'done' });
-      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: failed ? 'failed' : 'done', output } : x));
+      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: failed ? 'failed' : 'done', output, failure: failed ? (command ? '命令失败' : 'Agent 或配置失败') : undefined } : x));
+      outputs[node.id] = output;
       if (!failed) completed.add(node.id);
-      try { localStorage.setItem(runStateKey, JSON.stringify({ completed: [...completed], outputs: { ...(saved.outputs || {}), [node.id]: output }, updatedAt: Date.now() })); } catch {}
+      try { localStorage.setItem(runStateKey, JSON.stringify({ completed: [...completed], outputs, attempts, updatedAt: Date.now() })); } catch {}
       if (failed) break;
     }
     runFlow();
@@ -577,7 +666,15 @@ function RunsPanel() {
       <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button>
       {/* #7：「全部停止」出口 —— 并发下必须能一次停干净所有在跑的请求（含被覆盖的那条控制权） */}
       <button className="dock-danger" onClick={stopEverything} disabled={!sending}>全部停止 Agent</button>
+      <button onClick={() => void inspectTemplate()} disabled={running || !root}>导入模板</button>
+      <button onClick={() => void exportTemplate()} disabled={running || !nodes.length}>导出模板</button>
       <button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
+      {templatePreview && <div className="dock-recovery-plan" role="dialog" aria-label="模板依赖检查">
+        <strong>导入检查：{templatePreview.filePath}</strong>
+        <div className="dock-recovery-meta">{templatePreview.graph.nodes.length} 个节点 · 来源项目 {templatePreview.deps.sourceProject || '未知'} · 声明工具 {templatePreview.deps.tools.length} / 模型 {templatePreview.deps.models.length} / 路径 {templatePreview.deps.paths.length}</div>
+        {templatePreview.missing.length ? <div className="task-trace-warning">需要补齐：{templatePreview.missing.join('；')}</div> : <div className="dock-recovery-meta">已声明的依赖均可用；未声明在 Prompt 中的依赖仍需运行前核对。</div>}
+        <div className="dock-recovery-actions"><button className="dock-primary" onClick={importTemplate}>替换当前画布并导入</button><button onClick={() => setTemplatePreview(null)}>取消</button></div>
+      </div>}
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
         <strong>可恢复的 Agent 运行（中断 / 达到上限 / 失败）</strong>
@@ -697,7 +794,7 @@ function RunsPanel() {
         <span>隔离 {metrics.sandbox?.backend || 'none'}{metrics.sandbox?.degraded?.length ? '（降级：' + metrics.sandbox.degraded.join('/') + '）' : ''}</span>
         {metrics.alerts?.length ? <span className="dock-metrics-alert">{metrics.alerts[metrics.alerts.length - 1].message}</span> : null}
       </div>}
-      <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span></div>{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
+      <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span>{item.attempts ? <span className="dock-run-type">尝试 {item.attempts} 次</span> : null}</div>{item.input && <details><summary>消费的上游结果</summary><pre>{item.input}</pre></details>}{item.failure && <div className="task-trace-warning">{item.failure}</div>}{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
       <RunReplayPanel />
     </div>
   );
@@ -732,5 +829,5 @@ export default function WorkbenchDock() {
   const close = useUiStore((s) => s.closeDock);
   const setTab = useUiStore((s) => s.setDockTab);
   if (!open) return null;
-  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'editor' && <EditorPanel />}{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}{tab === 'extensions' && <ExtensionsPanel />}</div></section>;
+  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'editor' && <EditorPanel />}{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}{tab === 'extensions' && <ExtensionsPanel />}{tab === 'rag' && <RagSettingsPanel />}</div></section>;
 }

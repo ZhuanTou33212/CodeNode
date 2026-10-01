@@ -159,6 +159,12 @@ function loadConfig(projectRoot) {
     soulFile: cfg.soul_file || 'config/soul.md',
     tools: parseToolsConfig(cfg),
     rag: parseRagConfig(cfg),
+    dify: {
+      enabled: String(cfg['dify.enabled'] || '').toLowerCase() === 'true' && !!cfg['dify.base'] && !!cfg['dify.api_key'],
+      base: String(cfg['dify.base'] || '').trim().replace(/\/+$/, ''),
+      apiKey: String(cfg['dify.api_key'] || '').trim(),
+      kind: String(cfg['dify.kind'] || 'workflow').trim().toLowerCase(),
+    },
     grounding: parseGroundingConfig(cfg),
     prompt: parsePromptConfig(cfg),
     intent: intentLib.parseIntentConfig(cfg),
@@ -3545,6 +3551,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             result: result.text,
             data: result.data,
             callId,
+            actor: turnActor,
           };
           if (repeated) record.repeated = true;
           // S5：失败立即归类（工具显式声明的 failure > data.code 归一表 > timedOut/cancelled 这类结构化信号

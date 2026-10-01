@@ -46,6 +46,7 @@ const compactionLib = require('../compaction.cjs');
 // 动态上下文段落的统一 token 预算（审计 §4 P1-2）
 const dynamicContext = require('../dynamicContextBudget.cjs');
 const promptContextLib = require('../promptContext.cjs');
+const ragSettings = require('../ragSettings.cjs');
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
 function webSearchConfig(cfg) {
@@ -178,9 +179,30 @@ function register(ctx) {
       soul,
       toolsEnabled: cfg.tools.toolsEnabled,
       ragEnabled: cfg.rag.enabled,
+      rag: ragSettings.publicSettings(cfg.rag),
       models: modelStore.toPublicModels(store.models),
       activeModelId: store.activeId,
     };
+  });
+
+  ipcMain.handle('agent:rag-check', async (_event, projectRoot, input) => {
+    try {
+      if (!projectRoot) return { ok: false, error: '请先选择项目' };
+      const settings = ragSettings.normalizedSettings(input, agent.loadConfig(projectRoot).rag);
+      return await ragSettings.checkSettings(settings);
+    } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
+  });
+
+  ipcMain.handle('agent:rag-save', async (_event, projectRoot, input) => {
+    try {
+      if (!projectRoot) return { ok: false, error: '请先选择项目' };
+      if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请在任务结束后切换检索配置' };
+      const previous = agent.loadConfig(projectRoot).rag;
+      const settings = ragSettings.normalizedSettings(input, previous);
+      const checked = await ragSettings.checkSettings(settings);
+      if (!checked.ok) return checked;
+      return ragSettings.writeSettings(projectRoot, settings, previous);
+    } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
   });
 
   ipcMain.handle('agent:greeting', async (_event, projectRoot) => {
@@ -191,10 +213,10 @@ function register(ctx) {
 
   ipcMain.handle('agent:tools', async (_event, projectRoot) => {
     const cfg = agent.loadConfig(projectRoot);
-    const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
+    const registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
     const subagentManager = new SubagentManager({ agent, toolkit, cfg, registry });
     subagentManager.register(registry);
-    toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
+    toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
     return {
       enabled: cfg.tools.toolsEnabled,
       tools: registry.listTools().map((spec) => ({
@@ -561,7 +583,7 @@ function register(ctx) {
           enabled: (cfg.subagent && cfg.subagent.leases) !== false,
           ttlMs: (cfg.subagent && cfg.subagent.leaseTtlMs) || 120000,
         });
-        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases, webSearchEnabled: webSearchConfig(cfg).enabled });
+        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
       }
       let subagentManager = null;
       if (registry) {
@@ -582,7 +604,7 @@ function register(ctx) {
          * `agent.tool_profile=off` 时压根不注册 → 请求体与没有这个功能**逐字节一致**。
          */
         if (cfg.tools.toolProfile !== 'off') toolkit.registerDiscoverTool(registry);
-        toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled });
+        toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
       }
       const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
       /**

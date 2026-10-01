@@ -50,11 +50,17 @@ app.whenReady().then(async () => {
           grounding: {
             status: 'valid', valid: true, required: true,
             allowed: ['src/a.ts#L1-L4'], used: ['src/a.ts#L1-L4'], invalid: []
-          }
+          },
+          tools: [{ name: 'retrieve_context', ok: true, data: {
+            query: 'a', quality: { level: 'high' }, index: { indexedFiles: 1, vector: { provider: 'local', backend: 'memory' } },
+            sources: [{ citation: 'src/a.ts#L1-L4', path: 'src/a.ts', startLine: 1, endLine: 4, matchedTerms: ['a'] }]
+          } }]
         }]
       });
       const valid = await waitFor(()=>document.querySelector('.rag-grounding-valid'));
       const validText = valid ? valid.textContent : '';
+      const source = await waitFor(()=>document.querySelector('.task-trace-source'));
+      const sourceText = source ? source.textContent : '';
       session.setState({
         messages: [{
           role: 'assistant',
@@ -71,12 +77,14 @@ app.whenReady().then(async () => {
         sideTab: ui ? ui.getState().sideTab : '(no ui store)',
         hasPanel: Boolean(document.querySelector('.side-panel')),
         validText,
+        sourceText,
         invalidText: invalid ? invalid.textContent : '',
         invalidTitle: invalid ? invalid.getAttribute('title') : ''
       };
     })()`);
     const ok =
-      result.validText && result.validText.includes('来源已校验') &&
+      result.validText && result.validText.includes('引用位置可追溯') &&
+      result.sourceText && result.sourceText.includes('src/a.ts#L1-L4') &&
       result.invalidText && result.invalidText.includes('无效引用') &&
       result.invalidTitle && result.invalidTitle.includes('src/fake.ts#L1-L2');
     console.log('RAG UI TEST:', JSON.stringify(result));

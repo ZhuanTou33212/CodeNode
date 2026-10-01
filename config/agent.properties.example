@@ -158,6 +158,14 @@ soul_file=config/soul.md
 # 语义能力有限，接 Milvus 建议同时切 openai/ollama 真嵌入。写入失败/服务不可用会降级为
 # 纯 BM25 并在检索结果中标注「向量后端降级」，不会中断检索。
 
+# ---------- 可选 Dify 单向调用 ----------
+# 未配置时 dify_call 不注册，默认本地任务不依赖 Dify。
+# dify.enabled=false
+# dify.base=https://your-dify-host/v1
+# dify.api_key=
+# dify.kind=workflow               # workflow | chat；只调用已发布的应用
+# Dify 调用会把显式传入的 inputs/query 发到该服务；工具使用 network.request 权限和执行前确认。
+
 # ---------- 成本单价（用于成本账本 / 告警，不参与模型调用） ----------
 # cost.price.<model>=<输入美元/百万token>,<输出美元/百万token>[,<缓存命中输入美元/百万token>]
 # 第三段是**缓存命中**输入的单价：不写则按全量输入计价（旧行为，成本会被系统性高估），

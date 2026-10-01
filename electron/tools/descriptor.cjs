@@ -104,6 +104,7 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   execute_shell: 'shell.execute',
   fetch_url: 'network.request',
   web_search: 'network.request',
+  dify_call: 'network.request',
   worktree: 'workspace.write',
   ui_control: 'ui.interact',
   ask_user: 'ui.interact',
@@ -123,6 +124,7 @@ const SELF_TIMED_TOOLS = Object.freeze({
   analyze_project: 0,
   fetch_url: 0,
   web_search: 0,
+  dify_call: 0,
   bulk_edit: 0,
 });
 

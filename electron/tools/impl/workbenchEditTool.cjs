@@ -419,6 +419,8 @@ function register(registry) {
     async (context, args) => {
       const { created, affected, errors } = buildSummary(args);
       const ops = Array.isArray(args.operations) && args.operations.length ? args.operations : null;
+      const reviewLib = require('../canvasChangeReview.cjs');
+      const before = reviewLib.graphSnapshot(context.model());
       let applied = false;
       try {
         applied = await context.mutateWorkbench((model) => {
@@ -435,6 +437,7 @@ function register(registry) {
         return AgentToolResult.error('workbench_edit 执行失败：' + ((e && e.message) || e));
       }
       if (!applied && !errors.length) return AgentToolResult.error('工作台不可用（无变更应用）');
+      const review = reviewLib.canvasChangeReview(before, reviewLib.graphSnapshot(context.model()));
       const parts = [];
       if (created.length) parts.push('新建 ' + created.length + ' 个节点: ' + created.join(', '));
       if (affected.length) parts.push('操作 ' + affected.length + ' 项: ' + affected.join(', '));
@@ -446,9 +449,9 @@ function register(registry) {
       const stored = storeAffectedScalars(context, created, affected);
       if (stored > 0) summary += '；节点属性已入本地标量库（' + stored + ' 条）';
       if (errors.length) {
-        return AgentToolResult.ok('部分操作失败：' + errors.join('；') + '。' + summary, { created, affected, errors, applied });
+        return AgentToolResult.ok('部分操作失败：' + errors.join('；') + '。' + summary, { created, affected, errors, applied, review });
       }
-      return AgentToolResult.ok(summary, { created, affected, applied });
+      return AgentToolResult.ok(summary, { created, affected, applied, review });
     }
   );
 

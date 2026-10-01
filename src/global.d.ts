@@ -15,6 +15,7 @@ interface ProjectManifestDto {
   name?: string;
   createdAt?: string;
   modifiedAt?: string;
+  template?: { kind: 'workflow'; tools: string[]; models: string[]; paths: string[]; sourceProject?: string };
 }
 
 interface ProjectPayloadDto {
@@ -146,9 +147,12 @@ interface CodenodeApi {
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
     ragEnabled: boolean;
+    rag?: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean };
     models?: ModelSpecDto[];
     activeModelId?: string | null;
   }>;
+  ragCheck: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
+  ragSave: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null }>;
   modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;

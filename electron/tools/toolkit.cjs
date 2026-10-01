@@ -53,6 +53,7 @@ const BUILTINS = [
   require('./impl/viewImageTool.cjs'),
   // 联网搜索（对照 Codex/Claude Code 的 web_search）：后端由配置指定，**不配就不注册**
   require('./impl/webSearchTool.cjs'),
+  require('./impl/difyCallTool.cjs'),
   // 工作树隔离（对照 Codex/Claude Code）：create/list/remove，只在 .codenode/worktrees/ 下动手
   require('./impl/worktreeTool.cjs'),
 ];
@@ -118,6 +119,10 @@ function filterByConfig(registry, config) {
     }
     // 联网搜索同样是「关掉的能力不占上下文」：未启用就不注册（不留下一个永远报错的工具）
     if (spec.name === 'web_search' && cfg.webSearchEnabled !== true) {
+      registry.unregister(spec.name);
+      continue;
+    }
+    if (spec.name === 'dify_call' && cfg.difyEnabled !== true) {
       registry.unregister(spec.name);
       continue;
     }

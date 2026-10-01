@@ -20,6 +20,16 @@
         "name": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "modifiedAt": { "type": "string", "format": "date-time" },
+        "template": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "workflow" },
+            "tools": { "type": "array", "items": { "type": "string" } },
+            "models": { "type": "array", "items": { "type": "string" } },
+            "paths": { "type": "array", "items": { "type": "string" } },
+            "sourceProject": { "type": "string" }
+          }
+        },
         "generator": {
           "type": "object",
           "properties": {
