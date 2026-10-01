@@ -362,7 +362,7 @@ function buildSummary(args) {
 function register(registry) {
   registry.register(
     'workbench_edit',
-    '统一的工作台节点编辑工具：创建、编辑、连线全部用这一个工具完成，不需要再用 create_nodes / workbench_connect。' +
+    '统一的工作台节点编辑工具：创建、编辑、连线全部用这一个工具完成。' +
       '强烈建议用批量参数 operations=[{action, ...}, {action, ...}, ...] 一次提交全部节点变更：' +
       'action 支持 create(新建，name/type/count/prompt/objectName/connect串联)、rename(nodeId,name)、set_prompt(nodeId,value)、' +
       'set_status(nodeId,value)、set_category/set_goal/move/delete(nodeId)、duplicate、connect(sourceId,targetId 或 connections 批量)、' +

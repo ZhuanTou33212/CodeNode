@@ -55,7 +55,7 @@ function resourceKeysFor(name, args, options = {}) {
     pushFile(a.path || a.filePath);
   } else if (tool === 'save_project') {
     keys.push(PROJECT_SAVE_KEY);
-  } else if (tool === 'workbench_edit' || tool === 'ui_control' || tool === 'create_nodes' || tool === 'workbench_connect') {
+  } else if (tool === 'workbench_edit' || tool === 'ui_control') {
     // 画布是**单一资源**：两个 Agent 同时改画布一定互相覆盖，不存在「改不同节点就没事」
     keys.push(CANVAS_KEY);
   }

@@ -144,26 +144,19 @@ function context() {
         d.name === 'scan_project'),
       JSON.stringify(descriptors.filter((d) => d.readOnly !== descriptorLib.READ_ONLY_TOOLS.has(d.name)).map((d) => d.name)));
 
-    // 「文件在、工具却没注册」是一种静默漂移：工具文件写好了、里面的 declareContract 也写了，
-    // 但它从没被 require 进 BUILTINS —— 对不存在的名字补契约是 no-op，谁都不会发现。
-    // 这里把未接入的文件显式列出来，新增同类文件就会红。
-    const NOT_WIRED = ['createNodesTool.cjs', 'workbenchConnectTool.cjs'];
+    // 「文件在、工具却没注册」是一种静默漂移：每个工具实现都必须进入默认注册表。
     const implDir = path.join(__dirname, '..', 'electron', 'tools', 'impl');
     const registeredNames = new Set(toolkit.buildDefaultRegistry().listTools().map((t) => t.name));
     /** @type {string[]} */
     const missing = [];
     for (const file of fs.readdirSync(implDir)) {
       if (!file.endsWith('.cjs') || file === 'shared.cjs' || file === 'pdfText.cjs') continue;
-      if (NOT_WIRED.includes(file)) continue;
       const src = fs.readFileSync(path.join(implDir, file), 'utf8');
       for (const match of src.matchAll(/registry\.register\(\s*'([a-z_]+)'/g)) {
         if (!registeredNames.has(match[1])) missing.push(file + ':' + match[1]);
       }
     }
-    check('C6 impl 目录里的工具文件都已接入注册表（未接入的只有显式白名单）', missing.length === 0, JSON.stringify(missing));
-    check('C7 未接入白名单本身没有过期（文件确实还在、且确实没注册）',
-      NOT_WIRED.every((file) => fs.existsSync(path.join(implDir, file))),
-      JSON.stringify(NOT_WIRED.filter((file) => !fs.existsSync(path.join(implDir, file)))));
+    check('C6 impl 目录里的工具文件都已接入注册表', missing.length === 0, JSON.stringify(missing));
   }
 
   // ======================= D. 数组参数的默认长度上限（没声明也不能没闸） =======================

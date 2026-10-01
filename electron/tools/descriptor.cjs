@@ -54,10 +54,7 @@ const CACHEABLE_TOOLS = new Set([
 const MUTATION_TOOLS = new Set([
   'workbench_edit', 'bulk_edit', 'write_file', 'edit_file',
   'write_analysis_md', 'save_project', 'ui_control', 'remember',
-  // 遗留未接入（第 4 项）：create_nodes / workbench_connect 的实现文件在，但没注册进
-  // toolkit.BUILTINS，模型看不到它们（断言见 scripts/tool-contract-closure-test.cjs 的 NOT_WIRED）。
-  // 这里保留名字只为「万一有新路径注册它们」时语义仍然正确，不代表它们是可用工具。
-  'create_nodes', 'workbench_connect', 'delegate_task', 'delegate_tasks', 'review_subagent_result',
+  'delegate_task', 'delegate_tasks', 'review_subagent_result',
 ]);
 
 /**
@@ -101,9 +98,7 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   edit_file: 'workspace.write',
   bulk_edit: 'workspace.write',
   write_analysis_md: 'workspace.write',
-  create_nodes: 'workspace.write',
   workbench_edit: 'workspace.write',
-  workbench_connect: 'workspace.write',
   remember: 'workspace.write',
   save_project: 'project.save',
   execute_shell: 'shell.execute',

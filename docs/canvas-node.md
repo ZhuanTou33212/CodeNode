@@ -1,6 +1,6 @@
 # 画布节点（Canvas Node）——矢量画布内嵌到 Agent 画布
 
-> 状态：已实现 ｜ 分支：`n0_13` ｜ 相关代码：`src/vector/*`、`electron/tools/impl/{createNodesTool,workbenchEditTool}.cjs`
+> 状态：已实现 ｜ 分支：`n0_13` ｜ 相关代码：`src/vector/*`、`electron/tools/impl/workbenchEditTool.cjs`
 
 ## 1. 为什么重构
 
@@ -53,7 +53,7 @@ VectorNode(id)
   选中画布节点时工作台全局快捷键让位（`App.tsx` 检查 `getActiveVectorNode() === selectedId` 与 `.vs-scope` 焦点）。
 - **拖拽范围**：节点的 `dragHandle` 固定为 `.wf-vector-title`，节点内部所有指针交互都不会误拖整块画布。
 - **滚轮**：节点主体带 `nowheel`，滚轮缩放纸张而不是缩放整个 Agent 画布。
-- **Agent 集成**：`create_nodes` 与 `workbench_edit` 的 `type` 支持 `canvas`（别名 `vector`），
+- **Agent 集成**：`workbench_edit` 的 `create` 操作支持 `canvas`（别名 `vector`），
   创建的节点会带默认尺寸/模式；`GraphModel.stats()` 增加 `canvases` 统计。
 
 ## 4. 验收
