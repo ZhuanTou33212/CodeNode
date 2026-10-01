@@ -143,10 +143,10 @@ console.log('\n== B. 规则块拆两段：只搬整行、正文零改字 ==');
     exposedTools: ['read_file', 'search_files', 'execute_shell', 'discover_tools'],
   });
   const trimmedNums = [...new Set(promptRuleNumbers(trimmed))].sort((a, b) => a - b);
-  // 这次给的暴露面是 core 子集（没有 workbench_edit / query_scalars）→ 规则 2/6/12/19 被门控摘掉，
+  // 这次给的暴露面是 core 子集（没有 workbench_edit / query_scalars / retrieve_context）→ 对应规则被门控摘掉，
   // 并追加规则 21（告诉模型用 discover_tools 把能力找回来）。
-  check('[B] 裁剪时：点名未暴露工具的规则（2/6/12/19/20）消失、并追加规则 21（取回入口）',
-    JSON.stringify(trimmedNums) === JSON.stringify([1, 3, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 21]), JSON.stringify(trimmedNums));
+  check('[B] 裁剪时：点名未暴露工具的规则（2/6/8/11/12/19/20）消失、并追加规则 21（取回入口）',
+    JSON.stringify(trimmedNums) === JSON.stringify([1, 3, 4, 5, 7, 9, 10, 13, 14, 15, 16, 17, 18, 21]), JSON.stringify(trimmedNums));
   const taskNumsReal = ruleNumbers(agent.splitPromptSections(trimmed).find((s) => s.id === 'task-rules').text);
   check('[B] 真 prompt 上任务段只收「按面变化」的那几条（7 的剩余部分 / 14 画布块 / 20）',
     JSON.stringify(taskNumsReal) === JSON.stringify([7, 14, 21]), JSON.stringify(taskNumsReal));
@@ -223,9 +223,10 @@ console.log('\n== E. 跨任务类型前缀（棘轮）+ 接线 ==');
   check('[E] 两段都在登记表里（稳定段 runtime-rules / 任务段 task-rules）',
     agent.PROMPT_SECTIONS.find((s) => s.id === 'runtime-rules').stable === true &&
     agent.PROMPT_SECTIONS.find((s) => s.id === 'task-rules').stable === false);
-  const gatedNumbers = agent.RUNTIME_RULE_GATES.map((rule) => rule.rule);
+  // 规则 8/11 虽有工具门控，但 retrieve_context 属于常见 code/canvas 共有工具，留在稳定段。
+  const gatedNumbers = agent.RUNTIME_RULE_GATES.map((rule) => rule.rule).filter((n) => n !== 8 && n !== 11);
   const discoverNumber = Number(/^(\d+)\./.exec(agent.RUNTIME_RULE_DISCOVER)[1]);
-  check('[E] 任务段编号表 = 工具门控规则 + 裁剪后追加规则（加规则时同步登记）',
+  check('[E] 任务段包含随常见工具面变化的规则与裁剪入口',
     JSON.stringify(agent.TASK_RULE_NUMBERS) === JSON.stringify([...new Set([...gatedNumbers, discoverNumber])].sort((a, b) => a - b)));
 }
 

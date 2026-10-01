@@ -15,6 +15,9 @@ const { resolveInRoot, resolveFileFuzzy, detectLanguage, readTextFile, isSensiti
 const fsRunner = require('../fsRunner.cjs');
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const MAX_READ_LINES_PER_CALL = 500;
+const DEFAULT_READ_CHARS_PER_CALL = 24000;
+const MAX_READ_CHARS_PER_CALL = 48000;
 
 function binarySuggestion(relative) {
   const ext = path.extname(relative).toLowerCase();
@@ -83,8 +86,10 @@ function register(registry) {
       type: 'object',
       properties: {
         path: { type: 'string', description: '项目内相对路径' },
-        maxLines: { type: 'integer', description: '最多读取行数，默认 200' },
+        maxLines: { type: 'integer', description: '最多读取行数，默认 200，单次最多 500；更大的文件用 offset 分段读取' },
+        maxChars: { type: 'integer', description: '本次最多返回字符数，默认 24000，单次最多 48000；超长行可用返回的 charOffset 续读' },
         offset: { type: 'integer', description: '起始行号（1 基，默认 1），大文件用 offset 分段续读' },
+        charOffset: { type: 'integer', description: '从 offset 指定行的第几个字符继续（0 基），用于续读超长行' },
         analyze: { type: 'boolean', description: 'true=只返回结构摘要（不返回原文），默认 false' },
       },
       required: ['path'],
@@ -117,8 +122,16 @@ function register(registry) {
       }
 
       const analyzeOnly = args.analyze === true;
-      const maxLines = typeof args.maxLines === 'number' && Number.isFinite(args.maxLines) ? Math.max(1, Math.floor(args.maxLines)) : 200;
+      const maxLines = typeof args.maxLines === 'number' && Number.isFinite(args.maxLines)
+        ? Math.max(1, Math.min(MAX_READ_LINES_PER_CALL, Math.floor(args.maxLines)))
+        : 200;
+      const maxChars = typeof args.maxChars === 'number' && Number.isFinite(args.maxChars)
+        ? Math.max(1000, Math.min(MAX_READ_CHARS_PER_CALL, Math.floor(args.maxChars)))
+        : DEFAULT_READ_CHARS_PER_CALL;
       const offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(1, Math.floor(args.offset)) : 1;
+      const requestedCharOffset = typeof args.charOffset === 'number' && Number.isFinite(args.charOffset)
+        ? Math.max(0, Math.floor(args.charOffset))
+        : 0;
 
       const meta = { path: relative, language: detectLanguage(path.basename(file)), binary: false };
       if (fuzzyMatched) {
@@ -216,19 +229,52 @@ function register(registry) {
         );
       }
       const endIdx = Math.min(lines.length, startIdx + maxLines);
-      const content = lines.slice(startIdx, endIdx).join('\n');
-      const truncated = endIdx < lines.length;
+      const bodyLines = [];
+      let bodyChars = 0;
+      let lastLine = startIdx;
+      let nextRead = null;
+      let firstCharOffset = requestedCharOffset;
+      if (firstCharOffset > lines[startIdx].length) firstCharOffset = lines[startIdx].length;
+      for (let lineIndex = startIdx; lineIndex < endIdx; lineIndex += 1) {
+        const lineNumber = lineIndex + 1;
+        const charOffset = lineIndex === startIdx ? firstCharOffset : 0;
+        const remainingLine = lines[lineIndex].slice(charOffset);
+        const separator = bodyLines.length ? 1 : 0;
+        const room = maxChars - bodyChars - separator;
+        if (room <= 0) {
+          nextRead = { offset: lineNumber, charOffset };
+          break;
+        }
+        if (separator) bodyChars += separator;
+        if (remainingLine.length > room) {
+          bodyLines.push(remainingLine.slice(0, room));
+          bodyChars += room;
+          lastLine = lineNumber;
+          nextRead = { offset: lineNumber, charOffset: charOffset + room };
+          break;
+        }
+        bodyLines.push(remainingLine);
+        bodyChars += remainingLine.length;
+        lastLine = lineNumber;
+      }
+      if (!nextRead && endIdx < lines.length) nextRead = { offset: endIdx + 1, charOffset: 0 };
+      const content = bodyLines.join('\n');
+      const truncated = !!nextRead;
       meta.truncated = truncated;
       meta.offset = offset;
+      meta.charOffset = firstCharOffset;
       meta.startLine = Math.min(lines.length, startIdx + 1);
-      meta.endLine = endIdx;
+      meta.endLine = lastLine;
       if (meta.sourceSha256 && !isPdf) {
         meta.sourceRangeSha256 = 'sha256:' + crypto.createHash('sha256')
-          .update(lines.slice(startIdx, endIdx).join('\n').replace(/\r(?=\n|$)/g, ''), 'utf8').digest('hex');
+          .update(lines.slice(startIdx, lastLine).join('\n').replace(/\r(?=\n|$)/g, ''), 'utf8').digest('hex');
       }
+      meta.nextOffset = nextRead ? nextRead.offset : null;
+      meta.nextCharOffset = nextRead ? nextRead.charOffset : null;
       let suffix = '';
-      if (truncated) {
-        suffix = '\n…（已显示第 ' + meta.startLine + '-' + meta.endLine + ' 行，共 ' + lines.length + ' 行，用 offset=' + (endIdx + 1) + ' 继续读取剩余）';
+      if (nextRead) {
+        suffix = '\n…（本次最多返回 ' + maxChars + ' 字符或 ' + maxLines + ' 行；继续读取请用 offset=' + nextRead.offset +
+          (nextRead.charOffset ? '、charOffset=' + nextRead.charOffset : '') + '，文件共 ' + lines.length + ' 行）';
       } else if (offset > 1) {
         suffix = '\n（已显示第 ' + meta.startLine + '-' + meta.endLine + ' 行，共 ' + lines.length + ' 行）';
       }

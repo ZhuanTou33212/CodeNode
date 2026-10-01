@@ -11,6 +11,10 @@ const { globToRegExp, isSensitivePath, resolveInRoot, isCancelled } = require('.
 const fsRunner = require('../fsRunner.cjs');
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_RESULTS = 100;
+const HARD_MAX_RESULTS = 1000;
+const MAX_MODEL_OUTPUT_CHARS = 19500;
+const MAX_MODEL_RESULT_CHARS = 1500;
 
 function register(registry) {
   registry.register(
@@ -23,7 +27,7 @@ function register(registry) {
         pattern: { type: 'string', description: '正则表达式' },
         path: { type: 'string', description: '项目内子目录，缺省整个项目' },
         filePattern: { type: 'string', description: '限定文件的 glob，如 *.java' },
-        maxResults: { type: 'integer', description: '最多返回条数，默认 100' },
+        maxResults: { type: 'integer', description: '最多返回条数，默认 100，单次最多 1000；较多结果用 offset 分页' },
         offset: { type: 'integer', description: '跳过前 N 条结果，用于分页，默认 0' },
         caseSensitive: { type: 'boolean', description: '是否区分大小写，默认 false' },
       },
@@ -32,7 +36,9 @@ function register(registry) {
     async (context, args) => {
       const patternText = String(args.pattern || '').trim();
       if (!patternText) return AgentToolResult.error('缺少 pattern');
-      const max = typeof args.maxResults === 'number' && Number.isFinite(args.maxResults) ? Math.max(1, Math.floor(args.maxResults)) : 1000;
+      const max = typeof args.maxResults === 'number' && Number.isFinite(args.maxResults)
+        ? Math.max(1, Math.min(HARD_MAX_RESULTS, Math.floor(args.maxResults)))
+        : DEFAULT_MAX_RESULTS;
       const offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
       const caseSensitive = args.caseSensitive === true;
       const root = path.resolve(context.projectRoot());
@@ -66,7 +72,8 @@ function register(registry) {
           pattern: patternText,
           caseSensitive,
           filePattern,
-          maxCollect: offset + max,
+          // 多收一条哨兵结果，才能可靠判断刚好满一页时后面是否还有内容。
+          maxCollect: offset + max + 1,
           maxFileBytes: MAX_FILE_BYTES,
           shouldStop: () => isCancelled(context),
         },
@@ -88,14 +95,27 @@ function register(registry) {
       if (page.length === 0) {
         return AgentToolResult.ok('找到 ' + total + ' 处匹配，但 offset=' + offset + ' 超出范围（共 ' + total + ' 条）', { count: total, offset });
       }
-      const truncated = total > offset + max;
-      const shownRange = (offset + 1) + '-' + (offset + page.length);
-      // A1（审计 §4 P0-2）：同 find_files —— 匹配列表只发一份（文本里已含列表与分页游标）
+      const visiblePage = [];
+      let visibleChars = 0;
+      for (const match of page) {
+        let visible = String(match);
+        if (visible.length > MAX_MODEL_RESULT_CHARS) {
+          visible = visible.slice(0, MAX_MODEL_RESULT_CHARS) + '…（匹配行已截断）';
+        }
+        if (visibleChars + visible.length + 1 > MAX_MODEL_OUTPUT_CHARS && visiblePage.length) break;
+        if (visible.length > MAX_MODEL_OUTPUT_CHARS) visible = visible.slice(0, MAX_MODEL_OUTPUT_CHARS) + '…';
+        visiblePage.push(visible);
+        visibleChars += visible.length + 1;
+      }
+      const nextOffset = offset + visiblePage.length;
+      const truncated = total > nextOffset;
+      const shownRange = (offset + 1) + '-' + nextOffset;
+      // A1（审计 §4 P0-2）：匹配列表只发一份，并给模型可见输出设硬上限。
       const text =
-        '找到 ' + total + ' 处匹配' +
-        (truncated ? '，显示第 ' + shownRange + ' 条（用 offset=' + (offset + page.length) + ' 继续）：' : '：') +
-        '\n' + page.join('\n');
-      return AgentToolResult.ok(text, { count: total, offset, matches: page,
+        (truncated ? '已找到至少 ' : '找到 ') + total + ' 处匹配' +
+        (truncated ? '，显示第 ' + shownRange + ' 条（用 offset=' + nextOffset + ' 继续）：' : '：') +
+        '\n' + visiblePage.join('\n');
+      return AgentToolResult.ok(text, { count: total, offset, nextOffset, matches: page,
         sourceVersions: outcome.result.sourceVersions || {} }, { modelContent: text });
     }
   );

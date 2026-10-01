@@ -63,18 +63,20 @@ function register(registry) {
         );
       }
       if (!hit.instructions) {
-        return AgentToolResult.ok('（该 Skill 只有描述，没有更详细的正文）\n' + hit.description, { name: hit.name, instructions: '', truncated: false });
+        const text = '（该 Skill 只有描述，没有更详细的正文）\n' + hit.description;
+        return AgentToolResult.ok(text, { name: hit.name, instructions: '', truncated: false }, { modelContent: text });
       }
       const maxChars = Number(context.skillMaxChars && context.skillMaxChars()) > 0 ? Number(context.skillMaxChars()) : DEFAULT_MAX_CHARS;
       const truncated = hit.instructions.length > maxChars;
       const body = truncated ? hit.instructions.slice(0, maxChars) + '\n…（技能正文已截断，共 ' + hit.instructions.length + ' 字符）' : hit.instructions;
       if (typeof context.audit === 'function') context.audit('read_skill ' + hit.name + (truncated ? ' (truncated)' : ''));
-      return AgentToolResult.ok('【Skill：' + hit.name + '】\n' + body, {
+      const text = '【Skill：' + hit.name + '】\n' + body;
+      return AgentToolResult.ok(text, {
         name: hit.name,
         instructions: body,
         truncated,
         chars: hit.instructions.length,
-      });
+      }, { modelContent: text });
     }
   );
 }

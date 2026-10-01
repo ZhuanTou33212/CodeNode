@@ -145,6 +145,8 @@ function buildDefaultRegistryWithConfig(config) {
   if (cfg.leases) registry.leases = cfg.leases;
   if (cfg.projectRoot) registerProjectExtensions(registry, cfg.projectRoot);
   if (cfg.role) filterByRole(registry, cfg.role);
+  // CLI 等独立入口也可在配置过滤前注册取回入口，再应用与桌面相同的工具分层。
+  if (cfg.discoverTools === true) registerDiscoverTool(registry);
   return filterByConfig(registry, cfg);
 }
 

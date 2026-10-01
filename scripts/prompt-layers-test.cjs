@@ -142,7 +142,7 @@ try {
    *
    * ① web_search 默认不注册（未配置后端时 schema 里没有它），所以这里数到的 26 个不含它。
    */
-  check('[D] 工具 schema ≤ 17,000 字符（当前 ' + schemaChars + '，' + tools.length + ' 个工具）', schemaChars <= 17000, 'chars=' + schemaChars);
+  check('[D] 工具 schema ≤ 17,300 字符（含文件分页参数；当前 ' + schemaChars + '，' + tools.length + ' 个工具）', schemaChars <= 17300, 'chars=' + schemaChars);
   check(
     '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 19,800 字符（含记忆安全规则）',
     systemPure.length + schemaChars <= 19800,

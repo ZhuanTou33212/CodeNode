@@ -45,6 +45,8 @@ const runStore = require(path.join(ROOT, 'electron', 'runStore.cjs'));
 const modelProtocol = require(path.join(ROOT, 'electron', 'modelProtocol.cjs'));
 const { AgentToolContext, ConfirmationLevel } = require(path.join(ROOT, 'electron', 'tools', 'context.cjs'));
 const { RequestBudget } = require(path.join(ROOT, 'electron', 'requestBudget.cjs'));
+const promptContextLib = require(path.join(ROOT, 'electron', 'promptContext.cjs'));
+const compaction = require(path.join(ROOT, 'electron', 'compaction.cjs'));
 
 function parseArgs(argv) {
   const args = { project: process.cwd(), prompt: null, promptFile: null, allowWrites: false, yes: false, json: false, quiet: false, timeout: null, maxIterations: null, help: false };
@@ -179,13 +181,54 @@ async function main() {
   };
 
   const ws = parseWebSearchConfig(cfg);
-  const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot, ragEnabled: !!cfg.rag && cfg.rag.enabled !== false, webSearchEnabled: ws.enabled });
+  const registry = toolkit.buildDefaultRegistryWithConfig({
+    projectRoot,
+    toolsEnabled: cfg.tools.toolsEnabled,
+    toolsAllowed: cfg.tools.toolsAllowed,
+    toolsDeny: cfg.tools.toolsDeny,
+    ragEnabled: !!cfg.rag && cfg.rag.enabled !== false,
+    webSearchEnabled: ws.enabled,
+    discoverTools: cfg.tools.toolProfile !== 'off',
+  });
+  const profileDecision = toolkit.profiles.resolveToolProfiles({
+    canvas: false,
+    prompt,
+    mode: cfg.tools.toolProfile,
+  });
+  const registeredTools = registry.listTools().map((tool) => tool.name);
+  let toolFace = {
+    applied: false,
+    reason: profileDecision.reason,
+    profiles: profileDecision.profiles,
+    exposed: registeredTools.length,
+    hidden: 0,
+  };
+  if (profileDecision.source !== 'off' && registry.contains('discover_tools')) {
+    const exposedNames = toolkit.profiles.namesForProfiles(profileDecision.profiles, registeredTools);
+    registry.setExposure(exposedNames);
+    const schema = registry.schemaInfo();
+    toolFace = {
+      applied: true,
+      profiles: profileDecision.profiles,
+      reason: profileDecision.reason,
+      source: profileDecision.source,
+      exposed: exposedNames.length,
+      hidden: registeredTools.length - exposedNames.length,
+      chars: schema.chars,
+      hash: schema.hash,
+      tokens: compaction.estimateTokens([], schema.tools),
+    };
+  } else if (profileDecision.source !== 'off') {
+    // 用户的 allow/deny 规则挡住取回入口时，不裁工具面，维持完整能力。
+    toolFace.reason = 'no-discover-tool';
+  }
   const memory = require(path.join(ROOT, 'electron', 'memory.cjs'));
   const extensions = require(path.join(ROOT, 'electron', 'tools', 'extensions.cjs'));
   const userMemory = require(path.join(ROOT, 'electron', 'userMemory.cjs'));
   const context = new AgentToolContext({
     projectRoot,
     runId,
+    sourceMessageId: runId,
     confirm,
     askUser: async () => {
       emit(args, { kind: 'note', text: '[ask-user] 无人值守模式：按空回答处理（headless 不支持交互提问）' });
@@ -202,18 +245,48 @@ async function main() {
     signal: undefined,
   });
 
-  const memoryText = memory.buildMemoryText(memory.readMemory(projectRoot).entries, prompt, { limit: 30 });
-  const userMemoryText = userMemory.buildUserMemoryText(prompt, { limit: 20 });
+  const projectMemory = memory.readMemory(projectRoot);
   const skills = extensions.readManifest(projectRoot).filter((item) => String(item.kind || '').toLowerCase() === 'skills');
-  const skillsText = skills.map((item) => '- ' + item.name + ': ' + (item.instructions || item.description || '按项目扩展定义执行')).join('\n');
-  const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
-  const systemContent = agent.buildSystemPrompt(soul, '', agent.buildToolGuide(registry.listTools()), memoryText, skillsText, {
+  const promptContext = promptContextLib.buildPromptContext({
     prompt,
-    userMemoryText,
-    canvasMode: cfg.prompt && cfg.prompt.canvasRules,
+    canvasSummary: '',
+    skills,
+    projectMemoryEntries: projectMemory.entries,
+    memoryConfig: cfg.memory,
+    dynamicContextConfig: cfg.dynamicContext,
+    userMemoryStore: userMemory,
+    buildSkillsIndex: agent.buildSkillsIndex,
+    truncateCanvasSummary: agent.truncateCanvasSummary,
+    truncateSkillsIndex: agent.truncateSkillsIndex,
   });
+  const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
+  const toolGuide = agent.buildToolGuide(registry.listTools().filter((tool) => registry.isExposed(tool.name)));
+  const systemContent = agent.buildSystemPrompt(
+    soul,
+    promptContext.canvasSummaryForPrompt,
+    toolGuide,
+    promptContext.memoryText,
+    promptContext.skillsText,
+    {
+      prompt,
+      userMemoryText: promptContext.userMemoryText,
+      sessionMemoryText: promptContext.sessionMemoryText,
+      canvasMode: cfg.prompt && cfg.prompt.canvasRules,
+      exposedTools: registry.toolExposure,
+      toolFaceTrimmed: toolFace.applied,
+    },
+  );
 
   runStore.startRun(projectRoot, runId, { prompt: prompt.slice(0, 4000), model: cfg.model, headless: true, sandbox: sandbox.describe(sandboxPolicy) });
+  runStore.appendEvent(projectRoot, runId, 'tool_face', toolFace);
+  if (promptContext.contextBudget) {
+    runStore.appendEvent(projectRoot, runId, 'context_budget', {
+      totalTokens: promptContext.contextBudget.totalTokens,
+      used: promptContext.contextBudget.used,
+      overcommit: promptContext.contextBudget.overcommit,
+      trace: promptContext.contextBudget.trace,
+    });
+  }
   if (!args.json && !args.quiet) process.stderr.write('[codenode-agent] run=' + runId + ' project=' + projectRoot + ' model=' + cfg.model + '\n');
 
   let content = '';

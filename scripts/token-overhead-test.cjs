@@ -44,7 +44,7 @@ function check(label, condition, detail) {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-tokoverhead-'));
 const soul = agent.parseSoul('');
 
-/** 真实装配路径：与审计文档 §3.1 一致（含子代理工具；rag 开 = 33 工具那一条） */
+/** 真实装配路径：含 RAG 和子代理结果复核工具；discover_tools 在裁剪时再注册。 */
 function buildRegistry(rag) {
   const registry = toolkit.buildDefaultRegistryWithConfig({
     projectRoot: null,
@@ -125,7 +125,7 @@ async function runTurn(registry, script) {
 
 (async () => {
   // ============================ A. 基线 ============================
-  console.log('== A. 基线（真实装配路径，33 工具） ==');
+  console.log('== A. 基线（真实装配路径，含子代理复核工具） ==');
   const base = buildRegistry(true);
   const baseTools = base.toOpenAiTools();
   const baseSchemaTokens = compaction.estimateTokens([], baseTools);
@@ -138,9 +138,9 @@ async function runTurn(registry, script) {
     '   基线：工具 ' + baseTools.length + '，schema ' + baseSchemaTokens + ' tokens/' + JSON.stringify(baseTools).length +
     ' 字符；固定输入 纯代码 ' + basePureFixed + ' / 画布 ' + baseCanvasFixed,
   );
-  check('[A] 基线装配得到 33 个工具（rag + 子代理工具都在）', baseTools.length === 33, 'tools=' + baseTools.length);
-  check('[A] 基线固定输入与审计文档 §3.2 同量级（9k~10k / 10k~11k）',
-    basePureFixed > 9000 && basePureFixed < 10000 && baseCanvasFixed > 10000 && baseCanvasFixed < 11000,
+  check('[A] 基线装配得到 34 个工具（含新增的子代理结果复核）', baseTools.length === 34, 'tools=' + baseTools.length);
+  check('[A] 基线固定输入仍在有界范围（新增复核工具和文件分页 schema）',
+    basePureFixed > 10000 && basePureFixed < 11000 && baseCanvasFixed > 11000 && baseCanvasFixed < 12000,
     'pure=' + basePureFixed + ' canvas=' + baseCanvasFixed);
 
   // ============================ B. 裁剪后的面（棘轮） ============================
@@ -159,7 +159,7 @@ async function runTurn(registry, script) {
   console.log(fmt('调研', researchFace, basePureFixed));
   console.log(fmt('编排', orchFace, basePureFixed));
 
-  check('[B] 纯代码固定输入 ≤5,500 tokens（阶段 A 验收线）', codeFace.fixed <= 5500, 'fixed=' + codeFace.fixed);
+  check('[B] 纯代码固定输入 ≤5,600 tokens（保留 40% 以上降幅）', codeFace.fixed <= 5600, 'fixed=' + codeFace.fixed);
   check('[B] 纯代码降幅 ≥40%', (basePureFixed - codeFace.fixed) / basePureFixed >= 0.4,
     '降幅=' + (((basePureFixed - codeFace.fixed) / basePureFixed) * 100).toFixed(1) + '%');
   /**
@@ -170,9 +170,19 @@ async function runTurn(registry, script) {
    * 要更激进可显式配 `agent.tool_profile=core,canvas`。
    * 这里的上界是**棘轮**：只允许随「有意新增能力」抬高，且必须在注释里写明理由。
    */
-  check('[B] 画布固定输入 ≤9,000 tokens（文档估算的 6,000 未达，理由见本文件注释）', canvasFace.fixed <= 9000, 'fixed=' + canvasFace.fixed);
-  check('[B] 调研 / 编排面固定输入 ≤7,000 tokens', researchFace.fixed <= 7000 && orchFace.fixed <= 7000,
+  check('[B] 画布固定输入 ≤9,200 tokens（含更细的 read_file 分页 schema）', canvasFace.fixed <= 9200, 'fixed=' + canvasFace.fixed);
+  check('[B] 调研 ≤7,000、编排 ≤8,000 tokens（编排包含子代理结果复核）', researchFace.fixed <= 7000 && orchFace.fixed <= 8000,
     'research=' + researchFace.fixed + ' orch=' + orchFace.fixed);
+  const editDecision = profiles.resolveToolProfiles({ canvas: false, prompt: '修改 src/app.ts' });
+  const broadDecision = profiles.resolveToolProfiles({ canvas: false, prompt: '修复多个文件的问题' });
+  const editRegistry = buildRegistry(true);
+  toolkit.registerDiscoverTool(editRegistry);
+  const editTools = profiles.namesForProfiles(editDecision.profiles, editRegistry.listTools().map((t) => t.name));
+  check('[B] 明确单文件小改走 edit 面，保留读写/验证/取回入口',
+    JSON.stringify(editDecision.profiles) === JSON.stringify(['edit']) &&
+    ['read_file', 'edit_file', 'execute_shell', 'discover_tools'].every((name) => editTools.includes(name)) &&
+    !editTools.includes('retrieve_context') && !broadDecision.profiles.includes('edit'),
+    JSON.stringify({ edit: editDecision.profiles, broad: broadDecision.profiles, tools: editTools.length }));
   check('[B] 裁剪后的面都是基线的子集（不会凭空多出工具）',
     profiles.namesForProfiles(['core', 'code', 'canvas'], base.listTools().map((t) => t.name)).length <= baseTools.length);
 
@@ -230,14 +240,14 @@ async function runTurn(registry, script) {
   check('[D] 纯代码面：核心规则一条不少（读写文件 / 低敏感免问 / 读取策略）',
     codeSystem.includes('读写文件用 read_file / write_file / edit_file') &&
     codeSystem.includes('低敏感/只读操作') && codeSystem.includes('读取策略（泛读/精读分层'));
-  check('[D] 纯代码面：追加了 discover_tools 那条（21）', codeSystem.includes('discover_tools 搜功能词'));
+  check('[D] 纯代码面：追加了 discover_tools 取回规则（21）', codeSystem.includes('缺少能力时用 discover_tools 搜索并启用'));
   check('[D] 画布面：画布规则 2 与建模规则 a–h 都在（工具在面里 → 规则一条不收敛）',
     canvasFace.system.includes('需要读取画布时调用 get_workbench_model') &&
     canvasFace.system.includes(agent.CANVAS_RULES.slice(0, 60)) &&
     canvasFace.system.includes('【画布建模规则本次未注入】') === false,
     'len=' + canvasFace.system.length);
   check('[D] 未裁剪时一条规则都不收敛、也不追加规则 21',
-    !pureNoTrim.includes('discover_tools 搜功能词') && pureNoTrim.includes('需要读取画布时调用 get_workbench_model'));
+    !pureNoTrim.includes('缺少能力时用 discover_tools 搜索并启用') && pureNoTrim.includes('需要读取画布时调用 get_workbench_model'));
 
   // ============================ E. 变异校验（用例有判别力） ============================
   console.log('\n== E. 变异校验：改坏输入，断言必须翻转 ==');
@@ -340,7 +350,7 @@ async function runTurn(registry, script) {
       '裁剪后 tools=' + codeBody.tools.length + ' 输入 ' + codeTokens + ' tokens');
     check('[G] 真实请求体里的工具数 = 裁剪后的面', codeBody.tools.length === codeFace.count, 'body=' + codeBody.tools.length + ' face=' + codeFace.count);
     check('[G] 真实请求体里确实没有 workbench_edit', !codeBody.tools.some((t) => t.function.name === 'workbench_edit'));
-    check('[G] 未裁剪的请求体里仍然有全部工具（负向）', offBody.tools.length === 33);
+    check('[G] 未裁剪的请求体里仍然有全部工具（负向）', offBody.tools.length === baseTools.length);
     check('[G] 单轮输入 token 下降 ≥35%', (offTokens - codeTokens) / offTokens >= 0.35,
       ((offTokens - codeTokens) / offTokens * 100).toFixed(1) + '%');
   }
@@ -417,6 +427,8 @@ async function runTurn(registry, script) {
   {
     const ipcSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'ipc', 'agent.cjs'), 'utf8');
     const agentSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'agent.cjs'), 'utf8');
+    const promptContextSrc = fs.readFileSync(path.join(__dirname, '..', 'electron', 'promptContext.cjs'), 'utf8');
+    const cliSrc = fs.readFileSync(path.join(__dirname, '..', 'bin', 'codenode-agent.cjs'), 'utf8');
     check('[I] ipc 真的定了工具面（setExposure + profiles.namesForProfiles）',
       /registry\.setExposure\(names\)/.test(ipcSrc) && /toolkit\.profiles\.namesForProfiles\(/.test(ipcSrc));
     check('[I] ipc 把暴露面传给了 buildSystemPrompt（规则同源）',
@@ -425,8 +437,14 @@ async function runTurn(registry, script) {
       /if \(cfg\.tools\.toolProfile !== 'off'\) toolkit\.registerDiscoverTool\(registry\);\s*toolkit\.filterByConfig\(registry/.test(ipcSrc));
     check('[I] ipc 把定面结果落 run 事件（含 hash / tokens）',
       /runStore\.appendEvent\(projectRoot, runId, 'tool_face'/.test(ipcSrc) && /hash: info\.hash/.test(ipcSrc) && /tokens: compactionLib\.estimateTokens/.test(ipcSrc));
-    check('[I] ipc 用记忆注入预算（不再 limit:30 / limit:20 的裸切片）',
-      /memoryStore\.buildMemoryInjection\(/.test(ipcSrc) && /userMemoryStore\.buildUserMemoryInjection\(/.test(ipcSrc) &&
+    check('[I] CLI 同样定工具面、下发暴露集合并落 run 事件',
+      /profiles\.resolveToolProfiles\(/.test(cliSrc) && /registry\.setExposure\(/.test(cliSrc) &&
+      /runStore\.appendEvent\(projectRoot, runId, 'tool_face'/.test(cliSrc));
+    check('[I] ipc 与 CLI 共用记忆注入预算（不再 limit:30 / limit:20 的裸切片）',
+      /promptContextLib\.buildPromptContext\(/.test(ipcSrc) &&
+      /promptContextLib\.buildPromptContext\(/.test(cliSrc) &&
+      /memoryStore\.buildMemoryInjection\(projectResolved\.entries, prompt/.test(promptContextSrc) &&
+      /userStore\.buildUserMemoryInjection\(prompt/.test(promptContextSrc) &&
       !/buildMemoryText\(memory\.entries, prompt, \{ limit: 30 \}\)/.test(ipcSrc));
     check('[I] 配置项与解析都在（agent.tool_profile / 记忆预算）',
       /agent\.tool_profile/.test(agentSrc) && /function parseMemoryConfig/.test(agentSrc) && /memory:\s*parseMemoryConfig\(cfg\)/.test(agentSrc));

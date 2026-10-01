@@ -1,6 +1,7 @@
 /**
  * profiles.cjs —— 主 Agent 的**工具面分层**（阶段 A / P0-1）
  *
+ * auto 默认按任务选 core+code；单个明确文件的小改走 edit 面，少带 RAG、全项目分析与编排工具。
  * 问题（token 效率审计 §3.2）：主 Agent 每轮都把整个注册表序列化下发 —— 实测 33 个工具、
  * schema 7,261 tokens/轮，纯代码任务固定输入 9,493 tokens。一个 6 轮代码任务仅固定部分就约
  * 5.7 万 tokens，而且**用不到的能力（画布、子代理编排、联网）也在每轮缴税**。
@@ -14,7 +15,7 @@
  * 传进来（`input.canvas`）—— 两处各判一次迟早会漂移。
  *
  * 配置（config/agent.properties）：
- *   agent.tool_profile = auto        出厂默认：按任务确定性裁剪（见 PROFILE_TOOLS）
+ *   agent.tool_profile = auto        出厂默认：按任务确定性裁剪；单文件小改使用 edit 面
  *                      = off         完全关闭：暴露全部工具（与没有这个功能逐字节一致）
  *                      = core,code   显式指定：按名字叠加（core 永远在）
  */
@@ -24,8 +25,8 @@
  * profile → 工具名单（**唯一来源**）。
  *
  * 纪律：
- *   1. core 常驻 —— 任何任务都可能要读/写/查/跑命令/看计划/**取项目知识**（retrieve_context）。
- *      `discover_tools` 也必须在 core，否则「取回被裁掉的工具」这条退路本身也会被裁掉。
+ *   1. core 是普通任务的基础面；自动 edit 面也保留文件读写、定位、验证和 `discover_tools`。
+ *      `discover_tools` 必须在每个自动面里，否则「取回被裁掉的工具」这条退路本身也会被裁掉。
  *   2. **规则点名的工具必须留在暴露面里**：`agent.cjs` 的常驻运行规则（4/5/17/18）直接点名
  *      scan_project / analyze_project / retrieve_context / read_file 等；把规则点名的工具裁掉，
  *      模型会照着规则去调一个不存在的工具 —— 那是真实故障模式，不只是浪费。
@@ -63,6 +64,12 @@ const PROFILE_TOOLS = Object.freeze({
     'delegate_task', 'delegate_tasks', 'get_subagent_task', 'cancel_subagent_task',
     'merge_subagent_results', 'review_subagent_result', 'worktree',
   ]),
+  /** 单文件小改：目标文件读写、必要的定位/验证与按需取回；不常驻 RAG/编排/全项目分析。 */
+  edit: Object.freeze([
+    'read_file', 'write_file', 'edit_file',
+    'find_files', 'search_files', 'list_directory',
+    'execute_shell', 'poll_job', 'read_skill', 'discover_tools',
+  ]),
 });
 
 const PROFILE_NAMES = Object.freeze(Object.keys(PROFILE_TOOLS));
@@ -81,6 +88,17 @@ function profilesForTool(name) {
  */
 const RESEARCH_RE = /联网|搜索|搜一下|查一下|查资料|调研|最新的?资料|网上|浏览器|抓取|爬取|文档站|web|http/i;
 const ORCHESTRATION_RE = /子代理|子任务|并行|分工|多个\s*(agent|代理)|delegate|工作树|worktree/i;
+const SIMPLE_EDIT_ACTION_RE = /修改|改(?:一下|动|成)|替换|更新|修复|编辑|新增|添加|插入|删除|移除|去掉|\b(rename|change|edit|replace|update|fix|add|remove|delete)\b/i;
+const BROAD_EDIT_RE = /重构|批量|所有|每个|全局|整个项目|多个文件|跨文件|项目整体|架构|报错|错误|异常|堆栈|问题|故障|\b(bug|error|debug|issue|test|tests)\b|分析|审查|调研|联网|搜索|查找|部署|发布/i;
+const FILE_TARGET_RE = /[\w@.-]+(?:[\\/][\w@.-]+)*\.(?:js|cjs|mjs|ts|tsx|jsx|java|py|go|rs|json|md|css|scss|html|yml|yaml|toml|properties|txt|xml|sql|sh|ps1)\b/gi;
+
+/** 只在短请求明确指向一个文件、且没有广泛排查信号时使用精简编辑面。 */
+function isSimpleEditRequest(prompt) {
+  const text = String(prompt == null ? '' : prompt).trim();
+  if (!text || text.length > 320 || !SIMPLE_EDIT_ACTION_RE.test(text) || BROAD_EDIT_RE.test(text)) return false;
+  const targets = new Set((text.match(FILE_TARGET_RE) || []).map((item) => item.toLowerCase()));
+  return targets.size === 1;
+}
 
 /**
  * 按任务判定该暴露哪些 profile。
@@ -127,7 +145,7 @@ function resolveToolProfiles(input) {
     };
   }
 
-  // auto：core + code 是**基线**（规则 4/5/17/18 点名的工具都在里面），额外面只在命中时叠加。
+  // auto：明确单文件编辑已在上面分流；其它任务以 core + code 为基线，额外面只在命中时叠加。
   // 不做「画布替代代码面」这种省法：见 PROFILE_TOOLS 纪律 2（规则悬空 = 真实故障模式）。
   const profiles = ['core', 'code'];
   const reasons = [];
@@ -136,6 +154,10 @@ function resolveToolProfiles(input) {
     reasons.push('canvas-task');
   }
   const prompt = String(i.prompt == null ? '' : i.prompt);
+  if (i.canvas !== true && isSimpleEditRequest(prompt)
+    && !RESEARCH_RE.test(prompt) && !ORCHESTRATION_RE.test(prompt)) {
+    return { profiles: ['edit'], reason: 'explicit-single-file-edit', source: 'auto' };
+  }
   if (RESEARCH_RE.test(prompt)) {
     profiles.push('research');
     reasons.push('prompt-mentions-research');
@@ -177,6 +199,7 @@ module.exports = {
   PROFILE_TOOLS,
   PROFILE_NAMES,
   profilesForTool,
+  isSimpleEditRequest,
   resolveToolProfiles,
   namesForProfiles,
 };

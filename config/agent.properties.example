@@ -78,6 +78,8 @@ soul_file=config/soul.md
 # ---------- Agent 工具配置 ----------
 # 总开关：false 关闭全部工具（仅纯对话）
 # tools.enabled=true
+# 工具面：auto 按任务选择；明确的单文件小改使用精简 edit 面，其余走常规面；off 暴露全部工具。
+# agent.tool_profile=auto
 # 白名单：非空时只允许列出的工具（逗号分隔）；留空=全部允许
 # 实际暴露范围还会按角色、任务 profile 和功能配置筛选；画布节点创建/连线统一使用 workbench_edit。
 # tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,workbench_edit,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md,retrieve_context,remember,recall,update_plan,read_skill,view_image,worktree
