@@ -470,11 +470,8 @@ class AgentToolRegistry {
 
     // 门 2：声明需要网络能力的工具，在隔离策略切断网络时直接拒绝（不让它去试一次才发现连不上）
     if (descriptor.requiredCapability === 'network.request') {
-      // 注意：策略要从**底层上下文**读，不能走工具的能力面 —— sandbox 属于 shell.execute 能力，
-      // 对 network.request 工具是被闸住的（读到的会是 null，网络门就静默失效了）
-      const base = (context && context.__context) || context;
-      const policy = base && typeof base.sandbox === 'function' ? base.sandbox() : null;
-      if (policy && policy.network === 'deny') {
+      // 策略结论在创建能力面时从底层计算；不向工具暴露底层上下文。
+      if (execContext.exec.networkDenied) {
         return AgentToolResult.error('当前执行隔离策略已切断网络（sandbox.network=deny），不能执行 ' + name, {
           code: 'PERMISSION_DENIED',
           tool: name,
@@ -566,12 +563,11 @@ class AgentToolRegistry {
     // 直接返回 RESOURCE_LOCKED（可重试）+ 谁在占用。租约持有到**任务结束**（子代理完成/取消/主 run 收尾）
     // 或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖，那正是我们要防的「静默互相覆盖」。
     if (descriptor.mutatesWorkspace && this.leases && this.leases.enabled) {
-      const base = (context && context.__context) || context;
-      const itsRoot = base && typeof base.projectRoot === 'function' ? base.projectRoot() : '';
+      const itsRoot = execContext.project.root();
       const keys = resourceKeysFor(name, args, { projectRoot: itsRoot || process.cwd() });
       if (keys.length) {
-        const holder = (base && typeof base.taskId === 'function' && base.taskId()) || 'supervisor';
-        const role = (base && typeof base.role === 'function' && base.role()) || '';
+        const holder = execContext.exec.taskId || 'supervisor';
+        const role = execContext.exec.role || '';
         const claim = /** @type {any} */ (this.leases).acquire(keys, holder, { role });
         if (!claim.ok) {
           const c = claim.conflict || {};

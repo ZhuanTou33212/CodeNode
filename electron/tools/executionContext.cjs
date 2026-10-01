@@ -28,6 +28,10 @@
  */
 'use strict';
 
+const { GraphModel } = require('./GraphModel.cjs');
+// 套娃调用所需的底层引用留在模块私有表里，不暴露给工具。
+const executionContextBases = new WeakMap();
+
 /** 所有能力都可用的方法（跨切面） */
 const COMMON_METHODS = Object.freeze([
   'projectRoot', 'model', 'runId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
@@ -113,10 +117,34 @@ function safeCall(fn, fallback) {
  * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string }} [callInfo]
  */
 function createExecutionContext(source, descriptor, callInfo) {
-  const base = (source && source.__context) || source || {};
+  const base = (source && executionContextBases.get(source)) || source || {};
   const info = callInfo || {};
   const toolName = (descriptor && descriptor.name) || '';
   const capability = (descriptor && descriptor.requiredCapability) || 'workspace.read';
+  const readOnlyTool = !!(descriptor && descriptor.readOnly === true && descriptor.mutatesWorkspace !== true);
+  let modelSnapshot;
+  let historySnapshot;
+  const modelForTool = () => {
+    if (!readOnlyTool) return safeCall(() => base.model(), null);
+    if (modelSnapshot !== undefined) return modelSnapshot;
+    const model = safeCall(() => base.model(), null);
+    try {
+      modelSnapshot = model && model.doc ? new GraphModel(JSON.parse(JSON.stringify(model.doc))) : null;
+    } catch {
+      modelSnapshot = null;
+    }
+    return modelSnapshot;
+  };
+  const historyForTool = () => {
+    if (!readOnlyTool) return safeCall(() => base.conversationHistory(), []);
+    if (historySnapshot !== undefined) return historySnapshot;
+    try {
+      historySnapshot = JSON.parse(JSON.stringify(safeCall(() => base.conversationHistory(), [])));
+    } catch {
+      historySnapshot = [];
+    }
+    return historySnapshot;
+  };
 
   // 能力蕴含：写蕴含读、save 蕴含写、shell 蕴含写……（读是能力下限，不构成提权）
   const granted = new Set();
@@ -145,15 +173,21 @@ function createExecutionContext(source, descriptor, callInfo) {
   const allow = (...caps) => caps.some((cap) => granted.has(cap));
 
   const runId = safeCall(() => base.runId(), '') || '';
+  const taskId = safeCall(() => base.taskId(), '') || '';
   const turnId = info.turnId == null ? null : String(info.turnId);
   const toolCallId = info.toolCallId == null ? null : String(info.toolCallId);
   const attemptId = info.attemptId == null ? (toolCallId ? toolCallId + '#1' : null) : String(info.attemptId);
+  const networkDenied = safeCall(() => {
+    const policy = typeof base.sandbox === 'function' ? base.sandbox() : null;
+    return !!(policy && policy.network === 'deny');
+  }, false);
 
   const ctx = {};
 
   // ---- 面 1：标识与运行信息（每个动作都能带回 runId/turnId/toolCallId/attemptId） ----
   ctx.exec = Object.freeze({
     runId,
+    taskId,
     turnId,
     toolCallId,
     attemptId,
@@ -162,15 +196,16 @@ function createExecutionContext(source, descriptor, callInfo) {
     readOnly: safeCall(() => base.readOnly(), false) === true,
     capability,
     capabilities: [...granted].sort(),
+    networkDenied,
     describe: () => ({ runId, turnId, toolCallId, attemptId, tool: toolName, capability }),
   });
 
   // ---- 面 2：项目 ----
   ctx.project = {
     root: () => safeCall(() => base.projectRoot(), '.'),
-    model: () => safeCall(() => base.model(), null),
+    model: modelForTool,
     ragConfig: () => safeCall(() => base.ragConfig(), {}),
-    conversationHistory: () => safeCall(() => base.conversationHistory(), []),
+    conversationHistory: historyForTool,
     scalars: () => (allow('workspace.read', 'workspace.write') ? safeCall(() => base.scalars(), null) : deny('scalars') || null),
     queryScalars: (query) => (allow('workspace.read', 'workspace.write') ? safeCall(() => base.queryScalars(query), []) : deny('queryScalars') || []),
     storeScalars: (records) => (allow('workspace.read', 'workspace.write') ? safeCall(() => base.storeScalars(records), 0) : deny('storeScalars') || 0),
@@ -239,7 +274,7 @@ function createExecutionContext(source, descriptor, callInfo) {
   // ---- 面 8：追踪 ----
   ctx.trace = Object.freeze({
     runId,
-    taskId: safeCall(() => base.taskId(), '') || '',
+    taskId,
     role: safeCall(() => base.role(), 'supervisor'),
     note: (event, data) => safeCall(() => base.audit(JSON.stringify({
       kind: 'trace', event, data: data == null ? null : data, runId, turnId, toolCallId, attemptId, tool: toolName,
@@ -249,6 +284,14 @@ function createExecutionContext(source, descriptor, callInfo) {
   // ---- 双轨并存：旧方法名按能力转发（deprecated，迁移中的工具仍可用） ----
   for (const method of COMMON_METHODS) {
     if (HYBRID_METHODS.includes(method)) continue;
+    if (method === 'model') {
+      ctx.model = modelForTool;
+      continue;
+    }
+    if (method === 'conversationHistory') {
+      ctx.conversationHistory = historyForTool;
+      continue;
+    }
     if (typeof base[method] !== 'function') continue;
     ctx[method] = (...args) => base[method](...args);
   }
@@ -265,10 +308,8 @@ function createExecutionContext(source, descriptor, callInfo) {
     ctx[method] = (...args) => (allow(...rule.caps) ? base[method](...args) : (deny(method), rule.fallback));
   }
 
-  // 内部指针：registry 对「已经是 ExecutionContext 的上下文」再次包装时会解包，
-  // 保证套娃调用（例如 delegate_task 内部再 execute workbench_edit）始终作用在同一个底层上下文
-  ctx.__context = base;
-  ctx.__descriptor = descriptor || null;
+  // 再次包装时可解包，但工具对象上没有绕开能力检查的底层指针。
+  executionContextBases.set(ctx, base);
   return ctx;
 }
 

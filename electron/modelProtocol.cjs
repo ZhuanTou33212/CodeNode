@@ -762,6 +762,7 @@ function createStreamTranslator(protocol) {
 
   let buffer = '';
   let done = false;
+  let sawGeminiFinishReason = false;
   /** Anthropic：block index → 工具调用序号；以及「该工具块有没有收到过 input_json_delta」 */
   const toolIndexByBlock = new Map();
   let toolCount = 0;
@@ -871,7 +872,10 @@ function createStreamTranslator(protocol) {
         toolCount = index;
       }
     }
-    if (candidate && candidate.finishReason) out += openAiFinishFrame(mapFinishReason('gemini', candidate.finishReason));
+    if (candidate && candidate.finishReason) {
+      sawGeminiFinishReason = true;
+      out += openAiFinishFrame(mapFinishReason('gemini', candidate.finishReason));
+    }
     const usageRaw = payload && payload.usageMetadata;
     if (usageRaw) {
       const mapped = usageFromGemini(usageRaw);
@@ -892,7 +896,8 @@ function createStreamTranslator(protocol) {
     try {
       payload = JSON.parse(payloadText);
     } catch {
-      return '';
+      // 原生协议的坏帧必须进入统一错误通道，不能静默丢掉后仍交付成功。
+      return sseFrame({ error: { type: 'invalid_stream_frame', message: normalized + ' 流包含无法解析的数据帧' } });
     }
     return normalized === 'anthropic' ? handleAnthropicPayload(payload) : handleGeminiPayload(payload);
   }
@@ -910,9 +915,9 @@ function createStreamTranslator(protocol) {
       let out = '';
       if (buffer.trim()) out += handleLine(buffer);
       buffer = '';
-      // 原生流没有 OpenAI 的 [DONE] 终止帧（Gemini 尤其没有）：这里补一个，
-      // 让累加器的 done 语义与 OpenAI 一致；usageSeen 只用于自检，不影响帧内容
-      if (!done) {
+      // Gemini 只有见到 finishReason 才能合成结束帧；普通 EOF 可能只是截断。
+      // Anthropic 的 message_stop 已在处理帧时输出 [DONE]，缺失时也不伪造完成。
+      if (!done && normalized === 'gemini' && sawGeminiFinishReason) {
         out += 'data: [DONE]\n\n';
         done = true;
       }

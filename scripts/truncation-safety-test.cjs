@@ -141,6 +141,19 @@ async function runTurnWithCfg(reliabilityOverride, script) {
     !!assistantMessage && !!toolMessage && assistantMessage.tool_calls[0].id === toolMessage.tool_call_id,
     JSON.stringify({ declared: assistantMessage && assistantMessage.tool_calls[0].id, responded: toolMessage && toolMessage.tool_call_id }));
 
+  // JSON 恰好完整不等于这一轮调用完整：finish_reason=length 说明模型仍被截断。
+  spyRuns = 0;
+  const completeArgsButTruncated = await runTurn([
+    { toolCalls: [{ name: 'must_not_run', args: { path: 'a.txt' }, id: 'call_length' }], finishReason: 'length' },
+    { content: '请重新生成完整调用。', finishReason: 'stop' },
+  ]);
+  const truncatedCall = (completeArgsButTruncated.result.toolCalls || []).find((t) => t.name === 'must_not_run');
+  check('[截断调用] 参数 JSON 完整也不得执行', spyRuns === 0 && truncatedCall && truncatedCall.ok === false,
+    JSON.stringify({ spyRuns, call: truncatedCall && { ok: truncatedCall.ok, data: truncatedCall.data } }));
+  check('[截断调用] 返回 TOOL_CALL_TRUNCATED 并让模型重试',
+    truncatedCall && truncatedCall.data && truncatedCall.data.code === 'TOOL_CALL_TRUNCATED' && completeArgsButTruncated.seen.length === 2,
+    JSON.stringify({ code: truncatedCall && truncatedCall.data && truncatedCall.data.code, requests: completeArgsButTruncated.seen.length }));
+
   // ---- (2) 合法参数照常执行（别把正常调用一起关掉） ----
   spyRuns = 0;
   const okTurn = await runTurn([

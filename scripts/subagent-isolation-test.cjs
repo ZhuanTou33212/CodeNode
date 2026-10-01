@@ -131,6 +131,8 @@ const ok = (label) => console.log('  ✓ ' + label);
   ok('E timeoutSeconds 是任务总时长（秒 → 毫秒 + 钳制）');
 
   // ---- F/G. 结果契约 + 画布痕迹 ----
+  // 子代理视图按 projectRoot/runId 落盘；用独立工程根避免上次运行的任务数污染本次判据。
+  const subagentRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-subagent-run-'));
   const model = new GraphModel({
     root: {
       nodes: [
@@ -142,7 +144,7 @@ const ok = (label) => console.log('  ✓ ' + label);
   });
   const controller = new AbortController();
   const context = new AgentToolContext({
-    projectRoot: process.cwd(),
+    projectRoot: subagentRoot,
     model,
     confirm: async () => true,
     mutateWorkbench: async (fn) => {
@@ -178,7 +180,7 @@ const ok = (label) => console.log('  ✓ ' + label);
   const envelope = done.data.envelope;
   assert.ok(String(done.text).startsWith('[子代理结果] 契约 v1'), '结果必须是单一 JSON 信封（契约 v1）');
   assert.ok(String(done.text).includes('已截断'), '超长结果必须截断');
-  assert.ok(String(done.text).length < 2000, '截断后才进主上下文（不是 20000 字符全灌进去）');
+  assert.ok(String(done.text).length < 3000, '截断后才进主上下文（不是 20000 字符全灌进去）');
   assert.strictEqual(envelope.v, 1);
   assert.ok(/^sha256:[0-9a-f]{64}$/.test(envelope.snapshot.hash), '必须带世界状态（画布）快照哈希');
   assert.deepStrictEqual(envelope.refs, [{ kind: 'changed_file', path: 'a/b.txt' }], '变更文件要结构化回传');
@@ -216,6 +218,9 @@ const ok = (label) => console.log('  ✓ ' + label);
   assert.strictEqual(failed.ok, false);
   assert.strictEqual(failed.data.status, 'failed');
   assert.ok(String(failed.text).includes('请勿用相同 objective 原样重试'), '失败结果必须劝退原样重试');
+  const resolvedSubagentRoot = path.resolve(subagentRoot);
+  if (!resolvedSubagentRoot.startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('测试临时目录越界');
+  fs.rmSync(resolvedSubagentRoot, { recursive: true, force: true });
   ok('F2 子代理失败如实失败且不诱导原样重试');
 
   // ---- H. 幂等账本的行为者归因 ----

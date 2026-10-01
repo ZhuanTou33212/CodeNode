@@ -158,8 +158,22 @@ function descriptorFor(name, capability) {
 
     // 套娃解包
     const nested = createExecutionContext(ctx, descriptorFor('write_file', 'workspace.write'), { toolCallId: 'call_9' });
-    check('A16 对已包装的上下文再包装会解包到底层（子代理/内部调用不会套娃丢能力）',
-      nested.__context === base && nested.exec.runId === 'run-x' && nested.exec.toolCallId === 'call_9');
+    check('A16 再包装仍可使用底层能力，但工具拿不到底层引用',
+      nested.project.root() === root && nested.exec.runId === 'run-x' && nested.exec.toolCallId === 'call_9' &&
+      nested.__context === undefined && nested.__descriptor === undefined);
+
+    const canonicalModel = new GraphModel({ root: { nodes: [], edges: [] } });
+    const canonicalHistory = [{ role: 'user', content: '原始消息' }];
+    const readView = createExecutionContext(makeStubBase({
+      model: () => canonicalModel,
+      conversationHistory: () => canonicalHistory,
+    }), { ...descriptorFor('get_workbench_model', 'workspace.read'), readOnly: true, mutatesWorkspace: false });
+    readView.model().addNode('task', { label: '只改快照' });
+    readView.conversationHistory()[0].content = '只改副本';
+    check('A18 只读工具拿到画布与消息快照，不能修改本轮权威上下文',
+      canonicalModel.nodes().length === 0 && canonicalHistory[0].content === '原始消息' &&
+      readView.project.model() === readView.model(),
+      JSON.stringify({ nodes: canonicalModel.nodes().length, history: canonicalHistory[0].content }));
   }
 
   // ======================= B. 注册表集成 =======================
@@ -176,7 +190,7 @@ function descriptorFor(name, capability) {
     check('B1 注册表把组装好的能力面交给工具（exec 标识来自 callInfo）',
       res.ok === true && !!seen && seen.exec.turnId === '2' && seen.exec.toolCallId === 'call_abc' && seen.exec.tool === 'probe_read',
       JSON.stringify(seen && seen.exec.describe()));
-    check('B2 工具拿到的是能力面而不是裸上下文（__context 指回底层）', seen.__context === base);
+    check('B2 工具能力面不暴露底层上下文或描述符', seen.__context === undefined && seen.__descriptor === undefined);
     check('B3 读面探针的写方法被闸住且底层未被调用',
       (await seen.mutateWorkbench(() => {})) === false && !base.calls.some((c) => c[0] === 'mutateWorkbench'));
 
@@ -210,6 +224,11 @@ function descriptorFor(name, capability) {
     const writeRes = await realRegistry.execute('workbench_edit', { operations: [{ action: 'create', name: 'cap-probe', type: 'task' }] }, realContext, { turnId: 0, toolCallId: 'call_w' });
     check('B5 真实写工具（workbench_edit）在能力面下仍能改画布（旧方法转发有效）',
       writeRes.ok === true && JSON.stringify(realModel.doc) !== before, JSON.stringify({ ok: writeRes.ok, changed: JSON.stringify(realModel.doc) !== before, text: String(writeRes.text).slice(0, 60) }));
+    const authoritativeAfterWrite = JSON.stringify(realModel.doc);
+    const modelRead = await realRegistry.execute('get_workbench_model', { view: 'counts' }, realContext, { turnId: 0, toolCallId: 'call_model_read' });
+    check('B6 真实画布读取工具从快照读取且不改权威画布',
+      modelRead.ok === true && modelRead.data.nodeCount === realModel.nodes().length && JSON.stringify(realModel.doc) === authoritativeAfterWrite,
+      JSON.stringify({ ok: modelRead.ok, nodes: modelRead.data && modelRead.data.nodeCount }));
   }
 
   // ======================= C. 主循环端到端：标识贯通 =======================

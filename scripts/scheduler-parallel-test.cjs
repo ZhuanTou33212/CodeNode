@@ -240,6 +240,16 @@ ok('A 并发数归一（1–' + schedulerLib.MAX_CONCURRENCY + '，非法值回�
   assert.ok(writeTurn.elapsedMs >= SLOW_MS * 2 - 20, '含写操作时耗时应 ≥ 2×工具耗时（实际 ' + writeTurn.elapsedMs + 'ms）');
   ok('H 写操作独占（本轮有写 → 整轮串行，开关打开也不并发）');
 
+  // 即使参数 JSON 完整，length 截断也不能被只读并行调度器提前启动。
+  const truncatedParallel = await runTurn([
+    { toolCalls: [{ name: 'slow_read_a', args: { tag: '1' }, id: 'call_length' }], finishReason: 'length' },
+    { content: '请重新生成完整调用。', finishReason: 'stop' },
+  ], { parallel: true });
+  assert.strictEqual(truncatedParallel.completed, 0, 'length 截断时并行工具不得预启动或串行执行');
+  assert.strictEqual(truncatedParallel.peak, 0, 'length 截断时在飞工具数必须为 0');
+  assert.strictEqual(truncatedParallel.result.toolCalls[0].data.code, 'TOOL_CALL_TRUNCATED');
+  ok('H2 length 截断的完整 JSON 调用不会被并行预启动');
+
   // I. 取消贯穿：父 abort → 预启动的执行立刻收到 abort，主循环立即返回
   const controller = new AbortController();
   const slowScript = [

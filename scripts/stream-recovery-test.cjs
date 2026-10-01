@@ -56,6 +56,7 @@ function doneChunk(usage) {
  * 极简 OpenAI 兼容 mock：每个请求按 behaviors[n] 演一段剧本。
  *   { mode: 'kill-after', chunks, delayMs }  吐 N 个分片后**杀连接**（模拟中途断线）
  *   { mode: 'stall', chunks }                吐 N 个分片后**永不再发**（模拟卡死）
+ *   { mode: 'eof', text }                    正常关闭 HTTP 响应，但不发终止帧
  *   { mode: 'ok', text, chunkDelayMs }       正常流（可分包慢发）
  */
 function startMock(behaviors) {
@@ -81,6 +82,11 @@ function startMock(behaviors) {
       if (behavior.mode === 'stall') {
         for (let i = 0; i < (behavior.chunks || 2); i++) res.write(contentChunk('停滞片段' + (i + 1) + '。'));
         // 之后既不写也不再发：连接保持打开 → 只能在停滞超时里被判定
+        return;
+      }
+      if (behavior.mode === 'eof') {
+        res.write(contentChunk(behavior.text || '未完成的回答'));
+        res.end();
         return;
       }
       const text = behavior.text || '默认回答';
@@ -262,6 +268,26 @@ const RECOVERY = { maxAttempts: 1, retryBaseMs: 5, retryMaxMs: 10, turnTimeoutMs
     check('[正常流] 1 次请求、0 重发、0 复位', mock.state.requests === 1 && result.streamRestarts === 0 && sink.resets === 0,
       JSON.stringify({ req: mock.state.requests, restarts: result.streamRestarts, resets: sink.resets }));
     check('[正常流] 内容与终态不变', result.content === '一切正常。' && result.state === 'COMPLETED', JSON.stringify({ c: result.content, s: result.state }));
+  }
+
+  // 真实 HTTP 正常 EOF 但无结束帧：必须重发；耗尽次数则失败。
+  {
+    const mock = startMock([{ mode: 'eof', text: '旧半截' }, { mode: 'ok', text: '重发完成' }]);
+    const port = await mock.listen();
+    const { result, sink } = await runChat(port, { ...RECOVERY, streamMaxAttempts: 1 });
+    mock.close();
+    check('[真实 HTTP 提前 EOF] 整轮重发且只交付新内容',
+      mock.state.requests === 2 && result.content === '重发完成' && sink.content === '重发完成' && sink.resets === 1,
+      JSON.stringify({ requests: mock.state.requests, content: result.content, ui: sink.content, resets: sink.resets }));
+  }
+  {
+    const mock = startMock([{ mode: 'eof', text: '未完成' }]);
+    const port = await mock.listen();
+    const { result } = await runChat(port, { ...RECOVERY, streamMaxAttempts: 0 });
+    mock.close();
+    check('[真实 HTTP 提前 EOF] 无重试额度时明确失败',
+      mock.state.requests === 1 && result.state === 'FAILED' && /结束标记/.test(String(result.error || '')),
+      JSON.stringify({ requests: mock.state.requests, state: result.state, error: result.error }));
   }
 
   // ---- (7) 预算补偿：重发过的输入要计进 attemptsRef（不白烧额度） ----

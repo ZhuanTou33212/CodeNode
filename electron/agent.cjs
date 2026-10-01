@@ -14,6 +14,12 @@ const runStore = require('./runStore.cjs');
 // S8：统一运行事件流（.codenode/events.jsonl，带 runId/turnId/toolCallId/attemptId，可按 run 回放）
 const eventBus = require('./eventBus.cjs');
 const streamAccumulator = require('./streamAccumulator.cjs');
+const FATAL_STREAM_ANOMALIES = new Set([
+  'in-stream-error',
+  'unparsable-data-line',
+  'id-conflict',
+  'finish-reason-changed',
+]);
 // 协议适配层（S13）：OpenAI 兼容 / Anthropic Messages / Gemini 原生 / Azure OpenAI 共用一个请求构造
 const protocolLib = require('./modelProtocol.cjs');
 // 上下文压缩（照 Codex CLI 的做法）：窗口逼近上限时用交接摘要替换助手长文/工具结果
@@ -1521,10 +1527,17 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
     // Some OpenAI-compatible providers omit the final newline. Do not drop its
     // last content/tool-call event, otherwise the agent may end the turn early.
     forward(streamAccumulator.applySseText(state, translator.translate(decoder.decode())));
-    // 翻译层的残行 + 收尾帧（Gemini 不给 [DONE]，由翻译层补）先落地，再让累加器收尾
+    // 翻译层的残行与有终止依据时补出的收尾帧先落地，再让累加器收尾
     forward(streamAccumulator.applySseText(state, translator.flush()));
     forward(streamAccumulator.applySseText(state, '\n'));
     const final = streamAccumulator.finalize(state);
+    // 正常 EOF 不代表模型完成；已识别的损坏帧交给主循环按 stream_error 归类。
+    const hasFatalAnomaly = final.anomalies.some((item) => item && FATAL_STREAM_ANOMALIES.has(item.type));
+    if (!final.done && final.finishReason == null && !hasFatalAnomaly) {
+      throw Object.assign(new Error('模型流在结束标记（[DONE] 或 finish_reason）前关闭'), {
+        code: 'STREAM_INCOMPLETE',
+      });
+    }
     usage = final.usage || usage;
     return {
       content: final.content,
@@ -1622,8 +1635,12 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}
       if (!firstError) firstError = error;
       const retryable = !timedOut && (stalled || error.retryable !== false);
       if (!retryable || attemptNo >= totalAttempts) {
+        let code = 'STREAM_INTERRUPTED';
+        if (timedOut) code = 'TURN_TIMEOUT';
+        else if (stalled) code = 'STREAM_STALLED';
+        else if (error && error.code === 'STREAM_INCOMPLETE') code = 'STREAM_INCOMPLETE';
         throw decoratedStreamError(error, {
-          code: timedOut ? 'TURN_TIMEOUT' : stalled ? 'STREAM_STALLED' : 'STREAM_INTERRUPTED',
+          code,
           timeoutMs,
           idleTimeoutMs,
           partial,
@@ -1653,6 +1670,7 @@ function decoratedStreamError(error, info) {
   let prefix;
   if (info && info.code === 'STREAM_STALLED') prefix = `模型响应停滞（${fmtDuration(info.idleTimeoutMs)} 内没有收到任何数据）`;
   else if (info && info.code === 'TURN_TIMEOUT') prefix = `本轮模型请求超过 ${fmtDuration(info.timeoutMs)} 总时长上限`;
+  else if (info && info.code === 'STREAM_INCOMPLETE') prefix = '模型流式响应未完成';
   else prefix = '模型流式响应中断';
   const attemptsText = info && info.attempts > 0 ? `，已重发 ${info.attempts} 次` : '';
   const message = `${prefix}${received > 0 ? `（已收到 ${received} 字，这些内容不作为最终答复）` : ''}${attemptsText}：${original}`;
@@ -3155,17 +3173,16 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           count: streamAnomalies.length,
           types: streamAnomalies.map((a) => String((a && a.type) || '')).slice(0, 8),
         });
-        const fatal = streamAnomalies.find((a) => a && a.type === 'in-stream-error');
-        const produced =
-          (typeof content === 'string' && content.trim().length > 0) ||
-          (Array.isArray(res.toolCalls) && res.toolCalls.length > 0);
-        if (fatal && !produced) {
-          // 供应商在 200 流里报错、且本轮什么都没产出 → 按失败交付，不伪装成完成。
-          const detail = String((fatal && fatal.detail) || '').slice(0, 200);
-          const error =
-            '模型流内错误：供应商在 HTTP 200 的流里下发了 error，且本轮没有任何产出' + (detail ? '（' + detail + '）' : '');
+        const fatal = streamAnomalies.find((a) => a && FATAL_STREAM_ANOMALIES.has(a.type));
+        if (fatal) {
+          // 供应商报错或分片损坏后，即使已有正文/完整形状的调用也不能执行工具。
+          const providerError = fatal.type === 'in-stream-error';
+          const detail = providerError ? String(fatal.detail || '').slice(0, 200) : '';
+          const error = providerError
+            ? '模型流内错误：供应商在 HTTP 200 的流里下发了 error' + (detail ? '（' + detail + '）' : '')
+            : '模型流分片损坏（' + fatal.type + '），本轮未执行工具。';
           const outcome = finalizeState({ error, stopReason: 'stream_error' }, 'stream_error');
-          emitTrace({ kind: 'stream_error', turnId: iter, detail });
+          emitTrace({ kind: 'stream_error', turnId: iter, type: fatal.type, detail });
           onDelta && onDelta({ kind: 'error', error });
           return {
             content,
@@ -3312,7 +3329,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                 isMalformed: (item) => {
                   const parsedArgs = parseToolArgs(item.argsText);
                   const rawText = String(item.argsText || '').trim();
-                  return item.argsValid === false || (rawText !== '' && rawText !== '{}' && Object.keys(parsedArgs).length === 0);
+                  return finishReason === 'length' || item.argsValid === false ||
+                    (rawText !== '' && rawText !== '{}' && Object.keys(parsedArgs).length === 0);
                 },
                 execute: (item, execOptions) => {
                   if (tools.context && typeof tools.context.setToolEvidence === 'function') tools.context.setToolEvidence(allToolCalls);
@@ -3336,13 +3354,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const t0 = Date.now();
           const args = parseToolArgs(tc.args);
           const rawArgs = (tc.args || '').trim();
+          const malformed = tc.argsValid === false || (rawArgs !== '' && rawArgs !== '{}' && Object.keys(args).length === 0);
+          const truncatedToolCall = finishReason === 'length';
           // callId 统一取自 assignCallIds：assistant 声明的 id 与这条 tool 消息的 tool_call_id 必须一致
           const callId = tc.callId || tc.id || ('call_' + iter + '_' + totalToolCalls);
           // 副作用幂等 + 检查点：写操作先登记意图，中断后续跑时凭账本跳过已提交的写操作
           let sideEffectToken = null;
           let deduped = false;
           let dedupReason = '';
-          if (tools.context && typeof tools.context.beginSideEffect === 'function') {
+          if (!malformed && !truncatedToolCall && tools.context && typeof tools.context.beginSideEffect === 'function') {
             try {
               // 把「工具自报重复执行安全」带下去：账本对那些**无法核对目标状态**的写
               // （参数里没有 path，例如 save_project：键恒同、但画布可能早就变了）
@@ -3370,9 +3390,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               }
             } catch {}
           }
-          // 参数 JSON 损坏/未闭合：模型引号转义错误，或输出被 max_tokens 截断（finish_reason=length），
-          // 或分片拼坏。streamAccumulator 会在 tc.argsValid 上给出判定，这里再兜一层启发式。
-          const malformed = tc.argsValid === false || (rawArgs !== '' && rawArgs !== '{}' && Object.keys(args).length === 0);
+          // JSON 不完整与整轮 length 截断都不能执行；后者即使 JSON 恰好完整，也可能缺后续调用。
           let result;
           let repeated = false;
           if (deduped) {
@@ -3394,6 +3412,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
               '参数不是完整 JSON，本次未执行 ' + tc.name + '（可能是 max_tokens 截断或引号转义错误）。' +
                 '请用更短的参数重新调用；长内容先写文件再用路径引用。',
               { code: 'ARG_INVALID_JSON', tool: tc.name, finishReason: finishReason || null, argsLength: rawArgs.length }
+            );
+          } else if (truncatedToolCall) {
+            result = require('./tools/result.cjs').AgentToolResult.error(
+              '模型输出触及长度上限，本轮工具调用未确认完成，未执行 ' + tc.name + '。请重新生成完整调用。',
+              { code: 'TOOL_CALL_TRUNCATED', tool: tc.name, finishReason, argsLength: rawArgs.length }
             );
           } else if (cacheKey) {
             const cached = toolResultCache.get(cacheKey);
