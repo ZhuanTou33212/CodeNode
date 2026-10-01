@@ -1,341 +1,167 @@
-# CodeNode Next
+# CodeNode
 
-CodeNode 重构版：以 **DeepSeek Harness（DSH）** 为目标的 Agent 工作台。
+CodeNode 是一个面向本地工程的桌面 Agent 工作台：左侧与 Agent 对话，中央用节点和连线组织工作流，底部查看文件、终端、运行记录与恢复计划。Agent 能读取项目、调用受控工具、修改代码或画布，并把执行结果留在工程里。
 
-> 当前里程碑：**Agentic RAG**。采用 Electron + React + React Flow 重构原 Java/Swing 版本，
-> 保留节点画布操作逻辑（Blender 风格），并将节点语义改为「Agent 工作流可视化」。
-> 完整重构方案见 `REFACTOR_PLAN_DSH.md`（在仓库 `codenodeNew` 分支历史/工作区）。
+本仓库的 `yimi-branch` 使用 Electron + React + React Flow。这里的 **ReAct** 指 Agent 的“模型判断 → 调用工具 → 观察结果 → 再判断”循环；它与前端的 React 框架不是同一个概念。
 
-[![CodeNode CI](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml/badge.svg?branch=0_2)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml)
-[![production-gate](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/production-gate.yml/badge.svg?branch=0_2)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/production-gate.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue.svg)](docs/release-process.md)
-[![Gates](https://img.shields.io/badge/gates-103%20core%20%2B%207%20display-brightgreen.svg)](scripts/run-all-tests.cjs)
+> 想先用起来：看 [快速开始](#快速开始) 和 [第一次操作](#第一次操作)。想理解系统怎样运行：看 [架构](#架构)。
 
-![CodeNode 工作台：Agent 真实跑一轮（读文件 → 读画布 → 改画布），左侧是完整对话与工具调用，右侧画布随之更新](docs/screenshots/agent-chat.png)
+## 快速开始
 
-## 亮点速览
+### 环境
 
-| 维度 | 现状 |
-| --- | --- |
-| 代码规模 | TypeScript / Node 约 39k 行（渲染层 12.6k、Electron 主进程 15.3k、门禁与工具脚本 11k） |
-| 门禁 | `npm run verify` = 构建 + `check:js`（主进程/脚本 checkJs）+ **104 项核心套件 + 7 项显示环境套件**；清单唯一来源 `scripts/run-all-tests.cjs` |
-| CI | Windows / macOS / Linux 三平台矩阵：构建 → 静态检查 → 全量门禁 → 打包 → 评测；Agent 评测报告按 commit 归档为 artifact |
-| Agent 评测 | 11 个多步任务离线确定性评测（多步读写、改完跑测试、引用、长上下文压缩、提示注入、取消、崩溃恢复、预算上限），最近一次 **11/11 通过 / 127 次工具调用** |
-| 模型接入 | 界面上只有**一个 API Key 输入**：地址填哪家就连哪家（OpenAI 兼容 / Anthropic 原生 / Gemini 原生 / Azure 端点按地址自动判定），密钥走 safeStorage 加密存储 |
-| 分发 | electron-builder 打包 portable exe / dmg / AppImage，附 sha256/sha512 清单、签名与升级回滚判据（`docs/release-process.md`） |
-| 文档 | `CHANGELOG.md` 按 Keep a Changelog 记录每次行为变化与验证证据；`docs/` 含架构审查、整改进度、评测报告 |
+- Node.js **22**（见 `.nvmrc` 和 `package.json`）。
+- npm；首次安装依赖与 Electron 需要联网。
+- Windows、macOS 或 Linux 桌面环境。只打开 Vite 网页不能使用文件、工程和 Agent 功能，需启动 Electron。
 
-Agent 侧不是「套一层 API」，实现要点：
+```powershell
+git clone --branch yimi-branch https://github.com/ZhuanTou33212/CodeNode.git
+cd CodeNode
+npm ci
+npm run dev
+```
 
-- **工具循环**：流式 `tool_call` 累加器（重复下发整段、参数重发、`index` 漂移、id 分片、坏行全部记为 anomaly 而非静默拼错）+ `finish_reason=length` 截断安全（参数不完整一律拒绝执行）
-- **运行状态机**：7 个状态 + 显式迁移表，`WAITING_USER` 由 `confirm()`/`askUser()` 上报，续跑与崩溃恢复读同一份状态
-- **工具契约与最小能力面**：`ToolDescriptor` 声明只读/可缓存/写/超时/所需能力，注册表按契约 fail-closed 执行；每次执行现场组装最小能力面，越权方法返回安全默认值并写审计
-- **子代理**：角色契约（白名单/只读/能力/提示）单一来源，父子链独立 token 预算，任务总时长钳制，结构化结果契约回灌
-- **可靠性**：幂等账本（规范化参数键 + actor 归因）、请求预算与队列、成本账本（含服务端前缀缓存命中率）、断点续跑
-- **隔离与安全**：Windows Job 对象 / Linux bwrap / macOS sandbox-exec 三平台后端，网络与路径边界、SSRF 阻断、凭据脱敏、渲染层权限默认拒绝
-- **Agentic RAG**：BM25 + 本地标量查询 + 可插拔向量层（默认 `memory`；可选无服务进程的 SQLite 持久化索引或 Milvus），引用校验按「本轮真实读过的来源」判定
+`npm run dev` 同时启动 Vite 和 Electron。Windows 也可双击仓库根目录的 `启动项目.bat`，它会检查依赖并运行开发模式。首次编译或启动失败时，先确认终端使用的是 Node 22，再查看终端错误。
 
-## 界面预览
+要以构建产物启动：
 
-| 工作台画布（示例工程 workflow.cnode） | 矢量画布 · 设计模式 | 矢量画布 · 逻辑模式 |
+```powershell
+npm run start:prod   # 先构建，再启动 Electron
+```
+
+`npm start` 只加载已有的 `dist/`，不会替你重新构建。发行包构建命令见 [开发与打包](#开发与打包)。
+
+## 第一次操作
+
+1. **进入工程。** 启动页选“新建工程”创建 `.cnode`，或选“打开工程”指定已有代码目录；已有 `.cnode` 可用“打开工程文件”。右侧“最近打开”需手动点选，不会在启动时自动进入上次工程。
+2. **配置模型。** 在左侧 **Agent** 页的模型下拉框选“管理模型…” → “+ 新增模型”，填写显示名称、模型 ID、API 地址和 API Key，保存后点“设为当前模型”。本地服务可按其认证方式配置。协议会按地址识别常见的 OpenAI 兼容、Anthropic、Gemini 与 Azure 端点；高级覆盖项见 `config/agent.properties.example`。
+3. **先发一个只读请求。** 例如“帮我找到项目的入口文件，说明它如何启动，并给出文件路径”。输入框按 **Enter** 发送，**Shift+Enter** 换行。左侧会显示模型输出与工具调用；修改文件、运行命令等操作可能弹出确认。
+4. **让 Agent 做具体任务。** 例如“检查登录流程中的错误处理，先说明拟改哪些文件，再做最小修改”。运行中可用“插话”给下一轮追加纠偏信息，或点“停止”中止。
+5. **保存工程。** 点击顶部“保存”或按 **Ctrl+S**。`.cnode` 保存画布、会话及工作区等工程数据；项目源码仍在所选目录中。
+
+![CodeNode Agent 对话与画布](docs/screenshots/agent-chat.png)
+
+### 在画布上编排并运行工作流
+
+1. 在空白画布按 **Shift+A** 添加节点。最简单的链路是 `start → task → end`：从右侧输出端口拖线到下一个节点左侧输入端口。
+2. 选中任务节点，在左侧“节点”标签填写目标或 Prompt；复杂工作可用 `stage` 表示阶段、`scope` 包住分支或循环、`tool` 表示工具步骤。
+3. 点顶部“运行”，在底部“连续执行”页点“运行工作流”。工作流按连线拓扑执行；失败或停止后可点“继续运行”处理未完成节点。“数据流”按钮只计算节点输入/输出，不会启动 Agent 工作流。
+4. 用“自动整理”整理节点，点“保存”写入工程。`Ctrl+Z` / `Ctrl+Y` 可撤销或重做节点编辑。
+
+画布是工程工作区；聊天里的子 Agent 是由主 Agent 通过委派工具启动的独立任务。**画一个 `stage` 节点不等于立即启动一个子 Agent**，运行画布工作流与模型在聊天中委派任务也不是同一条执行路径。
+
+![CodeNode 工作流画布](docs/screenshots/codenode-canvas.png)
+
+### 让多个 Agent 分工
+
+在 Agent 输入框里描述分工和验收标准即可，例如：
+
+> 请先只读定位配置加载流程；由实现角色只修改发现的问题；再独立运行相关检查并审查边界情况。最后列出改动文件、验证依据和未解决的问题。
+
+主 Agent 可按任务需要调用 `delegate_task` 或 `delegate_tasks`。这由模型和工具循环决定，界面没有“强制启动五个角色”的按钮。工具记录与底部“运行”页可查看子任务状态；子 Agent 的自述先作为**候选结果**返回，主 Agent 核对并确认后才能作为后续依赖任务的可信摘要。
+
+### 中断后继续
+
+在底部“运行”页找到“可恢复的 Agent 运行”，点“查看恢复计划”：
+
+- **自动续跑**：检查点表明待办步骤可安全继续；已提交的写操作会被跳过。
+- **人工复核后续跑**：存在结果未知的副作用或待确认写操作；先核对当前文件与外部状态，再选“按当前状态重试”或在了解风险后选择强制续跑。
+- **工作流节点继续运行**：这是画布工作流的进度恢复，入口同样在“运行”页，与 Agent Run 的断点续跑分开。
+
+旧 Run 保留原状态；继续时创建新的 Run，不会把失败记录改写成成功。
+
+## 架构
+
+### 桌面端与数据流
+
+```mermaid
+flowchart LR
+  UI["React 界面 / React Flow 画布"] --> PRE["Electron preload API"]
+  PRE --> IPC["主进程 IPC"]
+  IPC --> PROJECT[".cnode 工程与项目文件"]
+  IPC --> AGENT["Agent 运行器"]
+  AGENT --> MODEL["模型协议适配 / 流式响应"]
+  AGENT --> TOOLS["工具注册表 / 权限与确认"]
+  TOOLS --> PROJECT
+  TOOLS --> RAG["本地检索与标量查询"]
+  AGENT --> RUNS["运行事件 / 检查点 / 副作用账本"]
+```
+
+| 层 | 职责 | 主要代码 |
 | --- | --- | --- |
-| ![画布](docs/screenshots/codenode-canvas.png) | ![设计模式](docs/vector-preview/v2-design-mode.png) | ![逻辑模式](docs/vector-preview/v2-logic-mode.png) |
+| 渲染层 | 对话、画布、文件树、运行与恢复界面 | `src/components/`、`src/store/` |
+| preload 与 IPC | 向界面暴露受控 API，连接主进程 | `electron/preload.cjs`、`electron/ipc/` |
+| Agent 运行器 | ReAct 循环、流式调用、上下文与运行状态 | `electron/agent.cjs`、`electron/agentState.cjs` |
+| 工具与子代理 | 参数契约、权限、确认、调度和结果审查 | `electron/tools/`、`electron/subagents.cjs` |
+| 工程与恢复 | `.cnode` 编解码、Run 事件、检查点、幂等记录 | `electron/cnode.cjs`、`electron/runStore.cjs`、`electron/runCheckpoint.cjs` |
+| 检索 | 项目文件索引、BM25/向量检索、标量查询 | `electron/rag/`、`electron/vectorStore/`、`electron/scalars/` |
 
-> 三张图都是真实应用窗口截图，由 `scripts/readme-shot.cjs` 走真实「最近打开 → 打开工程」链路生成并断言后才落盘
-> （首图额外经 UI 真实发送一次 Agent 请求，等 Run 结束、确认有工具调用与画布变更再截图）。
+### 单 Agent：ReAct 状态机
 
-## 技术栈
+![单 Agent ReAct 运行状态与恢复](docs/architecture/single-agent-react-state.png)
 
-```
-桌面壳      Electron（主进程 Node.js + 内嵌 Chromium，无外部浏览器）
-前端        React 18 + TypeScript + Vite
-画布        React Flow（@xyflow/react）+ zustand
-工程格式    .cnode（ZIP 容器 + mimetype + manifest/graph/workspace/integrity + SHA-256）
-```
+一次 Agent Run 从 `RUNNING` 开始。模型若给出最终答复，进入 `COMPLETED`；若提出工具调用，则在本轮流式响应结束并完成结构校验后进入 `WAITING_TOOL`，执行工具并将结果作为 `tool` 消息写回对话，再回到 `RUNNING`。需要审批或向用户提问时进入 `WAITING_USER`。`FAILED`、`CANCELLED` 和 `LIMIT_REACHED` 是其他终态。
 
-## 功能特性
+图中的 **ACTIVE 是为了阅读方便画出的活动态分组，不是代码里的第八个状态**。普通工具失败通常会作为工具结果交给模型判断下一步；流损坏、运行错误、用户取消或预算触顶才按各自终止规则处理。流式 `tool_call` 会先累加与校验，参数未完成或本轮因长度截断时不会直接执行。可选的 Observation/Blackboard 会把一轮工具结果整理成当前观察摘要，但不替代原始工具记录。
 
-### 画布（Blender 风格操作）
-- 鼠标中键 / 右键拖动画布，左键框选，滚轮缩放
-- `Shift+A` 光标处弹出节点菜单（入口 / 出口 / 任务 / 阶段 / 工具 / 范围 / 文件 / 对象 / 画布）
-- 节点拖拽、端口连线（右侧拖出 → 左侧，转弯处圆滑过渡的 waypoint 曲线）
-- **端口规则**：`start`（入口）只有输出端口、没有输入端口；`end`（出口）只有输入端口、没有输出端口
-- **对象节点**（`object`）：专门用于表示/存储对象名称（数据对象、配置对象、实体名），对象名称填在 `objectName` 字段
-- 快捷键：`Ctrl+Z/Y` 撤销重做、`Ctrl+D` 复制、`Del`/`X` 删除、`Home`/`Z` 聚焦全部、`Escape` 关闭菜单
-- 节点状态（待执行 / 执行中 / 已完成 / 失败 / 阻塞）实时着色
+恢复由 `runStore` 事件、`runCheckpoint` 检查点和 `sideEffects` 幂等账本共同决定。`planResume` 把旧 Run 分成可自动续跑、需人工复核、已完成或无法判断；结果未知的外部副作用不会被盲目重放。
 
-### 画布节点（`vector` / canvas，矢量画布内嵌在画布上）
+### 多 Agent：主 Agent 委派与确认
 
-矢量画布**不再单独占一个工作区**，而是作为一个节点直接放到 Agent 画布上：
+![多 Agent 协作调度与结果确认](docs/architecture/multi-agent-collaboration.png)
 
-- 工具栏 `✦ 画布节点` 或在光标处 `Shift+A → 画布节点` 即可新增；节点可拖拽、可连线、可缩放（右下角把手）
-- **左上角切换模式**：`✦ 设计`（图形编辑） / `◌ 逻辑`（集合运算分析），切换会写回节点 data
-- **预设配件**：左侧「配件」区一键放置矩形 / 圆角矩形 / 椭圆 / 贝塞尔 / 箭头 / 文本，落在当前指针位置
-- **自由绘制**：左侧工具区选择选择 / 钢笔 / 矩形 / 圆角矩形 / 椭圆 / 箭头 / 文本 / 平移后在纸面上直接绘制；支持双击改文字、框选、多选、编组、显隐/锁定、图层重排
-- 右侧面板（可收起）：属性 / 图层；切到逻辑模式时显示集合运算、区域统计、两两关系与韦恩图预览，画布同步高亮结果区域
-- 文档隔离：每个画布节点持有独立文档 store，并各自持久化到 `localStorage['codenode.vector.node.<节点 id>']`，互不干扰
-- 快捷键只在选中的画布节点内生效（`V/P/R/U/E/A/T/H` 切工具、`Ctrl+Z/Y` 节点内撤销重做、`Del` 删除选中图形），不会误删工作台节点
+主 Agent 本身仍执行上面的 ReAct 循环。它调用 `delegate_task` / `delegate_tasks` 时，`SubagentManager` 为子任务建立各自的提示词、对话、角色权限、时限和预算，并再次调用同一个 `runAgentChat`。子任务不是把主 Agent 的上下文完整复制一份。
 
-### 工程文件（专属 `.cnode` 格式，参考原版 .cnode）
-- UTF-8 ZIP 容器，`mimetype` 首条目：`application/vnd.codenode.project+zip`
-- 条目：`mimetype` / `manifest.json` / `graph.json` / `workspace.json` / `integrity.json`
-- `integrity.json` 记录各文件 SHA-256，打开时校验完整性（篡改会提示）
-- 宽松读取：未知字段忽略、缺失字段默认值、更高版本只读打开
-- 保存确定性写入当前工程文件；重启自动恢复上次工程
-- 格式 Schema：`src/resources/schemas/cnode-project-1.0.schema.json`
+| 角色 | 负责什么 | 主要边界 |
+| --- | --- | --- |
+| `explorer` | 只读定位文件、结构与证据 | 不改文件，不执行命令 |
+| `builder` | 在任务范围内修改源码或画布 | 写操作受权限和确认约束 |
+| `verifier` | 运行构建、检查或测试并报告输出 | 不修改被测源码 |
+| `reviewer` | 独立检查质量、边界与风险 | 只读，不替实现者改代码 |
+| `canvas` | 修改、连接、保存画布 | 不写项目源码文件 |
 
-### 项目管理器（左栏，Unity 风格）
-- 选择项目目录 → 递归文件树（忽略 node_modules/.git/dist 等），点击文件预览内容
-- 面板可收起 / 拖拽调宽；`.cnode` 工程文件在树中高亮
+子任务走统一 FIFO 调度器，默认最多同时运行 **3** 个。满足条件的只读任务可以并行，共享工作区写任务独占；选择 `isolation=worktree` 时，项目文件可在独立 Git 工作树中隔离，画布角色不支持该模式。角色能用哪些工具，由 `electron/tools/roles.cjs` 的白名单与能力契约约束。
 
-### 工程工作台（底部 Dock）
-- 代码编辑器：项目文件可直接编辑、保存，覆盖前自动生成 `.bak` 备份
-- Diff：逐行显示未保存修改；搜索：按项目内容返回文件与行号结果
-- 编辑器支持多文件标签、基础语法着色、Tab 缩进、基础问题诊断/补全和外部修改冲突处理
-- 终端：在项目根目录执行跨平台白名单命令，可运行构建、测试与 Git 操作
-- 终端采用主进程流式会话，支持实时输出、停止和超时终止
-- 工作流运行：按画布 DAG 拓扑连续推进节点；Prompt 以 `run:` 或 `$` 开头时执行真实命令
-- 工作流节点：task/stage/tool 有 Prompt 时调用 Agent，无命令或 Agent 配置时明确阻塞；失败/停止后可从 run-state 继续
-- 检查点：工作流运行前后自动保存到 `.cnode`，同时保留最近 30 个本地项目检查点
-- 长期记忆：Agent 可用 `remember` / `recall` 管理项目 `.codenode/memory.json`
-- 记忆版本：`remember` 指定相同 `scope + kind + key` 时，经确认用新记录取代旧记录；旧版仍可用 `recall includeHistory=true` 查到。项目槽位在本项目内覆盖同名用户级默认值；本轮临时要求不会自动写入长期库
-- 扩展：内置工具、项目进程扩展、MCP stdio JSON-RPC、Skills 上下文和 before/after Hooks 统一接入
+每个子 Agent 返回带状态、摘要、产物和证据的结果信封。主 Agent 可用 `get_subagent_task` 核对产物与来源，必要时委派 `verifier` 独立复跑；然后用 `review_subagent_result` 确认或撤回。**只有有效的已确认摘要**才能通过 `dependsOnTaskIds` 传给下游任务。合并报告仍只是候选；撤回或结果失效会使依赖任务需要重新核对。
 
-项目扩展清单示例：
+### 工具、检索和存储边界
 
-```json
-{
-  "extensions": [
-    {
-      "name": "project_lint",
-      "kind": "Skills",
-      "description": "运行项目自定义检查",
-      "command": "node scripts/project-lint.cjs",
-      "parameters": { "type": "object", "properties": {} }
-    }
-  ]
-}
-```
+- 工具由注册表校验参数、能力和确认策略。项目文件属于项目根目录；写入、命令与外部网络能力按各自契约执行，过程留审计记录。
+- 本地 Agentic RAG 为项目文件建立 BM25 索引，可选向量后端（默认进程内 `memory`；也可配置 SQLite 或 Milvus）。检索命中只帮助定位，引用仍需对应本轮实际读取的来源。设置入口在底部工作台的“检索设置”页。
+- `.cnode` 是工程容器，保存图、会话、工作区和完整性信息；`.codenode/` 存项目级运行记录、索引、标量等数据。模型列表保存在 Electron 用户数据目录，界面保存的 API Key 需要系统安全存储可用；项目级 `.codenode/agent.properties` 中的可选集成凭据按普通项目文件管理。
+- Dify 是**可选的单向调用**：在项目 `.codenode/agent.properties` 配置 `dify.enabled/base/api_key/kind` 后才注册 `dify_call`，调用已发布的 Dify 工作流或聊天应用，并需网络权限及执行前确认。未配置时本地任务不依赖 Dify。详见 [Dify 集成说明](docs/codenode-dify-improvement-proposal.md)。
 
-扩展进程的参数同时会通过 `CODENODE_TOOL_ARGS` 环境变量传入；写入型扩展仍会经过确认、审计和项目根目录隔离。MCP 扩展使用 `tools` 数组声明可调用工具，Skills 使用 `instructions` 字段注入项目上下文，Hooks 使用 `hooks.before` / `hooks.after`。
-
-### 检查器（右上角悬浮角标）
-- 默认显示悬浮角标（节点数 / 选中提示），点击展开为检查器浮层，可编辑节点名称 / 状态 / 目标说明
-
-### 模型接入（一个 API Key 就够）
-
-- **只有 API Key 一个入口**：模型管理里保持原有形态（显示名称 / 模型 ID / API 地址 / API Key / 上下文 / 价格 / 开关），
-  不要求用户选厂商、协议或认证方式
-- **协议按地址自动判定**（`electron/modelProtocol.cjs` 的 `resolveProtocol`）：`api.anthropic.com` → Claude 原生
-  `/v1/messages` + `x-api-key`；`generativelanguage.googleapis.com` → Gemini 原生；`*.openai.azure.com` →
-  部署名路径 + `api-key` + `api-version`；其余（DeepSeek / Qwen / Kimi / GLM / 豆包 / OpenRouter / Groq / Ollama…）
-  → OpenAI 兼容 `/chat/completions` + `Bearer`。需要强制指定时写 `config/agent.properties` 的 `api_protocol`
-- **流式统一翻成 OpenAI SSE 再进累加器**：断线整轮重发、停滞判定、用量归并、坏 JSON 记 anomaly 这套语义对四档协议共用
-- **密钥仍走 safeStorage 加密**（落盘加密、界面只回 `apiKeySet` 布尔）；本地/自建服务（`auth=none` 或回环地址）允许空 Key
-- **负向判据**：未声明协议时 URL / 认证头 / 请求体（含字段顺序）与单协议版本逐字节一致（门禁 `test:model-protocol`）
-
-### Agentic RAG（本地项目检索）
-- Agent 可把主问题、符号名、业务词和技术词作为多个查询，一次完成 RRF 融合排序
-- 本地增量索引复用未变化分块；文件工具写入后显式失效，外部变化由 mtime 自动发现
-- BM25 与向量候选分别召回后用倒数排名融合；默认 local 为确定性词项哈希向量，主要利用词项重合。跨表达语义召回需按需配置 openai/ollama 嵌入，向量可存在 memory、工程本地 SQLite 或 Milvus
-- TS/JS 按函数、类与方法的语法范围切块，长函数再按行拆分；命中方法或长函数中段时，附上可单独引用的父级声明。其他格式保留标题/声明优先的 72 行、重叠 12 行切块
-- TS/JS 同时建立项目内定义、调用、引用和相对导入的静态关系；跨文件问题可用 `hops=0..2` 有界扩展，结果标明关系来源。选块会避开高度重叠片段，父级上下文也计入字符预算
-- 向量后端可插拔（`rag.vector_store`）：默认 `memory`（进程内记忆化，小型学习式嵌入项目可独立召回）；`sqlite` 将向量增量持久化到工程 `.codenode`，以本地精确近邻检索运行、无服务进程；`milvus` 供更大规模或外部集群使用。向量后端失败时当轮退回 BM25 并显式告警
-- `retrieve_context` 支持 `mode=auto/file/vector/hybrid/scalar`：文件结果由 BM25 与向量按名次融合；可显式配置 Cohere 风格的重排 URL，对候选做二次排序，服务失败时保留 RRF 结果
-- 返回高/中/低检索匹配度、查询覆盖率、候选规模与 `path#Lx-Ly` 来源锚点；匹配度不表示片段足以支持结论
-- 匹配度低时 Agent 会改写查询、限定目录或深读文件；引用校验仅确认路径和行号在本轮读过的范围内
-- 检索片段被标记为不可信数据，项目文件内的提示注入不会被当作 Agent 指令
-- 默认硬排除 `.env`、SSH/证书密钥、凭据、`.codenode` 记录、依赖与构建产物
-- `rag.include` / `rag.exclude` 可配置范围，其他 `rag.*` 控制分块、Top-K、查询数、质量门槛、嵌入模型、融合权重及 `rag.vector_store` 向量后端
-
-### 本地标量（画布精准数据，不入云）
-- 画布节点的完整属性（name/label/prompt/goal/members/filePath 等）在画布工具执行时写入工程 `.codenode/scalars.json`，不随工具结果返回云端
-- Agent 需要精准数据时用 `query_scalars key=node:<id>`（或 `retrieve_context mode=scalar`）在本地读取
-- 标量来源以 `scalar:<key>` 引用；`.codenode` 目录被 RAG 硬排除，标量不会泄漏进文件索引
-
-### 工具结果子代理压缩
-- 工具返回的原始结果超过阈值（默认 2400 字符）时，经一次独立 LLM 调用（子代理，不共享主对话上下文）压缩成关键信息摘要再进入上下文，避免大量数据挤压上下文
-- 压缩保留文件路径/行号引用、符号名、错误信息、状态与节点 id；`retrieve_context`/`query_scalars`/`ask_user` 默认不压缩以保证引用保真
-- 单轮压缩调用数、目标长度、排除列表由 `agent.compression.*` 配置控制；失败自动降级为截断
-
-### Agent 节点建模规则（写入系统提示 + workbench_edit 工具，创建节点时强制遵守）
-- 一条完整节点链路必须有 `start`（开始，只有输出端口）与 `end`（结束，只有输入端口），且**必须真正连线成链**：start 连线到第一个执行节点、最后一个执行节点连线到 end，使 start/end 作为链路入口/出口而非游离节点
-- 条件判断 / 分支 / 重复循环 → 用 `scope`（范围）节点包裹，并**必须把子链路节点 id 加入 scope 的 `members`**（`add_members`/`set_members`，或 create 时传 `members`），否则节点不会显示在范围节点内
-- 需要子代理负责部分工作（文件探查、项目审核、独立分析、测试执行等）→ 用 `stage`（阶段）节点
-- 需要使用某个对象（数据对象 / 配置对象 / 实体名）→ 用 `object`（对象）节点，名称填 `objectName`
-- 节点类型按语义选择，禁止一律建 task；创建前先 `get_workbench_model` 读取当前画布并复用已有节点（画布为空时不读取）
-- `workbench_edit` 的 `create` 支持**自定义 id**（如 `id:"start-1"`），同一批 operations 内即可用该 id 连线或放进 scope
-- 收到需求先做「需求拆分」：对象 → object、独立工作 → stage、条件/循环 → scope（并加入 members）、具体步骤 → task/tool，最后 start 开头、end 结尾连成完整链路
-- 所有画布操作（新建 / 连线 / 移动 / 删除 / 放进范围节点 / 改名设属性）都由 Agent 通过 `workbench_edit` 执行，不能只停留在文字描述
-
-### 节点颜色 / 排布 / 范围节点
-- **颜色按类型判定**：start 绿、end 红、task 蓝、stage 紫、tool 橙、file 橙红、object 青、scope 紫；Agent 建节点自动按类型上色，渲染端缺失 accent 时也按类型回退，用户与 Agent 节点颜色一致
-- **自动整理（Blender Node Arrange 风格）**：先按连通分量分块，块内按依赖分层为列、列内按前驱重心排序，互不关联的分量各自成块；`scope` 与其成员视为同一分量，成员会按实际包围盒被范围节点包裹（成员在左/上时也会向左/上扩展）
-- **Agent 输出排布**：Agent 改图后改用分块自动整理（而非全部排成一排），并按制作顺序分区；新建节点未给坐标时自动错位，不再全部堆在 (120,120)（修复重启后节点聚到画面中心）
-- **范围节点**：有输入/输出端口，可参与链路连线；显示子节点数量；拖动 scope 时其成员跟随移动（父级容器）
-
-### 画布节点读写一致性
-- `get_workbench_model` 不在只读缓存内，任何时刻都读实时画布模型
-- 变更类工具（`workbench_edit`/`bulk_edit`/`write_file`/`edit_file`/`save_project`/`ui_control` 等）执行成功后自动清空只读结果缓存，避免「写入成功但读到旧数据/0 节点」
-- **画布编辑统一使用 `workbench_edit`**：创建、编辑、连线通过 `action` 或批量 `operations` 完成；旧的 `create_nodes` / `workbench_connect` 独立实现已清理，不再作为工具提供
-- `query_scalars`/`retrieve_context` 的 `prefix=node:<部分id>` 在严格前缀无命中时，会按「同类型 key 的 id 是否包含该片段」回退，命中 `node:<type>-<部分id>-<rand>`
-- **链路完整性**：`workbench_edit` 会在结果中提示「不在 start→end 完整路径上的节点」，驱动 Agent 补全连线
-
-### 长任务执行（后台 + 轮询）与工具失败处理
-- `execute_shell` 支持 `async=true`：长任务后台执行，**立即返回 jobId**，不再前台硬等；`timeoutSeconds` 可按预估时长调大（默认 30）
-- 新增 `poll_job jobId=… waitSeconds=…`：轮询后台任务状态（running/done/error/timeout）、已输出内容与退出码，任务结束自动清理
-- 核心原则：**工具失败 ≠ 任务失败**。任何 error 先做三件事：①分析原因 ②修正参数或换工具 ③重试，直到成功或确实无路可走
-- 模型网络请求对连接失败、408/425/429/5xx 做有限次数指数退避重试；用户取消和请求超时不会被继续重试
-- 工具注册表在执行前统一校验 JSON Schema 参数；敏感凭据文件不会通过 `read_file` / `search_files` 送入模型
-- 失败分类：参数错→修正重调；文件/节点/路径不存在→先探查（`list_directory`/`find_files`/`get_workbench_model`/`query_scalars`）再重试；命令不在白名单→换等价命令；执行超时→调大 `timeoutSeconds` 或 `async=true`+`poll_job`
-
-### 画布与会话解耦（独立工作系统）
-- 画布不再与每条新对话绑定：Agent 每一轮都读取**当前画布**内容
-- **就地修改**：Agent 在当前画布上做了修改（保留了画布已有节点）时，直接应用到当前画布，不新开画布；修改后当前画布保持 active
-- **新开画布**：仅发生在「用户手动新建」或「Agent 输出了与当前画布完全无关的全新内容 / 当前画布为空时创建内容」两种情况
-- **空画布不读取**：当前画布没有任何节点时，Agent 不调用 `get_workbench_model`，直接按需求创建完整链路；画布有节点时先读取现状再修改/补充
-- 跨会话持久：下一次对话仍读取同一块画布，节点不会因新对话丢失
-
-## 开发运行
+## 开发与打包
 
 ```powershell
-# 需要 Node.js 22（唯一来源：.nvmrc 与 package.json 的 engines；行尾一律 LF，见 .gitattributes）
-npm install          # 安装依赖
-npm run dev          # 开发模式（Vite HMR + Electron）
-npm run build        # 类型检查 + 构建到 dist/
-npm run verify       # 提交前必跑：build + check:js + 全量回归与门禁
-npm start            # 生产模式（加载 dist/）
-npm start:prod       # 先构建再启动
+npm run build       # TypeScript 检查 + Vite 构建
+npm run check:js    # Electron 主进程和脚本的静态检查
+npm run verify      # 构建、静态检查与仓库完整门禁
+npm run dist:win    # Windows portable exe
+npm run dist:mac    # macOS dmg / zip
+npm run dist:linux  # Linux AppImage / deb
 ```
 
-> 国内网络建议保留 `.npmrc`（npmmirror 源 + Electron 镜像）。
+打包产物写入 `release/`。Windows 的 `npm run dist:win` 还会生成“CodeNode 控制台.cmd”，可同时启动应用并查看日志；签名、哈希及发布流程见 [发布文档](docs/release-process.md)。
 
-### 打包 + 控制台面板（cmd 一起打开）
-```powershell
-npm run dist        # 构建 + 打包 portable exe + 生成「CodeNode 控制台.cmd」
-npm run dist:mac    # macOS DMG + ZIP（需要桌面发行环境；CI 会自动使用项目级缓存）
-npm run dist:linux  # Linux AppImage + deb
-```
-- 打包后在 `release/` 与 `release/win-unpacked/` 生成 **`CodeNode 控制台.cmd`**。
-- **桌面快捷方式指向该 .cmd**（而不是直接指向 exe），双击即可同时打开：
-  - CodeNode 应用本体；
-  - 一个 cmd 控制台面板，实时跟随显示应用日志（`<exe 目录>/logs/console.log`）。
-- 日志由主进程 `setupConsoleLog()` 写入（`electron/main.cjs`），打包 exe 无附着控制台也能留痕。
-- 如已打包但缺启动器，可单独运行 `npm run launcher` 重新生成。
+项目关键目录：
 
-### 撤销/重做（Ctrl+Z / Ctrl+Y）
-- 撤销只记录**节点操作**：移动、连线、断连、删除、复制、新增、检查器中的编辑。
-- 画布级操作（Ctrl+L 横排 / Ctrl+Shift+A 自动整理、聚焦视图）**不写入撤销历史**。
-- 编辑字段聚焦时记录一次快照，编辑过程本身是单步可撤销。
-
-## 项目结构
-
-```
-electron/           Electron 主进程 / 预加载 / .cnode 编解码
-  agent.cjs         Agent 工具循环（流式解析、截断安全、压缩、引用校验）
-  agentState.cjs    运行状态机（7 状态 + 显式迁移表）
-  tools/            工具注册表 / 契约（ToolDescriptor）/ 能力面 / 子代理
-  ipc/              按域拆分的 IPC 通道（models / project / metrics / agent）
-  rag/ vectorStore/ Agentic RAG 与可插拔向量后端（memory 默认 / SQLite / Milvus）
-  sandbox/          跨平台执行隔离（Windows Job / bwrap / sandbox-exec）
-src/
-  components/       画布、项目管理器、检查器、工具栏、状态栏、添加菜单
-  lib/              项目生命周期（新建/打开/保存）
-  nodes/            画布节点类型与模板
-  vector/           矢量画布节点（设计 / 逻辑两种模式）
-  resources/schemas/.cnode 格式 JSON Schema
-  store/            zustand：图模型 / 项目 / UI 状态
-  types.ts          节点数据类型
-scripts/            门禁与测试套件（104 项核心 + 7 项显示）/ 打包 / 发布 / 评测
+```text
+src/                 React 界面、画布、状态 store
+electron/            主进程、Agent、IPC、工具、检索与工程格式
+config/              Agent 配置示例与默认提示
+scripts/             开发入口、构建、门禁与发布脚本
+docs/                功能设计、架构记录及截图
 ```
 
-## 测试
+问题排查时先分清三种情况：**打不开工作台**看 Electron 启动终端；**模型不回答**核对当前模型、地址与 Key；**任务做到一半停止**到“运行”页查看工具记录和恢复计划。不要把画布的“数据流”计算误当作 Agent 工作流运行。
 
-统一入口（推荐；CI 也走这里，门禁清单只在 `scripts/run-all-tests.cjs` 维护一处）：
+## 文档与许可证
 
-```powershell
-npm run verify         # 提交前必跑：build + check:js + core 套件（104 项）
-npm test               # core 套件：无显示环境 / 无网络 / 确定性
-npm run test:display   # 需要窗口或本机浏览器的用例（smoke / RAG UI / 矢量画布）
-npm run test:list      # 打印套件清单
-npm run check:js       # electron/** 与 scripts/** 的 checkJs 静态检查（.cjs 不受 src 的 tsc 覆盖）
-npm test -- --only test:eval,test:sandbox   # 单项排查
-```
+- [画布节点操作](docs/canvas-node.md)
+- [Agent 观察结果处理](docs/agent-observation-flow.md)
+- [多 Agent 结果完整性](docs/multi-agent-info-integrity-2026-09-17.md)
+- [模型协议与多供应商接入](docs/model-protocol-multi-provider-2026-09-23.md)
+- [发布流程](docs/release-process.md)
+- [MIT License](LICENSE)
 
-单项命令（与上面等价，便于定位）：
-
-```powershell
-# DOM 冒烟（加载 dist/，校验画布/面板/控件；无 GUI 的 CI 会明确跳过）
-npm run test:smoke
-# 主进程自检（验证 preload + IPC + .cnode 保存/加载/完整性）
-$env:CODENODE_TEST=1; node_modules\electron\dist\electron.exe .
-# Agentic RAG 端到端测试（多查询融合、质量诊断、范围策略、安全排除、显式/自动刷新）
-node scripts/rag-test.cjs
-# 引用白名单与提示注入防护规则测试
-node scripts/rag-grounding-test.cjs
-# 标量库 / 可插拔向量 / 子代理压缩 端到端测试
-node scripts/scalar-vector-test.cjs
-# 向量后端（memory 默认 + SQLite / Milvus 适配器 / 降级 / vector-only）测试
-node scripts/vector-store-test.cjs
-# 真嵌入 + Milvus 的语义检索验证（需 MILVUS_ADDR 与 EMBED_BASE，未设置则 SKIP）
-node scripts/vector-store-semantic-probe.cjs
-# 画布节点读写一致性（缓存失效）回归测试
-node scripts/cache-consistency-test.cjs
-# 画布-会话解耦（就地修改 vs 新开画布 / 不复活已删节点）回归测试
-node scripts/session-canvas-test.cjs
-# workbench_edit 建模能力（scope members / 自定义 id / start-end 连线）回归测试
-node scripts/workbench-model-test.cjs
-# 画布节点（矢量画布内嵌）端到端 UI 验收：先 `npx vite --port 5199` 起 dev server，再执行
-npm run test:vector
-# 自动整理（连通分量分块 / scope 包裹）回归测试
-node scripts/arrange-test.cjs
-# 长任务后台执行 + poll_job 轮询 回归测试
-node scripts/background-job-test.cjs
-# 构建后验证来源校验徽标渲染
-npm run test:rag-ui
-# Agent 可靠性、安全边界、密钥存储、SSRF 与运行持久化回归
-npm run test:agent-reliability
-# 生产门禁（安全配置、运行持久化、角色隔离和核心结构检查）
-npm run test:production-gate
-```
-
-### 生产运行边界
-
-- Agent Run 会把生命周期、工具结果摘要、审计事件和结束状态追加写入 `.codenode/runs/<runId>.jsonl`；应用重启后未结束的 Run 会标记为 `interrupted`，不会伪装成已完成。
-- 单进程默认最多并发 2 个 Agent Run，单轮默认最多累计 600,000 tokens；可通过 `agent.max_concurrent_runs` 与 `agent.max_total_tokens` 调整。
-- `fetch_url` 会阻止 localhost、回环、私网、链路本地和解析到私网的域名，并限制手动重定向次数；项目扩展/MCP 子进程默认不继承密钥类环境变量。
-- GitHub Actions 的 `production-gate` 会执行生产构建、核心 Agent/RAG/子代理/后台任务回归和静态安全门禁。真实供应商端到端测试需要在受控环境注入凭据，不能用本地 mock 代替。
-- 真实供应商冒烟测试：设置 `CODENODE_E2E_API_KEY`（可选 `CODENODE_E2E_API_BASE`、`CODENODE_E2E_MODEL`）后运行 `npm run test:provider-smoke`；CI 通过 `PROVIDER_E2E_ENABLED=true` 才启用该 job。
-
-### Windows 打包（`npm run dist:win`）
-
-- 流程：`tsc --noEmit && vite build` → `postbuild` 生成 `build/icon.ico` → `electron-builder --win portable`，产物为 `release\CodeNode-<version>.exe`，随后 `make-launcher.cjs` 生成 `release\CodeNode 控制台.cmd`（可跟随应用日志的启动器）。
-- `build.win.signAndEditExecutable: true` 会让 electron-builder 调用 rcedit 写入图标/版本信息，而 app-builder 需要 `winCodeSign-2.6.0`（内含 `rcedit-x64.exe`）。它的 7z 里有 2 个 macOS 符号链接（`darwin/10.12/lib/libcrypto.dylib`、`libssl.dylib`），**在没有「创建符号链接」权限的 Windows 上 7za 解压会返回 exit 2，导致打包中断**。
-- 规避：先把该产物缓存到 app-builder 约定的路径即可（之后打包会直接命中缓存、不再下载）。失败时缓存里会留下 `winCodeSign-2.6.0.7z`，用它解压一次即可：
-
-```powershell
-$cache = "$PWD\.cache\electron-builder"
-$7z = "node_modules\7zip-bin\win\x64\7za.exe"
-$arc = Get-ChildItem "$cache\winCodeSign\*.7z" | Select-Object -First 1
-& $7z x $arc.FullName "-o$cache\winCodeSign\winCodeSign-2.6.0" '-xr!darwin' -y
-```
-
-- 桌面快捷方式不随打包自动更新：若安装了 `release\CodeNode-<version>.exe` 的快捷方式，升级版本号后需要把 `.lnk` 的目标指向新 exe（同一目录下的 `CodeNode 控制台.cmd` 会自动匹配第一个 `CodeNode-*.exe`，因此建议旧版本 exe 移出 `release\`）。
-
-## 路线图
-
-- [x] 基础画布 + 基础 UI + `.cnode` 专属格式
-- [x] Agent 引擎 + 工具循环 + 本地 Agentic RAG
-- [x] 长期记忆（remember / recall）
-- [x] 节点 = Agent 工作流：进度 / 顺序 / 结果摘要可视化
-- [x] Agent 通过工具控制画布（创建 / 连线 / 推进状态）
-- [x] 打包分发配置（electron-builder）与 `.cnode` 文件关联；实际签名/发布由 CI 或发行机执行
-
-## 发布与许可证
-
-- 发布流程（版本唯一来源、哈希清单、签名、升级/回滚判据）见 [`docs/release-process.md`](docs/release-process.md)：
-  `npm run release:hash` 生成 sha256/sha512 清单（不签名，CI 可跑）；`npm run release:sign` 用证书签名
-  （Windows 走 signtool；凭据与 fail-closed 规则见文档第 4 节）。
-- 许可证：**MIT**，见 [`LICENSE`](LICENSE)。
