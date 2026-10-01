@@ -10,6 +10,7 @@ const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot, readTextFile, checkExpectedHash, sha256OfFile } = require('./shared.cjs');
 const { atomicWriteFile } = require('../../atomicFile.cjs');
+const { fileChangeReview } = require('../fileChangeReview.cjs');
 
 function indexOfOccurrence(content, needle, occurrence) {
   let from = 0;
@@ -128,6 +129,7 @@ function register(registry) {
         return AgentToolResult.ok('已替换 ' + replaced + ' 处：' + relative, {
           path: relative,
           replaced,
+          review: fileChangeReview(content, updated, true),
           // 回传写入后的哈希：下一个写者可以拿它当 expectedSha256（乐观并发的交接棒）
           sha256: sha256OfFile(file),
         });

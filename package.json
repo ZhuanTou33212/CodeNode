@@ -48,6 +48,7 @@
     "test:read-file-limits": "node scripts/read-file-limits-test.cjs",
     "test:tool-pagination": "node scripts/tool-pagination-test.cjs",
     "test:observation-state": "node scripts/observation-state-test.cjs",
+    "test:file-change-review": "node scripts/file-change-review-test.cjs",
     "test:limit-wrapup": "node scripts/limit-wrapup-test.cjs",
     "test:memory-recall": "node scripts/memory-recall-test.cjs",
     "test:memory-conflict": "node scripts/memory-conflict-test.cjs",

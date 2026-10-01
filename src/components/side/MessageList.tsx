@@ -1,5 +1,6 @@
 import { memo, useState } from 'react';
 import type { SessionMsg } from '../../types';
+import TaskTrace from './TaskTrace';
 
 /** 单条会话消息（用户 / Agent），含推理与工具调用折叠区。原 ChatSidebar 内联实现，现供侧栏 Agent 标签复用。 */
 export function MessageView({ msg }: { msg: SessionMsg }) {
@@ -79,6 +80,7 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
               : `! 发现 ${grounding.invalid.length} 个无效引用`}
         </div>
       ) : null}
+      {tools.length ? <TaskTrace tools={tools} status={msg.status} /> : null}
       {msg.reasoning ? (
         <div className="chat-section">
           <button className="chat-section-toggle" onClick={() => setShowReasoning((v) => !v)}>

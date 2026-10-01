@@ -50,9 +50,10 @@ type SubagentRunView = {
  *   - `state === 'LIMIT_REACHED'`：**跑到上限停下**（status 仍是 error，靠 state 区分）——
  *     这些 Run 有检查点、续跑计划通常也是 auto，却被 `status === 'interrupted'` 的过滤挡在门外，
  *     用户只能看到一句「任务未完成」，连续跑按钮都找不到。
+ *   - `state === 'FAILED'`：允许查看恢复计划；失败原因与副作用需人工复核。
  */
 function isResumableRun(run: AgentRun) {
-  return run.status === 'interrupted' || run.state === 'LIMIT_REACHED';
+  return run.status === 'interrupted' || run.state === 'LIMIT_REACHED' || run.state === 'FAILED';
 }
 type ResumePlan = {
   runId?: string;
@@ -579,7 +580,7 @@ function RunsPanel() {
       <button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
-        <strong>可续跑的 Agent 运行（中断 / 达到步数上限）</strong>
+        <strong>可恢复的 Agent 运行（中断 / 达到上限 / 失败）</strong>
         {agentRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
           <span>
             {run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}

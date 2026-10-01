@@ -9,6 +9,7 @@ const { AgentToolResult } = require('../result.cjs');
 const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot, checkExpectedHash, sha256OfFile, summarizeContentForConfirm } = require('./shared.cjs');
 const { atomicWriteFile } = require('../../atomicFile.cjs');
+const { fileChangeReview } = require('../fileChangeReview.cjs');
 
 function register(registry) {
   registry.register(
@@ -72,6 +73,18 @@ function register(registry) {
       const existedNow = fs.existsSync(target);
       const backup = args.backup !== false;
       try {
+        let beforeText = '';
+        let reviewUnavailable = null;
+        if (existedNow) {
+          const size = fs.statSync(target).size;
+          if (size > 2 * 1024 * 1024) reviewUnavailable = '原文件超过 2 MB，未生成内联差异';
+          else {
+            beforeText = fs.readFileSync(target, 'utf8');
+            if (beforeText.includes('\0')) reviewUnavailable = '原文件不是纯文本，未生成内联差异';
+          }
+        }
+        if (content.length > 2 * 1024 * 1024) reviewUnavailable = '写入内容超过 2 MB，未生成内联差异';
+        const review = reviewUnavailable ? null : fileChangeReview(beforeText, content, existedNow);
         if (existedNow && backup) {
           fs.copyFileSync(target, target + '.bak');
         }
@@ -82,6 +95,8 @@ function register(registry) {
         return AgentToolResult.ok('已写入 ' + relative + '（' + content.length + ' 字节）', {
           path: relative,
           bytes: content.length,
+          review,
+          reviewUnavailable,
           // 回传写入后的哈希：下一个写者可以拿它当 expectedSha256（乐观并发的交接棒）
           sha256: sha256OfFile(target),
         });
