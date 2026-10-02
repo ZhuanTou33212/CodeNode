@@ -1504,6 +1504,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
   signal && signal.addEventListener('abort', onAbort);
   let usage = null;
   /** 本尝试已流出的部分（供重发时如实上报「作废了多少字」） */
+  /** @type {{content: string, reasoning: string, toolCalls: any[]}} */
   const partial = { content: '', reasoning: '', toolCalls: [] };
   const partialChars = () => partial.content.length + partial.reasoning.length +
     partial.toolCalls.reduce((sum, call) => sum + String(call.name || '').length + String(call.args || '').length, 0);
