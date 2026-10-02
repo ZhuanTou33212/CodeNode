@@ -1279,7 +1279,7 @@ async function chatCompletion(cfg, messages, options = {}) {
 /**
  * @param {any} cfg
  * @param {Array<any>} messages
- * @param {{ signal?: AbortSignal, timeoutMs?: number, attemptsRef?: { count: number } }} [options]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, attemptsRef?: any }} [options]
  */
 async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
@@ -1637,7 +1637,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
  * @param {any} cfg
  * @param {Array<any>} messages
  * @param {(event: any) => void} onEvent
- * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, streamMaxAttempts?: number, tools?: any, attemptsRef?: { count: number } }} [options]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, streamMaxAttempts?: number, tools?: any, attemptsRef?: any }} [options]
  */
 async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}) {
   const reliability = (cfg && cfg.reliability) || {};

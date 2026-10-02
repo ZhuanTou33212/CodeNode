@@ -203,7 +203,7 @@ async function withBudget(cfg, messages, tools, operation, attemptsRef) {
  * while the cost ledger marks the visible estimate as billing-unknown.
  * @param {any} cfg
  * @param {any[]} messages
- * @param {any[]} tools
+ * @param {any} tools
  * @param {() => Promise<any>} operation
  * @param {any} attemptsRef
  */
