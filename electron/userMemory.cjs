@@ -110,7 +110,7 @@ function persistUserMemoryUnlocked(entries, options = {}) {
   const current = readUserMemory();
   if (!current.ok) throw new Error('拒绝写入用户级记忆：' + current.error);
   if (options.expectedRevision != null && current.revision !== options.expectedRevision) {
-    const error = new Error('用户级记忆在确认期间已变化，请重新读取后再保存');
+    const error = /** @type {Error & {code?: string}} */ (new Error('用户级记忆在确认期间已变化，请重新读取后再保存'));
     error.code = 'MEMORY_CONFLICT';
     throw error;
   }
@@ -143,7 +143,7 @@ function writeUserMemory(entries) {
 
 /**
  * 同槽位写入新版本；内容、标签与生效时间都相同时返回 duplicate，不重复落盘。
- * @param {{key?: string, content: string, tags?: string[]}} entry
+ * @param {{key?: string, kind?: string, content: string, value?: string, tags?: string[]}} entry
  */
 function addUserMemory(entry, options = {}) {
   const content = redact(String((entry && entry.content) || '').trim());

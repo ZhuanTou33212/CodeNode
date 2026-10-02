@@ -127,7 +127,7 @@ function collectEvidence(input = {}) {
       warnings.push('引用来源不在工程内或路径无效，未纳入版本证据：' + String(rawPath || ''));
       return;
     }
-    const rel = path.relative(path.resolve(projectRoot), abs).split(path.sep).join('/');
+    const rel = path.relative(path.resolve(projectRoot || process.cwd()), abs).split(path.sep).join('/');
     let source = sourceByPath.get(rel);
     if (!source) {
       if (sources.length >= MAX_EVIDENCE_SOURCES) {
@@ -137,7 +137,7 @@ function collectEvidence(input = {}) {
       let stat = null;
       try { stat = fs.statSync(abs); } catch {}
       const exists = !!(stat && stat.isFile());
-      const bytes = exists ? stat.size : 0;
+      const bytes = stat && stat.isFile() ? stat.size : 0;
       const hash = /^sha256:[0-9a-f]{64}$/.test(String(meta.sha256 || '')) ? meta.sha256 : null;
       if (exists && bytes > MAX_EVIDENCE_SOURCE_BYTES) {
         warnings.push('引用来源超过 ' + MAX_EVIDENCE_SOURCE_BYTES + ' 字节，只记录存在性/长度，不能自动确认版本：' + rel);

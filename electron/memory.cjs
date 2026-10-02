@@ -132,7 +132,7 @@ function writeMemoryUnlocked(projectRoot, entries, options = {}) {
     throw new Error('拒绝写入项目记忆：' + current.error + '（原文件已保留，请先修复或删除再重试）');
   }
   if (options.expectedRevision != null && current.revision !== options.expectedRevision) {
-    const error = new Error('项目记忆在确认期间已变化，请重新读取后再保存');
+    const error = /** @type {Error & {code?: string}} */ (new Error('项目记忆在确认期间已变化，请重新读取后再保存'));
     error.code = 'MEMORY_CONFLICT';
     throw error;
   }
@@ -307,7 +307,7 @@ const MEMORY_INJECTION_DEFAULTS = Object.freeze({
  *
  * @param {Array<any>} entries
  * @param {string} query
- * @param {{limit?: number, maxEntryChars?: number, budgetTokens?: number, requireMatch?: boolean, label?: string}} [options]
+ * @param {{limit?: number, maxEntryChars?: number, budgetTokens?: number, requireMatch?: boolean, label?: string, scope?: 'project'|'user', sessionOverrides?: any}} [options]
  * @returns {{text: string, tokens: number, count: number, matched: boolean, dropped: number, truncated: number}}
  */
 function buildMemoryInjection(entries, query, options = {}) {

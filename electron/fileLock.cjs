@@ -31,7 +31,7 @@ function staleLock(lockPath, now) {
 }
 
 function lockError(target) {
-  const error = new Error('记忆文件正被另一个进程更新，请稍后重试：' + target);
+  const error = /** @type {Error & {code?: string}} */ (new Error('记忆文件正被另一个进程更新，请稍后重试：' + target));
   error.code = 'MEMORY_LOCKED';
   return error;
 }
