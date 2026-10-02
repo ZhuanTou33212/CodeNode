@@ -13,9 +13,11 @@
 
 ## Git stash 快照
 
-- `stash@{0}` 建于 2026-10-01，以 `085fbe2` 为基线；`stash@{1}` 建于 2026-09-30，以 `31c5288` 为基线。两者都早于当前 `yimi-branch` 的后续记忆、RAG、工具和 CI 修复提交。
+- `stash@{0}`（`86d88de675291d101d1807ba6f13fe51dc0d6173`）建于 2026-10-01，以 `085fbe2` 为基线；`stash@{1}`（`1b8bb3997cd48b4d7e54be7d6518f2b96cf799ef`）建于 2026-09-30，以 `31c5288` 为基线。两者都早于当前 `yimi-branch` 的后续记忆、RAG、工具和 CI 修复提交。
 - 按文件比较，`stash@{0}` 的 111 个路径中 55 个与当前工作区一致，50 个已有后续实现，另有 4 个缺失的旧图稿路径和 2 个已移除的旧画布工具路径。`stash@{1}` 的 41 个路径中 10 个一致、29 个已有后续实现，缺失的是同样 2 个旧画布工具路径。
 - 4 个旧图稿路径实际只有 **1 份 SVG + 1 份 PNG**：`agent-react-state-machine` 与 `agent-react-statechart` 两组名字的 Git blob 完全相同。已去重恢复到 [SVG](archive/agent-react-state-machine.svg) 和 [PNG](archive/agent-react-state-machine.png)。
 - `createNodesTool.cjs` 与 `workbenchConnectTool.cjs` 是旧版已删除工具；当前工作台使用统一的 `workbench_edit`，因此未重新接回旧工具。
 
 上述对账用于提取备份中的独有源码或文档内容。完整旧安装目录是历史构建产物，不应以旧文件覆盖已验证的新实现。
+
+源码、测试、文档与去重图稿提交到 `yimi-branch` 后，两份旧解包目录已从本机 `release-backups/` 清除，两份旧 stash 引用也已移除；当前 `release/win-unpacked` 保持可用。项目内部的 Codex 快照 refs 属于工具恢复机制，不在本次备份清理范围内。
