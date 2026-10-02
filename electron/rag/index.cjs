@@ -19,11 +19,13 @@ const { createEmbedder, cosine } = require('../embedder/index.cjs');
 const { createVectorStore, normalizeBackend } = require('../vectorStore/index.cjs');
 const { buildCodeGraph } = require('./codeGraph.cjs');
 const { rerankCandidates } = require('./rerank.cjs');
+const { isDocumentFile, extractDocumentText } = require('../tools/impl/documentText.cjs');
 
 const DEFAULTS = Object.freeze({
   enabled: true,
   maxFiles: 5000,
   maxFileBytes: 512 * 1024,
+  maxDocumentBytes: 20 * 1024 * 1024,
   chunkLines: 72,
   chunkOverlap: 12,
   topK: 6,
@@ -133,6 +135,7 @@ function normalizeOptions(options) {
     enabled: o.enabled !== false,
     maxFiles: clampInteger(o.maxFiles, DEFAULTS.maxFiles, 1, 50000),
     maxFileBytes: clampInteger(o.maxFileBytes, DEFAULTS.maxFileBytes, 1024, 8 * 1024 * 1024),
+    maxDocumentBytes: clampInteger(o.maxDocumentBytes, DEFAULTS.maxDocumentBytes, 1024 * 1024, 100 * 1024 * 1024),
     chunkLines,
     chunkOverlap: clampInteger(o.chunkOverlap, DEFAULTS.chunkOverlap, 0, Math.max(0, chunkLines - 1)),
     topK: clampInteger(o.topK, DEFAULTS.topK, 1, 20),
@@ -198,11 +201,12 @@ function isSensitiveFile(relative) {
   return /(^|[._-])(credentials?|secrets?|private[-_]?key)([._-]|$)/i.test(name);
 }
 
-function shouldIndexFile(relative, size, maxFileBytes) {
+function shouldIndexFile(relative, size, maxFileBytes, maxDocumentBytes = DEFAULTS.maxDocumentBytes) {
   const normalized = relative.replace(/\\/g, '/');
   const name = path.posix.basename(normalized).toLowerCase();
-  if (!size || size > maxFileBytes) return false;
-  if (isBinaryFileName(name) || isSensitiveFile(normalized) || NOISY_FILES.has(name)) return false;
+  const document = isDocumentFile(name);
+  if (!size || size > (document ? maxDocumentBytes : maxFileBytes)) return false;
+  if ((!document && isBinaryFileName(name)) || isSensitiveFile(normalized) || NOISY_FILES.has(name)) return false;
   if (name.endsWith('.min.js') || name.endsWith('.min.css') || name.endsWith('.map')) return false;
   return true;
 }
@@ -268,7 +272,17 @@ function readUtf8(file, maxBytes) {
   }
 }
 
-function splitIntoChunks(relative, text, chunkLines, overlap) {
+function readDocument(file, maxBytes) {
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) return null;
+    return extractDocumentText(fs.readFileSync(file), file)?.text || null;
+  } catch {
+    return null;
+  }
+}
+
+function splitIntoChunks(relative, text, chunkLines, overlap, minChars = 12) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const chunks = [];
   const boundaryScore = (at) => {
@@ -295,11 +309,12 @@ function splitIntoChunks(relative, text, chunkLines, overlap) {
       }
     }
     const content = lines.slice(start, end).join('\n').trimEnd();
-    if (content.trim().length >= 12) {
+    if (content.trim().length >= minChars) {
       const tokens = tokenize(relative + '\n' + content);
       chunks.push({
         id: relative + ':' + (start + 1) + ':' + end,
         path: relative,
+        kind: 'text',
         startLine: start + 1,
         endLine: end,
         content,
@@ -601,7 +616,7 @@ class LocalRagIndex {
   }
 
   accepts(relative, size) {
-    if (!shouldIndexFile(relative, size, this.options.maxFileBytes)) return false;
+    if (!shouldIndexFile(relative, size, this.options.maxFileBytes, this.options.maxDocumentBytes)) return false;
     if (this.includePatterns.length && !this.includePatterns.some((item) => item.regex.test(relative))) return false;
     if (this.excludePatterns.some((item) => item.regex.test(relative))) return false;
     return true;
@@ -642,7 +657,10 @@ class LocalRagIndex {
         reusedFiles++;
         continue;
       }
-      const text = readUtf8(item.absolute, this.options.maxFileBytes);
+      const document = isDocumentFile(item.relative);
+      const text = document
+        ? readDocument(item.absolute, this.options.maxDocumentBytes)
+        : readUtf8(item.absolute, this.options.maxFileBytes);
       this.dropFileVectors(item.relative);
       if (text == null) {
         skippedFiles++;
@@ -653,11 +671,13 @@ class LocalRagIndex {
       // TypeScript 解析器体积较大，直到首次建立文件索引时才加载。
       const structure = CODE_FILE_RE.test(item.relative)
         ? require('./codeStructure.cjs').analyzeCode(item.relative, text) : null;
+      const chunks = structure
+        ? splitStructuredChunks(item.relative, text, structure.segments, this.options.chunkLines, this.options.chunkOverlap)
+        : splitIntoChunks(item.relative, text, this.options.chunkLines, this.options.chunkOverlap, document ? 1 : 12);
+      if (document) for (const chunk of chunks) chunk.kind = 'document';
       this.fileCache.set(item.relative, {
         signature,
-        chunks: structure
-          ? splitStructuredChunks(item.relative, text, structure.segments, this.options.chunkLines, this.options.chunkOverlap)
-          : splitIntoChunks(item.relative, text, this.options.chunkLines, this.options.chunkOverlap),
+        chunks,
         imports: structure ? structure.imports : [],
       });
       // 只有「本次重新分块」的文件才需要写入外部向量后端（未变文件复用已有向量）

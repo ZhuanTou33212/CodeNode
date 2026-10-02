@@ -14,6 +14,12 @@
 
 ![CodeNode Agent 对话与画布](screenshots/agent-chat.png)
 
+### 检索项目中的文档
+
+把 PDF、DOCX、XLSX、PPTX 放在打开的项目目录中，Agent 可用 `retrieve_context` 检索其中提取出的文字，再用 `read_file` 按行复核来源。宏启用的 DOCM/XLSM/PPTM 也按相同的文字结构处理；不会执行其中的宏。PDF 的 `#Lx-Ly` 引用对应**提取后文本的行号**，不是印刷页码。默认单个文档原文件上限 20 MB，可通过 `rag.max_document_mb` 调整；提取后最多保留 100 万字符进入索引。
+
+扫描版 PDF 没有文字层时目前不会执行 OCR；旧二进制格式 `.doc`、`.xls`、`.ppt` 以及加密或损坏的文件也不会直接进入索引。这些文件需先转换为可提取文字的 PDF、现代 Office 格式或 UTF-8 文本。
+
 ### 在画布上编排并运行工作流
 
 1. 在空白画布按 **Shift+A** 添加节点。最简单的链路是 `start → task → end`：从右侧输出端口拖线到下一个节点左侧输入端口。

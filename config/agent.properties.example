@@ -92,6 +92,7 @@ soul_file=config/soul.md
 # rag.enabled=true
 # rag.max_files=5000
 # rag.max_file_bytes=524288
+# rag.max_document_mb=20       # PDF / DOCX / XLSX / PPTX 原文件上限（MB）；提取后的正文另有长度限制
 # rag.chunk_lines=72
 # rag.chunk_overlap=12
 # rag.top_k=6

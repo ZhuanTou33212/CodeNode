@@ -13,6 +13,12 @@
 
 ## 2. 总体架构（已落地 + 本期实现）
 
+### 文档文字接入（PDF / 现代 Office）
+
+`LocalRagIndex` 除源码和 UTF-8 文本外，还会对 PDF 文字层及 DOCX/DOCM、XLSX/XLSM、PPTX/PPTM 提取正文，经过同一套分块、BM25、可选向量融合、重排与引用流程。PDF 复用 `pdfText.cjs`；现代 Office 在内存中按 ZIP 中央目录读取必要 XML，不解包附件，也不执行宏。`read_file` 使用同一 Office 提取器的 worker 路径，便于按 RAG 给出的提取后行号复核。
+
+默认每份文档原文件不超过 20 MB（`rag.max_document_mb`），必要 XML 单项不超过 8 MB，提取正文最多 100 万字符；超限、加密、损坏或无可读文字的文档会跳过。扫描版 PDF 不含文字层，当前无 OCR；旧二进制 `.doc/.xls/.ppt` 不在直接支持范围。文档引用的行号指**提取后的文本行**，不是 PDF 页码或电子表格的物理行号。
+
 ```
                     ┌────────────────────────────────────────────┐
    Agent(主 LLM) ──►│  retrieve_context  mode=auto/file/vector/   │

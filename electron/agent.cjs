@@ -275,6 +275,7 @@ function parseRagConfig(cfg) {
     enabled: cfg['rag.enabled'] == null ? true : String(cfg['rag.enabled']).toLowerCase() !== 'false',
     maxFiles: configInteger(cfg, 'rag.max_files', 5000, 1, 50000),
     maxFileBytes: configInteger(cfg, 'rag.max_file_bytes', 512 * 1024, 1024, 8 * 1024 * 1024),
+    maxDocumentBytes: configInteger(cfg, 'rag.max_document_mb', 20, 1, 100) * 1024 * 1024,
     chunkLines,
     chunkOverlap: configInteger(cfg, 'rag.chunk_overlap', 12, 0, Math.max(0, chunkLines - 1)),
     topK: configInteger(cfg, 'rag.top_k', 6, 1, 20),

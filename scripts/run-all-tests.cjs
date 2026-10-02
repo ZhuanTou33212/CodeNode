@@ -81,6 +81,7 @@ const CORE = [
   'test:security',
   'test:ipc',
   'test:rag',
+  'test:rag-document',
   'test:shell-output',
   'test:bg',
   'test:production-gate',

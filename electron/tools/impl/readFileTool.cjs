@@ -1,5 +1,5 @@
 /**
- * read_file：读取项目内文本文件（UTF-8，自动识别语言；二进制/非 UTF-8 拒绝并说明）。
+ * read_file：读取项目内 UTF-8 文本、PDF 文字层与现代 Office 文档正文。
  * 超过 maxLines 截断并标注总行数；analyze=true 返回结构化摘要（import/class/function/变量）而非原文。
  */
 'use strict';
@@ -36,11 +36,18 @@ function binarySuggestion(relative) {
     case '.zip':
     case '.cnode':
       return '归档，先解压再分析内部条目';
+    case '.doc':
+    case '.xls':
+    case '.ppt':
+      return '旧版二进制 Office 格式，需先转换为 DOCX/XLSX/PPTX 或 UTF-8 文本';
     case '.pdf':
     case '.docx':
+    case '.docm':
     case '.xlsx':
+    case '.xlsm':
     case '.pptx':
-      return '文档格式，需专用解析器';
+    case '.pptm':
+      return '文档文字不可提取，可能加密、损坏或缺少文字层';
     default:
       return '用 scan_project 或专用工具处理';
   }
@@ -78,10 +85,7 @@ function analyzeStructure(text, maxLines) {
 function register(registry) {
   registry.register(
     'read_file',
-    '读取项目内文本文件（UTF-8，自动识别语言；二进制/非 UTF-8 拒绝并说明解析方法；PDF 自动提取文字层）。' +
-      '超过 maxLines 行时截断并标注总行数与可继续的 offset。' +
-      'offset 为起始行号（1 基，默认 1），大文件请分段读取：先 offset=1，再 offset=201、401…' +
-      'analyze=true 时返回结构化摘要（import/类/函数/变量）而非原文，适合大文件与快速定位。',
+    '读 UTF-8 文本及 PDF、DOCX、XLSX、PPTX；offset/maxLines/charOffset 分页，analyze=true 返回结构摘要。',
     {
       type: 'object',
       properties: {
@@ -138,12 +142,14 @@ function register(registry) {
         meta.matched = path.relative(root, fuzzyMatched).replace(/\\/g, '/');
       }
 
-      // PDF 特殊处理：自动提取文字层（含 CID/Identity-H + ToUnicode 的 Word 型 PDF）
+      // 文档特殊处理：PDF 文字层与现代 Office 正文经文件 worker 提取。
       let text = null;
-      const isPdf = path.extname(relative).toLowerCase() === '.pdf';
+      const ext = path.extname(relative).toLowerCase();
+      const isPdf = ext === '.pdf';
+      const isOffice = ['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm'].includes(ext);
       if (isPdf) {
         meta.language = 'pdf';
-        // P7 收口：PDF 分支是 read_file 里**唯一**的重活 —— 读（≤20MB，实测同步 ~6.6ms）之后还要
+        // P7 收口：PDF/Office 分支是 read_file 里的重活 —— 读（≤20MB）之后还要
         // 跑自研解析（inflate + CMap + 文本重建；实测一个 60MB 文本流光 inflate 就 ~82ms，
         // 真实 PDF 100–300ms 量级）。worker 固定往返只有 ~24ms，所以这是正收益：主线程不再被冻住，
         // 取消也能真的 terminate。
@@ -178,6 +184,33 @@ function register(registry) {
         }
         text = pdfResult.text;
         meta.sourceSha256 = pdfResult.sha256;
+      } else if (isOffice) {
+        meta.language = ext.slice(1);
+        const outcome = await fsRunner.runFsTask(
+          'readOfficeText',
+          { path: file, maxBytes: MAX_PDF_BYTES },
+          { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+        );
+        if (outcome.cancelled || outcome.timedOut) {
+          return AgentToolResult.failure('CANCELLED', 'Office 文档解析已取消（用户停止）。', { cancelled: true, path: relative });
+        }
+        if (outcome.mode === 'sync-fallback') {
+          context.audit('read_file(Office) worker 不可用，已退回主线程同步解析：' + outcome.fallbackReason);
+        }
+        const officeResult = outcome.result;
+        if (!officeResult || officeResult.ok !== true) {
+          meta.binary = true;
+          if (officeResult && officeResult.errorKind === 'too-large') {
+            return AgentToolResult.error(relative + ' 文档过大（>' + officeResult.limitMb + 'MB），无法读取', meta);
+          }
+          if (officeResult && officeResult.errorKind === 'read-failed') {
+            return AgentToolResult.error(officeResult.error, meta);
+          }
+          return AgentToolResult.error(relative + ' 的文字无法提取（文件可能损坏、加密或没有可读正文）。', meta);
+        }
+        text = officeResult.text;
+        meta.sourceSha256 = officeResult.sha256;
+        meta.extractedTruncated = officeResult.truncated === true;
       } else {
         const read = readTextFile(file, MAX_TEXT_BYTES);
         if (!read.ok) {
