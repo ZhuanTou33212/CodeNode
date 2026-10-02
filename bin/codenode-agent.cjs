@@ -160,7 +160,8 @@ async function main() {
 
   const sandboxPolicy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: path.join(projectRoot, '.codenode') });
   sandbox.setDefaultPolicy(sandboxPolicy);
-  cfg.requestBudget = new RequestBudget(cfg.limits && cfg.limits.maxTotalTokens);
+  cfg.requestBudget = new RequestBudget(cfg.limits && cfg.limits.maxTotalTokens,
+    { retryLimit: cfg.limits && cfg.limits.maxTotalRetries });
   const runId = runStore.normalizeRunId('run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
   cfg.costRunId = runId;
 

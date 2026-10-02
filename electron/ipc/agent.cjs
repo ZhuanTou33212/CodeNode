@@ -355,7 +355,7 @@ function register(ctx) {
       const sandboxPolicy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: userDataDir() });
       sandbox.setDefaultPolicy(sandboxPolicy);
       const maxConcurrentRuns = Number(cfg.limits && cfg.limits.maxConcurrentRuns) || 2;
-      cfg.requestBudget = new RequestBudget(cfg.limits.maxTotalTokens);
+      cfg.requestBudget = new RequestBudget(cfg.limits.maxTotalTokens, { retryLimit: cfg.limits.maxTotalRetries });
       if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
       // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
@@ -735,12 +735,14 @@ function register(ctx) {
                 const res = await agent.chatCompletion(callCfg, classifierMessages, { timeoutMs, signal });
                 // 记账口径与 compaction 一致：chatCompletion 自己不入账，由**调用方按用途**记账
                 // （kind='intent'，所以「意图识别花了多少」在成本面板里单独可查，不混进主对话）
-                agent.recordCost(cfg, {
+                if (res && res.usage) agent.recordCost(cfg, {
                   kind: 'intent',
                   model: callCfg.model,
                   usage: res && res.usage,
+                  attempt: res && res.httpAttempts,
                   latencyMs: Date.now() - startedAt,
                   runId: cfg.costRunId,
+                  meta: { perAttempt: true },
                 });
                 return (res && res.content) || '';
               },
