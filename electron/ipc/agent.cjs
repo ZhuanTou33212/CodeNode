@@ -46,6 +46,9 @@ const compactionLib = require('../compaction.cjs');
 // 动态上下文段落的统一 token 预算（审计 §4 P1-2）
 const dynamicContext = require('../dynamicContextBudget.cjs');
 const promptContextLib = require('../promptContext.cjs');
+const memoryIntent = require('../memoryIntent.cjs');
+const memoryPersistence = require('../memoryPersistence.cjs');
+const sessionOverrideStore = require('../sessionOverrideStore.cjs');
 const ragSettings = require('../ragSettings.cjs');
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
@@ -94,6 +97,8 @@ const { auditLog } = require('./project.cjs');
 
 /** 正在运行的 Agent 请求：requestId/runId → AbortController（「停止思考」与中断恢复判定都用它） */
 const activeRequests = new Map();
+/** 同一对话的两轮请求必须顺序处理，否则后轮看不到前轮刚确定的临时覆盖。 */
+const activeMemorySessions = new Set();
 
 /**
  * 用户插话（steering）队列 —— 实现搬到 `electron/steerQueue.cjs`（独立模块，用例可直接驱动，
@@ -340,9 +345,10 @@ function register(ctx) {
   });
 
   ipcMain.handle('agent:chat', async (event, payload) => {
-    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
+    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
     const sender = event.sender;
     let runId = null;
+    let memoryScopeKey = '';
     /** SessionStop 钩子需要的上下文：run 过程中可能抛异常，catch 里也要能补跑一次（保持外层可见） */
     /** @type {{cfg: any, sandboxPolicy: any, runId: string|null, projectRoot: string|null}|null} */
     let hookSessionCtx = null;
@@ -440,6 +446,16 @@ function register(ctx) {
       cfg.costLedger = costLedger;
       cfg.costRunId = runId;
       cfg.planSessionId = String(sessionId || (resumePlan && resumePlan.planSessionId) || '').slice(0, 120);
+      const memoryScopeId = String(memoryConversationId || cfg.planSessionId || '');
+      if (projectRoot && memoryScopeId) {
+        const normalizedRoot = path.resolve(projectRoot);
+        const key = (process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot) + '\u0000' + memoryScopeId;
+        if (activeMemorySessions.has(key)) {
+          return { ok: false, error: '同一对话已有 Agent 请求正在运行，请等待上一轮完成' };
+        }
+        memoryScopeKey = key;
+        activeMemorySessions.add(memoryScopeKey);
+      }
       const sideEffectLedger = new SideEffectLedger({ projectRoot, scopeRunId: resumeScope });
       const sideEffectGuard = createGuard(sideEffectLedger);
       const checkpointSink = (type, payload) => {
@@ -606,7 +622,52 @@ function register(ctx) {
         if (cfg.tools.toolProfile !== 'off') toolkit.registerDiscoverTool(registry);
         toolkit.filterByConfig(registry, { ...cfg.tools, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
       }
+      // 会话覆盖要在上下文组装前判定；预处理模型调用也必须响应「停止」。
+      const controller = new AbortController();
+      activeRequests.set(runId, controller);
       const memory = projectRoot ? memoryStore.readMemory(projectRoot) : { entries: [] };
+      const memorySessionId = memoryScopeId;
+      const isUserMemoryTurn = !resumePlan && !nodeId;
+      const storedOverrides = memorySessionId
+        ? (isUserMemoryTurn
+          ? sessionOverrideStore.beginTurn(projectRoot, memorySessionId, runId, { taskEpoch: memoryTaskEpoch })
+          : sessionOverrideStore.readSession(projectRoot, memorySessionId, { taskEpoch: memoryTaskEpoch }))
+        : { ok: true, overrides: [] };
+      if (!storedOverrides.ok) throw new Error('会话记忆覆盖读取失败：' + storedOverrides.error);
+      let memoryIntentResult = null;
+      let activeSessionOverrides = storedOverrides.overrides;
+      if (memorySessionId && isUserMemoryTurn) {
+        const userData = userMemoryStore.readUserMemory();
+        memoryIntentResult = await memoryIntent.classify({
+          prompt,
+          projectEntries: memory.entries,
+          userEntries: userData && userData.ok ? userData.entries : [],
+          sessionOverrides: activeSessionOverrides,
+        }, async (messages) => {
+          const callCfg = { ...cfg, model: cfg.intent && cfg.intent.model || cfg.model,
+            maxTokens: 300, reasoningEffort: null };
+          const startedAt = Date.now();
+          const res = await agent.chatCompletion(callCfg, messages, { timeoutMs: 5000, signal: controller.signal });
+          agent.recordCost(cfg, { kind: 'intent', model: callCfg.model, usage: res && res.usage,
+            latencyMs: Date.now() - startedAt, runId: cfg.costRunId });
+          return res && res.content || '';
+        });
+        const stateChanges = memoryIntentResult.changes.filter((item) =>
+          item.action !== 'permanent' && !(item.action === 'temporary' && item.override.lifetime === 'turn'));
+        if (!controller.signal.aborted && stateChanges.length) {
+          const updated = sessionOverrideStore.applyChanges(projectRoot, memorySessionId, stateChanges,
+            { turnSeq: storedOverrides.turnSeq });
+          if (!updated.ok) throw new Error('会话记忆覆盖保存失败：' + updated.error);
+          activeSessionOverrides = updated.overrides;
+        }
+        runStore.appendEvent(projectRoot, runId, 'memory_override', {
+          source: memoryIntentResult.source,
+          actions: controller.signal.aborted ? [] : memoryIntentResult.changes.map((item) => ({
+            action: item.action, slot: item.override ? memoryStore.memorySlot(item.override) : '*',
+          })),
+          activeCount: activeSessionOverrides.length,
+        });
+      }
       /**
        * A4（token 效率审计 §4 P1-2）：自动注入从「无命中就退回最近 30/20 条」改成
        * **有命中才注入 + 单条/整段预算**。旧口径把与本次提问无关的记忆当成每轮的固定税，
@@ -627,6 +688,8 @@ function register(ctx) {
       // 桌面与 CLI 共用同一个动态上下文预算，避免入口之间的提示词开销漂移。
       const promptContext = promptContextLib.buildPromptContext({
         prompt,
+        sessionOverrides: activeSessionOverrides,
+        memoryIntent: controller.signal.aborted ? null : memoryIntentResult,
         canvasSummary,
         skills,
         projectMemoryEntries: memory.entries,
@@ -654,17 +717,7 @@ function register(ctx) {
       }
       // ③ 提示词分层：画布建模规则只在「与画布有关」时注入（画布非空 / 提问含画布词 / 配置强制）。
       // 判定在 agent.resolvePromptLayers 里（纯函数，用例锁）；这里只负责把当轮事实传进去。
-      /**
-       * 执行控制器 + 并发登记**提前到这里**：意图识别的分类请求也要能随「停止」取消。
-       *
-       * 此前 controller 在工具装配处才建（下面 `---- 装配工具 ----`）、`activeRequests` 在
-       * `sendDelta('start')` 之后才登记 —— 而分类发生在两者之前，于是**分类期间用户点停止是无效的**
-       * （真机实测单次分类 0.9~3.7s，超时上限 8s；用户会看到「点了没反应」）。
-       * 声明上移后，`agent:stop` 按 requestId/runId 找到同一个 controller 直接 abort，分类请求被取消 →
-       * 分类器把它当作「没有信号」（`unavailable`），随即回到原来的路径，不阻断也不收紧。
-       */
-      const controller = new AbortController();
-      activeRequests.set(runId, controller);
+      // controller 已在记忆预处理前登记；记忆分类、任务分类和主循环共用取消信号。
 
       /**
        * ---- 意图识别（照 Codex guardian 分类器；见 electron/intent.cjs 顶部注释）----
@@ -1076,6 +1129,30 @@ function register(ctx) {
         tools = { registry, context };
       }
 
+      // 明确的永久改口走已有 remember 确认链路；分类器本身绝不直接写长期库。
+      const memoryWriteResults = await memoryPersistence.persistCandidates(
+        memoryIntentResult && memoryIntentResult.persistentCandidates,
+        { registry, context: tools && tools.context, signal: controller.signal },
+      );
+      const savedPermanent = memoryWriteResults.flatMap((result, index) => {
+        if (result.status !== 'saved' || !memoryIntentResult) return [];
+        const candidate = memoryIntentResult.persistentCandidates[index];
+        const slot = candidate && memoryStore.memorySlot(candidate);
+        const change = memoryIntentResult.changes.find((item) =>
+          item.action === 'permanent' && memoryStore.memorySlot(item.override) === slot);
+        return change ? [change] : [];
+      });
+      if (memorySessionId && savedPermanent.length) {
+        const committed = sessionOverrideStore.applyChanges(projectRoot, memorySessionId, savedPermanent,
+          { turnSeq: storedOverrides.turnSeq });
+        if (!committed.ok) throw new Error('永久记忆已确认，但会话覆盖清理失败：' + committed.error);
+      }
+      if (memoryWriteResults.length) {
+        runStore.appendEvent(projectRoot, runId, 'memory_persistence', { results: memoryWriteResults });
+        messages[0].content += '\n【本轮长期记忆写入结果】\n' + JSON.stringify(memoryWriteResults) +
+          '\n以上候选已处理，本轮不要重复调用 remember；未保存的候选仅按当前用户消息执行。';
+      }
+
       sendDelta({ kind: 'start' });
       // 用户插话（§4.2）：运行中的 run 有一条插话队列，agent:steer 按 runId 找到它。
       // 队列随 run 生命周期存在 —— run 结束后再插话会被拒绝（不能静默丢弃）。
@@ -1192,6 +1269,7 @@ function register(ctx) {
       if (bridge) bridge.cleanup();
       return out;
     } catch (e) {
+      if (runId) activeRequests.delete(runId);
       if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
       // MCP 会话在 run 结束时统一关闭：会话复用是本轮的优化，但**不能**留下孤儿 server 进程
       try {
@@ -1202,6 +1280,8 @@ function register(ctx) {
       }
       sendDelta({ kind: 'error', error: String((e && e.message) || e) });
       return { ok: false, error: String((e && e.message) || e) };
+    } finally {
+      if (memoryScopeKey) activeMemorySessions.delete(memoryScopeKey);
     }
   });
 

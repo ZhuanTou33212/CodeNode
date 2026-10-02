@@ -578,7 +578,31 @@ async function main() {
     const firstAfter = await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(firstId)}).getState().objects.length`);
     ok('在第二个节点绘制不影响第一个节点', firstAfter === firstCount, `${firstCount} → ${firstAfter}`);
 
-    /* ========== 14. 样式归属：节点与连线用本地 Blender 那套，不被覆盖 ========== */
+    /* ========== 14. 选中后可抓住边角手柄，实际放大整个画布节点 ========== */
+    await cdp.eval(`window.__codenodeStore.getState().setSelectedIds([${JSON.stringify(secondId)}])`);
+    await waitFor(cdp, `!!document.querySelector('.react-flow__node-vector[data-id="${secondId}"] .react-flow__resize-control.handle.bottom.right')`, 3000, '缩放手柄出现');
+    await waitForViewportIdle(cdp);
+    const resize = await cdp.eval(`(() => {
+      const node = document.querySelector('.react-flow__node-vector[data-id="${secondId}"]');
+      const handle = node.querySelector('.react-flow__resize-control.handle.bottom.right');
+      const r = handle.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const data = window.__codenodeStore.getState().nodes.find(n => n.id === ${JSON.stringify(secondId)}).data;
+      return { x, y, width: r.width, height: r.height, visible: getComputedStyle(node.querySelector('.wf-vector')).overflow === 'visible', hit: hit === handle || handle.contains(hit), nodeWidth: data.width || 1040, nodeHeight: data.height || 640 };
+    })()`);
+    ok('缩放手柄未被节点裁剪且能命中', resize.visible && resize.hit && resize.width >= 5, JSON.stringify(resize));
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resize.x, y: resize.y });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: resize.x, y: resize.y, button: 'left', clickCount: 1 });
+    for (let i = 1; i <= 5; i += 1) {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resize.x + i * 16, y: resize.y + i * 12, button: 'left', buttons: 1 });
+      await sleep(25);
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: resize.x + 80, y: resize.y + 60, button: 'left', clickCount: 1 });
+    await waitFor(cdp, `(() => { const d = window.__codenodeStore.getState().nodes.find(n => n.id === ${JSON.stringify(secondId)}).data; return d.width > ${resize.nodeWidth + 30} && d.height > ${resize.nodeHeight + 20}; })()`, 3000, '拖动边角后尺寸变大');
+    ok('拖动边角会放大整个画布节点', true);
+
+    /* ========== 15. 样式归属：节点与连线用本地 Blender 那套，不被覆盖 ========== */
     // 背景：n0_12 的「session surface」主题在后面又写了一遍 .wf-node/.wf-scope/.react-flow__edge-path
     // 等选择器，同优先级下后写的会赢。这里锁死「节点样式 + 连线样式」必须来自本地那套。
     await cdp.eval(`(() => {
@@ -630,7 +654,7 @@ async function main() {
     ok(`连线用本地 2.2px / round（实际 ${style.edgeStrokeWidth} ${style.edgeLinecap}）`, style.edgeStrokeWidth === '2.2px' && style.edgeLinecap === 'round');
     ok(`范围节点圆角用本地 8px（实际 ${style.scopeRadius}）`, style.scopeRadius === '8px');
 
-    /* ========== 15. 画布节点 × 工作台互不干扰 ========== */
+    /* ========== 16. 画布节点 × 工作台互不干扰 ========== */
     ok('工作台工具栏仍然完整', await cdp.eval(`document.querySelectorAll('.toolbar-group button').length > 5`));
     ok('画布节点带标题栏（Blender 风格）', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .wf-vector-title .wf-node-label')`));
     ok('矢量文档 store 与节点一一对应', await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(nodeId)}) !== window.__codenodeVector`));

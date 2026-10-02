@@ -30,6 +30,8 @@ const DEFAULTS = Object.freeze({
   maxContextChars: 12000,
   maxQueries: 5,
   graphHops: 1,
+  bm25K1: 1.35,
+  bm25B: 0.72,
   rerankUrl: '',
   rerankModel: '',
   rerankKey: '',
@@ -38,7 +40,7 @@ const DEFAULTS = Object.freeze({
   minCoverage: 0.2,
   include: [],
   exclude: [],
-  embedProvider: 'local',
+  embedProvider: 'none',
   embedDim: 4096,
   embedModel: '',
   embedBase: '',
@@ -137,6 +139,8 @@ function normalizeOptions(options) {
     maxContextChars: clampInteger(o.maxContextChars, DEFAULTS.maxContextChars, 1000, 50000),
     maxQueries: clampInteger(o.maxQueries, DEFAULTS.maxQueries, 1, 8),
     graphHops: clampInteger(o.graphHops, DEFAULTS.graphHops, 0, 2),
+    bm25K1: clampNumber(o.bm25K1, DEFAULTS.bm25K1, 0.1, 3),
+    bm25B: clampNumber(o.bm25B, DEFAULTS.bm25B, 0, 1),
     rerankUrl: String(o.rerankUrl || '').trim(),
     rerankModel: String(o.rerankModel || '').trim(),
     rerankKey: String(o.rerankKey || '').trim(),
@@ -434,7 +438,8 @@ function confidenceFor(results, queryRuns, minCoverage) {
   if ((topCoverage >= 0.68 || (exact && topCoverage >= 0.5)) && queryRatio >= 0.5) level = 'high';
   else if (topCoverage >= minCoverage && queryRatio >= 0.34) level = 'medium';
   const semanticCandidate = results.some((item) => item.vectorOnly && item.vectorScore >= SEMANTIC_CANDIDATE_MIN_SCORE);
-  if (level === 'low' && semanticCandidate) level = 'medium';
+  // 向量相似度只决定哪些片段值得深读，不能独立证明来源足以回答。
+  // 不同模型的余弦分标度差异很大；固定阈值会把无答案问题误判为可回答。
   const basis = topCoverage >= minCoverage ? 'lexical' : semanticCandidate ? 'semantic_candidate' : 'weak_match';
   return {
     level,
@@ -449,10 +454,10 @@ function confidenceFor(results, queryRuns, minCoverage) {
       level === 'high'
         ? '查询词覆盖充分，仍需核对来源是否支持结论'
         : level === 'medium'
-          ? basis === 'semantic_candidate'
-            ? '有纯向量命中候选，需深读原文件核实相关性'
-            : '存在匹配候选，关键结论需继续深读原文件'
-          : '查询词覆盖较弱，应改写查询或缩小范围后再检索',
+          ? '存在匹配候选，关键结论需继续深读原文件'
+          : semanticCandidate
+            ? '仅有纯向量命中候选；相似度不能证明可回答，请深读原文件核实，必要时改写查询'
+            : '查询词覆盖较弱，应改写查询或缩小范围后再检索',
   };
 }
 
@@ -747,8 +752,8 @@ class LocalRagIndex {
       return sum + (df ? Math.log(1 + (candidates.length - df + 0.5) / (df + 0.5)) : maxIdf);
     }, 0) || 1;
     const ranked = [];
-    const k1 = 1.35;
-    const b = 0.72;
+    const k1 = this.options.bm25K1;
+    const b = this.options.bm25B;
 
     for (const chunk of candidates) {
       let score = 0;
@@ -831,7 +836,7 @@ class LocalRagIndex {
     const provider = (this.options.embedProvider || 'none').toLowerCase();
     const vectorWeight = mode === 'vector' ? 1 : mode === 'file' ? 0 : this.options.vectorWeight;
     const vectorEnabled = provider !== 'none' && vectorWeight > 0 && (mode === 'auto' || mode === 'hybrid' || mode === 'vector');
-    // 学习式嵌入的小型 memory 索引独立召回；默认哈希向量仍只重排 BM25 候选。
+    // 学习式嵌入的小型 memory 索引独立召回；显式启用的哈希向量只重排 BM25 候选。
     let vectorScoresMap = new Map();
     let vectorOnly = 0;
     let vectorError = vectorSyncError;

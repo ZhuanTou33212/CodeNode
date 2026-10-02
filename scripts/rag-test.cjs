@@ -10,12 +10,14 @@ const {
   getProjectIndex,
   informativeTerms,
   invalidateProjectIndex,
+  normalizeOptions,
   tokenize,
 } = require('../electron/rag/index.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
-const { validateRagGrounding } = require('../electron/agent.cjs');
+const { parseRagConfig, validateRagGrounding } = require('../electron/agent.cjs');
 const { rerankCandidates } = require('../electron/rag/rerank.cjs');
+const ragSettings = require('../electron/ragSettings.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-rag-test-'));
 
@@ -30,6 +32,41 @@ function topPath(result) {
 }
 
 async function main() {
+  assert.strictEqual(parseRagConfig({}).embedProvider, 'none', '未配置时 Agent 应默认使用 BM25');
+  assert.strictEqual(normalizeOptions({}).embedProvider, 'none', '直接使用检索器时也应默认关闭向量层');
+  assert.strictEqual(parseRagConfig({ 'rag.bm25_k1': '1.8', 'rag.bm25_b': '0.4' }).bm25K1, 1.8);
+  assert.strictEqual(parseRagConfig({ 'rag.bm25_k1': '1.8', 'rag.bm25_b': '0.4' }).bm25B, 0.4);
+  assert.strictEqual(parseRagConfig({ 'rag.bm25_k1': '1.8 # tuning', 'rag.vector_weight': '0.4 # fusion' }).bm25K1, 1.8);
+  assert.strictEqual(parseRagConfig({ 'rag.bm25_k1': '1.8 # tuning', 'rag.vector_weight': '0.4 # fusion' }).vectorWeight, 0.4);
+  assert.strictEqual(normalizeOptions({ bm25K1: 99, bm25B: -1 }).bm25K1, 3);
+  assert.strictEqual(normalizeOptions({ bm25K1: 99, bm25B: -1 }).bm25B, 0);
+  const scoreChunk = (id, length, tf) => ({
+    id, path: id + '.ts', pathTerms: new Set(), frequencies: new Map([['token', tf]]),
+    length, lowerContent: 'token', startLine: 1,
+  });
+  const equalTfChunks = [scoreChunk('short', 4, 1), scoreChunk('long', 40, 1)];
+  const noLengthPenalty = new LocalRagIndex(root, { bm25B: 0 });
+  assert.strictEqual(noLengthPenalty.scoreQuery('token', equalTfChunks).ranked[0].score,
+    noLengthPenalty.scoreQuery('token', equalTfChunks).ranked[1].score,
+    'b=0 时相同词频不应因块长度而改变 BM25 分数');
+  const lengthAware = new LocalRagIndex(root, { bm25B: 1 });
+  assert.strictEqual(lengthAware.scoreQuery('token', equalTfChunks).ranked[0].chunk.id, 'short',
+    'b=1 时较短块应优先');
+  const frequencyChunks = [scoreChunk('once', 10, 1), scoreChunk('three', 10, 3)];
+  const ratio = (k1) => {
+    const ranked = new LocalRagIndex(root, { bm25K1: k1, bm25B: 0 }).scoreQuery('token', frequencyChunks).ranked;
+    return ranked[0].score / ranked[1].score;
+  };
+  assert.ok(ratio(2.5) > ratio(0.5), '增大 k1 应提高重复词的相对贡献');
+  const tuned = ragSettings.normalizedSettings({ provider: 'local', backend: 'memory', dim: 4096,
+    bm25K1: 1.8, bm25B: 0.4, vectorWeight: 0.2 }, {});
+  ragSettings.writeSettings(root, tuned, {});
+  const savedRagConfig = fs.readFileSync(path.join(root, '.codenode', 'agent.properties'), 'utf8');
+  assert.match(savedRagConfig, /^rag\.bm25_k1=1\.8$/m);
+  assert.match(savedRagConfig, /^rag\.bm25_b=0\.4$/m);
+  assert.match(savedRagConfig, /^rag\.vector_weight=0\.2$/m);
+  assert.throws(() => ragSettings.normalizedSettings({ ...tuned, bm25B: 1.2 }, {}), /BM25 b/);
+
   write(
     'src/auth/sessionService.ts',
     [
@@ -85,6 +122,7 @@ async function main() {
 
   const symbol = await index.retrieve('refreshSessionToken rotating nonce');
   assert.strictEqual(topPath(symbol), 'src/auth/sessionService.ts', '源码符号应排在第一位');
+  assert.strictEqual(symbol.stats.vector.provider, 'none', '默认检索不得静默启用哈希向量');
   assert.match(symbol.results[0].citation, /^src\/auth\/sessionService\.ts#L\d+-L\d+$/);
   assert.ok(symbol.results[0].coverage > 0.4, '高相关源码应有有效覆盖率');
   const cached = await index.retrieve('refreshSessionToken rotating nonce');
@@ -159,6 +197,10 @@ async function main() {
   assert.ok(toolResult.data.sources.length > 0, '工具应返回结构化来源');
   assert.ok(toolResult.data.quality && toolResult.data.quality.level, '工具应返回质量诊断');
   assert.match(toolResult.text, /不可信数据/, '工具必须声明来源内容不可信');
+  const vectorWithoutModel = await enabledRegistry.execute('retrieve_context',
+    { query: 'refreshSessionToken', mode: 'vector' }, toolContext);
+  assert.strictEqual(vectorWithoutModel.ok, true);
+  assert.match(vectorWithoutModel.text, /未启用向量模型，本次文件检索已退回 BM25/, '显式请求向量模式时须说明降级');
 
   const injectionResult = await enabledRegistry.execute(
     'retrieve_context',

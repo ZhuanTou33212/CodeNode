@@ -13,7 +13,8 @@
   min-width: 0;
   max-width: none;
   padding: 0;
-  overflow: hidden;
+  /* NodeResizer places its drag handles just outside this border. */
+  overflow: visible;
   border-radius: 10px;
   border-color: rgba(255, 255, 255, 0.16);
   background: var(--vpanel, #101112);
@@ -30,6 +31,14 @@
     0 8px 26px rgba(0, 0, 0, 0.5);
 }
 
+.wf-node.wf-vector .react-flow__resize-control.handle {
+  width: 12px;
+  height: 12px;
+  z-index: 5;
+  border-radius: 3px;
+  background: var(--wf-accent, #22d3ee);
+}
+
 /* ---------- 标题栏 ---------- */
 
 .wf-vector-title {
@@ -40,6 +49,7 @@
   height: 36px;
   padding: 0 8px;
   background: color-mix(in srgb, var(--wf-accent, #22d3ee) 16%, #23262c);
+  border-radius: 9px 9px 0 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.09);
   cursor: grab;
   user-select: none;
@@ -310,6 +320,7 @@
   padding: 0 10px;
   border-top: 1px solid var(--vborder, rgba(255, 255, 255, 0.08));
   background: var(--vbg, #0f1011);
+  border-radius: 0 0 9px 9px;
   color: var(--vtext3, #6f7680);
   font-size: 11px;
   overflow: hidden;

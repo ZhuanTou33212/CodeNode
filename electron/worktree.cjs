@@ -20,6 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('crypto');
 
 const sandbox = require('./sandbox.cjs');
 const shellTool = require('./tools/impl/executeShellTool.cjs');
@@ -238,6 +239,121 @@ async function commitCount(worktreePath, base, options) {
   return Number(res.stdout.trim()) || 0;
 }
 
+async function pendingFingerprint(root, pending) {
+  const hash = createHash('sha256');
+  for (const line of pending.slice().sort()) {
+    const raw = line.slice(3);
+    // Quoted and rename paths need Git's -z parser; refuse instead of hashing the wrong file.
+    if (!raw || raw.startsWith('"') || raw.includes(' -> ')) return null;
+    const file = path.resolve(root, raw);
+    const relative = path.relative(root, file);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    hash.update(line + '\0');
+    let stat;
+    try { stat = fs.lstatSync(file); }
+    catch (error) {
+      if (error && error.code === 'ENOENT') { hash.update('absent\0'); continue; }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) { hash.update('link\0' + fs.readlinkSync(file) + '\0'); continue; }
+    if (!stat.isFile()) return null;
+    for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+/** Preview a managed branch before integrating it into the main checkout. */
+async function inspectMerge(projectRoot, name, options) {
+  const root = path.resolve(projectRoot || '.');
+  const slug = slugify(name);
+  const managed = await managedWorktrees(root, options);
+  const source = managed.find((row) => path.basename(normalizePath(row.path)) === slug);
+  if (!source || !source.branch || !source.branch.startsWith('codenode/')) {
+    return { ok: false, error: 'NOT_MANAGED', message: '只能合并受管工作树的 codenode/ 分支：' + slug };
+  }
+  const current = await currentBranch(root, options);
+  if (!current || current === source.branch) {
+    return { ok: false, error: 'NO_TARGET', message: '主工作树必须位于另一个有效分支，才能合并 ' + source.branch };
+  }
+  const targetStatus = await runGit(root, ['status', '--porcelain', '--untracked-files=all'], options);
+  if (!targetStatus.ok) return { ok: false, error: 'GIT_FAILED', message: '无法检查主工作树状态' };
+  if (targetStatus.stdout.length >= MAX_OUTPUT_CHARS) return { ok: false, error: 'REVIEW_LIMIT', message: '主工作树状态输出过长，无法可靠预检' };
+  const targetChanges = targetStatus.stdout.split(/\r?\n/).filter((line) => line && !/^\?\? \.codenode\/worktrees\//.test(line));
+  if (targetChanges.length) {
+    return { ok: false, error: 'TARGET_DIRTY', message: '主工作树有未提交改动；请先保存或提交后再合并', changed: targetChanges };
+  }
+  const mergeHead = await runGit(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], options);
+  if (mergeHead.ok) return { ok: false, error: 'MERGE_IN_PROGRESS', message: '主工作树已有未完成的合并，先处理该合并' };
+  const targetHead = await runGit(root, ['rev-parse', 'HEAD'], options);
+  const sourceHead = await runGit(source.path, ['rev-parse', 'HEAD'], options);
+  if (!targetHead.ok || !sourceHead.ok) return { ok: false, error: 'GIT_FAILED', message: '无法读取合并前的提交版本' };
+  const sourceStatus = await runGit(source.path, ['status', '--porcelain', '--untracked-files=all'], options);
+  if (!sourceStatus.ok) return { ok: false, error: 'GIT_FAILED', message: '无法检查隔离工作树状态' };
+  if (sourceStatus.stdout.length >= MAX_OUTPUT_CHARS) return { ok: false, error: 'REVIEW_LIMIT', message: '隔离工作树状态输出过长，无法可靠预检' };
+  const committed = await runGit(root, ['diff', '--name-only', 'HEAD...' + source.branch], options);
+  if (!committed.ok) return { ok: false, error: 'GIT_FAILED', message: '无法列出分支改动；可能缺少共同基线' };
+  if (committed.stdout.length >= MAX_OUTPUT_CHARS) return { ok: false, error: 'REVIEW_LIMIT', message: '分支文件清单过长，无法可靠预检' };
+  const pending = sourceStatus.stdout.split(/\r?\n/).filter(Boolean);
+  const pendingDigest = await pendingFingerprint(source.path, pending);
+  if (!pendingDigest) return { ok: false, error: 'UNSUPPORTED_PATH', message: '待合并改动含复杂路径或目录，无法可靠核对内容；请先在隔离分支手动提交' };
+  const files = [...new Set(committed.stdout.split(/\r?\n/).filter(Boolean).concat(pending.map((line) => line.slice(3))))].sort();
+  const ahead = await runGit(root, ['rev-list', '--count', 'HEAD..' + source.branch], options);
+  if (!ahead.ok) return { ok: false, error: 'GIT_FAILED', message: '无法计算待合并提交数' };
+  return {
+    ok: true, name: slug, path: source.path, branch: source.branch, targetBranch: current,
+    targetHead: targetHead.stdout.trim(), sourceHead: sourceHead.stdout.trim(),
+    pending, pendingDigest, files, commits: Number(ahead.stdout.trim()) || 0,
+  };
+}
+
+/** Integrate a reviewed worktree. A failed merge is aborted; the source branch is retained. */
+async function mergeWorktree(projectRoot, args, options) {
+  const root = path.resolve(projectRoot || '.');
+  const preview = await inspectMerge(root, args && args.name, options);
+  if (!preview.ok) return preview;
+  const files = preview.files || [];
+  const pending = preview.pending || [];
+  if (!args || preview.targetHead !== args.expectedTargetHead || preview.sourceHead !== args.expectedSourceHead ||
+      preview.targetBranch !== args.expectedTargetBranch || preview.pendingDigest !== args.expectedPendingDigest) {
+    return { ok: false, error: 'STALE_PREVIEW', message: '预览后分支版本已变化；请重新 inspect_merge 后再试' };
+  }
+  if (!files.length && preview.commits === 0) {
+    return { ok: false, error: 'NO_CHANGES', message: '隔离工作树没有可合并改动' };
+  }
+  if (pending.length) {
+    const message = String(args.commitMessage || '').trim();
+    if (!message || message.length > 200) {
+      return { ok: false, error: 'COMMIT_MESSAGE_REQUIRED', message: '隔离工作树有未提交改动，合并前需提供不超过 200 字的 commitMessage' };
+    }
+    const added = await runGit(preview.path, ['add', '--all'], options);
+    if (!added.ok) return { ok: false, error: 'GIT_FAILED', message: '隔离工作树暂存失败；主工作树未改变' };
+    const committed = await runGit(preview.path, ['commit', '-m', message], options);
+    if (!committed.ok) return { ok: false, error: 'COMMIT_FAILED', message: '隔离工作树提交失败；主工作树未改变，暂存内容保留：' + committed.stdout.slice(0, 400) };
+  }
+  const targetNow = await runGit(root, ['rev-parse', 'HEAD'], options);
+  const targetDirty = await runGit(root, ['status', '--porcelain', '--untracked-files=all'], options);
+  const unexpected = targetDirty.stdout.split(/\r?\n/).filter((line) => line && !/^\?\? \.codenode\/worktrees\//.test(line));
+  if (!targetNow.ok || targetNow.stdout.trim() !== preview.targetHead || !targetDirty.ok || unexpected.length) {
+    return { ok: false, error: 'STALE_TARGET', message: '提交隔离改动期间主工作树发生变化；未执行合并，隔离分支保留' };
+  }
+  const merged = await runGit(root, ['merge', '--no-ff', '--no-edit', preview.branch], options);
+  if (!merged.ok) {
+    const conflicts = await runGit(root, ['diff', '--name-only', '--diff-filter=U'], options);
+    const mergeHead = await runGit(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], options);
+    const aborted = mergeHead.ok ? await runGit(root, ['merge', '--abort'], options) : null;
+    return {
+      ok: false, error: conflicts.stdout.trim() ? 'MERGE_CONFLICT' : 'MERGE_FAILED',
+      message: aborted && !aborted.ok
+        ? '合并失败且自动回退失败，请检查主工作树状态；隔离分支仍保留'
+        : '合并失败，主工作树已回退；隔离分支保留供解决冲突后重试',
+      conflicts: conflicts.stdout.split(/\r?\n/).filter(Boolean), rollbackOk: !aborted || aborted.ok,
+    };
+  }
+  const head = await runGit(root, ['rev-parse', 'HEAD'], options);
+  return { ok: true, branch: preview.branch, targetBranch: preview.targetBranch, head: head.stdout.trim(), files, sourcePath: preview.path };
+}
+
 /**
  * 移除工作树（默认拒绝强删有未提交改动的工作树 —— 那是别人的代码）
  * @param {string} projectRoot
@@ -287,6 +403,8 @@ module.exports = {
   listWorktrees,
   managedWorktrees,
   createWorktree,
+  inspectMerge,
+  mergeWorktree,
   removeWorktree,
   changedFiles,
   commitCount,

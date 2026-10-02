@@ -24,7 +24,7 @@ const { atomicWriteFile } = require('./atomicFile.cjs');
 const RULES_RELPATH = path.join('.codenode', 'approvals.json');
 const MAX_RULES = 50;
 /** 受保护路径（写工具一律拒绝）：这些文件是**授权面**，不能由 Agent 写 */
-const PROTECTED_RELPATHS = [RULES_RELPATH, path.join('.codenode', 'permissions.json')];
+const PROTECTED_RELPATHS = [RULES_RELPATH, path.join('.codenode', 'permissions.json'), path.join('.codenode', 'session-overrides.json')];
 
 function rulesFile(projectRoot) {
   return path.join(path.resolve(projectRoot || '.'), RULES_RELPATH);

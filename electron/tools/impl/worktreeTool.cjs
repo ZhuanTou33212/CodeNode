@@ -1,14 +1,15 @@
 /**
  * worktreeTool.cjs —— 工作树隔离工具（对照 Codex / Claude Code 的 worktree 用法）
  *
- * 三个动作：
+ * 五个动作：
  *   · `list`   —— 看有哪些受管工作树、各自分支与未提交改动（只读，不确认）
  *   · `create` —— 在 `.codenode/worktrees/<name>` 建一份独立检出（**要确认**：会建目录与分支）
+ *   · `inspect_merge` —— 预览待合并文件、两侧版本与主工作树状态（只读）
+ *   · `merge` —— 复核版本后提交隔离改动并合并；冲突时尝试回退主工作树（**要确认**）
  *   · `remove` —— 移除工作树；有未提交改动时默认拒绝，必须显式 `force`（**要确认**：可能丢代码）
  *
  * 为什么建/删都要确认：它们都会改**仓库结构**（新增分支、删目录），而 `remove --force` 会真的丢代码。
- * 为什么不自动合并：工作树的价值就是「主代理的工作树不受影响」——合并是主代理看到 diff 之后的决定，
- * 工具只负责如实报告「改了什么、提交了几个」。
+ * 合并必须先 inspect_merge，再明确确认；不会在子代理结束时自动合并。
  */
 'use strict';
 
@@ -27,15 +28,20 @@ function render(row) {
 function register(registry) {
   registry.register(
     'worktree',
-    'git 工作树隔离：create 建一份独立检出（子代理在里面改代码，主工作树不受影响）/ list 查看 / remove 移除（有未提交改动需 force）。',
+    '管理 git 隔离工作树：list/create/inspect_merge/merge/remove。先预览再确认合并；冲突时回退。',
     {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'create', 'remove'], description: '要做什么' },
-        name: { type: 'string', description: '工作树名字（create/remove 用；会归一化成安全目录名）' },
-        base: { type: 'string', description: 'create 的基线分支（默认当前分支）' },
-        path: { type: 'string', description: 'remove 也可直接给路径（必须是受管目录下的）' },
-        force: { type: 'boolean', description: 'remove 时丢弃未提交改动（默认 false）' },
+        action: { type: 'string', enum: ['list', 'create', 'inspect_merge', 'merge', 'remove'], description: '要做什么' },
+        name: { type: 'string', description: '受管工作树名' },
+        base: { type: 'string', description: 'create 的基线分支' },
+        path: { type: 'string', description: 'remove 的受管路径' },
+        force: { type: 'boolean', description: 'remove 时强制丢弃改动' },
+        expectedTargetHead: { type: 'string', description: '预检返回的 targetHead' },
+        expectedSourceHead: { type: 'string', description: '预检返回的 sourceHead' },
+        expectedTargetBranch: { type: 'string', description: '预检返回的 targetBranch' },
+        expectedPendingDigest: { type: 'string', description: '预检返回的 pendingDigest' },
+        commitMessage: { type: 'string', description: '合并未提交改动时的提交说明' },
       },
       required: ['action'],
     },
@@ -89,6 +95,55 @@ function register(registry) {
         );
       }
 
+      if (action === 'inspect_merge') {
+        const name = String((args && args.name) || '').trim();
+        if (!name) return AgentToolResult.error('inspect_merge 需要 name');
+        const preview = await worktree.inspectMerge(projectRoot, name, opts);
+        if (!preview.ok) return AgentToolResult.error(preview.message, preview);
+        const files = preview.files || [];
+        const pending = preview.pending || [];
+        return AgentToolResult.ok(
+          '待合并：' + preview.branch + ' → ' + preview.targetBranch +
+          '\n主工作树 HEAD：' + preview.targetHead + '\n隔离分支 HEAD：' + preview.sourceHead +
+          '\n未提交内容指纹：' + preview.pendingDigest +
+          '\n已有提交：' + preview.commits + '，未提交项：' + pending.length +
+          '\n涉及文件：\n' + (files.length ? files.map((file) => '- ' + file).join('\n') : '（无）') +
+          '\n核对后调用 merge，并原样传回两个 HEAD、targetBranch 和 pendingDigest；有未提交项时还需 commitMessage。',
+          preview
+        );
+      }
+
+      if (action === 'merge') {
+        const name = String((args && args.name) || '').trim();
+        if (!name || !args.expectedTargetHead || !args.expectedSourceHead || !args.expectedTargetBranch || !args.expectedPendingDigest) {
+          return AgentToolResult.error('merge 需要 name、expectedTargetHead、expectedSourceHead、expectedTargetBranch、expectedPendingDigest；先调用 inspect_merge');
+        }
+        const preview = await worktree.inspectMerge(projectRoot, name, opts);
+        if (!preview.ok) return AgentToolResult.error(preview.message, preview);
+        const files = preview.files || [];
+        const pending = preview.pending || [];
+        if (preview.targetHead !== args.expectedTargetHead || preview.sourceHead !== args.expectedSourceHead ||
+            preview.targetBranch !== args.expectedTargetBranch || preview.pendingDigest !== args.expectedPendingDigest) {
+          return AgentToolResult.error('预览后分支版本已变化，请重新 inspect_merge');
+        }
+        const ok = await context.confirm(
+          ConfirmationLevel.WRITE,
+          '合并隔离工作树 ' + preview.branch,
+          '将 ' + files.length + ' 个文件合并到 ' + preview.targetBranch + '。主工作树当前必须干净；' +
+            (pending.length ? '会先提交隔离工作树的 ' + pending.length + ' 个未提交项；' : '') +
+            '如有冲突将尝试 git merge --abort，隔离分支仍保留。'
+        );
+        if (!ok) return AgentToolResult.error('用户未批准，未执行合并');
+        const merged = await worktree.mergeWorktree(projectRoot, args, opts);
+        if (!merged.ok) return AgentToolResult.error(merged.message, merged);
+        if (typeof context.audit === 'function') context.audit('worktree merge ' + merged.branch + ' -> ' + merged.targetBranch + ' (' + merged.head + ')');
+        return AgentToolResult.ok(
+          '已合并 ' + merged.branch + ' 到 ' + merged.targetBranch + '\n新 HEAD：' + merged.head +
+            '\n涉及文件：' + (merged.files || []).join('、') + '\n隔离工作树仍保留，核验后可移除。',
+          merged
+        );
+      }
+
       if (action === 'remove') {
         const target = String((args && (args.name || args.path)) || '').trim();
         if (!target) return AgentToolResult.error('remove 需要 name 或 path');
@@ -111,7 +166,7 @@ function register(registry) {
         );
       }
 
-      return AgentToolResult.error('未知 action：' + action + '（可选 list / create / remove）', { code: 'ARG_SCHEMA', tool: 'worktree' });
+      return AgentToolResult.error('未知 action：' + action + '（可选 list / create / inspect_merge / merge / remove）', { code: 'ARG_SCHEMA', tool: 'worktree' });
     }
   );
 }

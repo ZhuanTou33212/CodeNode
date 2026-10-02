@@ -51,6 +51,8 @@ const CORE = [
   'test:read-file-limits',
   'test:limit-wrapup',
   'test:memory-recall',
+  'test:memory-conflict',
+  'test:session-memory-override',
   'test:agent-iterations',
   'test:tool-contract',
   'test:grounding-gate',
@@ -73,6 +75,7 @@ const CORE = [
   'test:context-capability',
   'test:side-effect-idem',
   'test:save-project',
+  'test:project-create',
   'test:shell-timeout',
   'test:sandbox-stdin',
   'test:security',
@@ -164,7 +167,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);

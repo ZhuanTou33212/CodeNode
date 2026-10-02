@@ -943,7 +943,7 @@ class SubagentManager {
       .join('\n');
     registry.register(
       'delegate_task',
-      '创建并执行一个受角色工具权限约束的子代理任务。\n按工作类型选角色：\n' + roleGuide +
+      '创建并执行一个受角色工具权限约束的子代理任务。单文件读取或一步可完成的问题由主 Agent 直接处理；独立探查、实现、验证或审查等多步工作再委派。\n按工作类型选角色：\n' + roleGuide +
         '\nstageNodeId 可绑定画布 stage 节点；timeoutSeconds 是**任务总时长**（秒，默认 ' + this.subCfg.totalTimeoutSeconds + '）。' +
         '\n结果默认以短候选卡回到父上下文；完整结论用 get_subagent_task(taskId, detail="full") 按页读取。' +
         'isolation=worktree 时该子代理在独立的 git 工作树里干活；该模式只隔离项目文件，canvas 角色不允许使用，builder 的共享画布写工具会禁用；工作树创建失败会**中止任务**而不是静默降级。',
@@ -962,6 +962,8 @@ class SubagentManager {
           acceptanceCriteria: { type: 'array', items: { type: 'string' } },
           stageNodeId: { type: 'string' },
           timeoutSeconds: { type: 'integer', description: '任务总时长（秒），超时会被中止' },
+          maxTurns: { type: 'integer', description: '本子任务最多模型轮次，1-200；只能收紧本轮 agent.max_tool_iterations 上限' },
+          tokenBudget: { type: 'integer', description: '本子任务独立 token 上限；仍受父 Run 总预算约束' },
           isolation: {
             type: 'string',
             enum: ['none', 'worktree'],
@@ -1218,6 +1220,8 @@ class SubagentManager {
                 acceptanceCriteria: { type: 'array', items: { type: 'string' } },
                 stageNodeId: { type: 'string' },
                 timeoutSeconds: { type: 'integer' },
+                maxTurns: { type: 'integer' },
+                tokenBudget: { type: 'integer' },
                 isolation: { type: 'string', enum: ['none', 'worktree'] },
                 dependsOnTaskIds: { type: 'array', items: { type: 'string' } },
                 verifiesTaskId: { type: 'string' },
@@ -1556,6 +1560,12 @@ class SubagentManager {
       acceptanceCriteria: Array.isArray(args.acceptanceCriteria) ? args.acceptanceCriteria.map(String) : [],
       stageNodeId: String(args.stageNodeId || ''),
       totalTimeoutMs: totalMs,
+      maxTurns: Number.isInteger(args.maxTurns) && args.maxTurns > 0
+        ? Math.min(200, args.maxTurns, Number(this.cfg.limits && this.cfg.limits.maxToolIterations) || 12)
+        : Number(this.cfg.limits && this.cfg.limits.maxToolIterations) || 12,
+      tokenBudget: Number.isInteger(args.tokenBudget) && args.tokenBudget > 0
+        ? Math.min(4000000, args.tokenBudget, Number(this.subCfg.maxTotalTokens) > 0 ? Number(this.subCfg.maxTotalTokens) : 4000000)
+        : Number(this.subCfg.maxTotalTokens) || 0,
       status: 'queued',
       version: lifecycle.task.version || 0,
       startedAt: new Date().toISOString(),
@@ -1635,7 +1645,7 @@ class SubagentManager {
         projectRoot: worktreeInfo ? worktreeInfo.path : task.verificationRoot || undefined,
       });
       // 独立配额（父子链）：0 = 不设独立配额，直接共享父预算（旧行为）
-      const childBudget = createSubagentBudget(this.cfg.requestBudget, this.subCfg.maxTotalTokens);
+      const childBudget = createSubagentBudget(this.cfg.requestBudget, task.tokenBudget);
       /**
        * #6（成本双重记账）：子代理的每一轮 `runAgentChat` 都会**自己**记账
        * （`recordCost` 按 `cfg.costKind` 归因，见 agent.cjs）。所以这里必须显式声明
@@ -1645,6 +1655,7 @@ class SubagentManager {
       const childCfg = {
         ...this.cfg,
         costKind: 'subagent',
+        limits: { ...(this.cfg.limits || {}), maxToolIterations: task.maxTurns },
         ...(childBudget && childBudget !== this.cfg.requestBudget ? { requestBudget: childBudget } : {}),
       };
       // 子代理的 system prompt：身份 + 工作范围 + **真实注册表里的**可用工具 + 职责技能 + 项目 Skill + 运行规则。

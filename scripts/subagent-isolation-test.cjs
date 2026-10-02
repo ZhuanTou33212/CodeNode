@@ -156,26 +156,37 @@ const ok = (label) => console.log('  ✓ ' + label);
   });
   const supervisor = toolkit.buildDefaultRegistry();
   const longText = '结论：写完了\n' + 'x'.repeat(20000);
+  const parentRequestBudget = new RequestBudget(1000000);
+  /** @type {any} */
+  let observedChildConfig = null;
   const manager = new SubagentManager({
     agent: {
-      runAgentChat: async () => ({
+      runAgentChat: async ({ cfg }) => {
+        observedChildConfig = cfg;
+        return ({
         content: longText,
         toolCalls: [{ name: 'write_file', ok: true, args: JSON.stringify({ path: 'a/b.txt', content: 'x' }) }],
         usage: { total_tokens: 123 },
-      }),
+        });
+      },
     },
     toolkit,
     cfg: {
       tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] },
       rag: { enabled: true },
       subagent: { resultMaxChars: 500, totalTimeoutSeconds: 600 },
+      limits: { maxToolIterations: 12 },
+      requestBudget: parentRequestBudget,
     },
     registry: supervisor,
     runId: 'run-test',
   });
   manager.register(supervisor);
-  const done = await supervisor.execute('delegate_task', { role: 'builder', objective: '写文件', stageNodeId: 'stage-1' }, context);
+  const done = await supervisor.execute('delegate_task', { role: 'builder', objective: '写文件', stageNodeId: 'stage-1', maxTurns: 5, tokenBudget: 50000 }, context);
   assert.strictEqual(done.ok, true);
+  assert.strictEqual(observedChildConfig.limits.maxToolIterations, 5, 'maxTurns 必须收紧子代理模型循环');
+  assert.strictEqual(observedChildConfig.requestBudget.limit, 50000, 'tokenBudget 必须成为子代理独立预算');
+  assert.strictEqual(observedChildConfig.requestBudget.parent, parentRequestBudget, '子代理预算仍须记入父 Run');
   // P1：结果不再是「字段头 + 自由文本」，而是一个带契约的 JSON 信封（可校验、可拒收）
   const envelope = done.data.envelope;
   assert.ok(String(done.text).startsWith('[子代理结果] 契约 v1'), '结果必须是单一 JSON 信封（契约 v1）');
@@ -303,7 +314,7 @@ const ok = (label) => console.log('  ✓ ' + label);
   assert.strictEqual(hitRate.promptCacheHitRate, 0.75);
 
   const defaults = agent.parseSubagentConfig({});
-  assert.strictEqual(defaults.maxTotalTokens, 0);
+  assert.strictEqual(defaults.maxTotalTokens, 120000);
   assert.strictEqual(defaults.totalTimeoutSeconds, 600);
   assert.strictEqual(defaults.resultMaxChars, 8000);
   const compressionDefaults = agent.loadConfig(process.cwd()).compression;

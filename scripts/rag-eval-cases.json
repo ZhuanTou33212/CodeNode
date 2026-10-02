@@ -1,0 +1,16 @@
+[
+  { "query": "BM25 k1 b 词频饱和和长度归一化在哪里计算", "expected": ["electron/rag/index.cjs"], "expectedText": "const k1 = this.options.bm25K1" },
+  { "query": "本地 n-gram 哈希向量怎样归一化", "expected": ["electron/embedder/index.cjs"], "expectedText": "function localVector" },
+  { "query": "跨文件调用和导入关系图在哪里建立", "expected": ["electron/rag/codeGraph.cjs"], "expectedText": "function buildCodeGraph" },
+  { "query": "TypeScript 函数和类方法按语法树切块", "expected": ["electron/rag/codeStructure.cjs"], "expectedText": "function analyzeCode" },
+  { "query": "向量结果与 BM25 倒数排名融合权重", "expected": ["electron/rag/index.cjs"] },
+  { "query": "SQLite 向量索引怎样持久化", "expected": ["electron/vectorStore/sqlite.cjs"], "expectedText": "class SqliteVectorStore" },
+  { "query": "Milvus HNSW efConstruction 和搜索 ef", "expected": ["electron/vectorStore/milvus.cjs"], "expectedText": "efConstruction" },
+  { "query": "重排服务 relevance_score 如何绑定候选", "expected": ["electron/rag/rerank.cjs"], "expectedText": "item.relevance_score" },
+  { "query": "retrieve_context 来源片段怎样隔离提示注入", "expected": ["electron/tools/impl/retrieveContextTool.cjs"], "expectedText": "function escapeRetrievedText" },
+  { "query": "上下文窗口接近上限时生成交接摘要", "expected": ["electron/compaction.cjs"], "expectedText": "function buildSummarizationMessages" },
+  { "query": "检索不到来源时如何判断证据是否足够回答", "expected": ["electron/rag/index.cjs"] },
+  { "query": "谁负责将用户问题转换成代码片段引用", "expected": ["electron/tools/impl/retrieveContextTool.cjs"] },
+  { "query": "totallyAbsentQuantumBananaIdentifier", "expected": [] },
+  { "query": "CodeNode 是否实现了量子香蕉传送接口", "expected": [] }
+]

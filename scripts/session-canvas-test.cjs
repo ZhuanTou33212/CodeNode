@@ -15,8 +15,16 @@ const path = require('path');
 const PROJECT = path.resolve(__dirname, '..');
 const OUT = path.join(os.tmpdir(), 'codenode-session-test');
 
+function clearCompiledOutput() {
+  const target = path.resolve(OUT);
+  if (path.dirname(target) !== path.resolve(os.tmpdir()) || path.basename(target) !== 'codenode-session-test') {
+    throw new Error('拒绝清理意外路径：' + target);
+  }
+  fs.rmSync(target, { recursive: true, force: true });
+}
+
 function compile() {
-  fs.rmSync(OUT, { recursive: true, force: true });
+  clearCompiledOutput();
   const src = [
     'src/global.d.ts',
     'src/store/graphStore.ts',
@@ -25,6 +33,7 @@ function compile() {
     'src/store/uiStore.ts',
     'src/store/projectStore.ts',
     'src/store/usageStore.ts',
+    'src/lib/projectActions.ts',
     'src/lib/flow.ts',
     'src/types.ts',
   ];
@@ -46,12 +55,25 @@ const { useGraphStore } = require(path.join(OUT, 'store', 'graphStore.js'));
 const { useSessionStore } = require(path.join(OUT, 'store', 'sessionStore.js'));
 const { useChatStore } = require(path.join(OUT, 'store', 'chatStore.js'));
 const { useUiStore } = require(path.join(OUT, 'store', 'uiStore.js'));
+const { useProjectStore } = require(path.join(OUT, 'store', 'projectStore.js'));
+const projectActions = require(path.join(OUT, 'lib', 'projectActions.js'));
+const cnode = require(path.join(PROJECT, 'electron', 'cnode.cjs'));
+
+const savedLocal = new Map();
+global.localStorage = {
+  get length() { return savedLocal.size; },
+  clear: () => { savedLocal.clear(); },
+  getItem: (key) => savedLocal.has(key) ? savedLocal.get(key) : null,
+  key: (index) => [...savedLocal.keys()][index] || null,
+  setItem: (key, value) => { savedLocal.set(key, String(value)); },
+  removeItem: (key) => { savedLocal.delete(key); },
+};
 
 const mkNode = (id, type, label) => ({ id, type, position: { x: 0, y: 0 }, data: { label, status: 'pending' } });
 
 function reset() {
   useGraphStore.setState({ nodes: [], edges: [], root: { nodes: [], edges: [] }, past: [], future: [], selectedId: null, selectedIds: [], altDragIds: [], draggingIds: [], flow: {} });
-  useSessionStore.setState({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null });
+  useSessionStore.setState({ sessions: {}, order: [], activeId: null, memoryConversationId: '', memoryTaskEpoch: 0, streaming: false, messages: [], progress: null });
 }
 
 function installApi(agentChatImpl) {
@@ -74,21 +96,38 @@ async function main() {
   useSessionStore.getState().initProject('你好');
   assert.strictEqual(useSessionStore.getState().order.length, 1, '初始应有 1 个画布');
   const canvas1Id = useSessionStore.getState().activeId;
-  await runTurn(async () => ({
-    ok: true,
-    reply: '已完成',
-    reasoning: '',
-    toolCalls: [],
-    usage: null,
-    document: { root: { nodes: [mkNode('s1', 'start', '开始'), mkNode('t1', 'task', '任务')], edges: [] } },
-  }));
+  const memoryId = useSessionStore.getState().memoryConversationId;
+  await runTurn(async (payload) => {
+    assert.strictEqual(payload.memoryConversationId, memoryId, '首轮应传稳定记忆会话 ID');
+    return {
+      ok: true,
+      reply: '已完成',
+      reasoning: '',
+      toolCalls: [],
+      usage: null,
+      document: { root: { nodes: [mkNode('s1', 'start', '开始'), mkNode('t1', 'task', '任务')], edges: [] } },
+    };
+  });
   const ssA = useSessionStore.getState();
   assert.strictEqual(ssA.order.length, 2, '画布为空时应新开画布承载 Agent 输出');
+  assert.notStrictEqual(ssA.activeId, canvas1Id);
+  assert.strictEqual(ssA.memoryConversationId, memoryId, '自动新建画布不能改变记忆会话 ID');
+  assert.strictEqual(ssA.memoryTaskEpoch, 0, 'Agent 自动新画布仍属于原任务代');
   const newCanvas = ssA.sessions[ssA.activeId];
   assert.strictEqual(newCanvas.doc.root.nodes.length, 2, '新画布应包含 Agent 创建的内容');
   assert.ok(ssA.sessions[canvas1Id], '原画布应保留');
   // 新画布由 Agent 承载 → 仍应保持 active（工作画布）
   assert.strictEqual(ssA.sessions[ssA.activeId].status, 'active');
+  await runTurn(async (payload) => {
+    assert.strictEqual(payload.memoryConversationId, memoryId, '下一轮仍应使用同一记忆会话 ID');
+    assert.strictEqual(payload.sessionId, ssA.activeId, '计划仍绑定当前画布 ID');
+    return { ok: true, reply: '继续', reasoning: '', toolCalls: [], usage: null };
+  });
+  useSessionStore.getState().switchSession(canvas1Id);
+  assert.strictEqual(useSessionStore.getState().memoryConversationId, memoryId, '手动切换画布不改变记忆会话 ID');
+  useSessionStore.getState().newCanvas();
+  assert.strictEqual(useSessionStore.getState().memoryTaskEpoch, 1, '用户手动新画布启动新任务代');
+  assert.strictEqual(useSessionStore.getState().memoryConversationId, memoryId, '新任务仍在同一对话中');
 
   // ---- 场景 B：画布已有节点 → Agent 就地修改 → 不新开画布 ----
   reset();
@@ -151,6 +190,34 @@ async function main() {
   useSessionStore.getState().markActive();
   assert.strictEqual(useSessionStore.getState().sessions[useSessionStore.getState().activeId].status, 'active', 'markActive 应恢复 active');
 
+  // ---- 场景 E：.cnode 保存/打开后，稳定记忆 ID 保留 ----
+  reset();
+  useSessionStore.getState().initProject('你好');
+  const persistentId = useSessionStore.getState().memoryConversationId;
+  useSessionStore.getState().newCanvas();
+  const persistentEpoch = useSessionStore.getState().memoryTaskEpoch;
+  const projectFile = path.join(os.tmpdir(), 'codenode-memory-session-roundtrip.cnode');
+  useProjectStore.setState({ root: path.dirname(projectFile), projectFile, loadRoot: async () => {} });
+  let encoded = null;
+  global.window = { codenode: {
+    saveProject: async (_target, payload) => {
+      encoded = cnode.encodeCnode(payload);
+      return { ok: true, filePath: projectFile };
+    },
+    openGraph: async () => ({ ok: true, filePath: projectFile, data: cnode.decodeCnode(encoded) }),
+  } };
+  await projectActions.saveProject();
+  assert.equal(cnode.decodeCnode(encoded).canvases.memoryConversationId, persistentId);
+  assert.equal(cnode.decodeCnode(encoded).canvases.memoryTaskEpoch, persistentEpoch);
+  useSessionStore.getState().reset();
+  await projectActions.openProjectFile();
+  assert.equal(useSessionStore.getState().memoryConversationId, persistentId, '工程重载后仍使用同一记忆会话 ID');
+  assert.equal(useSessionStore.getState().memoryTaskEpoch, persistentEpoch, '工程重载后保留任务代');
+
+  reset();
+  useSessionStore.getState().startOnCurrent('没有预初始化的指令');
+  assert.ok(useSessionStore.getState().memoryConversationId, '懒创建首个画布也必须产生稳定记忆 ID');
+
   console.log('SESSION CANVAS TEST: PASS');
 }
 
@@ -161,5 +228,5 @@ main()
     process.exitCode = 1;
   })
   .finally(() => {
-    fs.rmSync(OUT, { recursive: true, force: true });
+    clearCompiledOutput();
   });

@@ -214,8 +214,12 @@ function register(ctx) {
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
     });
     if (canceled || !filePath) return { ok: false };
-    fs.writeFileSync(filePath, cnode.encodeCnode(payload));
-    return { ok: true, filePath };
+    try {
+      fs.writeFileSync(filePath, cnode.encodeCnode(payload));
+      return { ok: true, filePath };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle('graph:open', async () => {
@@ -225,20 +229,24 @@ function register(ctx) {
       properties: ['openFile'],
     });
     if (canceled || !filePaths[0]) return { ok: false };
-    const data = fs.readFileSync(filePaths[0]);
-    const dec = cnode.decodeCnode(data);
-    if (!dec.ok) return { ok: false, filePath: filePaths[0], error: dec.error };
-    return {
-      ok: true,
-      filePath: filePaths[0],
-      data: {
-        graph: dec.graph,
-        workspace: dec.workspace,
-        manifest: dec.manifest,
-        canvases: dec.canvases || null,
-        warnings: dec.warnings,
-      },
-    };
+    try {
+      const data = fs.readFileSync(filePaths[0]);
+      const dec = cnode.decodeCnode(data);
+      if (!dec.ok) return { ok: false, filePath: filePaths[0], error: dec.error };
+      return {
+        ok: true,
+        filePath: filePaths[0],
+        data: {
+          graph: dec.graph,
+          workspace: dec.workspace,
+          manifest: dec.manifest,
+          canvases: dec.canvases || null,
+          warnings: dec.warnings,
+        },
+      };
+    } catch (e) {
+      return { ok: false, filePath: filePaths[0], error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle('project:choose', async () => {
@@ -257,13 +265,19 @@ function register(ctx) {
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
     });
     if (canceled || !filePath) return { ok: false };
-    const buf = cnode.encodeCnode({
-      graph: { revision: 1, nodes: [], edges: [] },
-      workspace: { viewport: { x: 0, y: 0, zoom: 1 } },
-    });
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, buf);
-    return { ok: true, filePath, root: path.dirname(filePath) };
+    try {
+      const buf = cnode.encodeCnode({
+        graph: { revision: 1, nodes: [], edges: [] },
+        workspace: { viewport: { x: 0, y: 0, zoom: 1 } },
+      });
+      const root = path.dirname(filePath);
+      // An existing Windows drive root can reject mkdir even with recursive: true.
+      if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(filePath, buf);
+      return { ok: true, filePath, root };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle('project:list', async (_event, root) => {
@@ -415,7 +429,7 @@ function register(ctx) {
       if (!target) return { ok: false, error: '未指定保存位置' };
       const isFile = String(target).toLowerCase().endsWith('.cnode');
       const filePath = isFile ? path.resolve(target) : path.join(path.resolve(target), 'workflow.cnode');
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, cnode.encodeCnode(payload));
       return { ok: true, filePath };
     } catch (e) {

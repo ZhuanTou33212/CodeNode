@@ -207,6 +207,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ss.startOnCurrent(userText);
     }
     const planSessionId = useSessionStore.getState().activeId;
+    const memoryConversationId = useSessionStore.getState().memoryConversationId;
+    const memoryTaskEpoch = useSessionStore.getState().memoryTaskEpoch;
     useSessionStore.getState().beginPlanRun(planSessionId);
     ss.pushUser(userText, attachments);
     ss.beginTurn();
@@ -241,6 +243,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nodeId: null,
         requestId,
         sessionId: planSessionId || undefined,
+        memoryConversationId: memoryConversationId || undefined,
+        memoryTaskEpoch,
         modelId: us.modelId || undefined,
         reasoningEffort: us.effort,
         document: { root: ctx },

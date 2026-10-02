@@ -98,17 +98,19 @@ soul_file=config/soul.md
 # rag.max_context_chars=12000
 # rag.max_queries=5
 # rag.graph_hops=1           # 跨文件问题默认最多沿定义/调用/引用/导入关系扩展 1 跳；0=关闭，最多 2
+# rag.bm25_k1=1.35           # 词频饱和，范围 0.1~3；建议结合项目检索评测调整
+# rag.bm25_b=0.72            # 文档长度归一化，范围 0~1
 # rag.min_coverage=0.20
 # 可选收录/排除 glob（逗号分隔）；敏感文件无论配置如何都不会收录
 # rag.include=src/**,docs/**,README*
 # rag.exclude=**/*.generated.*,fixtures/**
 
 # ---------- 向量层（可插拔嵌入器） ----------
-# provider：local（默认，纯本地确定性 n-gram 哈希向量，无网络）/
+# provider：none（默认，只用 BM25）/
+#           local（可选，纯本地确定性 n-gram 哈希向量，无网络）/
 #           openai（OpenAI 兼容 /embeddings，需 embed_base+embed_key+embed_model）/
 #           ollama（本地 Ollama，需 embed_base+embed_model）/
-#           none（关闭向量层，只用 BM25）
-# rag.embed_provider=local
+# rag.embed_provider=none
 # rag.embed_dim=4096            # local 向量维度
 # rag.embed_model=              # openai 用 text-embedding-3-small；ollama 用 nomic-embed-text
 # rag.embed_base=               # openai 默认 https://api.openai.com/v1；ollama 默认 http://localhost:11434
@@ -130,7 +132,7 @@ soul_file=config/soul.md
 # retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
 
 # ---------- 向量后端（chunk 向量存放与检索方式） ----------
-# memory（默认）：进程内记忆化；默认哈希向量只重排 BM25 候选。配置学习式嵌入的小项目可独立向量召回。
+# memory（启用向量层后的默认后端）：进程内记忆化；哈希向量只重排 BM25 候选。配置学习式嵌入的小项目可独立向量召回。
 # sqlite：工程 .codenode 内的持久化 sqlite-vec 索引；无服务进程，需 Node/Electron 的 node:sqlite 与可选依赖 sqlite-vec。
 # milvus：外部 Milvus 服务，chunk 向量写入 collection，检索走全库 ANN（不再受 BM25 预筛限制）。
 #   注意：milvus 是本项目唯一会把 chunk 向量落到外部服务的形态，默认关闭；
@@ -248,6 +250,8 @@ soul_file=config/soul.md
 # 规则：同一个资源，同一时刻只允许一个写者。只在**写类**工具上生效（读不加锁），被占用时**不排队等待**，
 # 直接返回 RESOURCE_LOCKED（可重试，带「谁在持有、多久过期」），让 Agent 自己换顺序/换文件。
 # agent.subagent.max_concurrent_tasks=3          # 同一管理器的共享并发上限（1–8），单独委派与批次共用；写任务独占
+# agent.subagent.max_total_tokens=120000         # 每个子代理的默认独立 Token 上限；delegate_task 可用 tokenBudget 收紧，父 Run 总预算仍生效
+# agent.subagent.total_timeout_seconds=600       # 每个子任务的总时长上限；delegate_task 可用 maxTurns / timeoutSeconds 进一步收紧
 # 租约持有到**任务结束**（子代理完成/取消）或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖。
 # agent.subagent.leases=true                       # 总开关（默认开）
 # agent.subagent.lease_ttl_ms=120000               # 兜底时长（持有者崩溃时不永久占住资源）

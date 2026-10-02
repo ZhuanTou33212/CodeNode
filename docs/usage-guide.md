@@ -33,6 +33,10 @@
 
 主 Agent 可按任务需要调用 `delegate_task` 或 `delegate_tasks`。这由模型和工具循环决定，界面没有“强制启动五个角色”的按钮。工具记录与底部“运行”页可查看子任务状态；子 Agent 的自述先作为**候选结果**返回，主 Agent 核对并确认后才能作为后续依赖任务的可信摘要。
 
+单次读文件或一步能完成的请求可以由主 Agent 直接处理。委派多步任务时可给 `delegate_task` 设置 `maxTurns`、`tokenBudget` 和 `timeoutSeconds`；前两者限制该子任务的模型轮次与 Token，用量仍计入本轮总预算。默认单个子 Agent 有 120000 Token 独立上限，可在 `config/agent.properties` 中调整。下游任务使用 `dependsOnTaskIds` 时只能收到主 Agent 已确认的摘要及其证据引用，需要原文时仍应按路径重新读取。
+
+隔离修改可使用 `isolation: "worktree"`。子任务完成后，先核对其结果，再用 `worktree(action="inspect_merge", name=...)` 查看分支版本和涉及文件；确认合并时把预检返回的 `targetHead`、`sourceHead`、`targetBranch`、`pendingDigest` 分别作为 `expectedTargetHead`、`expectedSourceHead`、`expectedTargetBranch`、`expectedPendingDigest` 传给 `worktree(action="merge", ...)`。隔离工作树有未提交改动时还需提供 `commitMessage`。主工作树必须干净；版本或未提交内容变化会拒绝合并，Git 冲突会尝试自动回退主工作树并保留隔离分支供处理。合并后仍需运行适用的验证。
+
 ### 中断后继续
 
 在底部“运行”页找到“可恢复的 Agent 运行”，点“查看恢复计划”：

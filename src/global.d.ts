@@ -24,6 +24,9 @@ interface ProjectPayloadDto {
   manifest?: ProjectManifestDto;
   canvases?: {
     sessions?: unknown[];
+    messages?: unknown[];
+    memoryConversationId?: string;
+    memoryTaskEpoch?: number;
   };
   checkpoints?: unknown[];
 }
@@ -34,6 +37,9 @@ interface ProjectLoadDto {
   manifest?: ProjectManifestDto;
   canvases?: {
     sessions?: unknown[];
+    messages?: unknown[];
+    memoryConversationId?: string;
+    memoryTaskEpoch?: number;
   };
   checkpoints?: unknown[];
   warnings?: string[];
@@ -104,7 +110,7 @@ interface CodenodeApi {
   saveGraph: (payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   openGraph: () => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   chooseProject: () => Promise<{ ok: boolean; root?: string }>;
-  createProject: () => Promise<{ ok: boolean; filePath?: string; root?: string }>;
+  createProject: () => Promise<{ ok: boolean; filePath?: string; root?: string; error?: string }>;
   listProject: (root: string) => Promise<{ ok: boolean; files?: ProjectFileDto[]; error?: string }>;
   readProjectFile: (
     root: string,
@@ -147,12 +153,12 @@ interface CodenodeApi {
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
     ragEnabled: boolean;
-    rag?: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean };
+    rag?: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean; bm25K1: number; bm25B: number; vectorWeight: number };
     models?: ModelSpecDto[];
     activeModelId?: string | null;
   }>;
-  ragCheck: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
-  ragSave: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
+  ragCheck: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
+  ragSave: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null }>;
   modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
@@ -332,6 +338,8 @@ interface CodenodeApi {
     resumeRunId?: string;
     resumeForce?: boolean;
     sessionId?: string;
+    memoryConversationId?: string;
+    memoryTaskEpoch?: number;
     prompt: string;
     history?: { role: string; content: string }[];
     /** 图片附件（多模态）：仅当所选模型 vision=true 时允许 */

@@ -56,6 +56,10 @@ interface SessionState {
   sessions: Record<string, SessionCanvas>;
   order: string[];
   activeId: string | null;
+  /** 对话级稳定标识；画布 activeId 自动变化时，记忆覆盖仍使用这一标识。 */
+  memoryConversationId: string;
+  /** 用户手动开启新任务时递增；Agent 自动新画布不改变任务代。 */
+  memoryTaskEpoch: number;
   streaming: boolean;
   messages: SessionMsg[];
   progress: ProgressState | null;
@@ -71,7 +75,7 @@ interface SessionState {
   startOnCurrent: (prompt: string) => void;
   switchSession: (id: string) => void;
   syncActiveGraph: () => void;
-  restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null) => void;
+  restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null, memoryConversationId?: string, memoryTaskEpoch?: number) => void;
 
   getDocument: () => SessionDoc;
   pushUser: (content: string, attachments?: SessionMsg['attachments']) => void;
@@ -171,10 +175,16 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+function validMemoryConversationId(value: string | undefined): boolean {
+  return /^[\w.-]{1,120}$/.test(value || '') && !['__proto__', 'constructor', 'prototype'].includes(value || '');
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: {},
   order: [],
   activeId: null,
+  memoryConversationId: '',
+  memoryTaskEpoch: 0,
   streaming: false,
   messages: [],
   progress: null,
@@ -210,6 +220,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: { [id]: first },
       order: [id],
       activeId: id,
+      memoryConversationId: uid('memory'),
+      memoryTaskEpoch: 0,
       activePlanSessionId: id,
       plan: null,
       planUpdatedAt: null,
@@ -243,7 +255,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     sessions = { ...sessions, [id]: blank };
     order.push(id);
     loadGraph(blank.doc);
-    set({ sessions, order, activeId: id, activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
+    set({ sessions, order, activeId: id, memoryConversationId: s.memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
   },
 
   switchSession: (id) => {
@@ -273,7 +285,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }));
   },
 
-  restoreSessions: (list, messages, activeId) => {
+  restoreSessions: (list, messages, activeId, memoryConversationId, memoryTaskEpoch) => {
+    const stableMemoryId = validMemoryConversationId(memoryConversationId)
+      ? String(memoryConversationId) : uid('memory');
+    const taskEpoch = Number.isInteger(memoryTaskEpoch) && Number(memoryTaskEpoch) >= 0
+      ? Number(memoryTaskEpoch) : 0;
     const sessions: Record<string, SessionCanvas> = {};
     const order: string[] = [];
     for (const s of list) {
@@ -301,16 +317,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       id = best || order[order.length - 1] || null;
     }
     if (!id) {
-      set({ sessions, order, activeId: null, activePlanSessionId: null, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
+      set({ sessions, order, activeId: null, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: null, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
       return;
     }
     loadGraph(sessions[id].doc);
-    set({ sessions, order, activeId: id, activePlanSessionId: id, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
+    set({ sessions, order, activeId: id, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: id, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
   },
 
   getDocument: () => snapshotGraph(),
 
   newCanvas: () => {
+    set((s) => ({ memoryTaskEpoch: s.memoryTaskEpoch + 1 }));
     get().beginWorkSession('');
   },
 
@@ -329,7 +346,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           createdAt: Date.now(),
           nodeCount: 0,
         };
-        set({ sessions: { [id]: first }, order: [id], activeId: id, activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
+        set({ sessions: { [id]: first }, order: [id], activeId: id, memoryConversationId: get().memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
         loadGraph(emptyDoc());
         return;
       }
@@ -672,7 +689,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  reset: () => set({ sessions: {}, order: [], activeId: null, activePlanSessionId: null, plansBySessionId: {}, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, intentUpdatedAt: null, intentRunId: null }),
+  reset: () => set({ sessions: {}, order: [], activeId: null, memoryConversationId: '', memoryTaskEpoch: 0, activePlanSessionId: null, plansBySessionId: {}, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, intentVerdict: null, intentUpdatedAt: null, intentRunId: null }),
 }));
 
 /** 合并工具记录：流式增量按 id 去重（同一调用多次 chunk 只算一条）；最终结果按 name+args 回填到未定结果条目，保留每次真实调度 */

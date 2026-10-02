@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { atomicWriteFile } = require('./atomicFile.cjs');
-const { clearIndexCache } = require('./rag/index.cjs');
+const { DEFAULTS, clearIndexCache } = require('./rag/index.cjs');
 
 const KEYS = {
   provider: 'rag.embed_provider',
@@ -13,6 +13,9 @@ const KEYS = {
   dimensions: 'rag.embed_dimensions',
   backend: 'rag.vector_store',
   key: 'rag.embed_key',
+  bm25K1: 'rag.bm25_k1',
+  bm25B: 'rag.bm25_b',
+  vectorWeight: 'rag.vector_weight',
 };
 
 function publicSettings(rag) {
@@ -23,6 +26,9 @@ function publicSettings(rag) {
     dim: rag.embedDim,
     dimensions: rag.embedDimensions,
     backend: rag.vectorStore,
+    bm25K1: rag.bm25K1,
+    bm25B: rag.bm25B,
+    vectorWeight: rag.vectorWeight,
     hasKey: !!rag.embedKey,
     rerankEnabled: !!rag.rerankUrl,
     rerankExternal: !!rag.rerankUrl && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/i.test(rag.rerankUrl),
@@ -37,6 +43,12 @@ function normalizedSettings(raw, existing) {
   if (!['memory', 'sqlite'].includes(backend)) throw new Error('设置页仅支持 memory 或 sqlite；Milvus 请在配置文件中单独配置');
   const dim = Number(input.dim);
   if (!Number.isInteger(dim) || dim < 256 || dim > 8192) throw new Error('向量维度必须在 256–8192 之间');
+  const bm25K1 = Number(input.bm25K1 == null ? existing.bm25K1 ?? DEFAULTS.bm25K1 : input.bm25K1);
+  const bm25B = Number(input.bm25B == null ? existing.bm25B ?? DEFAULTS.bm25B : input.bm25B);
+  const vectorWeight = Number(input.vectorWeight == null ? existing.vectorWeight ?? DEFAULTS.vectorWeight : input.vectorWeight);
+  if (!Number.isFinite(bm25K1) || bm25K1 < 0.1 || bm25K1 > 3) throw new Error('BM25 k1 必须在 0.1–3 之间');
+  if (!Number.isFinite(bm25B) || bm25B < 0 || bm25B > 1) throw new Error('BM25 b 必须在 0–1 之间');
+  if (!Number.isFinite(vectorWeight) || vectorWeight < 0 || vectorWeight > 1) throw new Error('向量融合权重必须在 0–1 之间');
   const dimensions = input.dimensions == null || String(input.dimensions).trim() === '' ? '' : String(input.dimensions).trim();
   if (dimensions && (!/^\d+$/.test(dimensions) || Number(dimensions) !== dim)) throw new Error('请求维度必须与索引维度一致');
   const model = String(input.model || '').trim();
@@ -50,7 +62,7 @@ function normalizedSettings(raw, existing) {
     if (provider === 'openai' && !key) throw new Error('OpenAI 兼容嵌入服务需要 API Key');
   }
   for (const value of [model, base, key]) if (/[\r\n]/.test(value)) throw new Error('配置值不能包含换行');
-  return { provider, backend: provider === 'none' ? 'memory' : backend, dim, dimensions: provider === 'openai' ? dimensions : '', model: provider === 'ollama' || provider === 'openai' ? model : '', base: provider === 'ollama' || provider === 'openai' ? base : '', key };
+  return { provider, backend: provider === 'none' ? 'memory' : backend, dim, dimensions: provider === 'openai' ? dimensions : '', model: provider === 'ollama' || provider === 'openai' ? model : '', base: provider === 'ollama' || provider === 'openai' ? base : '', key, bm25K1, bm25B, vectorWeight };
 }
 
 async function checkSettings(settings) {
@@ -92,6 +104,8 @@ function writeSettings(projectRoot, settings, previous) {
   const entries = new Map([
     [KEYS.provider, settings.provider], [KEYS.model, settings.model], [KEYS.base, settings.base],
     [KEYS.dim, String(settings.dim)], [KEYS.dimensions, settings.dimensions], [KEYS.backend, settings.backend],
+    [KEYS.bm25K1, String(settings.bm25K1)], [KEYS.bm25B, String(settings.bm25B)],
+    [KEYS.vectorWeight, String(settings.vectorWeight)],
   ]);
   if (settings.key && settings.key !== previous.embedKey) entries.set(KEYS.key, settings.key);
   const lines = before.split(/\r?\n/).filter((line) => {

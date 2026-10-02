@@ -25,15 +25,15 @@
                     │  ┌──────────────┐   ┌─────────────────────┐ │
                     │  │ 标量库 ScalarStore                        │ │
                     │  │ .codenode/   │   │ 向量层 Embedder        │ │
-                    │  │ scalars.json │   │ provider=local        │ │
-                    │  │ node:<id>... │   │   (n-gram 哈希向量)    │ │
+                    │  │ scalars.json │   │ provider=none 默认    │ │
+                    │  │ node:<id>... │   │ local 可选哈希向量    │ │
                     │  └──────────────┘   │ provider=openai/ollama│ │
                     │                     └──────────┬──────────┘ │
                     │  ┌─────────────────────────────▼──────────┐ │
                     │  │ 文件索引 LocalRagIndex（BM25 增量缓存）    │ │
                     │  └────────────────────────────────────────┘ │
                     │  向量后端 rag.vector_store：                 │
-                    │    memory（默认，进程内记忆化 + BM25 预筛）   │
+                    │    memory（启用向量后的默认本地后端）         │
                     │    milvus（可选，外部服务 + 全库 ANN）        │
                     └──────────────────────────────────────────────┘
 ```
@@ -52,22 +52,31 @@
 ### 2.2 向量层（语义联想，可插拔）
 - **接口**：`electron/embedder/index.cjs`，`embed(texts) → vectors`，统一 `cosine(a,b)`。
 - **provider**：
-  - `local`（默认）：确定性 n-gram 哈希向量（FNV-1a 桶 + 正负号 + L2 归一），无网络、跨会话稳定。
+  - `none`（默认）：关闭向量层，仅使用 BM25 文件检索。
+  - `local`（可选）：确定性 n-gram 哈希向量（FNV-1a 桶 + 正负号 + L2 归一），无网络、跨会话稳定。
   - `openai`：`rag.embed_base + embed_key + embed_model`，走 `/v1/embeddings`。
   - `ollama`：`rag.embed_base + embed_model`，走 `/api/embeddings`。
-  - `none`：关闭向量层，退化为纯 BM25。
-- **融合策略（agentic）**：默认哈希向量只重排 BM25 预筛候选（`rag.embed_top_k`，默认 40）；
+- **融合策略（agentic）**：显式启用的哈希向量只重排 BM25 预筛候选（`rag.embed_top_k`，默认 40）；
   学习式嵌入 + `memory` 且块数不超过 `rag.memory_semantic_max_chunks` 时独立扫描块向量；SQLite 在工程本地持久化向量，Milvus 走外部 ANN。
   BM25 与向量各自排序后按倒数排名融合，并为高分纯向量命中保留少量 Top-K 席位；`mode` 决定权重：
   - `file`：weight=0（纯词法）
   - `auto`/`hybrid`：weight=`rag.vector_weight`（默认 0.35）
   - `vector`：weight=1（语义优先）
 
+**下一步候选**：本地 Jina Code embedding 在小规模代码检索实验中改善了目标片段召回，
+但模型下载、CPU 建索引时长和无答案质量门槛需要继续评估。本期不随安装包内置、
+不自动下载，也不作为默认检索层；需要语义检索时仍可显式配置本地 Ollama
+或 OpenAI 兼容嵌入服务。
+
+BM25 的词频饱和与长度归一化分别由 `rag.bm25_k1`（默认 1.35，范围 0.1–3）和
+`rag.bm25_b`（默认 0.72，范围 0–1）控制；可在「检索设置」中连同向量融合权重按项目保存。
+这些默认值是兼容旧检索行为的起点，不代表针对每个代码库的最优值。
+
 ### 2.2.1 向量后端（`rag.vector_store`，chunk 向量存哪里）
 
 | 后端 | 位置 | 检索方式 | 外部依赖 |
 | --- | --- | --- | --- |
-| `memory`（默认） | 进程内 `Map`（有界记忆化） | 默认哈希向量重排 BM25；学习式嵌入的小项目可独立召回 | 无额外向量库 |
+| `memory`（启用向量层后的默认后端） | 进程内 `Map`（有界记忆化） | 哈希向量重排 BM25；学习式嵌入的小项目可独立召回 | 无额外向量库 |
 | `sqlite` | 工程 `.codenode/rag-vectors-*.sqlite` | 本地精确近邻检索，文件范围在查询前过滤 | 可选 `sqlite-vec`，无需服务进程 |
 | `milvus` | 外部 Milvus collection | **全库 ANN**（不受 BM25 预筛限制），命中并回 BM25 结果一起融合 | Milvus 服务 + `@zilliz/milvus2-sdk-node` |
 
@@ -79,6 +88,8 @@
   未变文件不重写——向量写入天然是增量的。
 - **纯向量命中**：SQLite、Milvus 或 memory 全量扫描命中的块若 BM25 完全未召回，会以 `vector-only` 并入结果；
   SQLite/memory 要求余弦分 ≥ 0.4，Milvus 要求向量分达到最低门槛，工具文本会标明来源。
+  该分数只决定候选是否进入检索结果；纯向量命中本身不把质量判定升级为「可回答」。
+  Agent 需深读原文件，核实片段确实支持结论后才能据此回答。
 - **检索一致性默认 `strong`**（`rag.milvus_consistency`，可选 bounded/eventually/session/default）：
   默认 Bounded 时**按文件删除的旧块有几秒仍会被召回**（实测 ~3s），刚改完文件就问会出现旧内容；
   Strong 让刚写入/刚删除立即可见（真机探针 4/4 稳定）。服务端不支持该级别时（部分云托管只支持 Bounded）
@@ -192,8 +203,11 @@ minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/mini
 ## 5. 配置速查
 
 ```properties
+# BM25；也可在项目的「检索设置」中修改
+rag.bm25_k1=1.35
+rag.bm25_b=0.72
 # 向量层
-rag.embed_provider=local          # local | openai | ollama | none
+rag.embed_provider=none           # none（默认）| local | openai | ollama
 rag.embed_dim=4096
 rag.embed_model=                  # openai: text-embedding-3-small / ollama: nomic-embed-text
 rag.embed_base=                   # openai: https://api.openai.com/v1 / ollama: http://localhost:11434
@@ -232,6 +246,18 @@ agent.compression.threshold_chars=2400
 agent.compression.budget_chars=1500
 agent.compression.max_calls=8
 ```
+
+### 5.1 离线检索评测
+
+运行 `node scripts/rag-eval.cjs --out=out/rag-eval-report.json`，会用
+`scripts/rag-eval-cases.json` 中固定的问题与目标代码片段，对比默认配置、两组 BM25 参数、
+不同哈希向量权重、纯词法及关闭图扩展的结果。报告分别记录文件与目标片段的
+Recall@3、Recall@6，以及片段 MRR、
+无答案问题的误判率、各问题排名与检索耗时。评测在本地运行，不调用嵌入服务。
+
+这些样例只覆盖当前仓库的少量文件定位问题，适合发现排序回退，不足以证明某个参数或
+嵌入模型普遍更好。决定更改生产默认值前，应补入真实使用问题及人工标注的答案片段，
+并分别比较精确符号、自然语言改写、跨文件关系和无答案查询。
 
 ## 6. 后续演进（未在本期实现）
 

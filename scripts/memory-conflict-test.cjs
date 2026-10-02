@@ -185,8 +185,14 @@ async function main() {
   } finally {
     if (formerHome == null) delete process.env.CODENODE_HOME;
     else process.env.CODENODE_HOME = formerHome;
-    fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(home, { recursive: true, force: true });
+    const temp = path.resolve(os.tmpdir());
+    for (const [target, prefix] of [[root, 'codenode-memory-conflict-project-'], [home, 'codenode-memory-conflict-user-']]) {
+      const resolved = path.resolve(target);
+      if (path.dirname(resolved) !== temp || !path.basename(resolved).startsWith(prefix)) {
+        throw new Error('拒绝清理意外路径：' + resolved);
+      }
+      fs.rmSync(resolved, { recursive: true, force: true });
+    }
   }
 }
 

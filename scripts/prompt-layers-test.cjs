@@ -142,10 +142,11 @@ try {
    *
    * ① web_search 默认不注册（未配置后端时 schema 里没有它），所以这里数到的 26 个不含它。
    */
-  check('[D] 工具 schema ≤ 17,300 字符（含文件分页参数；当前 ' + schemaChars + '，' + tools.length + ' 个工具）', schemaChars <= 17300, 'chars=' + schemaChars);
+  // 工作树安全合并新增 HEAD/分支/未提交内容指纹参数，实测 schema 17,659 字符；仅放宽到 17,700。
+  check('[D] 工具 schema ≤ 17,700 字符（含安全合并参数；当前 ' + schemaChars + '，' + tools.length + ' 个工具）', schemaChars <= 17700, 'chars=' + schemaChars);
   check(
-    '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 19,800 字符（含记忆安全规则）',
-    systemPure.length + schemaChars <= 19800,
+    '[D] 纯代码任务的每轮固定开销（system 省层 + schema）≤ 20,500 字符（含安全合并与委派规则）',
+    systemPure.length + schemaChars <= 20500,
     'total=' + (systemPure.length + schemaChars)
   );
 

@@ -624,6 +624,8 @@ function RunsPanel() {
       } else if (!command && prompt && root && window.codenode?.agentChat && ['task', 'stage', 'tool'].includes(node.type || '')) {
         const requestId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const planSessionId = useSessionStore.getState().activeId;
+        const memoryConversationId = useSessionStore.getState().memoryConversationId;
+        const memoryTaskEpoch = useSessionStore.getState().memoryTaskEpoch;
         const res = await window.codenode.agentChat({
           projectRoot: root,
           prompt: `执行工作流节点「${label}」：\n${prompt}\n上游结果：\n${input.slice(0, 6000) || '无'}\n输出名称：${String(contract.outputName || label)}\n完成条件：${String(contract.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(contract.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
@@ -632,6 +634,8 @@ function RunsPanel() {
           nodeId: node.id,
           requestId,
           sessionId: planSessionId || undefined,
+          memoryConversationId: memoryConversationId || undefined,
+          memoryTaskEpoch,
           document: { root: useGraphStore.getState().getDocument() },
           projectFile: useProjectStore.getState().projectFile || undefined,
         });

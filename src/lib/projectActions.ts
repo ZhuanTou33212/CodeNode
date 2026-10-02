@@ -51,6 +51,8 @@ function buildPayload() {
     canvases: {
       sessions,
       messages: ss.messages,
+      memoryConversationId: ss.memoryConversationId,
+      memoryTaskEpoch: ss.memoryTaskEpoch,
     },
     workspace: { viewport: useUiStore.getState().viewport },
     manifest: useProjectStore.getState().doc,
@@ -77,7 +79,9 @@ function applyLoaded(
     graph?: { nodes?: unknown[]; edges?: unknown[] };
     canvases?: {
       sessions?: unknown[];
-      messages?: SessionMsg[];
+      messages?: unknown[];
+      memoryConversationId?: string;
+      memoryTaskEpoch?: number;
     };
     workspace?: { viewport?: { x: number; y: number; zoom: number } };
     manifest?: { documentId?: string; createdAt?: string; name?: string };
@@ -92,6 +96,9 @@ function applyLoaded(
 
   const sessData = data?.canvases?.sessions as SessionPayload[] | undefined;
   const messages = data?.canvases?.messages as SessionMsg[] | undefined;
+  const memoryConversationId = data?.canvases?.memoryConversationId ||
+    (data?.manifest?.documentId ? 'memory-' + data.manifest.documentId : undefined);
+  const memoryTaskEpoch = data?.canvases?.memoryTaskEpoch;
   const ss = useSessionStore.getState();
 
   if (sessData && sessData.length) {
@@ -107,7 +114,7 @@ function applyLoaded(
         root: { nodes: (sd.root?.nodes as never[]) || [], edges: (sd.root?.edges as never[]) || [] } as Graph,
       } as SessionDoc,
     }));
-    ss.restoreSessions(list, messages || [], undefined);
+    ss.restoreSessions(list, messages || [], undefined, memoryConversationId, memoryTaskEpoch);
   } else {
     // 旧版单画布：把加载到的图作为首个会话（忽略其中的组节点与组图）
     const doc: SessionDoc = {
@@ -136,7 +143,9 @@ function applyLoaded(
           } as SessionCanvas,
         ],
         greeting ? [{ role: 'assistant', content: greeting, status: 'done' } as SessionMsg] : [],
-        undefined
+        undefined,
+        memoryConversationId,
+        memoryTaskEpoch
       );
     });
   }
@@ -148,8 +157,24 @@ export async function newProject(): Promise<void> {
     useUiStore.getState().setToast('需要 Electron 环境');
     return;
   }
-  const res = await api.createProject();
-  if (!res.ok || !res.filePath) return;
+  useProjectStore.setState({ error: null });
+  let res;
+  try {
+    res = await api.createProject();
+  } catch (e) {
+    const message = '新建工程失败：' + String(e);
+    useProjectStore.setState({ error: message });
+    useUiStore.getState().setToast(message);
+    return;
+  }
+  if (!res.ok || !res.filePath) {
+    if (res.error) {
+      const message = '新建工程失败：' + res.error;
+      useProjectStore.setState({ error: message });
+      useUiStore.getState().setToast(message);
+    }
+    return;
+  }
   const root = res.root || dirOf(res.filePath);
   localStorage.setItem(LAST_ROOT_KEY, root);
   localStorage.setItem(LAST_FILE_KEY, res.filePath);
@@ -199,12 +224,23 @@ export async function openProjectFile(): Promise<void> {
     useUiStore.getState().setToast('需要 Electron 环境');
     return;
   }
-  const res = await api.openGraph();
-  if (!res.ok || !res.filePath) return;
-  if (res.error) {
-    useUiStore.getState().setToast('打开失败：' + res.error);
+  useProjectStore.setState({ error: null });
+  let res;
+  try {
+    res = await api.openGraph();
+  } catch (e) {
+    const message = '打开工程文件失败：' + String(e);
+    useProjectStore.setState({ error: message });
+    useUiStore.getState().setToast(message);
     return;
   }
+  if (res.error) {
+    const message = '打开工程文件失败：' + res.error;
+    useProjectStore.setState({ error: message });
+    useUiStore.getState().setToast(message);
+    return;
+  }
+  if (!res.ok || !res.filePath) return;
   const root = dirOf(res.filePath);
   localStorage.setItem(LAST_ROOT_KEY, root);
   localStorage.setItem(LAST_FILE_KEY, res.filePath);
@@ -268,7 +304,7 @@ export async function saveProject(): Promise<void> {
     await useProjectStore.getState().loadRoot(dirOf(res.filePath));
     useUiStore.getState().setToast('已保存：' + res.filePath);
   } else {
-    useUiStore.getState().setToast('已取消保存');
+    useUiStore.getState().setToast(res.error ? '保存失败：' + res.error : '已取消保存');
   }
 }
 

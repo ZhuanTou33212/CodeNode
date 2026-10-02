@@ -190,7 +190,42 @@ function worktreeRegistry() {
   }
 
   // ==================== F. 隔离层接线 ====================
-  console.log('\n== F. 隔离层 ==');
+  console.log('\n== F. 合并预检与冲突回退 ==');
+  {
+    const source = await worktree.createWorktree(repo, { name: 'merge-probe' }, opts);
+    fs.writeFileSync(path.join(source.path, 'README.md'), 'merged\n');
+    fs.writeFileSync(path.join(source.path, 'merged.txt'), 'new\n');
+    const preview = await worktree.inspectMerge(repo, 'merge-probe', opts);
+    check('[F] 预检列出文件、分支和两个 HEAD', preview.ok && preview.files.includes('README.md') && preview.files.includes('merged.txt') && !!preview.targetHead && !!preview.sourceHead, JSON.stringify(preview));
+    const stale = await worktree.mergeWorktree(repo, { name: 'merge-probe', expectedTargetHead: 'old', expectedSourceHead: preview.sourceHead, expectedTargetBranch: preview.targetBranch, expectedPendingDigest: preview.pendingDigest, commitMessage: 'merge probe' }, opts);
+    check('[F] 版本过期拒绝合并且不改主工作树', stale.error === 'STALE_PREVIEW' && fs.readFileSync(path.join(repo, 'README.md'), 'utf8') === 'main\n');
+    fs.writeFileSync(path.join(source.path, 'README.md'), 'changed after preview\n');
+    const drift = await worktree.mergeWorktree(repo, { name: 'merge-probe', expectedTargetHead: preview.targetHead, expectedSourceHead: preview.sourceHead, expectedTargetBranch: preview.targetBranch, expectedPendingDigest: preview.pendingDigest, commitMessage: 'merge probe' }, opts);
+    check('[F] 未提交内容在预览后变化也拒绝合并', drift.error === 'STALE_PREVIEW' && fs.readFileSync(path.join(repo, 'README.md'), 'utf8') === 'main\n');
+    fs.writeFileSync(path.join(source.path, 'README.md'), 'merged\n');
+    const denied = await worktreeRegistry().execute('worktree', { action: 'merge', name: 'merge-probe', expectedTargetHead: preview.targetHead, expectedSourceHead: preview.sourceHead, expectedTargetBranch: preview.targetBranch, expectedPendingDigest: preview.pendingDigest, commitMessage: 'merge probe' }, contextFor(false));
+    check('[F] 用户拒绝时没有提交或合并', !denied.ok && fs.readFileSync(path.join(repo, 'README.md'), 'utf8') === 'main\n');
+    const merged = await worktreeRegistry().execute('worktree', { action: 'merge', name: 'merge-probe', expectedTargetHead: preview.targetHead, expectedSourceHead: preview.sourceHead, expectedTargetBranch: preview.targetBranch, expectedPendingDigest: preview.pendingDigest, commitMessage: 'merge probe' }, contextFor(true));
+    check('[F] 确认后先提交隔离改动，再合并进主工作树', merged.ok && fs.readFileSync(path.join(repo, 'README.md'), 'utf8').replace(/\r\n/g, '\n') === 'merged\n' && fs.existsSync(path.join(repo, 'merged.txt')), JSON.stringify({ ok: merged.ok, readme: fs.readFileSync(path.join(repo, 'README.md'), 'utf8'), newFile: fs.existsSync(path.join(repo, 'merged.txt')), data: merged.data }));
+    await worktree.removeWorktree(repo, { name: 'merge-probe' }, opts);
+
+    const conflicting = await worktree.createWorktree(repo, { name: 'conflict-probe' }, opts);
+    fs.writeFileSync(path.join(conflicting.path, 'README.md'), 'from worktree\n');
+    fs.writeFileSync(path.join(repo, 'README.md'), 'from main\n');
+    await git(['add', 'README.md']);
+    await git(['commit', '-q', '-m', 'main change']);
+    const beforeConflict = await git(['rev-parse', 'HEAD']);
+    const conflictPreview = await worktree.inspectMerge(repo, 'conflict-probe', opts);
+    const conflict = await worktree.mergeWorktree(repo, { name: 'conflict-probe', expectedTargetHead: conflictPreview.targetHead, expectedSourceHead: conflictPreview.sourceHead, expectedTargetBranch: conflictPreview.targetBranch, expectedPendingDigest: conflictPreview.pendingDigest, commitMessage: 'worktree change' }, opts);
+    const afterConflict = await git(['rev-parse', 'HEAD']);
+    check('[F] 冲突时返回冲突文件并自动回退主工作树', !conflict.ok && conflict.error === 'MERGE_CONFLICT' && conflict.conflicts.includes('README.md') && conflict.rollbackOk && beforeConflict.stdout.trim() === afterConflict.stdout.trim() && fs.readFileSync(path.join(repo, 'README.md'), 'utf8').replace(/\r\n/g, '\n') === 'from main\n', JSON.stringify({ conflict, before: beforeConflict.stdout, after: afterConflict.stdout, readme: fs.readFileSync(path.join(repo, 'README.md'), 'utf8') }));
+    const retained = await worktree.inspectMerge(repo, 'conflict-probe', opts);
+    check('[F] 失败后隔离分支保留供人工解决', retained.ok && fs.existsSync(conflicting.path));
+    await worktree.removeWorktree(repo, { name: 'conflict-probe' }, opts);
+  }
+
+  // ==================== G. 隔离层接线 ====================
+  console.log('\n== G. 隔离层 ==');
   {
     const src = fs.readFileSync(path.join(__dirname, '..', 'electron', 'worktree.cjs'), 'utf8');
     check('[F] git 命令走 sandbox.guardedSpawn', /sandbox\.guardedSpawn\(/.test(src));

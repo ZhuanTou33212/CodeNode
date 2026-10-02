@@ -14,7 +14,8 @@ const { extractSessionMemoryOverrides } = require('./sessionMemoryOverrides.cjs'
 /**
  * @param {{
  *   prompt?: string, canvasSummary?: string, projectMemoryEntries?: any[], skills?: any[],
- *   sessionOverrides?: Array<{scope?: string, kind?: string, key: string}>,
+ *   sessionOverrides?: Array<{scope?: string, kind?: string, key: string, value?: string}>,
+ *   memoryIntent?: {changes?: Array<any>, overrides?: Array<any>, persistentCandidates?: Array<any>} | null,
  *   memoryConfig?: any, dynamicContextConfig?: any, userMemoryStore?: any,
  *   buildSkillsIndex: (skills: any[]) => string,
  *   truncateCanvasSummary: (text: string, budget: number) => {text: string},
@@ -30,11 +31,25 @@ function buildPromptContext(input) {
   const skillsIndexFull = i.buildSkillsIndex(Array.isArray(i.skills) ? i.skills : []);
   const projectEntries = Array.isArray(i.projectMemoryEntries) ? i.projectMemoryEntries : [];
   const userData = typeof userStore.readUserMemory === 'function' ? userStore.readUserMemory() : { entries: [] };
-  const overrideContext = extractSessionMemoryOverrides(prompt, {
+  const overrideContext = /** @type {{changes?: Array<any>, overrides?: Array<any>, persistentCandidates?: Array<any>}} */ (i.memoryIntent || extractSessionMemoryOverrides(prompt, {
     projectEntries,
     userEntries: userData && userData.ok !== false ? userData.entries : [],
-  });
-  const sessionOverrides = [...(Array.isArray(i.sessionOverrides) ? i.sessionOverrides : []), ...overrideContext.overrides];
+  }));
+  const turnOverrides = Array.isArray(overrideContext.changes)
+    ? overrideContext.changes.filter((item) => item && ['temporary', 'permanent'].includes(item.action)).map((item) => item.override)
+    : (Array.isArray(overrideContext.overrides) ? overrideContext.overrides : []);
+  const overrideSlots = new Map();
+  for (const item of [...(Array.isArray(i.sessionOverrides) ? i.sessionOverrides : []), ...turnOverrides]) {
+    const slot = memoryStore.memorySlot(item);
+    if (slot) overrideSlots.set(slot, item);
+  }
+  const sessionOverrides = [...overrideSlots.values()];
+  const sessionMemoryText = sessionOverrides.length || (overrideContext.persistentCandidates || []).length
+    ? JSON.stringify({ overrides: sessionOverrides.map((item) => ({
+      scope: item.scope, kind: item.kind, key: item.key, value: item.value, lifetime: item.lifetime || 'task',
+    })), persistentCandidates: overrideContext.persistentCandidates || [] })
+      .replace(/[<>&]/g, (char) => ({ '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' })[char])
+    : '';
   // 在召回打分前先取每个槽位的有效版本；项目槽位覆盖同名用户级默认值。
   const projectResolved = memoryStore.resolveMemory(projectEntries, {
     scope: 'project', sessionOverrides,
@@ -48,7 +63,7 @@ function buildPromptContext(input) {
     Math.max(0, Number(memoryCfg.budgetTokens) || 0),
     Math.max(0, Number(dynMemoryCap) || 0),
   );
-  const sessionMemoryTokens = compaction.estimateTextTokens(overrideContext.text);
+  const sessionMemoryTokens = compaction.estimateTextTokens(sessionMemoryText);
   const storedMemoryCap = Math.max(0, memoryCap - sessionMemoryTokens);
   const measureProject = memoryStore.buildMemoryInjection(projectResolved.entries, prompt, {
     limit: memoryCfg.topK,
@@ -145,7 +160,7 @@ function buildPromptContext(input) {
     skillsText,
     canvasSummaryForPrompt,
     contextBudget,
-    sessionMemoryText: overrideContext.text,
+    sessionMemoryText,
     sessionOverrides,
   };
 }

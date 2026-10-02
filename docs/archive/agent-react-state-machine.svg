@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1540" viewBox="0 0 1920 1540" role="img" aria-labelledby="title desc">
+  <title id="title">CodeNode 单 Agent ReAct 运行状态与恢复</title>
+  <desc id="desc">上部是严格的运行状态机，内部执行步骤单独列在中部，下部显示终态后由用户触发的新 Run 恢复路径。</desc>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f9fbff"/><stop offset="1" stop-color="#f3f7ff"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%"><feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#294467" flood-opacity=".10"/></filter>
+    <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#3269df"/></marker>
+    <marker id="purpleArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#8e51e8"/></marker>
+    <marker id="orangeArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#df8a34"/></marker>
+    <marker id="redArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#d96c72"/></marker>
+    <style>
+      .title{font:700 44px 'Segoe UI','Microsoft YaHei',sans-serif;fill:#14243f}
+      .subtitle{font:21px 'Segoe UI','Microsoft YaHei',sans-serif;fill:#63758e}
+      .section{font:700 18px 'Segoe UI','Microsoft YaHei',sans-serif;letter-spacing:2px}
+      .state{font:700 26px 'Segoe UI','Microsoft YaHei',sans-serif;fill:#172844}
+      .step{font:700 24px 'Segoe UI','Microsoft YaHei',sans-serif;fill:#172844}
+      .body{font:17px 'Segoe UI','Microsoft YaHei',sans-serif;fill:#62738a}
+      .small{font:15px 'Segoe UI','Microsoft YaHei',sans-serif;fill:#718198}
+      .label{font:700 16px 'Segoe UI','Microsoft YaHei',sans-serif;paint-order:stroke fill;stroke:#fafcff;stroke-width:7px;stroke-linejoin:round}
+      .blue{fill:none;stroke:#3269df;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#blueArrow)}
+      .purple{fill:none;stroke:#8e51e8;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#purpleArrow)}
+      .orange{fill:none;stroke:#df8a34;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#orangeArrow)}
+      .red{fill:none;stroke:#d96c72;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#redArrow)}
+      .dashed{stroke-dasharray:10 8}
+    </style>
+  </defs>
+
+  <rect width="1920" height="1480" fill="url(#page)"/>
+  <text x="76" y="74" class="title">单 Agent · ReAct 运行状态与恢复</text>
+  <text x="78" y="110" class="subtitle">状态迁移、工具处理和终态后新 Run 的恢复路径分开展示</text>
+
+  <!-- Statechart: only runtime states appear in this panel. -->
+  <rect x="54" y="140" width="1812" height="620" rx="30" fill="#fbfcff" stroke="#98b8f2" stroke-width="2.5" stroke-dasharray="11 8"/>
+  <text x="80" y="178" class="section" fill="#3269df">1 · RUNTIME STATECHART / 运行状态机</text>
+  <rect x="96" y="205" width="1728" height="325" rx="25" fill="#f7faff" stroke="#aebfe0" stroke-width="2.3" stroke-dasharray="9 7"/>
+  <text x="119" y="236" class="section" fill="#7086ae">ACTIVE / 活动态 · 全局错误和取消事件作用于内部任一状态</text>
+
+  <rect x="175" y="286" width="400" height="124" rx="20" fill="#eaf2ff" stroke="#4a82fa" stroke-width="3" filter="url(#shadow)"/>
+  <text x="375" y="335" text-anchor="middle" class="state">RUNNING</text>
+  <text x="375" y="370" text-anchor="middle" class="body">主模型决策</text>
+
+  <rect x="760" y="286" width="400" height="124" rx="20" fill="#f3edff" stroke="#a37bef" stroke-width="3" filter="url(#shadow)"/>
+  <text x="960" y="335" text-anchor="middle" class="state">WAITING_TOOL</text>
+  <text x="960" y="370" text-anchor="middle" class="body">工具执行与结果结算</text>
+
+  <rect x="1345" y="286" width="400" height="124" rx="20" fill="#f3edff" stroke="#a37bef" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1545" y="335" text-anchor="middle" class="state">WAITING_USER</text>
+  <text x="1545" y="370" text-anchor="middle" class="body">等待审批或答复</text>
+
+  <path d="M575 315H748" class="blue"/>
+  <text x="662" y="299" text-anchor="middle" class="label" fill="#3269df">tool_calls</text>
+  <path d="M760 381H587" class="purple dashed"/>
+  <text x="674" y="405" text-anchor="middle" class="label" fill="#7e4acb">tools_settled</text>
+  <path d="M1160 315H1333" class="blue"/>
+  <text x="1246" y="299" text-anchor="middle" class="label" fill="#3269df">审批 / 提问</text>
+  <path d="M1345 381H1172" class="purple dashed"/>
+  <text x="1258" y="405" text-anchor="middle" class="label" fill="#7e4acb">答复 / 拒绝</text>
+
+  <!-- Terminal states are true sinks, connected by guarded transitions. -->
+  <rect x="143" y="618" width="330" height="104" rx="18" fill="#edf8f1" stroke="#8ccc9e" stroke-width="2.7" filter="url(#shadow)"/>
+  <text x="308" y="663" text-anchor="middle" class="state" fill="#34754e">COMPLETED</text>
+  <text x="308" y="692" text-anchor="middle" class="body">最终答复完成</text>
+  <rect x="562" y="618" width="330" height="104" rx="18" fill="#fff4e7" stroke="#e8ab5b" stroke-width="2.7" filter="url(#shadow)"/>
+  <text x="727" y="663" text-anchor="middle" class="state" fill="#9f6425">LIMIT_REACHED</text>
+  <text x="727" y="692" text-anchor="middle" class="body">达到运行上限</text>
+  <rect x="981" y="618" width="330" height="104" rx="18" fill="#fff0f0" stroke="#e78c91" stroke-width="2.7" filter="url(#shadow)"/>
+  <text x="1146" y="663" text-anchor="middle" class="state" fill="#a7464c">FAILED</text>
+  <text x="1146" y="692" text-anchor="middle" class="body">本 Run 因错误终止</text>
+  <rect x="1400" y="618" width="330" height="104" rx="18" fill="#f4effc" stroke="#b49ade" stroke-width="2.7" filter="url(#shadow)"/>
+  <text x="1565" y="663" text-anchor="middle" class="state" fill="#7051a7">CANCELLED</text>
+  <text x="1565" y="692" text-anchor="middle" class="body">用户取消</text>
+
+  <path d="M308 410V606" class="blue"/>
+  <text x="282" y="562" text-anchor="end" class="label" fill="#3269df">最终答复</text>
+  <path d="M480 410V500H650V606" class="orange"/>
+  <path d="M850 410V530H805V606" class="orange"/>
+  <text x="727" y="578" text-anchor="middle" class="label" fill="#ae6b23">预算触顶</text>
+  <path d="M1146 530V606" class="red"/>
+  <text x="1132" y="577" text-anchor="end" class="label" fill="#b74b4b">run_error</text>
+  <path d="M1565 530V606" class="purple"/>
+  <text x="1580" y="577" class="label" fill="#7258ae">abort</text>
+  <text x="80" y="746" class="small">当前用户交互只在工具执行时触发。父框 ACTIVE 的出口表示任一活动状态遇到 run_error → FAILED，收到 abort → CANCELLED。</text>
+
+  <!-- Implementation detail, explicitly not runtime states. -->
+  <rect x="54" y="795" width="1812" height="284" rx="30" fill="#f9fffb" stroke="#9bdcba" stroke-width="2.5" stroke-dasharray="11 8"/>
+  <text x="80" y="833" class="section" fill="#279660">2 · INSIDE WAITING_TOOL / 内部处理步骤（非状态）</text>
+  <rect x="124" y="884" width="322" height="125" rx="18" fill="#fff" stroke="#61c78b" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="285" y="932" text-anchor="middle" class="step">Tool Executor</text>
+  <text x="285" y="966" text-anchor="middle" class="body">执行并结算工具</text>
+  <rect x="545" y="884" width="322" height="125" rx="18" fill="#fff" stroke="#61c78b" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="706" y="932" text-anchor="middle" class="step">Tool Adapter</text>
+  <text x="706" y="966" text-anchor="middle" class="body">结果 → State Patch</text>
+  <rect x="966" y="884" width="390" height="125" rx="18" fill="#eaf9f0" stroke="#4fbe80" stroke-width="2.8" filter="url(#shadow)"/>
+  <text x="1161" y="932" text-anchor="middle" class="step">Reducer · Blackboard</text>
+  <text x="1161" y="966" text-anchor="middle" class="body">确定性合并本 run 状态</text>
+  <rect x="1455" y="884" width="322" height="125" rx="18" fill="#fff" stroke="#61c78b" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="1616" y="932" text-anchor="middle" class="step">Observation View</text>
+  <text x="1616" y="966" text-anchor="middle" class="body">生成当前步视口</text>
+  <path d="M446 947H533" class="blue"/>
+  <path d="M867 947H954" class="blue"/>
+  <path d="M1356 947H1443" class="blue"/>
+  <text x="960" y="1049" text-anchor="middle" class="body">全部工具结果结算、状态归约并回灌后，以 tools_settled 迁移到 RUNNING；普通工具错误进入诊断域。</text>
+
+  <!-- Recovery is a new run, never a transition out of a terminal state in the same run. -->
+  <rect x="54" y="1115" width="1812" height="355" rx="30" fill="#fffdfb" stroke="#d5dce8" stroke-width="2.5" stroke-dasharray="11 8"/>
+  <text x="80" y="1153" class="section" fill="#687a95">3 · RECOVERY / 终态后由用户启动新 Run</text>
+  <rect x="108" y="1225" width="302" height="115" rx="18" fill="#f3f5f9" stroke="#aeb9ca" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="259" y="1265" text-anchor="middle" class="step">Run A · 终态</text>
+  <text x="259" y="1293" text-anchor="middle" class="body">LIMIT_REACHED / FAILED</text>
+  <text x="259" y="1320" text-anchor="middle" class="body">CANCELLED（需复核）</text>
+  <rect x="500" y="1225" width="302" height="115" rx="18" fill="#fff" stroke="#aeb9ca" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="651" y="1271" text-anchor="middle" class="step">planResume</text>
+  <text x="651" y="1305" text-anchor="middle" class="body">检查点 + 副作用账本</text>
+  <rect x="900" y="1192" width="300" height="95" rx="18" fill="#edf8f1" stroke="#8ccc9e" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="1050" y="1230" text-anchor="middle" class="step">AUTO</text>
+  <text x="1050" y="1260" text-anchor="middle" class="body">仅安全的断点续跑</text>
+  <rect x="900" y="1320" width="300" height="95" rx="18" fill="#fff2e9" stroke="#e4ab83" stroke-width="2.5" filter="url(#shadow)"/>
+  <text x="1050" y="1358" text-anchor="middle" class="step">REVIEW</text>
+  <text x="1050" y="1388" text-anchor="middle" class="body">修复原因 / 核对副作用</text>
+  <rect x="1490" y="1245" width="300" height="120" rx="18" fill="#eaf2ff" stroke="#4a82fa" stroke-width="2.8" filter="url(#shadow)"/>
+  <text x="1640" y="1292" text-anchor="middle" class="step">Run B · RUNNING</text>
+  <text x="1640" y="1326" text-anchor="middle" class="body">新 runId 与运行预算</text>
+  <path d="M410 1282H488" class="blue"/>
+  <path d="M802 1259H850V1240H888" class="blue"/>
+  <path d="M802 1310H850V1367H888" class="orange"/>
+  <path d="M1200 1240H1380V1276H1478" class="blue"/>
+  <path d="M1200 1367H1380V1335H1478" class="orange"/>
+  <text x="960" y="1447" text-anchor="middle" class="body">旧 Run 保持终态；FAILED、上下文窗口触顶或副作用不确定时先复核，再选择沿检查点继续或按当前状态重试。</text>
+  <text x="80" y="1510" class="small">CODENODE / AGENT RUNTIME · 第 1 区是状态迁移；第 2、3 区是内部处理与恢复流程，不是新状态。</text>
+</svg>

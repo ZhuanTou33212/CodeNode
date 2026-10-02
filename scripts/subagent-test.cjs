@@ -15,6 +15,8 @@ const { CostLedger } = require('../electron/costLedger.cjs');
 const agent = require('../electron/agent.cjs');
 const sandbox = require('../electron/sandbox.cjs');
 const { installScriptedModel } = require('./lib/scripted-model.cjs');
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-subagent-main-'));
+process.on('exit', () => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 /**
  * 判据失败要打印**字面量 FAIL** 并以非零退出 —— 变异测试（out/mutation-check.cjs）
@@ -34,7 +36,7 @@ function check(label, fn) {
 
 const buildContext = (model, signal) =>
   new AgentToolContext({
-    projectRoot: process.cwd(),
+    projectRoot: TEST_ROOT,
     model,
     confirm: async () => true,
     mutateWorkbench: async (fn) => {
@@ -92,7 +94,7 @@ const baseCfg = { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }
     { role: 'explorer', objective: '读取项目结构', stageNodeId: 'stage-1' },
     context,
   );
-  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
   assert.strictEqual(model.byId('stage-1').data.status, 'done');
   assert.ok(String(model.byId('stage-1').data.result_summary).includes('探查完成'));
   assert.ok(childSignal && childSignal.aborted === false);
@@ -176,7 +178,7 @@ const baseCfg = { tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] }
     for (let i = 0; i < 200 && !hangingTaskId; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     assert.ok(hangingTaskId, '应当能拿到正在运行的子任务 taskId');
     check('子任务开始后立即落盘，进程中断时能找回 taskId', () => {
-      assert.ok(readTaskViews(process.cwd(), 'run-cancel-one').tasks.some((item) => item.taskId === hangingTaskId && item.status === 'running'));
+      assert.ok(readTaskViews(TEST_ROOT, 'run-cancel-one').tasks.some((item) => item.taskId === hangingTaskId && item.status === 'running'));
     });
     const cancelResult = await cancelReg.execute('cancel_subagent_task', { taskId: hangingTaskId, reason: '测试取消' }, buildContext(model, parentAbort.signal));
     assert.strictEqual(cancelResult.ok, true, '取消应当成功：' + cancelResult.text);

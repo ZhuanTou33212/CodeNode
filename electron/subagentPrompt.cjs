@@ -150,6 +150,9 @@ function buildSubagentPrompt(task, options) {
   const duration = Number(t.totalTimeoutMs) > 0
     ? '\n总时长上限：' + Math.round(Number(t.totalTimeoutMs) / 1000) + ' 秒（超时会被中止，请优先产出可交付的部分）。'
     : '';
+  const budgets = '\n模型轮次上限：' + (Number(t.maxTurns) || 12) +
+    '；独立 Token 上限：' + (Number(t.tokenBudget) > 0 ? Number(t.tokenBudget) : '共享父预算') +
+    '。请先完成最能满足验收条件的步骤。';
   lines.push(
     '\n【任务】\n任务编号：' + String(t.taskId || '') +
       '\n任务目标：' + String(t.objective || '') +
@@ -157,7 +160,8 @@ function buildSubagentPrompt(task, options) {
       inputs +
       sharedContent +
       verificationSection +
-      duration
+      duration +
+      budgets
   );
 
   // 交付格式
