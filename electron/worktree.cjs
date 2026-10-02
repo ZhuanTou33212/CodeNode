@@ -263,6 +263,24 @@ async function pendingFingerprint(root, pending) {
   return hash.digest('hex');
 }
 
+/** Pin the exact branch and uncommitted bytes produced by an isolated task. */
+async function snapshotSource(worktreePath, options) {
+  const head = await runGit(worktreePath, ['rev-parse', 'HEAD'], options);
+  const status = await runGit(worktreePath, ['status', '--porcelain', '--untracked-files=all'], options);
+  if (!head.ok || !status.ok || status.stdout.length >= MAX_OUTPUT_CHARS) {
+    return { ok: false, error: 'GIT_FAILED', message: '无法锁定隔离工作树版本' };
+  }
+  const pending = status.stdout.split(/\r?\n/).filter(Boolean);
+  const pendingDigest = await pendingFingerprint(worktreePath, pending);
+  if (!pendingDigest) return { ok: false, error: 'UNSUPPORTED_PATH', message: '隔离工作树含无法安全核对的路径' };
+  return { ok: true, sourceHead: head.stdout.trim(), pendingDigest, pending };
+}
+
+function isAppRuntimeUntracked(line) {
+  // Only ignore untracked app-owned runtime state. Tracked .codenode edits still block the merge.
+  return /^\?\? \.codenode\//.test(line);
+}
+
 /** Preview a managed branch before integrating it into the main checkout. */
 async function inspectMerge(projectRoot, name, options) {
   const root = path.resolve(projectRoot || '.');
@@ -279,7 +297,7 @@ async function inspectMerge(projectRoot, name, options) {
   const targetStatus = await runGit(root, ['status', '--porcelain', '--untracked-files=all'], options);
   if (!targetStatus.ok) return { ok: false, error: 'GIT_FAILED', message: '无法检查主工作树状态' };
   if (targetStatus.stdout.length >= MAX_OUTPUT_CHARS) return { ok: false, error: 'REVIEW_LIMIT', message: '主工作树状态输出过长，无法可靠预检' };
-  const targetChanges = targetStatus.stdout.split(/\r?\n/).filter((line) => line && !/^\?\? \.codenode\/worktrees\//.test(line));
+  const targetChanges = targetStatus.stdout.split(/\r?\n/).filter((line) => line && !isAppRuntimeUntracked(line));
   if (targetChanges.length) {
     return { ok: false, error: 'TARGET_DIRTY', message: '主工作树有未提交改动；请先保存或提交后再合并', changed: targetChanges };
   }
@@ -333,11 +351,28 @@ async function mergeWorktree(projectRoot, args, options) {
   }
   const targetNow = await runGit(root, ['rev-parse', 'HEAD'], options);
   const targetDirty = await runGit(root, ['status', '--porcelain', '--untracked-files=all'], options);
-  const unexpected = targetDirty.stdout.split(/\r?\n/).filter((line) => line && !/^\?\? \.codenode\/worktrees\//.test(line));
+  const unexpected = targetDirty.stdout.split(/\r?\n/).filter((line) => line && !isAppRuntimeUntracked(line));
   if (!targetNow.ok || targetNow.stdout.trim() !== preview.targetHead || !targetDirty.ok || unexpected.length) {
     return { ok: false, error: 'STALE_TARGET', message: '提交隔离改动期间主工作树发生变化；未执行合并，隔离分支保留' };
   }
-  const merged = await runGit(root, ['merge', '--no-ff', '--no-edit', preview.branch], options);
+  const sourceNow = await runGit(preview.path, ['rev-parse', 'HEAD'], options);
+  if (!sourceNow.ok) return { ok: false, error: 'GIT_FAILED', message: '无法读取隔离分支提交，未执行合并' };
+  // merge-tree only writes Git objects. A conflict is rejected before touching the target checkout.
+  const dryRun = await runGit(root, ['merge-tree', '--write-tree', preview.targetHead, sourceNow.stdout.trim()], options);
+  if (!dryRun.ok) {
+    const conflicts = dryRun.stdout.split(/\r?\n/).filter((line) => line.startsWith('CONFLICT '))
+      .map((line) => line.match(/\bin (.+)$/)?.[1] || line);
+    return { ok: false, error: conflicts.length ? 'MERGE_CONFLICT' : 'MERGE_PREVIEW_FAILED',
+      message: conflicts.length ? '预合并发现冲突；主工作树未改变，隔离分支保留' :
+        '预合并检查未能完成；主工作树未改变，请检查 Git 版本或错误输出',
+      conflicts, rollbackOk: true };
+  }
+  const targetBeforeMerge = await runGit(root, ['rev-parse', 'HEAD'], options);
+  if (!targetBeforeMerge.ok || targetBeforeMerge.stdout.trim() !== preview.targetHead) {
+    return { ok: false, error: 'STALE_TARGET', message: '预合并后主工作树 HEAD 发生变化，未执行合并' };
+  }
+  // Merge the reviewed commit object, not the mutable branch name.
+  const merged = await runGit(root, ['merge', '--no-ff', '--no-edit', sourceNow.stdout.trim()], options);
   if (!merged.ok) {
     const conflicts = await runGit(root, ['diff', '--name-only', '--diff-filter=U'], options);
     const mergeHead = await runGit(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], options);
@@ -351,7 +386,8 @@ async function mergeWorktree(projectRoot, args, options) {
     };
   }
   const head = await runGit(root, ['rev-parse', 'HEAD'], options);
-  return { ok: true, branch: preview.branch, targetBranch: preview.targetBranch, head: head.stdout.trim(), files, sourcePath: preview.path };
+  return { ok: true, branch: preview.branch, targetBranch: preview.targetBranch, head: head.stdout.trim(),
+    sourceHead: sourceNow.stdout.trim(), previousTargetHead: preview.targetHead, files, sourcePath: preview.path };
 }
 
 /**
@@ -404,6 +440,7 @@ module.exports = {
   managedWorktrees,
   createWorktree,
   inspectMerge,
+  snapshotSource,
   mergeWorktree,
   removeWorktree,
   changedFiles,

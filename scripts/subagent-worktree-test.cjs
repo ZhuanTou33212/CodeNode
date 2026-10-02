@@ -82,12 +82,12 @@ function makeContext(projectRoot, audits, model) {
   await worktree.runGit(repo, ['commit', '-q', '-m', 'init'], { policy });
 
   /** 子代理 stub：记录它看到的 projectRoot，并在那里写一个文件 */
-  function stubAgent(seen) {
+  function stubAgent(seen, content = 'from subagent\n', filename = 'agent-made.txt') {
     return {
       runAgentChat: async ({ tools }) => {
         const root = tools.context.projectRoot();
         seen.push(root);
-        fs.writeFileSync(path.join(root, 'agent-made.txt'), 'from subagent\n');
+        fs.writeFileSync(path.join(root, filename), content);
         return { content: '隔离里干完了', toolCalls: [], usage: null, state: 'COMPLETED' };
       },
     };
@@ -125,7 +125,7 @@ function makeContext(projectRoot, audits, model) {
     const res = await supervisor.execute('delegate_task', { role: 'explorer', objective: '再改一遍', isolation: 'worktree' }, ctx);
     const text = String(res.text);
     check('[B] 文本给出隔离工作树路径与分支', /【隔离工作树】/.test(text) && /codenode\/task-/.test(text), text.split('\n').find((l) => l.includes('【隔离工作树】')) || text.slice(0, 60));
-    check('[B] 明确写出「这些改动不在主工作树里」+ 合并方式', /不在\*\*主工作树/.test(text) && /git merge codenode\/task-/.test(text));
+    check('[B] 明确写出「这些改动不在主工作树里」+ 绑定确认合并方式', /不在\*\*主工作树/.test(text) && /confirm_and_merge/.test(text));
     check('[B] data.worktree 里带改动清单', res.data && res.data.worktree && Array.isArray(res.data.worktree.changed) && res.data.worktree.changed.some((c) => c.includes('agent-made.txt')), JSON.stringify(res.data && res.data.worktree && res.data.worktree.changed));
   }
 
@@ -193,6 +193,121 @@ function makeContext(projectRoot, audits, model) {
     check('[F] 收尾有 subagent_worktree_summary 审计（改动数/提交数）', audits.some((a) => /subagent_worktree_summary/.test(a)));
     const schema = supervisor.listTools().find((t) => t.name === 'delegate_task').inputSchema;
     check('[F] delegate_task 的 schema 暴露 isolation 枚举', JSON.stringify(schema.properties.isolation.enum) === JSON.stringify(['none', 'worktree']), JSON.stringify(schema.properties.isolation));
+  }
+
+  // ==================== G. 确认与代码合入绑定 ====================
+  console.log('\n== G. 确认与代码合入绑定 ==');
+  {
+    const audits = [];
+    const seen = [];
+    const ctx = makeContext(repo, audits);
+    const supervisor = toolkit.buildDefaultRegistry();
+    const manager = new SubagentManager({ agent: stubAgent(seen), toolkit, cfg: baseCfg, registry: supervisor, runId: 'run-atomic' });
+    manager.register(supervisor);
+    const delegated = await supervisor.execute('delegate_task', {
+      role: 'explorer', objective: '隔离修改并合入', isolation: 'worktree', taskId: 'task-atomic',
+    }, ctx);
+    check('[G] 隔离任务产生候选结果', delegated.ok === true && !fs.existsSync(path.join(repo, 'agent-made.txt')));
+    const premature = await supervisor.execute('review_subagent_result', {
+      taskId: 'task-atomic', decision: 'confirm', confirmedSummary: '已完成', note: '人工检查',
+    }, ctx);
+    check('[G] 单独确认不能把未合入代码标记为共享事实', premature.ok === false && manager.confirmedSources(ctx, ['task-atomic']).ok === false);
+    const integrated = await supervisor.execute('review_subagent_result', {
+      taskId: 'task-atomic', decision: 'confirm_and_merge', confirmedSummary: '代码已合入',
+      note: '检查隔离工作树内容与目标分支', commitMessage: 'test: integrate isolated task',
+    }, ctx);
+    const record = manager.taskById(ctx, 'task-atomic');
+    check('[G] 合入成功后才确认且记录目标提交', integrated.ok === true &&
+      fs.readFileSync(path.join(repo, 'agent-made.txt'), 'utf8').replace(/\r\n/g, '\n') === 'from subagent\n' &&
+      record.review.status === 'confirmed' && !!record.review.integration.targetHead,
+    JSON.stringify({ ok: integrated.ok, text: String(integrated.text).slice(0, 180) }));
+    check('[G] 下游只在代码合入后得到已确认摘要', manager.confirmedSources(ctx, ['task-atomic']).ok === true);
+    const headBeforeRepeat = (await worktree.runGit(repo, ['rev-parse', 'HEAD'], { policy })).stdout.trim();
+    const repeated = await supervisor.execute('review_subagent_result', {
+      taskId: 'task-atomic', decision: 'confirm_and_merge', confirmedSummary: '代码已合入',
+      note: '重复提交不应再次合并', commitMessage: 'test: duplicate',
+    }, ctx);
+    const headAfterRepeat = (await worktree.runGit(repo, ['rev-parse', 'HEAD'], { policy })).stdout.trim();
+    check('[G] 重复确认幂等，不新增合并提交', repeated.ok === true && headBeforeRepeat === headAfterRepeat);
+    await worktree.removeWorktree(repo, { name: 'task-atomic' }, { policy });
+  }
+  {
+    const audits = [];
+    const seen = [];
+    const ctx = makeContext(repo, audits);
+    const supervisor = toolkit.buildDefaultRegistry();
+    const manager = new SubagentManager({ agent: stubAgent(seen, 'new candidate\n'), toolkit, cfg: baseCfg, registry: supervisor, runId: 'run-stale' });
+    manager.register(supervisor);
+    const delegated = await supervisor.execute('delegate_task', {
+      role: 'explorer', objective: '隔离修改后发生漂移', isolation: 'worktree', taskId: 'task-stale',
+    }, ctx);
+    check('[G] 漂移用例建立隔离工作树', delegated.ok === true && seen.length === 1, String(delegated.text).slice(0, 120));
+    fs.writeFileSync(path.join(seen[0], 'agent-made.txt'), 'changed after child finished\n');
+    const stale = await supervisor.execute('review_subagent_result', {
+      taskId: 'task-stale', decision: 'confirm_and_merge', confirmedSummary: '不能采信',
+      note: '检查隔离工作树', commitMessage: 'test: stale task',
+    }, ctx);
+    check('[G] 子任务结束后的额外改动不能冒充原结果合入', stale.ok === false &&
+      manager.confirmedSources(ctx, ['task-stale']).ok === false &&
+      fs.readFileSync(path.join(repo, 'agent-made.txt'), 'utf8').replace(/\r\n/g, '\n') === 'from subagent\n');
+    await worktree.removeWorktree(repo, { name: 'task-stale', force: true }, { policy });
+  }
+  {
+    const audits = [];
+    const seen = [];
+    const ctx = makeContext(repo, audits);
+    const supervisor = toolkit.buildDefaultRegistry();
+    const manager = new SubagentManager({ agent: stubAgent(seen, 'from child\n', 'app.js'), toolkit, cfg: baseCfg, registry: supervisor, runId: 'run-conflict' });
+    manager.register(supervisor);
+    const delegated = await supervisor.execute('delegate_task', {
+      role: 'explorer', objective: '产生真实合并冲突', isolation: 'worktree', taskId: 'task-conflict',
+    }, ctx);
+    check('[G] 冲突用例建立隔离工作树', delegated.ok === true);
+    fs.writeFileSync(path.join(repo, 'app.js'), 'from parent\n');
+    await worktree.runGit(repo, ['add', 'app.js'], { policy });
+    await worktree.runGit(repo, ['commit', '-q', '-m', 'parent edit'], { policy });
+    const headBefore = (await worktree.runGit(repo, ['rev-parse', 'HEAD'], { policy })).stdout.trim();
+    const conflict = await supervisor.execute('review_subagent_result', {
+      taskId: 'task-conflict', decision: 'confirm_and_merge', confirmedSummary: '不得确认',
+      note: '隔离分支与主分支冲突', commitMessage: 'test: conflicting child',
+    }, ctx);
+    const headAfter = (await worktree.runGit(repo, ['rev-parse', 'HEAD'], { policy })).stdout.trim();
+    check('[G] 冲突阻断确认并保持主工作树提交不变', conflict.ok === false &&
+      manager.confirmedSources(ctx, ['task-conflict']).ok === false && headBefore === headAfter &&
+      manager.taskById(ctx, 'task-conflict').review.status === 'conflict_blocked');
+    await worktree.removeWorktree(repo, { name: 'task-conflict' }, { policy });
+  }
+
+  // ==================== H. 隔离写任务取消 ====================
+  console.log('\n== H. 隔离写任务取消 ==');
+  {
+    const audits = [];
+    const ctx = makeContext(repo, audits);
+    const supervisor = toolkit.buildDefaultRegistry();
+    let startedPath = '';
+    const agent = { runAgentChat: async ({ tools }) => {
+      startedPath = tools.context.projectRoot();
+      fs.writeFileSync(path.join(startedPath, 'partial.txt'), 'unfinished\n');
+      const signal = tools.context.signal();
+      await new Promise((resolve) => signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true }));
+      return { content: '', toolCalls: [], usage: null, aborted: true };
+    } };
+    const manager = new SubagentManager({ agent, toolkit, cfg: baseCfg, registry: supervisor, runId: 'run-cancel-isolated' });
+    manager.register(supervisor);
+    const pending = supervisor.execute('delegate_task', {
+      role: 'builder', objective: '写入后取消', isolation: 'worktree', taskId: 'task-cancel-isolated',
+    }, ctx);
+    for (let i = 0; i < 200 && !startedPath; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    check('[H] 写任务确实在隔离工作树开始', !!startedPath && fs.existsSync(path.join(startedPath, 'partial.txt')));
+    const cancelled = await supervisor.execute('cancel_subagent_task', {
+      taskId: 'task-cancel-isolated', reason: '测试取消',
+    }, ctx);
+    const settled = await Promise.race([pending.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+    const task = manager.taskById(ctx, 'task-cancel-isolated');
+    check('[H] 取消后主工作树没有半成品且隔离文件留待复核', settled === true && cancelled.ok === true &&
+      task.status === 'cancelled' && task.requiresReview === true &&
+      fs.existsSync(path.join(startedPath, 'partial.txt')) && !fs.existsSync(path.join(repo, 'partial.txt')) &&
+      String(cancelled.text).includes(startedPath));
   }
 
   // 清场：把建出来的工作树都 force 掉（否则临时目录删不掉）

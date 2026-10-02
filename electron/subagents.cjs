@@ -20,6 +20,7 @@
 'use strict';
 
 const { AgentToolResult } = require('./tools/result.cjs');
+const { ConfirmationLevel } = require('./tools/context.cjs');
 const { parseWebSearchConfig } = require('./tools/impl/webSearchTool.cjs');
 const worktreeLib = require('./worktree.cjs');
 const { LeaseRegistry } = require('./tools/leases.cjs');
@@ -312,8 +313,7 @@ function renderWorktreeSummary(info) {
     '【隔离工作树】' + (info.relativePath || info.path) + '（分支 ' + (info.branch || '-') + '，基线 ' + (info.base || '-') + '）',
     '- 改动：' + (info.changed && info.changed.length ? info.changed.join('、') : '无未提交改动'),
     '- 新提交：' + (info.commits || 0) + ' 个',
-    '- 这些改动**不在**主工作树里；先在此工作树核验候选结果并调用 review_subagent_result，再决定是否 `git merge ' +
-      (info.branch || '<branch>') + '`。核验完成前不要移除工作树，否则来源文件无法复核。',
+    '- 这些改动**不在**主工作树里；核验后调用 review_subagent_result(decision="confirm_and_merge")，由系统先预检并合入、再确认摘要。取消或冲突时保留隔离工作树供复核；核验完成前不要移除。',
   ].join('\n');
 }
 
@@ -814,6 +814,11 @@ class SubagentManager {
       if (!task.review || task.review.status !== 'confirmed' || !task.review.confirmedSummary) {
         return { ok: false, error: '依赖任务尚未由主代理确认，不能作为共享内容传给下游：' + id };
       }
+      const isolatedChanges = task.worktree &&
+        ((Array.isArray(task.worktree.changed) && task.worktree.changed.length) || Number(task.worktree.commits) > 0);
+      if (isolatedChanges && !task.review.integration) {
+        return { ok: false, error: '依赖任务的隔离代码尚未与确认记录绑定，不能传给下游：' + id };
+      }
       const verification = this.verifyTaskForSharing(context, task);
       task.verification = verification;
       if (verification.verdict !== 'valid') {
@@ -946,7 +951,8 @@ class SubagentManager {
       '创建并执行一个受角色工具权限约束的子代理任务。单文件读取或一步可完成的问题由主 Agent 直接处理；独立探查、实现、验证或审查等多步工作再委派。\n按工作类型选角色：\n' + roleGuide +
         '\nstageNodeId 可绑定画布 stage 节点；timeoutSeconds 是**任务总时长**（秒，默认 ' + this.subCfg.totalTimeoutSeconds + '）。' +
         '\n结果默认以短候选卡回到父上下文；完整结论用 get_subagent_task(taskId, detail="full") 按页读取。' +
-        'isolation=worktree 时该子代理在独立的 git 工作树里干活；该模式只隔离项目文件，canvas 角色不允许使用，builder 的共享画布写工具会禁用；工作树创建失败会**中止任务**而不是静默降级。',
+        'builder 改文件优先用 isolation=worktree；共享写入取消后无法安全回滚。' +
+        '该模式只隔离项目文件，canvas 角色不支持，builder 的共享画布写工具会禁用；工作树创建失败会**中止任务**而不是静默降级。',
       {
         type: 'object',
         properties: {
@@ -1030,6 +1036,7 @@ class SubagentManager {
     registry.register(
       'review_subagent_result',
       '审查子代理候选结果。get_subagent_task 默认给短摘要；summaryTruncated/lossy 或内容不足时用 detail="full" 分页读取。' +
+        '隔离代码用 confirm_and_merge：核对指纹、合入后确认。' +
         'confirm 前核对当前 verification，并按验收条件独立核对来源；哈希有效不等于结论正确。' +
         'confirm 必须提交主代理核验后的 confirmedSummary 与检查说明；可带 verifierTaskId 证明某 verifier 绑定并独立运行了通过的命令。' +
         'validationBasis 可选 all/filesystem/canvas/manual，用来声明结论依赖的版本面；确认后的摘要才可作为共享内容传给 dependsOnTaskIds。' +
@@ -1038,9 +1045,10 @@ class SubagentManager {
         type: 'object',
         properties: {
           taskId: { type: 'string' },
-          decision: { type: 'string', enum: ['confirm', 'retract'] },
+          decision: { type: 'string', enum: ['confirm', 'confirm_and_merge', 'retract'] },
           confirmedSummary: { type: 'string', description: 'confirm 时必填，最多 4000 字；由主代理复核后整理的可共享内容。' },
           note: { type: 'string', description: '必填。说明核验依据，或撤回原因。' },
+          commitMessage: { type: 'string', description: 'confirm_and_merge 时隔离工作树有未提交改动则必填，最多 200 字。' },
           verificationTaskId: { type: 'string', description: '可选 verifier taskId；该 verifier 必须在此候选完成后针对同一信封版本运行成功命令。' },
           validationBasis: {
             type: 'string', enum: ['all', 'filesystem', 'canvas', 'manual'],
@@ -1065,7 +1073,17 @@ class SubagentManager {
         if (note.length > 1000) return AgentToolResult.error('note 最多 1000 字，请保留关键核验依据');
         const reviewerId = String((typeof context.runId === 'function' ? context.runId() : context.runId) || this.runId);
         const previousReview = task.review;
-        if (decision === 'confirm') {
+        let integrated = null;
+        if (decision === 'confirm' || decision === 'confirm_and_merge') {
+          if (task.review && task.review.status === 'integrating') {
+            return AgentToolResult.error('上次合入状态待人工核对；检查主分支与任务视图后再恢复，不能重复执行合并');
+          }
+          if (task.review && task.review.status === 'confirmed') {
+            const existing = this.confirmedSources(context, [task.taskId]);
+            if (!existing.ok) return AgentToolResult.error(existing.error);
+            return AgentToolResult.ok('该子代理结果已经确认，无需重复合并',
+              { taskId: task.taskId, review: task.review });
+          }
           if (task.review && task.review.status === 'retracted') {
             return AgentToolResult.error('已撤回的候选结果不能重新确认；请基于最新状态重新派发任务');
           }
@@ -1098,10 +1116,66 @@ class SubagentManager {
               return AgentToolResult.error('manual basis 必须在 note 中保留至少一个已用 citation，便于下游追溯');
             }
           }
+          const isolatedChanges = !!(task.worktree &&
+            ((Array.isArray(task.worktree.changed) && task.worktree.changed.length) || Number(task.worktree.commits) > 0));
+          if (isolatedChanges && decision !== 'confirm_and_merge') {
+            return AgentToolResult.error('隔离工作树仍有代码改动；须使用 confirm_and_merge，合入成功前不能标记 confirmed');
+          }
+          if (decision === 'confirm_and_merge') {
+            if (!isolatedChanges) return AgentToolResult.error('该任务没有待合入的隔离工作树改动');
+            const pinned = task.worktree.sourceSnapshot;
+            if (!pinned || !pinned.ok) return AgentToolResult.error('子任务结束时未能锁定隔离工作树内容，不能自动合并');
+            const root = typeof context.projectRoot === 'function' ? context.projectRoot() : '';
+            const opts = { context, policy: typeof context.sandbox === 'function' ? context.sandbox() : null };
+            const preview = await worktreeLib.inspectMerge(root, task.taskId, opts);
+            if (!preview.ok) return AgentToolResult.error('隔离工作树预检失败：' + preview.message, preview);
+            if (path.resolve(preview.path || '') !== path.resolve(task.worktree.path) ||
+                preview.branch !== task.worktree.branch || preview.sourceHead !== pinned.sourceHead ||
+                preview.pendingDigest !== pinned.pendingDigest) {
+              this.markNeedsRecheck(context, task, '子任务结束后隔离工作树内容发生变化', task.taskId);
+              return AgentToolResult.error('隔离工作树内容与子任务结束时不同，已标记 needs_recheck；请重新核验');
+            }
+            const approved = await context.confirm(ConfirmationLevel.WRITE,
+              '确认并合入子代理结果 ' + task.taskId,
+              '将 ' + (preview.files || []).length + ' 个文件从 ' + preview.branch + ' 合入 ' + preview.targetBranch +
+              '；冲突会在写入主工作树前拦截，合入成功后才向下游开放确认摘要。');
+            if (!approved) return AgentToolResult.error('用户未批准，未合入也未确认子代理结果');
+            task.review = { status: 'integrating', targetHead: preview.targetHead,
+              sourceHead: preview.sourceHead, pendingDigest: preview.pendingDigest,
+              startedAt: new Date().toISOString(), reviewedBy: reviewerId };
+            try { this.persistTask(context, task); }
+            catch (error) {
+              task.review = previousReview;
+              return AgentToolResult.error('合入意图未能持久化，未修改主工作树：' + String((error && error.message) || error));
+            }
+            const merge = await worktreeLib.mergeWorktree(root, {
+              name: task.taskId, expectedTargetHead: preview.targetHead,
+              expectedSourceHead: preview.sourceHead, expectedTargetBranch: preview.targetBranch,
+              expectedPendingDigest: preview.pendingDigest, commitMessage: args.commitMessage,
+            }, opts);
+            if (!merge.ok) {
+              task.review = { status: merge.error === 'MERGE_CONFLICT' ? 'conflict_blocked' : 'candidate',
+                reason: merge.message, failedAt: new Date().toISOString() };
+              try { this.persistTask(context, task); }
+              catch (error) { return AgentToolResult.error('合并失败且状态落盘失败，请检查任务视图：' + String(error.message || error), merge); }
+              return AgentToolResult.error('代码未合入，结果未确认：' + merge.message, merge);
+            }
+            integrated = { targetBranch: merge.targetBranch, targetHead: merge.head,
+              previousTargetHead: merge.previousTargetHead, sourceHead: merge.sourceHead,
+              files: merge.files, mergedAt: new Date().toISOString() };
+            const afterMerge = this.confirmableVerification(context, task, validationBasis);
+            if (!afterMerge.ok) {
+              task.review = { status: 'needs_recheck', integration: integrated,
+                reason: '代码已合入，但合入后证据版本变化：' + afterMerge.error };
+              try { this.persistTask(context, task); } catch {}
+              return AgentToolResult.error('代码已合入，但结果未确认：' + afterMerge.error);
+            }
+          }
           task.review = {
             status: 'confirmed',
             confirmedSummary,
             note,
+            ...(integrated ? { integration: integrated } : {}),
             reviewedAt: new Date().toISOString(),
             reviewedBy: reviewerId,
             source: {
@@ -1151,13 +1225,14 @@ class SubagentManager {
             },
           };
         } else {
-          return AgentToolResult.error('decision 必须是 confirm 或 retract');
+          return AgentToolResult.error('decision 必须是 confirm、confirm_and_merge 或 retract');
         }
         try {
           this.persistTask(context, task);
         } catch (error) {
-          task.review = previousReview;
-          return AgentToolResult.error('审查记录未能持久化，未应用决定：' + String((error && error.message) || error));
+          task.review = integrated ? { status: 'integrating', integration: integrated,
+            reason: '代码已合入，但确认记录落盘失败；下游仍被阻断，请人工核对' } : previousReview;
+          return AgentToolResult.error((integrated ? '代码已合入，但' : '') + '审查记录未能持久化，结果未对下游确认：' + String((error && error.message) || error));
         }
         const invalidated = decision === 'retract'
           ? this.invalidateDependentTasks(context, task.taskId, '上游候选结果已撤回：' + note)
@@ -1165,15 +1240,16 @@ class SubagentManager {
         context.audit(JSON.stringify({ kind: 'subagent_result_review', runId: this.runId, taskId: task.taskId,
           decision, sourceMsgId: task.envelope.msgId }));
         if (this.onDelta) this.onDelta({ kind: 'subagent_review', taskId: task.taskId, status: task.review.status });
-        const resultText = decision === 'confirm'
-            ? '已确认子代理结果 ' + task.taskId + '。下游可用 dependsOnTaskIds 引用它；共享内容会携带来源和证据。'
+        const resultText = decision === 'confirm' || decision === 'confirm_and_merge'
+            ? '已确认子代理结果 ' + task.taskId + (integrated ? '，代码已合入 ' + integrated.targetBranch + '（' + integrated.targetHead + '）' : '') +
+              '。下游可用 dependsOnTaskIds 引用它；共享内容会携带来源和证据。'
             : '已撤回子代理结果 ' + task.taskId + '；' + invalidated.length + ' 个依赖任务已标记 needs_recheck。';
         return AgentToolResult.ok(resultText, { taskId: task.taskId, review: task.review }, { modelContent: resultText });
       }
     );
     registry.register(
       'cancel_subagent_task',
-      '取消一个**正在运行**的子代理任务（只取消这一个，不影响主 Agent 与其他子代理；已提交的写操作不会被回滚）。',
+      '取消一个**正在运行**的子代理任务（只取消这一个，不影响主 Agent 与其他子代理；隔离工作树保留待复核，共享工作区已发生的写入不能自动回滚）。',
       {
         type: 'object',
         properties: { taskId: { type: 'string' }, reason: { type: 'string' } },
@@ -1199,7 +1275,11 @@ class SubagentManager {
         } catch {
           /* 落盘失败不影响取消本身 */
         }
-        return AgentToolResult.ok('已请求取消子代理任务 ' + taskId + '，等待执行退出；已发生的写入不会自动回滚。', { taskId, role: task.role, status: 'cancelling', executionSettled: false });
+        const location = task.worktree && task.worktree.path
+          ? '；隔离改动仍在 ' + task.worktree.path + '，不会自动合入主工作树，结算后请复核'
+          : '；若任务写入共享工作区，已发生的写入需要逐项复核，不能安全地自动回滚';
+        return AgentToolResult.ok('已请求取消子代理任务 ' + taskId + '，等待执行退出' + location + '。',
+          { taskId, role: task.role, status: 'cancelling', executionSettled: false, worktree: task.worktree || null });
       }
     );
     registry.register(
@@ -1745,6 +1825,7 @@ class SubagentManager {
       const changedList = await worktreeLib.changedFiles(worktreeInfo.path, hopts);
       worktreeInfo.changed = changedList.map((c) => c.status + ' ' + c.path);
       worktreeInfo.commits = await worktreeLib.commitCount(worktreeInfo.path, worktreeInfo.base, hopts);
+      worktreeInfo.sourceSnapshot = await worktreeLib.snapshotSource(worktreeInfo.path, hopts);
       task.worktree = worktreeInfo;
       context.audit(
         JSON.stringify({ kind: 'subagent_worktree_summary', taskId: task.taskId, changed: worktreeInfo.changed.length, commits: worktreeInfo.commits })
