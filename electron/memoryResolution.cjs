@@ -163,7 +163,7 @@ function upsertMemory(entries, input, options = {}) {
   if (validFromRaw && !Number.isFinite(validFromTime)) {
     return { ok: false, code: 'INVALID_VALID_FROM', error: 'validFrom 必须是可解析的日期时间' };
   }
-  const validFrom = validFromRaw ? new Date(validFromTime).toISOString() : '';
+  const validFrom = validFromTime != null ? new Date(validFromTime).toISOString() : '';
   const tags = Array.isArray(input && input.tags) ? input.tags.map(String) : [];
   const key = String((input && input.key) || '').trim();
   const value = input && input.value != null ? String(input.value).trim() : '';

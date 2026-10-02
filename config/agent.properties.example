@@ -47,6 +47,7 @@ max_tokens=32768
 # agent.turn_timeout_ms=600000          # 单轮模型请求的总时长上限（含重发），出厂 600s（旧行为写死 180s）
 # agent.stream_idle_timeout_ms=120000   # 停滞判定：连续这么久没有任何分片才认为卡死（有数据就重置）
 # agent.stream_max_attempts=2           # 流中途断线/停滞 → 丢弃半截、整轮重发的次数（0=旧行为：半截+报错）
+# agent.max_total_retries=12            # 单个 Run 内所有模型 HTTP 重试的共享上限（父 Agent / 子 Agent / 预处理共用；0=禁止重试）
 # agent.truncation_nudges=4             # 回答触到 max_tokens 时最多补问几次（让它从断点接着写）
 # 单进程并发与单轮累计 token 上限
 # agent.max_concurrent_runs=2

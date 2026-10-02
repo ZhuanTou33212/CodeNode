@@ -486,6 +486,8 @@ function parseLimitsConfig(cfg) {
     // 单次运行的累计 token 上限。带图对话的输入会明显变大，默认给到 60 万；
     // 真正防止"算错"的是 requestBudget 的估算口径（图片按 token 规则折算，不按 base64 字节）。
     maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 600000, 10000, 4000000),
+    // One retry quota is shared by the supervisor, helpers, and child agents.
+    maxTotalRetries: configInteger(cfg, 'agent.max_total_retries', 12, 0, 100),
     // 循环硬上限（此前是 agent.cjs 里的源码常量，无法按项目调整）——默认值与旧常量一致。
     maxToolIterations: configInteger(cfg, 'agent.max_tool_iterations', 12, 1, 200),
     maxTotalToolCalls: configInteger(cfg, 'agent.max_total_tool_calls', 100, 1, 2000),
@@ -1261,22 +1263,23 @@ function maxAttemptsFor(cfg) {
  * @param {{ signal?: AbortSignal, tools?: any, timeoutMs?: number }} [options]
  */
 async function chatCompletion(cfg, messages, options = {}) {
-  // attemptsRef：真实尝试次数，供预算按实际重试次数补偿输入（而不是按上限倍数放大）
-  const attemptsRef = { count: 0 };
-  return require('./requestQueue.cjs').modelQueue.run(options.signal,
-    () => require('./requestBudget.cjs').withBudget(
+  // Count actual HTTP sends, including connection retries.
+  const attemptsRef = { count: 0, maxAttempts: maxAttemptsFor(cfg) };
+  const result = await require('./requestQueue.cjs').modelQueue.run(options.signal,
+    () => require('./requestBudget.cjs').withAttemptBudget(
       cfg,
       messages,
       [],
       () => chatCompletionInternal(cfg, messages, { ...options, attemptsRef }),
       attemptsRef,
     ));
+  return { ...result, httpAttempts: attemptsRef.count };
 }
 
 /**
  * @param {any} cfg
  * @param {Array<any>} messages
- * @param {{ signal?: AbortSignal, timeoutMs?: number, attemptsRef?: { count: number } }} [options]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, attemptsRef?: any }} [options]
  */
 async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 120000, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
@@ -1295,8 +1298,10 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
     const attempts = maxAttemptsFor(cfg);
     let lastError = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      let finishAttempt = null;
       try {
-        if (attemptsRef) attemptsRef.count = attempt;
+        finishAttempt = attemptsRef && typeof attemptsRef.beginAttempt === 'function'
+          ? attemptsRef.beginAttempt() : null;
         const res = await fetch(url, {
           method: 'POST',
           headers: request.headers,
@@ -1304,6 +1309,8 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
           signal: controller.signal,
         });
         if (!res.ok) {
+          if (finishAttempt) finishAttempt(null, { failed: true });
+          finishAttempt = null;
           const text = await res.text().catch(() => '');
           const message = `HTTP ${res.status}: ${text.slice(0, 300)}`;
           if (isRetryableStatus(res.status) && attempt < attempts && !timedOut && !(signal && signal.aborted)) {
@@ -1315,8 +1322,13 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
         /** @type {any} */
         const data = await res.json();
         // 协议层归一（OpenAI 分支与改造前逐字段一致；Claude / Gemini 在这里翻译成同一形状）
-        return protocolLib.parseResponse(request.protocol, data);
+        const parsed = protocolLib.parseResponse(request.protocol, data);
+        if (finishAttempt) finishAttempt(parsed.usage, {
+          partialChars: String(parsed.content || '').length + String(parsed.reasoning || '').length,
+        });
+        return parsed;
       } catch (error) {
+        if (finishAttempt) finishAttempt(null, { failed: true });
         lastError = error;
         if (timedOut || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
         await waitForRetry(retryDelay(cfg, attempt), controller.signal);
@@ -1437,25 +1449,33 @@ function chatBody(cfg, messages, /** @type {{ stream?: boolean, tools?: any }} *
  * 流式对话（SSE）：实时回调推理/内容/工具调用增量。tools 为 OpenAI tools 参数（可选）。
  */
 async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
-  // attemptsRef：真实尝试次数，让预算按实际重试次数补偿输入（而不是按上限倍数放大）
-  const attemptsRef = { count: 0 };
-  return require('./requestQueue.cjs').modelQueue.run(options.signal,
-    () => require('./requestBudget.cjs').withBudget(
+  // One counter covers both inner HTTP retries and whole-stream restarts.
+  const restarts = typeof options.streamMaxAttempts === 'number' && Number.isFinite(options.streamMaxAttempts)
+    ? options.streamMaxAttempts : Number(cfg && cfg.reliability && cfg.reliability.streamMaxAttempts) || 0;
+  // A shared ceiling prevents inner connection retries and outer stream
+  // restarts from multiplying into request_max_attempts × stream_max_attempts.
+  const attemptsRef = {
+    count: Math.max(0, Number(options.retryOffset) || 0),
+    maxAttempts: maxAttemptsFor(cfg) + Math.max(0, Math.floor(restarts)),
+  };
+  const result = await require('./requestQueue.cjs').modelQueue.run(options.signal,
+    () => require('./requestBudget.cjs').withAttemptBudget(
       cfg,
       messages,
       options.tools,
       () => chatCompletionStreamInternal(cfg, messages, onEvent, { ...options, attemptsRef }),
       attemptsRef,
     ));
+  return { ...result, httpAttempts: attemptsRef.count };
 }
 
 /**
  * @param {any} cfg
  * @param {Array<any>} messages
  * @param {(event: any) => void} onEvent
- * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, tools?: any, attemptsRef?: { count: number }, sentBefore?: number }} [options]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, tools?: any, attemptsRef?: any }} [options]
  */
-async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS, tools, attemptsRef, sentBefore = 0 } = {}) {
+async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_TURN_TIMEOUT_MS, idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS, tools, attemptsRef } = {}) {
   if (signal?.aborted) throw Object.assign(new Error('请求已取消'), { name: 'AbortError' });
   // 协议层现算 URL / 认证头 / 请求体（重发时复用同一份，保证「整轮重发」发的是同一个请求）
   const request = protocolLib.buildRequest(cfg, messages, { stream: true, tools });
@@ -1484,15 +1504,20 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
   signal && signal.addEventListener('abort', onAbort);
   let usage = null;
   /** 本尝试已流出的部分（供重发时如实上报「作废了多少字」） */
+  /** @type {{content: string, reasoning: string, toolCalls: any[]}} */
   const partial = { content: '', reasoning: '', toolCalls: [] };
+  const partialChars = () => partial.content.length + partial.reasoning.length +
+    partial.toolCalls.reduce((sum, call) => sum + String(call.name || '').length + String(call.args || '').length, 0);
+  let finishStreamAttempt = null;
+  let accumulatorState = null;
   try {
     const body = request.body;
     const attempts = maxAttemptsFor(cfg);
     let res = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      // 重发过的输入要计进预算补偿：sentBefore = 此前已经整轮重发过的次数
-      if (attemptsRef) attemptsRef.count = sentBefore + attempt;
       try {
+        finishStreamAttempt = attemptsRef && typeof attemptsRef.beginAttempt === 'function'
+          ? attemptsRef.beginAttempt() : null;
         res = await fetch(url, {
           method: 'POST',
           headers: request.headers,
@@ -1500,6 +1525,8 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
           signal: controller.signal,
         });
         if (res.ok) break;
+        if (finishStreamAttempt) finishStreamAttempt(null, { failed: true });
+        finishStreamAttempt = null;
         const text = await res.text().catch(() => '');
         if (isRetryableStatus(res.status) && attempt < attempts && !timedOut && !(signal && signal.aborted)) {
           await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
@@ -1507,6 +1534,8 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
         }
         throw Object.assign(new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`), { retryable: false });
       } catch (error) {
+        if (finishStreamAttempt) finishStreamAttempt(null, { failed: true, partialChars: partialChars() });
+        finishStreamAttempt = null;
         if (timedOut || stalled || (signal && signal.aborted) || isAbortError(error) || error.retryable === false || attempt >= attempts) throw error;
         await waitForRetry(retryDelay(cfg, attempt), controller.signal);
       }
@@ -1517,6 +1546,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
     // 分片解析统一交给 streamAccumulator（纯函数、可单测）：重复/累积分片、index 漂移与复用、
     // finish_reason、坏 JSON 都在那里判定，主循环只把事件转成 onEvent。
     const state = streamAccumulator.createAccumulator();
+    accumulatorState = state;
     /**
      * 协议翻译：Claude 的 `content_block_delta` / Gemini 的 `candidates[].parts` 在这里
      * 逐帧翻成 OpenAI 的 `choices[].delta` 文本 —— 于是「中途断线整轮重发 / 停滞判定 /
@@ -1561,6 +1591,8 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
       });
     }
     usage = final.usage || usage;
+    if (finishStreamAttempt) finishStreamAttempt(usage, { failed: hasFatalAnomaly, partialChars: partialChars() });
+    finishStreamAttempt = null;
     return {
       content: final.content,
       reasoning: final.reasoning,
@@ -1572,6 +1604,9 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
       stalled,
     };
   } catch (error) {
+    if (finishStreamAttempt) finishStreamAttempt(accumulatorState && accumulatorState.usage,
+      { failed: true, partialChars: partialChars() });
+    finishStreamAttempt = null;
     // 标注失败形态，供「整轮重发」判断是卡住不动 / 连接被重置 / 总时长超限，
     // 并带上本尝试已流出的部分（报错文案要如实说「已收到多少字」）。
     if (error && typeof error === 'object') {
@@ -1603,7 +1638,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
  * @param {any} cfg
  * @param {Array<any>} messages
  * @param {(event: any) => void} onEvent
- * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, streamMaxAttempts?: number, tools?: any, attemptsRef?: { count: number } }} [options]
+ * @param {{ signal?: AbortSignal, timeoutMs?: number, idleTimeoutMs?: number, streamMaxAttempts?: number, tools?: any, attemptsRef?: any }} [options]
  */
 async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}) {
   const reliability = (cfg && cfg.reliability) || {};
@@ -1645,12 +1680,13 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}
         ...options,
         timeoutMs: remaining,
         idleTimeoutMs,
-        sentBefore: attemptNo - 1,
       });
       return { ...result, streamAttempts: attemptNo, streamRestarts: attemptNo - 1 };
     } catch (error) {
       // 用户主动停止：原样抛出（主循环按 signal.aborted 归类为 CANCELLED）
       if (signal && signal.aborted) throw error;
+      if (error && (error.code === 'BUDGET_EXCEEDED' || error.code === 'RETRY_BUDGET_EXCEEDED' ||
+        error.code === 'REQUEST_ATTEMPT_LIMIT')) throw error;
       const stalled = !!(error && error.stalled);
       const timedOut = !!(error && error.timedOut) || Date.now() - startedAt >= timeoutMs;
       if (error && error.partial) partial = error.partial;
@@ -1934,13 +1970,14 @@ async function runCompressionBatchRequest(cfg, batch, signal, options, budget) {
     const body = { ...cfg, model, maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
     if (comp.reasoning !== true) body.reasoningEffort = false;
     const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
-    recordCost(cfg, {
+    if (res.usage) recordCost(cfg, {
       kind: 'compression',
       model,
       usage: res.usage,
+      attempt: res.httpAttempts,
       latencyMs: Date.now() - startedAt,
       runId: cfg.costRunId,
-      meta: { batchSize: batch.length, tools: batch.map((entry) => entry.item.toolName) },
+      meta: { batchSize: batch.length, tools: batch.map((entry) => entry.item.toolName), perAttempt: true },
     });
     return parseCompressionBatchOutput(res.content, batch.map((entry) => entry.index + 1));
   } catch {
@@ -2065,7 +2102,8 @@ async function compressToolContent(cfg, toolName, text, signal, options) {
     // 摘要/搬运类任务不需要思考链：默认关掉 reasoning（agent.compression.reasoning=true 可打开）
     if (comp.reasoning !== true) body.reasoningEffort = false;
     const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
-    recordCost(cfg, { kind: 'compression', model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName } });
+    if (res.usage) recordCost(cfg, { kind: 'compression', model, usage: res.usage, attempt: res.httpAttempts,
+      latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName, perAttempt: true } });
     const out = String(res.content || '').trim();
     if (!out) return degradedOriginalText(text, '模型返回空摘要');
     if (cache) cache.set(key, out, toolName);
@@ -2763,7 +2801,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const res = await chatCompletion(compactCfg, built.messages, { signal, timeoutMs: compactionCfg.timeoutMs });
       summary = String((res && res.content) || '').trim();
       if (res && res.usage) {
-        recordCost(cfg, { kind: 'compaction', model: compactCfg.model, usage: res.usage, latencyMs: Date.now() - startedAt, runId: cfg.costRunId });
+        recordCost(cfg, { kind: 'compaction', model: compactCfg.model, usage: res.usage, attempt: res.httpAttempts,
+          latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { perAttempt: true } });
       }
     } catch (error) {
       failure = String((error && error.message) || error);
@@ -3184,7 +3223,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const shrankOutput = fit < turnMaxTokens;
           if (shrankOutput) turnMaxTokens = fit;
           emitTrace({ kind: 'context_overflow_retry', turnId: iter, tokens, tokensAfter, maxTokens: turnMaxTokens, shrankOutput });
-          return chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools || undefined });
+          // The new request still consumes a retry credit after the provider's
+          // 400, even though it begins a fresh stream with compacted messages.
+          return chatCompletionStream(buildTurnCfg(), messages, onEvent,
+            { signal, timeoutMs: turnTimeoutMs, tools: payload.tools || undefined, retryOffset: 1 });
         }
       };
       const res = await sendTurn();
@@ -3316,9 +3358,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           kind: (cfg && cfg.costKind) || 'main',
           model: cfg.model,
           usage: res.usage,
+          attempt: res.httpAttempts,
           latencyMs: Date.now() - turnStartedAt,
           runId: cfg.costRunId,
-          meta: attribution ? { attribution } : null,
+          meta: { ...(attribution ? { attribution } : {}), perAttempt: true },
         });
         totalTokens = Number(usage.total_tokens) || totalTokens;
         const maxTotalTokens = Number(cfg && cfg.limits && cfg.limits.maxTotalTokens) || 250000;

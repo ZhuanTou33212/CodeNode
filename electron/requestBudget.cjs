@@ -62,10 +62,19 @@ function estimateInputTokens(messages, tools) {
   return textBytes + imageTokens + (Array.isArray(messages) ? messages.length * 32 : 0) + 256;
 }
 
+function usageTotal(usage) {
+  if (!usage || typeof usage !== 'object') return NaN;
+  if (usage.total_tokens != null) return Number(usage.total_tokens);
+  const input = usage.prompt_tokens ?? usage.input_tokens;
+  const output = usage.completion_tokens ?? usage.output_tokens;
+  if (input == null || output == null) return NaN;
+  return Number(input) + Number(output);
+}
+
 class RequestBudget {
   /**
    * @param {number} limit
-   * @param {{parent?: RequestBudget|null, scope?: string}} [options]
+   * @param {{parent?: RequestBudget|null, scope?: string, retryLimit?: number}} [options]
    *   parent：父预算（S9 父子链）。子代理的独立配额仍受父总量约束，不绕过 run 上限。
    */
   constructor(limit, options) {
@@ -77,6 +86,21 @@ class RequestBudget {
     this.scope = o.scope || 'run';
     this.used = 0;
     this.reserved = 0;
+    // Retry credits live at the run root. Child budgets delegate to their parent.
+    this.retryLimit = Number.isFinite(Number(o.retryLimit)) ? Math.max(0, Math.floor(Number(o.retryLimit))) : null;
+    this.retriesUsed = 0;
+  }
+
+  claimRetry() {
+    if (this.parent) return this.parent.claimRetry();
+    if (this.retryLimit == null) return null;
+    if (this.retriesUsed >= this.retryLimit) {
+      throw Object.assign(new Error('本次运行已达到模型请求重试上限（' + this.retryLimit + ' 次）'), {
+        code: 'RETRY_BUDGET_EXCEEDED', retryable: false,
+      });
+    }
+    this.retriesUsed += 1;
+    return this.retriesUsed;
   }
 
   /** 本层配额是否不够（只看自己，不碰父） */
@@ -114,7 +138,7 @@ class RequestBudget {
       settled = true;
       this.reserved -= amount;
       // Missing usage or an uncertain failed request retains its full reservation.
-      const actual = usage && Number(usage.total_tokens);
+      const actual = usageTotal(usage);
       const usedAmount = Number.isFinite(actual) && actual >= 0 ? actual : amount;
       this.used += usedAmount;
       // 父按**实际**用量结算（不是按预留额）：两个维度都反映真实消耗，父总量依然守恒
@@ -154,7 +178,7 @@ async function withBudget(cfg, messages, tools, operation, attemptsRef) {
   try {
     const result = await operation();
     const usage = result && result.usage;
-    const actual = usage && Number(usage.total_tokens);
+    const actual = usageTotal(usage);
     if (Number.isFinite(actual) && actual >= 0) {
       // 有明确 usage：按实际结算；若真的重试过，服务端对失败的尝试也计了输入费，
       // 而 usage 只反映最后一次，按「实际重试次数」补偿这部分输入。
@@ -172,4 +196,90 @@ async function withBudget(cfg, messages, tools, operation, attemptsRef) {
   }
 }
 
-module.exports = { RequestBudget, createSubagentBudget, withBudget, estimateInputTokens, collectImageUrls };
+/**
+ * Reserve and settle each actual HTTP attempt separately. A stream replay and
+ * its inner HTTP retries share the same counter and the run-wide retry cap.
+ * Unknown provider usage consumes the full reservation in the token budget,
+ * while the cost ledger marks the visible estimate as billing-unknown.
+ * @param {any} cfg
+ * @param {any[]} messages
+ * @param {any} tools
+ * @param {() => Promise<any>} operation
+ * @param {any} attemptsRef
+ */
+async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
+  const ref = /** @type {any} */ (attemptsRef || { count: 0 });
+  const input = estimateInputTokens(messages, tools);
+  const output = Number(cfg && cfg.maxTokens) || 8192;
+  const budget = cfg && cfg.requestBudget;
+  /** @type {Set<Function>} */
+  const pending = new Set();
+  ref.beginAttempt = () => {
+    if (Number.isFinite(Number(ref.maxAttempts)) && ref.count >= Number(ref.maxAttempts)) {
+      throw Object.assign(new Error('本次模型调用已达到 HTTP 请求总次数上限（' + ref.maxAttempts + ' 次）'), {
+        code: 'REQUEST_ATTEMPT_LIMIT', retryable: false,
+      });
+    }
+    let settle = null;
+    try {
+      settle = budget ? budget.reserve(input + output) : null;
+    } catch (error) {
+      if (error && typeof error === 'object') error.retryable = false;
+      throw error;
+    }
+    try {
+      if (ref.count > 0 && budget && typeof budget.claimRetry === 'function') budget.claimRetry();
+    } catch (error) {
+      if (settle) settle({ total_tokens: 0 });
+      if (error && typeof error === 'object') error.retryable = false;
+      throw error;
+    }
+    const number = ++ref.count;
+    let finished = false;
+    /** @param {any} usage @param {{failed?: boolean, partialChars?: number}} [details] */
+    const finish = (usage, details = {}) => {
+      if (finished) return;
+      finished = true;
+      pending.delete(finish);
+      const actual = usageTotal(usage);
+      const known = Number.isFinite(actual) && actual >= 0;
+      if (settle) settle(known ? { total_tokens: actual } : null);
+      if ((details.failed || !usage) && cfg && cfg.costLedger && typeof cfg.costLedger.record === 'function') {
+        const visibleOutput = Math.min(output, Math.ceil(Math.max(0, Number(details.partialChars) || 0) / 4));
+        const estimate = known ? usage : {
+          prompt_tokens: input,
+          completion_tokens: visibleOutput,
+          total_tokens: input + visibleOutput,
+        };
+        try {
+          cfg.costLedger.record({
+            kind: details.failed ? 'failed-attempt' : 'usage-unknown',
+            model: cfg.model,
+            usage: estimate,
+            ok: details.failed !== true,
+            estimated: !known,
+            billingUnknown: !known,
+            attempt: number,
+            runId: cfg.costRunId,
+            meta: {
+              perAttempt: true,
+              actor: cfg.costKind || 'main',
+              partialChars: Math.max(0, Number(details.partialChars) || 0),
+              reservedUpperBoundTokens: input + output,
+            },
+          });
+        } catch {}
+      }
+    };
+    pending.add(finish);
+    return finish;
+  };
+  try {
+    return await operation();
+  } finally {
+    for (const finish of [...pending]) finish(null, { failed: true });
+    delete ref.beginAttempt;
+  }
+}
+
+module.exports = { RequestBudget, createSubagentBudget, withBudget, withAttemptBudget, estimateInputTokens, collectImageUrls };

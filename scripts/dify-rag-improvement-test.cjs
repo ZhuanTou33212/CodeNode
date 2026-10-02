@@ -21,11 +21,12 @@ async function main() {
   const decoded = cnode.decodeCnode(cnode.encodeCnode({ graph: { nodes: [], edges: [] }, manifest: { name: 'test template', template } }));
   assert.equal(decoded.ok, true);
   assert.deepEqual(decoded.manifest.template, template);
-  let editHandler;
+  /** @type {any} */ let editHandler;
   require('../electron/tools/impl/workbenchEditTool.cjs').register({
     register(name, _description, _schema, fn) { if (name === 'workbench_edit') editHandler = fn; },
     declareContract() {},
   });
+  assert.ok(editHandler);
   const graph = new GraphModel({ root: { nodes: [], edges: [] } });
   const edited = await editHandler({ model: () => graph, mutateWorkbench: async (fn) => { fn(graph); return true; }, storeScalars: () => 0 }, { action: 'create', id: 'task-a', name: 'A', type: 'task' });
   assert.equal(edited.ok, true);
@@ -50,8 +51,9 @@ async function main() {
     else if (req.url === '/v1/workflows/run') res.end(JSON.stringify({ task_id: 'task-1', data: { id: 'run-1', status: 'succeeded', outputs: { answer: 'ok' } } }));
     else { res.statusCode = 404; res.end('{}'); }
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(null)));
   const address = server.address();
+  assert.ok(address && typeof address !== 'string');
   const base = 'http://127.0.0.1:' + address.port;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-improvement-'));
   try {
@@ -69,8 +71,9 @@ async function main() {
     assert.equal((text.match(/rag.embed_provider=/g) || []).length, 1);
 
     fs.appendFileSync(path.join(root, '.codenode', 'agent.properties'), `dify.enabled=true\ndify.base=${base}/v1\ndify.api_key=test-secret\ndify.kind=workflow\n`);
-    let handler;
+    /** @type {any} */ let handler;
     register({ register(name, _description, _schema, fn) { if (name === 'dify_call') handler = fn; }, declareContract() {} });
+    assert.ok(handler);
     const audit = [];
     const result = await handler({ projectRoot: () => root, signal: () => null, audit: (entry) => audit.push(entry) }, { inputs: { subject: 'demo' } });
     assert.equal(result.ok, true);

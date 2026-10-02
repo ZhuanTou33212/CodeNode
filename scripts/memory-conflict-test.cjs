@@ -180,7 +180,7 @@ async function main() {
 
     assert.throws(() => withFileLock(path.join(root, '.codenode', 'lock-check.json'), () =>
       withFileLock(path.join(root, '.codenode', 'lock-check.json'), () => true)),
-    (error) => error.code === 'MEMORY_LOCKED');
+    (error) => error instanceof Error && 'code' in error && error.code === 'MEMORY_LOCKED');
     console.log('MEMORY CONFLICT TEST: PASS');
   } finally {
     if (formerHome == null) delete process.env.CODENODE_HOME;

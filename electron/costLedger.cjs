@@ -109,7 +109,9 @@ function emptyCounters() {
 function addCounters(target, entry, cost) {
   target.requests += 1;
   if (entry.ok === false) target.errors += 1;
-  if (Number(entry.attempt) > 1) target.retries += Number(entry.attempt) - 1;
+  if (Number(entry.attempt) > 1) {
+    target.retries += entry.meta && entry.meta.perAttempt === true ? 1 : Number(entry.attempt) - 1;
+  }
   target.promptTokens += entry.tokens.prompt;
   target.completionTokens += entry.tokens.completion;
   target.promptCachedTokens += Number(entry.tokens.cached) || 0;
@@ -159,10 +161,13 @@ class CostLedger {
       ok: entry.ok !== false,
       attempt: Number(entry.attempt) || 1,
       estimated,
+      billingUnknown: entry.billingUnknown === true,
       latencyMs: Number(entry.latencyMs) || 0,
       meta: entry.meta || null,
     };
-    record.costUsd = costOf(model, usage, this.prices);
+    // Failed streams may have consumed tokens without a final provider usage frame.
+    // Show the estimate, but never present a guessed charge as a known USD amount.
+    record.costUsd = record.billingUnknown ? null : costOf(model, usage, this.prices);
     this.entries.push(record);
     if (this.entries.length > MAX_IN_MEMORY) this.entries.splice(0, this.entries.length - MAX_IN_MEMORY);
     addCounters(this.totals, record, record.costUsd);

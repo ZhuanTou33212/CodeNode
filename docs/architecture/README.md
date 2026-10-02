@@ -40,6 +40,12 @@ flowchart LR
 
 恢复由 `runStore` 事件、`runCheckpoint` 检查点和 `sideEffects` 幂等账本共同决定。`planResume` 把旧 Run 分成可自动续跑、需人工复核、已完成或无法判断；结果未知的外部副作用不会被盲目重放。
 
+#### 断流重试与成本边界
+
+断流后仍是整轮重发，不会把半截结果接到新请求后面。连接重试与断流重发共用单次模型调用的 HTTP 请求总次数上限：默认是 3 次连接尝试加 2 次断流重发额度，最多发出 5 次请求，不会相乘成 9 次。每次实际 HTTP 请求发出前都从本次 Run 的 token 预算预留一次输入与最大输出额度；失败且供应商没有返回用量时，预算按上界结算。父 Agent、预处理模型和所有子 Agent 共用 `agent.max_total_retries` 重试额度（默认 12 次，设为 0 可禁止重试），子 Agent 仍保留自己的 token 配额和任务时限。
+
+成本账本为失败尝试保留可见输出的 token 估算及“计费未知”标记，不把这类估算显示为确定的美元费用。供应商实际是否计费、前缀缓存是否命中仍以供应商返回的数据为准。配置入口见 `config/agent.properties.example`。
+
 ### 多 Agent：主 Agent 委派与确认
 
 ![多 Agent 协作调度与结果确认](multi-agent-collaboration.png)
@@ -61,6 +67,7 @@ flowchart LR
 ### 工具、检索和存储边界
 
 - 工具由注册表校验参数、能力和确认策略。项目文件属于项目根目录；写入、命令与外部网络能力按各自契约执行，过程留审计记录。
+- 同一轮工具调用只在全部调用都是无需确认的只读工具时才允许可选并行；只要含写入或审批，整轮按模型给出的顺序串行，因此“读 A → 写 A → 读 A”不会被预启动成并行读。
 - 本地 Agentic RAG 为项目文件建立 BM25 索引，可选向量后端（默认进程内 `memory`；也可配置 SQLite 或 Milvus）。检索命中只帮助定位，引用仍需对应本轮实际读取的来源。设置入口在底部工作台的“检索设置”页。
 - `.cnode` 是工程容器，保存图、会话、工作区和完整性信息；`.codenode/` 存项目级运行记录、索引、标量等数据。模型列表保存在 Electron 用户数据目录，界面保存的 API Key 需要系统安全存储可用；项目级 `.codenode/agent.properties` 中的可选集成凭据按普通项目文件管理。
 - Dify 是**可选的单向调用**：在项目 `.codenode/agent.properties` 配置 `dify.enabled/base/api_key/kind` 后才注册 `dify_call`，调用已发布的 Dify 工作流或聊天应用，并需网络权限及执行前确认。未配置时本地任务不依赖 Dify。详见 [Dify 集成说明](../codenode-dify-improvement-proposal.md)。
