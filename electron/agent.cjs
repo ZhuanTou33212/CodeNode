@@ -1456,7 +1456,8 @@ async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
   // restarts from multiplying into request_max_attempts × stream_max_attempts.
   const attemptsRef = {
     count: Math.max(0, Number(options.retryOffset) || 0),
-    maxAttempts: maxAttemptsFor(cfg) + Math.max(0, Math.floor(restarts)),
+    maxAttempts: Math.max(0, Number(options.retryOffset) || 0) +
+      maxAttemptsFor(cfg) + Math.max(0, Math.floor(restarts)),
   };
   const result = await require('./requestQueue.cjs').modelQueue.run(options.signal,
     () => require('./requestBudget.cjs').withAttemptBudget(
