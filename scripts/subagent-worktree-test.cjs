@@ -208,6 +208,19 @@ function makeContext(projectRoot, audits, model) {
       role: 'explorer', objective: '隔离修改并合入', isolation: 'worktree', taskId: 'task-atomic',
     }, ctx);
     check('[G] 隔离任务产生候选结果', delegated.ok === true && !fs.existsSync(path.join(repo, 'agent-made.txt')));
+    const alias = path.join(base, 'repo-alias');
+    let aliased = false;
+    try {
+      fs.symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const task = manager.taskById(ctx, 'task-atomic');
+      task.worktree.path = path.join(alias, '.codenode', 'worktrees', 'task-atomic');
+      aliased = true;
+    } catch {}
+    if (aliased) {
+      check('[G] 同一工作树的目录别名按真实路径匹配',
+        worktree.normalizePath(manager.taskById(ctx, 'task-atomic').worktree.path) ===
+        worktree.normalizePath(seen[0]));
+    }
     const premature = await supervisor.execute('review_subagent_result', {
       taskId: 'task-atomic', decision: 'confirm', confirmedSummary: '已完成', note: '人工检查',
     }, ctx);
@@ -229,6 +242,7 @@ function makeContext(projectRoot, audits, model) {
     }, ctx);
     const headAfterRepeat = (await worktree.runGit(repo, ['rev-parse', 'HEAD'], { policy })).stdout.trim();
     check('[G] 重复确认幂等，不新增合并提交', repeated.ok === true && headBeforeRepeat === headAfterRepeat);
+    if (aliased) fs.unlinkSync(alias);
     await worktree.removeWorktree(repo, { name: 'task-atomic' }, { policy });
   }
   {

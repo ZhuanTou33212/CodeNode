@@ -1035,12 +1035,12 @@ class SubagentManager {
     );
     registry.register(
       'review_subagent_result',
-      '审查子代理候选结果。get_subagent_task 默认给短摘要；summaryTruncated/lossy 或内容不足时用 detail="full" 分页读取。' +
+      '审查候选结果；正文用 get_subagent_task(detail="full") 读取。' +
         '隔离代码用 confirm_and_merge：核对指纹、合入后确认。' +
         'confirm 前核对当前 verification，并按验收条件独立核对来源；哈希有效不等于结论正确。' +
-        'confirm 必须提交主代理核验后的 confirmedSummary 与检查说明；可带 verifierTaskId 证明某 verifier 绑定并独立运行了通过的命令。' +
-        'validationBasis 可选 all/filesystem/canvas/manual，用来声明结论依赖的版本面；确认后的摘要才可作为共享内容传给 dependsOnTaskIds。' +
-        '如果快照变过，须重新核对当前状态并在 note 里说明；产物哈希不符不能确认。retract 会保留来源记录，并把显式依赖该结果的下游任务标记为 needs_recheck。',
+        'confirm 需 confirmedSummary 和核验 note；verificationTaskId 可绑定独立 verifier。' +
+        'validationBasis 可选 all/filesystem/canvas/manual；确认摘要才可作为下游依赖。' +
+        '快照变化须复核，产物哈希不符不能确认；retract 使下游 needs_recheck。',
       {
         type: 'object',
         properties: {
@@ -1129,11 +1129,14 @@ class SubagentManager {
             const opts = { context, policy: typeof context.sandbox === 'function' ? context.sandbox() : null };
             const preview = await worktreeLib.inspectMerge(root, task.taskId, opts);
             if (!preview.ok) return AgentToolResult.error('隔离工作树预检失败：' + preview.message, preview);
-            if (path.resolve(preview.path || '') !== path.resolve(task.worktree.path) ||
-                preview.branch !== task.worktree.branch || preview.sourceHead !== pinned.sourceHead ||
-                preview.pendingDigest !== pinned.pendingDigest) {
-              this.markNeedsRecheck(context, task, '子任务结束后隔离工作树内容发生变化', task.taskId);
-              return AgentToolResult.error('隔离工作树内容与子任务结束时不同，已标记 needs_recheck；请重新核验');
+            const drift = [];
+            if (worktreeLib.normalizePath(preview.path || '') !== worktreeLib.normalizePath(task.worktree.path)) drift.push('path');
+            if (preview.branch !== task.worktree.branch) drift.push('branch');
+            if (preview.sourceHead !== pinned.sourceHead) drift.push('head');
+            if (preview.pendingDigest !== pinned.pendingDigest) drift.push('pending');
+            if (drift.length) {
+              this.markNeedsRecheck(context, task, '子任务结束后隔离工作树版本发生变化：' + drift.join(','), task.taskId);
+              return AgentToolResult.error('隔离工作树内容与子任务结束时不同（' + drift.join(',') + '），已标记 needs_recheck；请重新核验');
             }
             const approved = await context.confirm(ConfirmationLevel.WRITE,
               '确认并合入子代理结果 ' + task.taskId,
