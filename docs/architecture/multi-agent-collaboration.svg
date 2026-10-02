@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1720" viewBox="0 0 1800 1720" role="img" aria-labelledby="diagram-title diagram-desc">
+<title id="diagram-title">CodeNode 多 Agent 协作调度与结果确认</title>
+<desc id="diagram-desc">主 Agent 通过委派工具启动五类子 Agent，由有界 FIFO 调度；下方展示共享写入、工作树隔离、合并预检与候选结果确认的流程。</desc>
+<defs>
+  <filter id="shadow" x="-15%" y="-25%" width="130%" height="165%"><feGaussianBlur in="SourceAlpha" stdDeviation="9"/><feOffset dy="7"/><feComponentTransfer><feFuncA type="linear" slope="0.09"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1 1 L11 6 L1 11 Z" fill="#3678ED"/></marker>
+  <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1 1 L11 6 L1 11 Z" fill="#4BCB85"/></marker>
+  <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1 1 L11 6 L1 11 Z" fill="#F3A333"/></marker>
+</defs>
+<rect width="1800" height="1720" fill="#F7F9FF"/>
+<g font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, Segoe UI, Arial, sans-serif">
+
+<text x="70" y="78" fill="#11294A" font-size="51" font-weight="700" text-anchor="start" letter-spacing="0">多 Agent · 协作调度与结果确认</text>
+<text x="72" y="113" fill="#8496B8" font-size="23" font-weight="400" text-anchor="start" letter-spacing="0">与「单 Agent · ReAct 运行状态与恢复」配套；每个子 Agent 内部仍运行同一套 ReAct 循环</text>
+<rect x="48" y="140" width="1704" height="625" rx="30" fill="#F7F9FF" stroke="#8EB5FF" stroke-width="2.4" stroke-dasharray="10 10"/>
+<text x="73" y="181" fill="#11294A" font-size="22" font-weight="700" text-anchor="start" letter-spacing="1.0">1 · SUPERVISOR → DELEGATION / 主 Agent 委派</text>
+<rect x="100" y="225" width="420" height="142" rx="18" fill="#E9F0FF" stroke="#3678ED" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="310.0" y="271" fill="#11294A" font-size="28" font-weight="700" text-anchor="middle" letter-spacing="0">主 Agent · Supervisor</text>
+<text x="310.0" y="305" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">任务拆分、判断、核验与汇总</text>
+<text x="310.0" y="334" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">自己的 RUNNING / WAITING_TOOL 循环</text>
+<rect x="630" y="225" width="460" height="142" rx="18" fill="#F2EAFF" stroke="#A36AFF" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="860.0" y="271" fill="#11294A" font-size="28" font-weight="700" text-anchor="middle" letter-spacing="0">delegate_task(s)</text>
+<text x="860.0" y="305" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">role · objective · acceptanceCriteria</text>
+<text x="860.0" y="334" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">可选依赖、预算、时限与 worktree 隔离</text>
+<rect x="1210" y="225" width="470" height="142" rx="18" fill="#E8F8EF" stroke="#4BCB85" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1445.0" y="271" fill="#11294A" font-size="28" font-weight="700" text-anchor="middle" letter-spacing="0">SubagentManager</text>
+<text x="1445.0" y="305" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">登记子任务、独立提示词与预算</text>
+<text x="1445.0" y="334" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">共享租约、副作用记录和取消信号</text>
+<path d="M520 296 H624" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1090 296 H1204" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<text x="575" y="276" fill="#8496B8" font-size="18" font-weight="400" text-anchor="middle" letter-spacing="0">本轮工具调用</text>
+<path d="M1445 367 V412 H900 V439" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<rect x="500" y="440" width="800" height="86" rx="18" fill="#E9F0FF" stroke="#8EB5FF" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="900.0" y="486" fill="#11294A" font-size="26" font-weight="700" text-anchor="middle" letter-spacing="0">有界 FIFO 调度器</text>
+<text x="900.0" y="520" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">默认最多同时运行 3 个子任务；按资源决定并行或独占</text>
+<path d="M900 526 V541" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M228 541 H1556" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M228 541 V579" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<rect x="88" y="585" width="280" height="120" rx="18" fill="#FFFFFF" stroke="#79B8F0" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="228.0" y="631" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">Explorer</text>
+<text x="228.0" y="665" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">只读 · 定位与证据</text>
+<path d="M560 541 V579" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<rect x="420" y="585" width="280" height="120" rx="18" fill="#FFFFFF" stroke="#FFB85C" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="560.0" y="631" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">Builder</text>
+<text x="560.0" y="665" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">写入 · 实施修改</text>
+<path d="M892 541 V579" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<rect x="752" y="585" width="280" height="120" rx="18" fill="#FFFFFF" stroke="#4BCB85" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="892.0" y="631" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">Verifier</text>
+<text x="892.0" y="665" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">执行命令 · 独立检验</text>
+<path d="M1224 541 V579" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<rect x="1084" y="585" width="280" height="120" rx="18" fill="#FFFFFF" stroke="#B69AEB" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1224.0" y="631" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">Reviewer</text>
+<text x="1224.0" y="665" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">只读 · 审查与反例</text>
+<path d="M1556 541 V579" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<rect x="1416" y="585" width="280" height="120" rx="18" fill="#FFFFFF" stroke="#79B8F0" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1556.0" y="631" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">Canvas</text>
+<text x="1556.0" y="665" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">画布修改与保存</text>
+<text x="82" y="742" fill="#8496B8" font-size="18" font-weight="400" text-anchor="start" letter-spacing="0">每个子 Agent 有独立消息与角色权限；默认 600 秒、12 轮、120,000 Token 上限，消耗仍计入父 Run。</text>
+<rect x="48" y="795" width="1704" height="385" rx="30" fill="#F5FCF8" stroke="#8DD9AA" stroke-width="2.4" stroke-dasharray="10 10"/>
+<text x="73" y="837" fill="#11294A" font-size="22" font-weight="700" text-anchor="start" letter-spacing="1.0">2 · SCHEDULING &amp; ISOLATION / 并发与隔离规则</text>
+<rect x="86" y="872" width="490" height="145" rx="18" fill="#FFFFFF" stroke="#8DD9AA" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="331.0" y="918" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">安全只读任务</text>
+<text x="331.0" y="952" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">共享槽位，可并行</text>
+<text x="331.0" y="981" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">运行命令的 Verifier 不走此通道</text>
+<rect x="655" y="872" width="490" height="145" rx="18" fill="#FFFFFF" stroke="#FFB85C" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="900.0" y="918" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">共享工作区写任务</text>
+<text x="900.0" y="952" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">调度器独占执行</text>
+<text x="900.0" y="981" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">资源租约防止跨 Agent 写冲突</text>
+<rect x="1224" y="872" width="490" height="145" rx="18" fill="#FFFFFF" stroke="#8EB5FF" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1469.0" y="918" fill="#11294A" font-size="27" font-weight="700" text-anchor="middle" letter-spacing="0">isolation = worktree</text>
+<text x="1469.0" y="952" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">独立检出隔离项目文件</text>
+<text x="1469.0" y="981" fill="#8496B8" font-size="20" font-weight="400" text-anchor="middle" letter-spacing="0">可并行；Canvas 不适用</text>
+<text x="88" y="1064" fill="#11294A" font-size="20" font-weight="700" text-anchor="start" letter-spacing="0">隔离改动交付：</text>
+<rect x="302" y="1037" width="355" height="72" rx="16" fill="#E9F0FF" stroke="#8EB5FF" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="479.5" y="1069" fill="#11294A" font-size="21" font-weight="700" text-anchor="middle" letter-spacing="0">inspect_merge</text>
+<text x="479.5" y="1096" fill="#8496B8" font-size="16" font-weight="400" text-anchor="middle" letter-spacing="0">预览 HEAD / 文件 / 内容指纹</text>
+<rect x="738" y="1037" width="355" height="72" rx="16" fill="#E8F8EF" stroke="#8DD9AA" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="915.5" y="1069" fill="#11294A" font-size="21" font-weight="700" text-anchor="middle" letter-spacing="0">merge</text>
+<text x="915.5" y="1096" fill="#8496B8" font-size="16" font-weight="400" text-anchor="middle" letter-spacing="0">确认后提交并合入主工作树</text>
+<rect x="1174" y="1037" width="405" height="72" rx="16" fill="#FFF6EA" stroke="#FFB85C" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1376.5" y="1069" fill="#11294A" font-size="21" font-weight="700" text-anchor="middle" letter-spacing="0">冲突 → merge --abort</text>
+<text x="1376.5" y="1096" fill="#8496B8" font-size="16" font-weight="400" text-anchor="middle" letter-spacing="0">保留隔离分支供处理</text>
+<path d="M657 1073 H731" fill="none" stroke="#3678ED" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1093 1073 H1167" fill="none" stroke="#F3A333" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-orange)"/>
+<text x="82" y="1151" fill="#8496B8" font-size="18" font-weight="400" text-anchor="start" letter-spacing="0">状态：queued → running → done / failed / cancelled / blocked；取消不会自动回滚已写入内容。</text>
+<rect x="48" y="1210" width="1704" height="430" rx="30" fill="#FFFDFB" stroke="#C4D7F6" stroke-width="2.4" stroke-dasharray="10 10"/>
+<text x="73" y="1252" fill="#11294A" font-size="22" font-weight="700" text-anchor="start" letter-spacing="1.0">3 · CANDIDATE → VERIFIED RESULT / 候选交付与下游依赖</text>
+<rect x="75" y="1310" width="370" height="154" rx="18" fill="#E9F0FF" stroke="#8EB5FF" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="260.0" y="1356" fill="#11294A" font-size="25" font-weight="700" text-anchor="middle" letter-spacing="0">子 Agent 结果信封</text>
+<text x="260.0" y="1390" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">状态、摘要、来源与证据</text>
+<text x="260.0" y="1419" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">此时仍是候选结果</text>
+<rect x="490" y="1310" width="370" height="154" rx="18" fill="#E8F8EF" stroke="#8DD9AA" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="675.0" y="1356" fill="#11294A" font-size="25" font-weight="700" text-anchor="middle" letter-spacing="0">主 Agent 独立核对</text>
+<text x="675.0" y="1390" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">get_subagent_task 重算校验</text>
+<text x="675.0" y="1419" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">必要时派 Verifier 复跑</text>
+<rect x="905" y="1310" width="370" height="154" rx="18" fill="#FFF6EA" stroke="#FFB85C" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1090.0" y="1356" fill="#11294A" font-size="25" font-weight="700" text-anchor="middle" letter-spacing="0">review_subagent_result</text>
+<text x="1090.0" y="1390" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">confirm / retract</text>
+<text x="1090.0" y="1419" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">记录核验依据与确认摘要</text>
+<rect x="1320" y="1310" width="370" height="154" rx="18" fill="#E8F8EF" stroke="#8DD9AA" stroke-width="2.4" filter="url(#shadow)"/>
+<text x="1505.0" y="1356" fill="#11294A" font-size="25" font-weight="700" text-anchor="middle" letter-spacing="0">下游依赖任务</text>
+<text x="1505.0" y="1390" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">dependsOnTaskIds</text>
+<text x="1505.0" y="1419" fill="#8496B8" font-size="19" font-weight="400" text-anchor="middle" letter-spacing="0">仅接收有效已确认摘要</text>
+<path d="M445 1387 H482" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M860 1387 H897" fill="none" stroke="#3678ED" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+<path d="M1275 1387 H1312" fill="none" stroke="#4BCB85" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-green)"/>
+<text x="1298" y="1365" fill="#8496B8" font-size="17" font-weight="400" text-anchor="middle" letter-spacing="0">确认</text>
+<rect x="700" y="1510" width="400" height="66" rx="17" fill="#FFF6EA" stroke="#F3A333" stroke-width="2.4"/>
+<text x="900" y="1552" fill="#11294A" font-size="23" font-weight="700" text-anchor="middle" letter-spacing="0">needs_recheck</text>
+<path d="M1090 1464 V1502" fill="none" stroke="#F3A333" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-orange)"/>
+<text x="1120" y="1510" fill="#8496B8" font-size="18" font-weight="400" text-anchor="start" letter-spacing="0">撤回 / 失效</text>
+<text x="1120" y="1538" fill="#8496B8" font-size="18" font-weight="400" text-anchor="start" letter-spacing="0">下游依赖待复核</text>
+<text x="82" y="1614" fill="#8496B8" font-size="18" font-weight="400" text-anchor="start" letter-spacing="0">merge_subagent_results 只整理候选声明；Git 代码合并走上方 worktree 流程，二者不会自动互相触发。</text>
+<text x="72" y="1682" fill="#8496B8" font-size="18" font-weight="400" text-anchor="start" letter-spacing="0">CODE NODE / MULTI-AGENT RUNTIME · 对应实现：subagents.cjs、subagentScheduler.cjs、roles.cjs、worktree.cjs</text>
+</g></svg>
