@@ -64,6 +64,10 @@ try {
   }
   const statusOnly = clone(graph); statusOnly.nodes[0].data.status = 'running';
   check(call('crash', 'read', {}, statusOnly).state.complete, 'UI status is not part of execution identity');
+  const branched = clone(graph); branched.edges = [{ source: 'source', target: 'consumer', data: { condition: { op: 'contains', path: 'output', value: 'never' } } }];
+  const branchSource = prepare('branch', 'source', branched); settle('branch', branchSource, 'source-result', branched);
+  const branchView = call('branch', 'read', {}, branched).state;
+  check(branchView.skipped.includes('consumer') && branchView.complete, '条件边不满足时下游节点被安全跳过');
   const explicitV1 = { ...clone(graph), schemaVersion: 1 };
   check(call('versioned', 'read', {}, explicitV1).ok && call('versioned', 'read', {}, explicitV1).state.schemaVersion === 1, 'explicit workflow schema v1 is accepted and exposed');
   for (const version of [0, 2, '1', null]) {

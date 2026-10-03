@@ -111,6 +111,7 @@ interface WorkflowStateDto {
   revision: number;
   graphDigest: string;
   completed: string[];
+  skipped: string[];
   outputs: Record<string, string>;
   attempts: Record<string, number>;
   reviews: Record<string, string>;

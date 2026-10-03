@@ -7,6 +7,7 @@ const path = require('path');
 const { createHash, randomUUID } = require('crypto');
 const { atomicWriteFile } = require('./atomicFile.cjs');
 const { withFileLock } = require('./fileLock.cjs');
+const conditions = require('./workflowConditions.cjs');
 
 const RUNTIME = randomUUID();
 const active = new Set();
@@ -50,7 +51,9 @@ function graphInfo(graph) {
   if (ids.size !== nodes.length) fail('工作流节点标识重复');
   const edges = graph.edges.map((edge) => {
     if (!edge || !ids.has(edge.source) || !ids.has(edge.target)) fail('工作流连线指向不存在的节点');
-    return { source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle || '', targetHandle: edge.targetHandle || '', data: edge.data || null };
+    const data = edge.data || null;
+    return { source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle || '', targetHandle: edge.targetHandle || '', data,
+      condition: conditions.normalize(data && data.condition) };
   });
   const degrees = new Map(nodes.map((node) => [node.id, 0]));
   for (const edge of edges) degrees.set(edge.target, degrees.get(edge.target) + 1);
@@ -98,12 +101,20 @@ function snapshot(state, graph) {
   const attempts = Object.create(null);
   const reviews = Object.create(null);
   const inputs = Object.create(null);
+  const skipped = [];
   for (const id of graph.order) {
     const prior = state.records.filter((record) => record.nodeId === id);
     attempts[id] = prior.length;
     // Persisted outputs and edge order define exactly what is fed downstream.
-    const incoming = graph.edges.filter((edge) => edge.target === id).map((edge) => ({ id: edge.source, output: outputs[edge.source] || '' }));
+    const allIncoming = graph.edges.filter((edge) => edge.target === id);
+    const incoming = allIncoming.filter((edge) => conditions.evaluate(edge.condition, outputs[edge.source] || '')).map((edge) => ({ id: edge.source, output: outputs[edge.source] || '' }));
     inputs[id] = digest(incoming);
+    if (allIncoming.length && allIncoming.every((edge) => edge.condition) && allIncoming.every((edge) => Object.prototype.hasOwnProperty.call(outputs, edge.source)) && incoming.length === 0) {
+      skipped.push(id);
+      completed.push(id);
+      outputs[id] = '';
+      continue;
+    }
     const last = prior[prior.length - 1];
     if (last && last.cycle === state.cycle && last.graphDigest === graph.digest && last.inputDigest === inputs[id] && last.phase === 'done') {
       completed.push(id);
@@ -112,7 +123,7 @@ function snapshot(state, graph) {
   }
   const pending = state.records.filter((record) => record.phase === 'prepared' || record.phase === 'failed')
     .map((record) => ({ id: record.id, nodeId: record.nodeId, label: record.label, active: record.phase === 'prepared' && live(record) }));
-  return { revision: state.revision, schemaVersion: graph.schemaVersion, graphDigest: graph.digest, completed, outputs, attempts, reviews, inputs, pending,
+  return { revision: state.revision, schemaVersion: graph.schemaVersion, graphDigest: graph.digest, completed, skipped, outputs, attempts, reviews, inputs, pending,
     hasHistory: state.records.length > 0, complete: completed.length === graph.nodes.length, order: graph.order };
 }
 
@@ -138,7 +149,7 @@ function transact(root, workflowId, request = {}) {
       } else if (request.action === 'prepare') {
         const node = graph.nodes.find((item) => item.id === request.nodeId);
         if (!node) fail('待执行节点不存在');
-        if (view.complete || view.completed.includes(node.id)) fail('该节点已经完成，请刷新工作流状态');
+        if (view.complete || view.completed.includes(node.id)) fail(view.skipped.includes(node.id) ? '条件边未满足，该节点已跳过' : '该节点已经完成，请刷新工作流状态');
         if (view.pending.some((item) => item.active)) fail('工作流节点仍在执行，不能重复运行');
         const required = new Set(view.pending.map((item) => item.id));
         if (view.reviews[node.id]) required.add(view.reviews[node.id]);
@@ -201,6 +212,7 @@ async function execute(root, workflowId, request, host) {
     if (!node) fail('待执行节点不存在');
     const current = transact(root, workflowId, { action: 'read', graph: request.graph });
     if (!current.ok || !current.state) return current;
+    if (current.state.skipped && current.state.skipped.includes(node.id)) return { ok: true, executionOk: true, skipped: true, output: '', state: current.state };
     if (request.expectedRevision !== current.state.revision) fail('工作流状态已变化，请重新加载后再继续');
     if (current.state.pending.some((item) => item.active)) fail('工作流节点仍在执行，不能重复运行');
     const reviewIds = [...new Set([
