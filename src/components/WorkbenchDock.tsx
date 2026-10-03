@@ -751,6 +751,7 @@ function RunsPanel() {
                 </label>
                 <button onClick={createTimeTravel} disabled={busy || recoveryBusy || !window.codenode?.agentTimeTravel || !resumePlan.messageCheckpointCount}>创建 Time Travel 分支</button>
                 <button className="dock-danger" onClick={forceResume} disabled={busy} title={view.forceResumePrompt}>了解风险，强制续跑</button>
+                {resumePlan.pendingWaits?.length ? <button onClick={retryResume} disabled={busy} title="旧审批令牌不会恢复；创建新 Run 后，工具再次请求时会重新签发一次性审批令牌">重新发起审批</button> : null}
                 <button onClick={retryResume} disabled={busy} title={view.retryPrompt}>按当前状态重试</button>
               </div>
             </div>

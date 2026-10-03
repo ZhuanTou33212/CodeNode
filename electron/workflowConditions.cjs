@@ -19,4 +19,13 @@ function evaluate(condition, output) {
   if (c.op === 'equals') return actual === c.value || String(actual) === String(c.value);
   return !(actual === c.value || String(actual) === String(c.value));
 }
-module.exports = { normalize, evaluate };
+function completionCheck(condition, output) {
+  if (condition && typeof condition === 'object') return { enforced: true, ok: evaluate(condition, output), reason: '结构化条件' };
+  const text = String(condition || '').trim();
+  const contains = /^contains\s*:\s*(.+)$/i.exec(text);
+  if (contains) return { enforced: true, ok: String(output || '').includes(contains[1]), reason: 'contains' };
+  const equals = /^equals\s*:\s*(.*)$/i.exec(text);
+  if (equals) return { enforced: true, ok: String(output || '') === equals[1], reason: 'equals' };
+  return { enforced: false, ok: true, reason: '自然语言条件需人工核对' };
+}
+module.exports = { normalize, evaluate, completionCheck };

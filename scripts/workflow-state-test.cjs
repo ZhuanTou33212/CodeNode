@@ -68,6 +68,12 @@ try {
   const branchSource = prepare('branch', 'source', branched); settle('branch', branchSource, 'source-result', branched);
   const branchView = call('branch', 'read', {}, branched).state;
   check(branchView.skipped.includes('consumer') && branchView.complete, '条件边不满足时下游节点被安全跳过');
+  const contractGraph = clone(graph); contractGraph.nodes[0].data.completionCondition = 'contains:verified';
+  const contractPrepared = prepare('contract', 'source', contractGraph);
+  const contractFailed = settle('contract', contractPrepared, 'source-result', contractGraph);
+  check(contractFailed.ok && contractFailed.executionOk === false && !contractFailed.state.complete, '结构化完成条件不满足时节点不会误报成功');
+  const contractRetry = prepare('contract', 'source', contractGraph, [contractPrepared.attemptId]);
+  check(contractRetry.ok && settle('contract', contractRetry, 'verified', contractGraph).executionOk === true, '完成条件满足后节点才可完成');
   const explicitV1 = { ...clone(graph), schemaVersion: 1 };
   check(call('versioned', 'read', {}, explicitV1).ok && call('versioned', 'read', {}, explicitV1).state.schemaVersion === 1, 'explicit workflow schema v1 is accepted and exposed');
   for (const version of [0, 2, '1', null]) {

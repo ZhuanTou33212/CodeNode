@@ -173,13 +173,17 @@ function transact(root, workflowId, request = {}) {
         if (!record || record.phase !== 'prepared' || record.runtime !== RUNTIME || !active.has(record.id) || record.graphDigest !== graph.digest) fail('待结算的工作流执行不存在或已失效');
         try {
           if (typeof request.output !== 'string' || request.output.length > MAX_OUTPUT) fail('节点结果超过可恢复上限；原执行保留为待复核');
-          record.phase = request.ok === true ? 'done' : 'failed';
+          const node = graph.nodes.find((item) => item.id === record.nodeId);
+          const completion = conditions.completionCheck(node && node.data && node.data.completionCondition, request.output);
+          const finalOk = request.ok === true && completion.ok;
+          record.phase = finalOk ? 'done' : 'failed';
           record.output = request.output;
+          record.completion = completion;
           record.settledAt = new Date().toISOString();
           data.revision += 1;
           persist(file, data);
         } finally { active.delete(record.id); }
-        return { ok: true, state: snapshot(data, graph) };
+        return { ok: true, executionOk: record.phase === 'done', completion: record.completion, state: snapshot(data, graph) };
       } else fail('未知工作流状态操作');
       data.revision += 1;
       persist(file, data);
@@ -242,7 +246,7 @@ async function execute(root, workflowId, request, host) {
       ok: outcome.ok, output: outcome.output,
     });
     if (!settled.ok) return { ok: false, error: '节点可能已执行，但结果未能持久化；后续节点已停止：' + settled.error };
-    return { ok: true, executionOk: outcome.ok, output: outcome.output, state: settled.state };
+    return { ok: true, executionOk: settled.executionOk === true, output: outcome.output, completion: settled.completion, state: settled.state };
   } catch (error) {
     return { ok: false, error: String((error && error.message) || error) };
   } finally {
