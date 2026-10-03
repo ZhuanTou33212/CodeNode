@@ -29,6 +29,24 @@ const { STATE_INFO } = require('./agentState.cjs');
 
 const MAX_CHECKPOINT_MESSAGES = 24;
 const MAX_MESSAGE_CHARS = 6000;
+// Time Travel may carry a small, non-secret execution snapshot.  Keep this
+// allow-list deliberately narrow: provider URLs, API keys, approval tokens and
+// arbitrary model output must never be copied into a branch checkpoint.
+const CONTROL_STATE_KEYS = Object.freeze([
+  'model', 'modelTaskType', 'reasoningEffort', 'compacted', 'contextTrims',
+  'contextTrimmedChars', 'overflowRecoveries',
+]);
+
+function sanitizeControlState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const key of CONTROL_STATE_KEYS) {
+    const item = value[key];
+    if (typeof item === 'string') out[key] = item.slice(0, 160);
+    else if (typeof item === 'number' && Number.isFinite(item)) out[key] = Math.max(0, Math.floor(item));
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 function checkpointFile(projectRoot, runId) {
   const safe = runStore.normalizeRunId(runId);
@@ -102,6 +120,13 @@ function recordWait(projectRoot, runId, payload) {
     kind: item.kind === 'question' ? 'question' : 'approval',
     toolCallId: item.toolCallId ? String(item.toolCallId).slice(0, 120) : null,
     taskId: item.taskId ? String(item.taskId).slice(0, 120) : null,
+    ...(item.type === 'wait_start' ? {
+      what: String(item.what || '').slice(0, 160),
+      level: String(item.level || 'WRITE').slice(0, 24),
+      capability: item.capability ? String(item.capability).slice(0, 120) : null,
+      scope: Array.isArray(item.scope) ? item.scope.map((value) => String(value).slice(0, 200)).slice(0, 32) : null,
+      detailDigest: item.detailDigest ? String(item.detailDigest).slice(0, 128) : null,
+    } : {}),
     ...(item.type === 'wait_settle' ? { outcome: String(item.outcome || 'unknown').slice(0, 32) } : {}),
   });
 }
@@ -112,7 +137,9 @@ function pendingWaitsOf(checkpoints) {
   for (const item of Array.isArray(checkpoints) ? checkpoints : []) {
     if (!item || !item.waitId) continue;
     if (item.type === 'wait_start') {
-      pending.set(item.waitId, { waitId: item.waitId, kind: item.kind || 'approval', toolCallId: item.toolCallId || null, taskId: item.taskId || null, startedAt: item.ts || null });
+      pending.set(item.waitId, { waitId: item.waitId, kind: item.kind || 'approval', toolCallId: item.toolCallId || null,
+        taskId: item.taskId || null, startedAt: item.ts || null, what: item.what || null, level: item.level || null,
+        capability: item.capability || null, scope: item.scope || null, detailDigest: item.detailDigest || null });
     } else if (item.type === 'wait_settle') {
       pending.delete(item.waitId);
     }
@@ -240,9 +267,9 @@ function isToolPairingValid(messages) {
  * @param {any} projectRoot
  * @param {string} runId
  * @param {Array<any>} messages
- * @param {{ reason?: string }} [options]
+ * @param {{ reason?: string, controlState?: object }} [options]
  */
-function saveMessages(projectRoot, runId, messages, { reason } = {}) {
+function saveMessages(projectRoot, runId, messages, { reason, controlState } = {}) {
   const list = Array.isArray(messages) ? messages : [];
   const trimmed = list
     .filter((message) => message && message.role)
@@ -264,6 +291,7 @@ function saveMessages(projectRoot, runId, messages, { reason } = {}) {
     reason: reason || 'round',
     count: repaired.length,
     messages: repaired,
+    controlState: sanitizeControlState(controlState),
   });
 }
 
@@ -284,6 +312,41 @@ function readCheckpoints(projectRoot, runId) {
   } catch {
     return [];
   }
+}
+
+/**
+ * Create a new Run branch from a persisted message checkpoint. This preserves
+ * the original Run and deliberately carries a review-required marker: file,
+ * shell and remote side effects are never undone by a time-travel branch.
+ */
+function createTimeTravelBranch(projectRoot, sourceRunId, branchRunId, checkpointIndex) {
+  if (!projectRoot || !sourceRunId || !branchRunId) return { ok: false, error: '缺少 Run 标识' };
+  const source = String(sourceRunId);
+  const branch = String(branchRunId);
+  if (source === branch) return { ok: false, error: '分支 Run 必须使用新的标识' };
+  const events = readCheckpoints(projectRoot, source);
+  const snapshots = events.filter((event) => event && event.type === 'messages' && Array.isArray(event.messages));
+  const index = Number.isInteger(Number(checkpointIndex)) ? Number(checkpointIndex) : snapshots.length - 1;
+  const selected = snapshots[index];
+  if (!selected) return { ok: false, error: '找不到指定的消息检查点' };
+  const runEvents = require('./runStore.cjs').readRun(projectRoot, source);
+  const start = runEvents.find((event) => event.type === 'run_start') || {};
+  const started = require('./runStore.cjs').startRun(projectRoot, branch, {
+    prompt: String(start.prompt || ''), model: start.model || null, parentRunId: source,
+    timeTravelFrom: source, timeTravelCheckpoint: index, requiresReview: true,
+  });
+  if (!started) return { ok: false, error: '新分支 Run 无法落盘' };
+  const saved = saveMessages(projectRoot, branch, selected.messages, {
+    reason: 'time_travel_branch',
+    controlState: selected.controlState,
+  });
+  if (!saved) return { ok: false, error: '分支消息检查点无法落盘' };
+  require('./runStore.cjs').appendEvent(projectRoot, branch, 'time_travel_branch', {
+    parentRunId: source, checkpointIndex: index, requiresReview: true,
+    warning: '分支不会撤销源 Run 已发生的文件、命令或外部副作用；继续前需人工核对。',
+  });
+  return { ok: true, runId: branch, parentRunId: source, checkpointIndex: index, requiresReview: true,
+    messageCount: selected.messages.length, controlState: sanitizeControlState(selected.controlState) };
 }
 
 /** 从检查点事件流归约出「每一步的状态」 */
@@ -318,6 +381,14 @@ function lastMessages(checkpoints) {
   return [];
 }
 
+function lastControlState(checkpoints) {
+  for (let i = checkpoints.length - 1; i >= 0; i--) {
+    const value = sanitizeControlState(checkpoints[i] && checkpoints[i].controlState);
+    if (value) return value;
+  }
+  return null;
+}
+
 /**
  * 续跑计划：失败分支只带 error，成功分支带上下面这些字段（字段含义见 planResume 实现）。
  * @typedef {Object} ResumePlan
@@ -338,6 +409,7 @@ function lastMessages(checkpoints) {
  * @property {string} [status]
  * @property {string} [prompt]
  * @property {any} [model]
+ * @property {string|null} [modelTaskType]
  * @property {any} [nodeId]
  * @property {string} [startedAt]
  * @property {string} [finishedAt]
@@ -351,6 +423,7 @@ function lastMessages(checkpoints) {
  * @property {Array<any>} [unknownEffects]
  * @property {Array<any>} [messages]
  * @property {number} [checkpointCount]
+ * @property {number} [messageCheckpointCount]
  * @property {number} [ledgerCommitted]
  */
 
@@ -425,6 +498,7 @@ function planResume(projectRoot, runId, options = {}) {
     status,
     prompt: String(start.prompt || ''),
     model: start.model || null,
+    modelTaskType: events.find((event) => event.type === 'task_route')?.modelTaskType || start.modelTaskType || null,
     nodeId: start.nodeId || null,
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
@@ -438,8 +512,12 @@ function planResume(projectRoot, runId, options = {}) {
     skippedByLedger: skippable,
     unknownEffects: [...unknownSteps, ...unknownFromLedger],
     messages: lastMessages(checkpoints),
+    controlState: lastControlState(checkpoints),
     taskPlan: planLib.readPlan(projectRoot, summary.runId),
     checkpointCount: checkpoints.length,
+    // Time Travel indexes message snapshots, not every tool/wait checkpoint.
+    // Expose the exact count so the UI cannot offer indexes that do not exist.
+    messageCheckpointCount: checkpoints.filter((event) => event && event.type === 'messages' && Array.isArray(event.messages)).length,
     ledgerCommitted: ledgerReview.committed.length,
     warning: null,
     reason: null,
@@ -629,8 +707,11 @@ module.exports = {
   repairToolPairing,
   isToolPairingValid,
   readCheckpoints,
+  createTimeTravelBranch,
   stepsOf,
   lastMessages,
+  lastControlState,
+  sanitizeControlState,
   planResume,
   buildResumeMessages,
   inheritTaskPlan,

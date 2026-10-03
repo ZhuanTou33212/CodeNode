@@ -39,6 +39,8 @@ function isProtectedWriteTarget(projectRoot, target) {
     return true;
   }
   const norm = rel.split(/[\\/]/).join('/');
+  // A model must not forge completed/prepared records to bypass recovery review.
+  if (/^\.codenode\/workflows(?:\/|$)/i.test(norm)) return true;
   return PROTECTED_RELPATHS.some((p) => p.split(/[\\/]/).join('/') === norm);
 }
 

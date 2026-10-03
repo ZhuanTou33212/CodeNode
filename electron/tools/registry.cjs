@@ -21,6 +21,7 @@ const { resourceKeysFor } = require('./leases.cjs');
 // P0-3：动作级复核要不要问模型，先看这个动作的副作用类别（read/write/unknown）
 const sideEffectsLib = require('../sideEffects.cjs');
 const descriptorLib = require('./descriptor.cjs');
+const { validateOutput } = require('./outputSchema.cjs');
 
 /**
  * S7：模型自填的「审批字段」—— 审批只能由服务端（ApprovalService）签发令牌，参数里塞这些
@@ -368,10 +369,33 @@ class AgentToolRegistry {
    * @param {string} name
    * @param {any} arguments_
    * @param {any} context 底层 AgentToolContext（或已被包装过的 ExecutionContext）
-   * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string }} [callInfo]
+   * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string, traceContext?: any }} [callInfo]
    *   调用标识：每个动作都能带回 runId/turnId/toolCallId/attemptId（审查第 5 项要求）
    */
   async execute(name, arguments_, context, callInfo) {
+    const parent = callInfo && callInfo.traceContext || (typeof context?.traceContext === 'function' ? context.traceContext() : null);
+    if (!parent) return this._executeChecked(name, arguments_, context, callInfo);
+    const root = typeof context?.projectRoot === 'function' ? context.projectRoot() : null;
+    const span = require('../eventBus.cjs').startSpan(root, {
+      spanKind: 'tool', name, runId: parent.runId, parent,
+      actor: typeof context.taskId === 'function' ? context.taskId() || 'main' : 'main',
+      turnId: callInfo?.turnId, toolCallId: callInfo?.toolCallId, attemptId: callInfo?.attemptId,
+    });
+    try {
+      const result = await this._executeChecked(name, arguments_, context, { ...callInfo, traceContext: span.context });
+      span.end(result?.ok === true ? 'ok' : result?.failure?.code === 'CANCELLED' ? 'cancelled' : 'error', {
+        attributes: { outcome: result?.kind || (result?.ok ? 'success' : 'failure'),
+          failureCode: result?.failure?.code || result?.data?.code || null,
+          sideEffectStatus: result?.data?.sideEffectStatus || null },
+      });
+      return result;
+    } catch (error) {
+      span.end(error?.name === 'AbortError' ? 'cancelled' : 'error', { error });
+      throw error;
+    }
+  }
+
+  async _executeChecked(name, arguments_, context, callInfo) {
     if (this.allowedTools && !this.allowedTools.has(name)) {
       // S5：显式失败码 —— 分类化提示才能告诉模型「这是权限问题，别原样重试」
       return AgentToolResult.failure('PERMISSION_DENIED', '当前子代理角色无权使用工具：' + name, { tool: name });
@@ -588,10 +612,50 @@ class AgentToolRegistry {
     }
 
     try {
-      return await this._executeWithTimeout(tool, descriptor, name, args, execContext);
+      const outcome = await this._executeWithTimeout(tool, descriptor, name, args, execContext);
+      return this._validateOutput(outcome, descriptor, name, execContext);
     } catch (e) {
-      return AgentToolResult.error('工具 ' + name + ' 执行失败：' + ((e && e.message) || e));
+      const effectUnknown = descriptor.readOnly !== true || descriptor.mutatesWorkspace === true;
+      return AgentToolResult.failure(effectUnknown ? 'EFFECT_UNKNOWN' : 'SYSTEM_ERROR',
+        '工具 ' + name + ' 执行失败：' + ((e && e.message) || e) +
+          (effectUnknown ? '。副作用可能已生效，请先只读核对，禁止盲目重放。' : ''),
+        { tool: name, executed: true, sideEffectStatus: effectUnknown ? 'unknown' : 'none' },
+        { tool: name, retryable: false });
     }
+  }
+
+  /** Output schemas constrain successful data, never the error payload or text. */
+  _validateOutput(outcome, descriptor, name, context) {
+    if (descriptor.outputSchema == null) return outcome;
+    // A genuine failure retains its original category, payload, and retry guidance.
+    if (outcome && outcome.ok === false) return outcome;
+    let issue = null;
+    if (!outcome || typeof outcome !== 'object' || outcome.ok !== true || typeof outcome.text !== 'string') {
+      issue = { path: '$', keyword: 'envelope', message: '工具必须返回含 ok/text/data 的结果对象' };
+    } else if ((outcome.kind && !['success', 'partial'].includes(outcome.kind)) || outcome.failure || outcome.isError === true) {
+      issue = { path: '$.ok', keyword: 'envelope', message: '工具成功状态与失败标记冲突' };
+    } else {
+      try { issue = validateOutput(outcome.data, descriptor.outputSchema); }
+      catch { issue = { path: '$.data', keyword: 'validation', message: '工具输出无法完成 schema 校验' }; }
+    }
+    if (!issue) return outcome;
+    // Even an idempotent write may already have changed state. Invalid output is
+    // not evidence of rollback; retry requires an independent read of real state.
+    const effectUnknown = descriptor.readOnly !== true || descriptor.mutatesWorkspace === true;
+    const diagnostic = {
+      contractCode: 'INVALID_TOOL_OUTPUT', tool: name, executed: true,
+      sideEffectStatus: effectUnknown ? 'unknown' : 'none', retryable: false,
+      outputValidation: issue,
+    };
+    const trace = context && context.trace;
+    try {
+      if (trace && typeof trace.note === 'function') trace.note('tool_output_invalid', diagnostic);
+    } catch { /* Audit must never promote invalid output to success. */ }
+    const message = '工具 ' + name + ' 返回的数据不符合输出契约：' + issue.path + ' ' + issue.message + '。' +
+      (effectUnknown ? '工具已执行，副作用可能已生效；先只读核对真实状态，禁止盲目重放。' : '这是工具内部契约错误，不要原样重试。');
+    return AgentToolResult.failure(effectUnknown ? 'EFFECT_UNKNOWN' : 'SYSTEM_ERROR', message, diagnostic, {
+      tool: name, retryable: false, userActionRequired: effectUnknown, detail: issue,
+    });
   }
 
   /**
@@ -611,13 +675,21 @@ class AgentToolRegistry {
     try {
       const outcome = await Promise.race([Promise.resolve(tool.executor(context, args)), timeout]);
       if (outcome === TOOL_TIMEOUT) {
-        return AgentToolResult.error('工具 ' + name + ' 执行超时（' + limit + 'ms），已放弃等待。', {
-          code: 'TIMEOUT',
+        const effectUnknown = descriptor.readOnly !== true || descriptor.mutatesWorkspace === true;
+        const result = AgentToolResult.failure(effectUnknown ? 'EFFECT_UNKNOWN' : 'TIMEOUT',
+          '工具 ' + name + ' 执行超时（' + limit + 'ms），已放弃等待。' +
+            (effectUnknown ? '工具可能仍在执行，副作用尚未确认；禁止盲目重放。' : ''), {
           tool: name,
           timeoutMs: limit,
-          retryable: tool.descriptor.retryPolicy.maxAttempts > 1,
-          userActionRequired: false,
-        });
+          executed: true,
+          sideEffectStatus: effectUnknown ? 'unknown' : 'none',
+          retryable: !effectUnknown && tool.descriptor.retryPolicy.maxAttempts > 1,
+          userActionRequired: effectUnknown,
+        }, { tool: name, retryable: !effectUnknown && tool.descriptor.retryPolicy.maxAttempts > 1 });
+        // Keep the legacy timeout signal; failure/failureCode carry the stricter
+        // side-effect classification consumed by the agent and journal.
+        result.data.code = 'TIMEOUT';
+        return result;
       }
       return outcome;
     } finally {

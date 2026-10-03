@@ -151,6 +151,7 @@ function register(registry) {
       }
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["scan_project"]);
 }
 
 function fPrompt(result, relPath) {

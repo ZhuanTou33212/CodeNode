@@ -1079,10 +1079,15 @@ function renderMarkdown(report) {
 
 main()
   .then((code) => {
-    process.exitCode = code;
+    // The eval harness may touch HTTP clients and child-process transports
+    // whose keep-alive handles outlive the report.  The async main promise is
+    // the authoritative lifecycle boundary: once it resolves, reports and
+    // self-checks are complete, so exit explicitly instead of leaving
+    // npm/run-all-tests waiting on incidental sockets or timers.
+    process.exit(code);
   })
   .catch((error) => {
     console.error('AGENT EVAL: FAIL（runner 异常）');
     console.error(error && error.stack ? error.stack : error);
-    process.exitCode = EXIT_TASK_FAIL;
+    process.exit(EXIT_TASK_FAIL);
   });

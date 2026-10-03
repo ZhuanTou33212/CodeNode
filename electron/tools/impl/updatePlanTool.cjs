@@ -64,8 +64,8 @@ const OUTPUT_SCHEMA = {
     runFilePersisted: { type: 'boolean' },
     sessionFilePersisted: { type: 'boolean' },
     eventPersisted: { type: 'boolean' },
-    file: { type: 'string' },
-    sessionFile: { type: 'string' },
+    file: { type: ['string', 'null'] },
+    sessionFile: { type: ['string', 'null'] },
   },
 };
 
@@ -202,6 +202,7 @@ function register(registry) {
       });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["update_plan"]);
 }
 
 module.exports = { register };

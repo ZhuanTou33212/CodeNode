@@ -62,6 +62,7 @@ interface ProjectExtensionDto {
   description?: string;
   enabled?: boolean;
   source?: string;
+  contract?: { explicit: boolean; outputSchema: boolean; readOnly: boolean; timeoutMs: number | null };
 }
 
 interface AgentToolSpecDto {
@@ -106,7 +107,34 @@ interface ModelSpecDto {
   enabled?: boolean;
 }
 
+interface WorkflowStateDto {
+  revision: number;
+  graphDigest: string;
+  completed: string[];
+  outputs: Record<string, string>;
+  attempts: Record<string, number>;
+  reviews: Record<string, string>;
+  inputs: Record<string, string>;
+  pending: Array<{ id: string; nodeId: string; label: string; active: boolean }>;
+  hasHistory: boolean;
+  complete: boolean;
+  order: string[];
+}
+
+interface WorkflowGraphDto {
+  nodes: Array<{ id: string; type: string; data: Record<string, unknown> }>;
+  edges: Array<{ source: string; target: string; sourceHandle?: string; targetHandle?: string; data?: unknown }>;
+}
+
 interface CodenodeApi {
+  workflowState: (root: string, workflowId: string, request: {
+    action: 'read' | 'prepare' | 'settle' | 'restart'; graph: WorkflowGraphDto;
+    expectedRevision?: number; nodeId?: string; reviewedAttemptIds?: string[];
+    attemptId?: string; ok?: boolean; output?: string;
+  }) => Promise<{ ok: boolean; error?: string; needsReview?: boolean; attemptId?: string; state?: WorkflowStateDto }>;
+  workflowExecute: (root: string, workflowId: string, request: {
+    graph: WorkflowGraphDto; nodeId: string; expectedRevision: number; legacyRecovery?: boolean;
+  }) => Promise<{ ok: boolean; executionOk?: boolean; output?: string; error?: string; needsReview?: boolean; state?: WorkflowStateDto }>;
   saveGraph: (payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   openGraph: () => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   chooseProject: () => Promise<{ ok: boolean; root?: string }>;
@@ -183,6 +211,9 @@ interface CodenodeApi {
     finishedAt: string | null;
     eventCount: number;
   }>>;
+  agentFeedback: (root: string, payload: { verdict: 'accept' | 'reject' | 'retry' | 'report'; content: string; input?: string; correction?: string; sessionId?: string; runId?: string; role?: string; tools?: unknown[] }) => Promise<{ ok: boolean; duplicate?: boolean; error?: string }>;
+  agentFeedbackExport: (root: string, options?: { includeReviewed?: boolean }) => Promise<{ ok: boolean; count?: number; dataset?: unknown[]; error?: string }>;
+  agentFeedbackReview: (root: string, id: string, expectedOutput: string, reviewer?: string) => Promise<{ ok: boolean; error?: string }>;
   agentResumePlan: (root: string | null, runId: string) => Promise<{
     ok: boolean;
     mode?: 'complete' | 'auto' | 'review' | 'unknown';
@@ -203,6 +234,8 @@ interface CodenodeApi {
     completedSteps?: { tool: string; idemKey: string | null; at: string | null }[];
     skippedByLedger?: { tool: string; idemKey: string | null; reason: string }[];
     unknownEffects?: { tool: string; effect: string }[];
+    checkpointCount?: number;
+  messageCheckpointCount?: number;
   }>;
   agentReadPlan: (root: string | null, sessionId: string) => Promise<{
     ok: boolean;
@@ -332,6 +365,9 @@ interface CodenodeApi {
     ok: boolean;
     error?: string;
     replacementRunId?: string;
+  }>;
+  agentTimeTravel: (root: string, sourceRunId: string, branchRunId: string, checkpointIndex?: number) => Promise<{
+    ok: boolean; runId?: string; parentRunId?: string; checkpointIndex?: number; requiresReview?: boolean; messageCount?: number; error?: string;
   }>;
   agentChat: (payload: {
     projectRoot: string | null;

@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const runStore = require('./runStore.cjs');
 
 const MAX_IN_MEMORY = 5000;
@@ -88,6 +89,8 @@ function costOf(model, usage, prices) {
   const price = prices && prices[model];
   if (!price) return null;
   const { prompt, completion, cached, miss } = tokenParts(usage);
+  // A total with an incomplete input/output split is not an exact bill.
+  if (!usage || Number(usage.total_tokens) > prompt + completion) return null;
   if (Number.isFinite(price.cachedIn)) {
     const missTokens = Number.isFinite(miss) ? Math.min(miss, prompt) : prompt;
     return (missTokens / 1e6) * price.in + (cached / 1e6) * price.cachedIn + (completion / 1e6) * price.out;
@@ -152,6 +155,7 @@ class CostLedger {
     const tokens = tokenParts(usage);
     const estimated = entry.estimated === true || !usage || tokens.total === 0;
     const record = {
+      recordId: randomUUID(),
       ts: new Date().toISOString(),
       runId: entry.runId ? runStore.normalizeRunId(entry.runId) : this.runId,
       kind,
@@ -164,6 +168,12 @@ class CostLedger {
       billingUnknown: entry.billingUnknown === true,
       latencyMs: Number(entry.latencyMs) || 0,
       meta: entry.meta || null,
+      costUsd: /** @type {number|null} */ (null),
+      ...require('./traceTree.cjs').contextFields(entry),
+      turnId: entry.turnId ?? null,
+      toolCallId: entry.toolCallId ?? null,
+      attemptId: entry.attemptId ?? null,
+      actor: entry.actor || entry.meta?.actor || null,
     };
     // Failed streams may have consumed tokens without a final provider usage frame.
     // Show the estimate, but never present a guessed charge as a known USD amount.
@@ -182,11 +192,26 @@ class CostLedger {
         runStore.appendJsonl(this.file, { type: 'cost', ...record }, this.maxBytes);
         // S8：成本事件也进统一流（按 run 回放时能看到这轮花了多少、缓存命中多少）
         require('./eventBus.cjs').bridge(this.projectRoot, 'cost', {
+          recordId: record.recordId,
+          ts: record.ts,
           runId: record.runId || null,
           call: record.kind || null,
           model: record.model || null,
           costUsd: record.costUsd,
           tokens: record.usage || null,
+          usage: record.usage || null,
+          traceId: record.traceId,
+          spanId: record.spanId,
+          parentSpanId: record.parentSpanId,
+          turnId: record.turnId,
+          toolCallId: record.toolCallId,
+          attemptId: record.attemptId,
+          actor: record.actor,
+          ok: record.ok,
+          attempt: record.attempt,
+          latencyMs: record.latencyMs,
+          estimated: record.estimated,
+          billingUnknown: record.billingUnknown,
         });
       } catch {}
     }
@@ -210,7 +235,7 @@ class CostLedger {
     const seen = new Set();
     const push = (entry) => {
       if (!entry) return;
-      const key = entry.ts + '|' + entry.kind + '|' + entry.model + '|' + ((entry.tokens || {}).total);
+      const key = entry.recordId || entry.ts + '|' + entry.kind + '|' + entry.model + '|' + ((entry.tokens || {}).total);
       if (seen.has(key)) return;
       seen.add(key);
       out.push(entry);
@@ -240,7 +265,7 @@ class CostLedger {
     const seen = new Set();
     const fromMemory = (entry) => {
       if (!String(entry.ts || '').startsWith(day)) return;
-      seen.add(entry.ts + '|' + entry.kind + '|' + entry.model + '|' + entry.tokens.total);
+      seen.add(entry.recordId || entry.ts + '|' + entry.kind + '|' + entry.model + '|' + entry.tokens.total);
       addCounters(counters, entry, entry.costUsd);
     };
     for (const entry of this.entries) fromMemory(entry);
@@ -256,7 +281,7 @@ class CostLedger {
             continue; // 容忍损坏行
           }
           if (entry.type !== 'cost' || !String(entry.ts || '').startsWith(day)) continue;
-          const key = entry.ts + '|' + entry.kind + '|' + entry.model + '|' + (entry.tokens || {}).total;
+          const key = entry.recordId || entry.ts + '|' + entry.kind + '|' + entry.model + '|' + (entry.tokens || {}).total;
           if (seen.has(key)) continue;
           seen.add(key);
           fromMemory(entry);

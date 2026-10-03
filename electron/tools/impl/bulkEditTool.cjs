@@ -154,6 +154,7 @@ function register(registry) {
       }
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["bulk_edit"]);
 }
 
 async function createNodes(context, args) {

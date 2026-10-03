@@ -83,6 +83,7 @@ function register(registry) {
     }
   });
   registry.declareContract('dify_call', { readOnly: false, mutatesWorkspace: false, requiredCapability: 'network.request', requiresConfirmation: 'HIGH', idempotent: false, timeoutMs: 0 });
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["dify_call"]);
 }
 
 module.exports = { register, endpointFor };

@@ -548,12 +548,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     const msgs = s.messages.map((m) => ({ ...m }));
     const last = msgs[msgs.length - 1];
+    const previousUser = [...msgs].reverse().find((message) => message.role === 'user');
     if (last && last.role === 'assistant') {
       last.content = reply || last.content;
       if (reasoning) last.reasoning = reasoning;
       if (tools && tools.length) last.tools = tools;
       last.status = 'done';
       if (grounding) last.grounding = grounding;
+      if (previousUser) last.feedbackInput = String(previousUser.content || '').slice(0, 12000);
     }
     // 当前画布标记完成并记录摘要
     let sessions = { ...s.sessions };

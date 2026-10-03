@@ -3443,6 +3443,8 @@ textarea:focus-visible {
 .dock-rollback-force input{accent-color:#e0a45e}
 .dock-recovery-review strong{color:#fca5a5}
 .dock-recovery-actions{display:flex;gap:6px;flex-wrap:wrap}
+.dock-time-travel-picker{display:inline-flex;align-items:center;gap:5px;color:var(--text-dim,#8b8f98);font-size:11px}
+.dock-time-travel-picker select{min-width:112px}
 
 /* #21：Agent 面板里的续跑复核条（与 RunsPanel 同一份计划，两条入口都能看到复核依据） */
 .ap-resume-review{margin:0 10px 8px;padding:8px 10px;border:1px solid rgba(224,164,94,.45);background:rgba(224,164,94,.08);color:#e8d3a8;font-size:11px;display:flex;flex-direction:column;gap:4px}

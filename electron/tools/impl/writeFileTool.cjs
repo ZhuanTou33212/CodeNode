@@ -105,6 +105,7 @@ function register(registry) {
       }
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["write_file"]);
 }
 
 module.exports = { register };

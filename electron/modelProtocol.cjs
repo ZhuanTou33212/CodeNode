@@ -584,9 +584,13 @@ function buildGeminiRequest(cfg, messages, /** @type {{ stream?: boolean, tools?
 function usageFromGemini(usage) {
   if (!usage) return null;
   const prompt = Number(usage.promptTokenCount || 0) || 0;
-  const output = Number(usage.candidatesTokenCount || 0) || 0;
+  // Gemini bills response candidates plus thoughts as output tokens.
+  // https://ai.google.dev/gemini-api/docs/generate-content/thinking
+  const thoughts = Math.max(0, Number(usage.thoughtsTokenCount || 0) || 0);
+  const output = (Number(usage.candidatesTokenCount || 0) || 0) + thoughts;
   const total = Number(usage.totalTokenCount || 0) || prompt + output;
   const out = { prompt_tokens: prompt, completion_tokens: output, total_tokens: total };
+  if (thoughts > 0) out.completion_tokens_details = { reasoning_tokens: thoughts };
   const cached = Number(usage.cachedContentTokenCount || 0) || 0;
   if (cached > 0) out.prompt_tokens_details = { cached_tokens: cached };
   return out;

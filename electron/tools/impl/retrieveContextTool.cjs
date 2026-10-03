@@ -272,6 +272,7 @@ function register(registry) {
           maxChars: args.maxChars,
           refresh: args.refresh === true,
           hops: args.hops,
+          runtime: typeof context.modelRuntime === 'function' ? context.modelRuntime() : null,
         });
       } catch (error) {
         return AgentToolResult.error('检索失败：' + ((error && error.message) || error));
@@ -400,6 +401,7 @@ function register(registry) {
       );
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["retrieve_context"]);
 }
 
 module.exports = { register };

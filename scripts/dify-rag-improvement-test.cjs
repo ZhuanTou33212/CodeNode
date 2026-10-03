@@ -24,7 +24,7 @@ async function main() {
   /** @type {any} */ let editHandler;
   require('../electron/tools/impl/workbenchEditTool.cjs').register({
     register(name, _description, _schema, fn) { if (name === 'workbench_edit') editHandler = fn; },
-    declareContract() {},
+    declareContract() { return true; },
   });
   assert.ok(editHandler);
   const graph = new GraphModel({ root: { nodes: [], edges: [] } });
@@ -72,7 +72,7 @@ async function main() {
 
     fs.appendFileSync(path.join(root, '.codenode', 'agent.properties'), `dify.enabled=true\ndify.base=${base}/v1\ndify.api_key=test-secret\ndify.kind=workflow\n`);
     /** @type {any} */ let handler;
-    register({ register(name, _description, _schema, fn) { if (name === 'dify_call') handler = fn; }, declareContract() {} });
+    register({ register(name, _description, _schema, fn) { if (name === 'dify_call') handler = fn; }, declareContract() { return true; } });
     assert.ok(handler);
     const audit = [];
     const result = await handler({ projectRoot: () => root, signal: () => null, audit: (entry) => audit.push(entry) }, { inputs: { subject: 'demo' } });

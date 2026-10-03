@@ -32,6 +32,15 @@ const CORE = [
   'test:agent-boundary',
   'test:bridge',
   'test:request-budget',
+  'test:cost-budget',
+  'test:tool-output-contract',
+  'test:builtin-output-contract',
+  'test:trace-tree',
+  'test:feedback-store',
+  'test:feedback-dataset',
+  'test:time-travel',
+  'test:model-routing',
+  'test:workflow-state',
   'test:run-store',
   'test:atomic-file',
   'test:dep-declaration',
@@ -72,6 +81,10 @@ const CORE = [
   'test:truncation-safety',
   'test:agent-state',
   'test:tool-descriptor',
+  // 项目扩展/MCP 清单显式 descriptor（输出契约、只读性、超时）必须进入核心门禁，
+  // 不能只靠开发者手动运行专项脚本。
+  'test:extension-contract',
+  'test:pii',
   'test:context-capability',
   'test:side-effect-idem',
   'test:save-project',
@@ -168,7 +181,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -198,6 +211,10 @@ if (flag('--list')) {
 
 const isWindows = process.platform === 'win32';
 const cwd = path.join(__dirname, '..');
+// A broken child test must fail the gate, never hold CI/Desktop verification
+// forever.  Individual suites have their own shorter budgets where needed;
+// this is only the outer process-lifecycle guard.
+const TEST_PROCESS_TIMEOUT_MS = 180000;
 
 function runScript(name) {
   const started = Date.now();
@@ -210,14 +227,16 @@ function runScript(name) {
   // Windows 上直接 spawn npm.cmd 会 EINVAL，必须走 shell；POSIX 上必须用参数数组（把整条命令
   // 当字符串交给 execve 会 ENOENT → status=null，CI 上表现为"25 项全部 0.00s 失败"）。
   const result = isWindows
-    ? spawnSync('npm.cmd run --silent ' + name, { cwd, stdio: 'inherit', shell: true })
-    : spawnSync('npm', ['run', '--silent', name], { cwd, stdio: 'inherit' });
+    ? spawnSync('npm.cmd run --silent ' + name, { cwd, stdio: 'inherit', shell: true, timeout: TEST_PROCESS_TIMEOUT_MS })
+    : spawnSync('npm', ['run', '--silent', name], { cwd, stdio: 'inherit', timeout: TEST_PROCESS_TIMEOUT_MS });
   const ms = Date.now() - started;
   const ok = result.status === 0;
   // spawn 本身失败（ENOENT/EINVAL）时 status 为 null、error 有值：必须显式带出来，
   // 否则只剩 `exit=null`，看不出是脚本失败还是根本没跑起来。
   const spawnError = result.error ? String(result.error.message || result.error) : null;
-  return { name, ok, ms, status: result.status, signal: result.signal, error: spawnError };
+  const spawnErrorObject = /** @type {any} */ (result.error);
+  const timedOut = Boolean(spawnErrorObject && (String(spawnErrorObject.code || '') === 'ETIMEDOUT' || /timed out/i.test(String(spawnErrorObject.message || ''))));
+  return { name, ok: ok && !timedOut, ms, status: result.status, signal: result.signal, timedOut, error: spawnError };
 }
 
 console.log('CodeNode 测试套件：组=' + (only.length ? '自定义' : group) + '，共 ' + scripts.length + ' 项');
@@ -240,7 +259,7 @@ console.log('测试汇总');
 console.log('='.repeat(72));
 for (const r of results) {
   const mark = r.ok ? 'PASS' : 'FAIL';
-  console.log('  ' + mark + '  ' + r.name.padEnd(26) + (r.ms / 1000).toFixed(2).padStart(7) + 's' + (r.ok ? '' : '  (exit=' + r.status + (r.error ? ', spawn 失败: ' + r.error : '') + ')'));
+  console.log('  ' + mark + '  ' + r.name.padEnd(26) + (r.ms / 1000).toFixed(2).padStart(7) + 's' + (r.ok ? '' : '  (' + (r.timedOut ? '超时' : 'exit=' + r.status) + (r.error ? ', spawn 失败: ' + r.error : '') + ')'));
 }
 if (skipped.length) console.log('  跳过: ' + skipped.join(', '));
 

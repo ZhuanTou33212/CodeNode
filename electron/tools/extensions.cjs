@@ -111,6 +111,34 @@ function runMcpTool(root, extension, tool, args, signal, context) {
   return mcpClient.callTool(root, extension, tool, args, signal, context);
 }
 
+/**
+ * Project extensions are user supplied, so their risk/output contract must be
+ * explicit when the manifest provides one.  Keep the conservative defaults for
+ * old manifests, but do not discard fields such as outputSchema/readOnly.
+ */
+function descriptorForManifest(extension, tool, name, description, inputSchema) {
+  const source = tool || extension || {};
+  const readOnly = source.readOnly === true;
+  return {
+    name,
+    description,
+    inputSchema,
+    outputSchema: (tool && tool.outputSchema) || (extension && extension.outputSchema) || null,
+    readOnly,
+    idempotent: source.idempotent === true || readOnly,
+    mutatesWorkspace: readOnly ? false : source.mutatesWorkspace !== false,
+    // The extension executor already shows the command and asks for approval;
+    // registering another approval gate would ask twice.
+    requiresConfirmation: false,
+    requiredCapability: readOnly ? 'workspace.read' : 'shell.execute',
+    timeoutMs: Number.isFinite(Number(source.timeoutMs)) ? Number(source.timeoutMs) : null,
+    retryPolicy: source.retryPolicy,
+    concurrencyPolicy: source.concurrencyPolicy,
+    roleAllowlist: Array.isArray(source.roleAllowlist) ? source.roleAllowlist : null,
+    explicit: true,
+  };
+}
+
 async function runHook(root, hook, args, signal, allowlist, context) {
   if (!hook) return { ok: true };
   const command = typeof hook === 'string' ? hook : hook.command;
@@ -125,7 +153,13 @@ function registerProjectExtensions(registry, projectRoot) {
     if (Array.isArray(extension.tools) && extension.tools.length) {
       for (const tool of extension.tools) {
         if (!tool || !tool.name || registry.contains(String(tool.name))) continue;
-        registry.register(String(tool.name), String(tool.description || `${name} MCP 工具`), tool.parameters || { type: 'object', properties: {} }, async (context, args) => {
+        registry.registerDescriptor(descriptorForManifest(
+          extension,
+          tool,
+          String(tool.name),
+          String(tool.description || `${name} MCP 工具`),
+          tool.parameters || { type: 'object', properties: {} },
+        ), async (context, args) => {
           // #10：MCP 分支此前只给「来源」，连 command 都不给（非 MCP 分支反而给了）——
           // 对话框是用户唯一的判断依据，这里必须能看到**要跑什么、带什么参数**。
           const commandLine = String(extension.command || '') +
@@ -152,10 +186,14 @@ function registerProjectExtensions(registry, projectRoot) {
       continue;
     }
     if (!extension.command) continue;
-    registry.register(
-      name,
-      String(extension.description || `项目扩展：${name}`) + '（参数会以 CODENODE_TOOL_ARGS JSON 环境变量传入）',
-      extension.parameters || { type: 'object', properties: {} },
+    registry.registerDescriptor(
+      descriptorForManifest(
+        extension,
+        null,
+        name,
+        String(extension.description || `项目扩展：${name}`) + '（参数会以 CODENODE_TOOL_ARGS JSON 环境变量传入）',
+        extension.parameters || { type: 'object', properties: {} },
+      ),
       async (context, args) => {
         const ok = await context.confirm(ConfirmationLevel.WRITE, `运行项目扩展 ${name}`, `来源：${extension.source}\n命令：${extension.command}`);
         if (!ok) return AgentToolResult.error('已取消扩展执行');
@@ -173,4 +211,4 @@ function registerProjectExtensions(registry, projectRoot) {
   return registry;
 }
 
-module.exports = { registerProjectExtensions, readManifest, safeEnvironment, splitCommand, spawnErrorHint };
+module.exports = { registerProjectExtensions, readManifest, safeEnvironment, splitCommand, spawnErrorHint, descriptorForManifest };

@@ -183,6 +183,10 @@ function actorLabel(actor) {
   return taskId + (role ? '(' + role + ')' : '');
 }
 
+function ledgerError(code, message, data = {}) {
+  return Object.assign(new Error(message), { code, retryable: false, ...data });
+}
+
 class SideEffectLedger {
   /**
    * @param {object} options { projectRoot, scopeRunId, file, clock }
@@ -203,6 +207,11 @@ class SideEffectLedger {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      if (!parsed || !Array.isArray(parsed.records) || parsed.records.some((record) =>
+        !record || typeof record.idemKey !== 'string' || !['read', 'write', 'unknown'].includes(record.effect) ||
+        !['pending', 'committed', 'failed', 'unknown'].includes(record.phase))) {
+        throw new Error('invalid ledger shape');
+      }
       for (const record of parsed.records || []) this.records.set(record.idemKey, record);
       // 前像是**按路径**存的（不是按记录）：同一路径被写多次时，回滚要回到「Run 开始前」那一份，
       // 而记录是按 (工具,参数) 分键的 —— 存进记录里会被后续不同参数的写各存一份、互相覆盖。
@@ -210,8 +219,10 @@ class SideEffectLedger {
         this.beforeImages.set(relPath, image);
       }
     } catch {
-      // 账本损坏：保留文件内容供人工排查，从空账本开始（宁可少去重，也不能伪造去重）
-      this.loadError = '账本解析失败，已忽略旧内容';
+      // A corrupt recovery journal cannot prove that an earlier write did not run.
+      this.records.clear();
+      this.beforeImages.clear();
+      this.loadError = '账本解析失败；只读操作仍可执行，写操作需先修复或核对原账本';
     }
   }
 
@@ -235,17 +246,22 @@ class SideEffectLedger {
       const records = [...this.records.values()];
       const beforeImages = Object.fromEntries(this.beforeImages);
       atomicWriteFile(this.file, JSON.stringify({ scopeRunId: this.scopeRunId, updatedAt: this.clock(), records, beforeImages }, null, 2));
-      // S8：账本变化也投递一条事件 —— 只报事实（条数 + 最新一条的相位），不搬整份账本进事件流
-      const latest = records.length ? records[records.length - 1] : null;
-      if (this.projectRoot) {
-        require('./eventBus.cjs').bridge(this.projectRoot, 'side_effect', {
-          runId: this.scopeRunId,
-          records: records.length,
-          latest: latest ? { tool: latest.tool || null, phase: latest.phase || latest.status || null } : null,
-        });
-      }
+      this.persistError = null;
     } catch (error) {
-      this.persistError = String((error && error.message) || error);
+      this.persistError = redact(String((error && error.message) || error)).slice(0, 500);
+      throw ledgerError('SYSTEM_ERROR', '副作用账本无法持久化，已停止依赖该账本的执行。', { ledgerPersistenceFailed: true });
+    }
+    // Observability is separate from the durable write. A bridge failure must not
+    // pretend that a successfully fsynced ledger was lost.
+    try {
+      const records = [...this.records.values()];
+      const latest = records.length ? records[records.length - 1] : null;
+      if (this.projectRoot) require('./eventBus.cjs').bridge(this.projectRoot, 'side_effect', {
+        runId: this.scopeRunId, records: records.length,
+        latest: latest ? { tool: latest.tool || null, phase: latest.phase || latest.status || null } : null,
+      });
+    } catch {
+      // The journal remains authoritative even when an observer is unavailable.
     }
   }
 
@@ -267,6 +283,14 @@ class SideEffectLedger {
     const key = idempotencyKey(this.scopeRunId, toolName, args);
     const existing = this.records.get(key);
     const who = actorLabel(actor);
+    if (effect !== 'read' && (this.loadError || this.persistError)) {
+      throw ledgerError('SYSTEM_ERROR', '副作用账本不可用，当前写操作未执行；请先检查账本。', { executed: false });
+    }
+    if (existing && (existing.phase === 'unknown' || effect !== 'read' && existing.phase === 'pending')) {
+      throw ledgerError('EFFECT_UNKNOWN', '同一操作已有未确认的执行记录，可能已生效；先只读核对状态，禁止盲目重放。', {
+        executed: false, sideEffectStatus: 'unknown', idemKey: key,
+      });
+    }
     // 目标文件的**当前**状态指纹（只有带 path 的写操作才有）。
     // 幂等键刻意**不含**它（改动键会让已落盘的账本对不上，续跑去重直接失效）；
     // 它只用来回答一个问题：「现在跳过，还与当初提交时的世界一致吗？」
@@ -334,22 +358,39 @@ class SideEffectLedger {
     // 必须取提交后的状态（写操作本身就会改变提交前的状态，拿前者比对必然不等）。
     if (record.statePath) record.postStateDigest = fileStateDigest(this.projectRoot, record.statePath);
     this.records.set(token.idemKey, record);
-    this._persist(record.effect);
+    try { this._persist(record.effect); }
+    catch {
+      record.phase = 'unknown';
+      record.failureCode = 'EFFECT_UNKNOWN';
+      record.unknownAt = this.clock();
+      throw ledgerError('EFFECT_UNKNOWN', '工具已执行，但结果未能写入副作用账本；先只读核对状态，禁止盲目重放。', {
+        executed: true, sideEffectStatus: 'unknown', ledgerPersistenceFailed: true,
+      });
+    }
     return record;
   }
 
   fail(token, error) {
     if (!token || !token.idemKey) return null;
     const record = this.records.get(token.idemKey) || { idemKey: token.idemKey, tool: token.tool, effect: token.effect };
-    record.phase = 'failed';
+    const data = error && error.data || {};
+    const failure = error && error.failure || {};
+    const effectUnknown = failure.code === 'EFFECT_UNKNOWN' || data.code === 'EFFECT_UNKNOWN' ||
+      data.sideEffectStatus === 'unknown' || error && (error.code === 'EFFECT_UNKNOWN' || error.sideEffectStatus === 'unknown');
+    record.phase = effectUnknown ? 'unknown' : 'failed';
+    if (effectUnknown) {
+      record.failureCode = 'EFFECT_UNKNOWN';
+      record.unknownAt = this.clock();
+      if (typeof data.contractCode === 'string') record.contractCode = data.contractCode;
+    }
     record.failedAt = this.clock();
     if (token.actor) record.failedBy = token.actor;
     // 脱敏（#15）：错误原文可能带凭据（命令回显 token、URL 里带 key 等）。
     // `.codenode/runs/<run>.side-effects.json` 是要长期留存的，而 runStore 那条路径已经脱敏 ——
     // 这里漏掉就会让「日志已统一脱敏」的判断失真。统计字段（时长/退出码）不受影响。
-    record.error = redact(String((error && error.message) || error || '')).slice(0, 500);
+    record.error = redact(String((error && (error.text || error.message)) || error || '')).slice(0, 500);
     this.records.set(token.idemKey, record);
-    this._persist(record.effect);
+    this._persist(effectUnknown ? 'unknown' : record.effect);
     return record;
   }
 
@@ -373,7 +414,7 @@ class SideEffectLedger {
       // 只对 effect==='write' 生效 —— 结果就是「文案说跳过了、实际又跑了一遍」，
       // 对 git push / npm publish 这类不可逆外部副作用就是重复执行。
       // 注意：unknown 项仍带 phase 字段，消费者可区分「已提交的 unknown」与「未提交的 unknown」。
-      if (record.effect === 'unknown') unknown.push(item);
+      if (record.effect === 'unknown' || record.phase === 'unknown') unknown.push(item);
       else if (record.phase === 'committed') committed.push(item);
       else pending.push(item);
     }

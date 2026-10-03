@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 const agent = require('../agent.cjs');
+const piiLib = require('../pii.cjs');
 const toolkit = require('../tools/toolkit.cjs');
 const modelStore = require('../modelStore.cjs');
 // 协议层（S13）：Claude / Gemini 原生协议与 Azure 企业端点的切换都经过它的归一化
@@ -97,6 +98,21 @@ const { auditLog } = require('./project.cjs');
 
 /** 正在运行的 Agent 请求：requestId/runId → AbortController（「停止思考」与中断恢复判定都用它） */
 const activeRequests = new Map();
+/** @type {((event: any, payload: any) => Promise<any>) | null} */
+let registeredChatHandler = null;
+
+// Main-process-only reuse by the controlled workflow executor. There is no
+// extra preload capability or IPC channel, and the original sender/event is
+// retained for deltas, approval bridges, cancellation and audit attribution.
+async function runWorkflowChat(event, payload) {
+  if (!registeredChatHandler) throw new Error('Agent 聊天处理器尚未注册');
+  if (!event || !event.sender || typeof event.sender.isDestroyed !== 'function' ||
+      event.sender.isDestroyed() || typeof event.sender.send !== 'function') throw new Error('工作流执行窗口已关闭或无效');
+  if (event.senderFrame && event.sender.mainFrame && event.senderFrame !== event.sender.mainFrame) {
+    throw new Error('工作流 Agent 仅允许主窗口框架调用');
+  }
+  return registeredChatHandler(event, payload);
+}
 /** 同一对话的两轮请求必须顺序处理，否则后轮看不到前轮刚确定的临时覆盖。 */
 const activeMemorySessions = new Set();
 
@@ -242,6 +258,10 @@ function register(ctx) {
     return runStore.listRuns(projectRoot, 50);
   });
 
+  ipcMain.handle('agent:feedback', async (_event, projectRoot, payload) => require('../feedbackStore.cjs').add(projectRoot, payload || {}));
+  ipcMain.handle('agent:feedback-export', async (_event, projectRoot, options) => require('../feedbackStore.cjs').exportDataset(projectRoot, options || {}));
+  ipcMain.handle('agent:feedback-review', async (_event, projectRoot, id, expectedOutput, reviewer) => require('../feedbackStore.cjs').review(projectRoot, id, expectedOutput, reviewer));
+
   // S8：按 run 回放统一事件流（UI 的「运行回放」区块直接用这个载荷）
   ipcMain.handle('agent:events', async (_event, projectRoot, options) => {
     if (!projectRoot) {
@@ -277,6 +297,9 @@ function register(ctx) {
   ipcMain.handle('agent:resume-start', async (_event, projectRoot, runId, replacementRunId) => {
     if (!projectRoot) return { ok: false, error: '未选择项目' };
     return runStore.markRetry(projectRoot, runId, replacementRunId);
+  });
+  ipcMain.handle('agent:time-travel', async (_event, projectRoot, sourceRunId, branchRunId, checkpointIndex) => {
+    return runCheckpoint.createTimeTravelBranch(projectRoot, sourceRunId, branchRunId, checkpointIndex);
   });
 
   // Run 级文件回滚（§4.2）：先给**只读计划**，用户看过再执行。计划里逐项写明
@@ -344,10 +367,13 @@ function register(ctx) {
     return subagents.listTaskViews(projectRoot, options || {});
   });
 
-  ipcMain.handle('agent:chat', async (event, payload) => {
-    const { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
+  registeredChatHandler = async (event, payload) => {
+    let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
     const sender = event.sender;
     let runId = null;
+    /** @type {any} */
+    let runSpan = null;
+    let runTraceStatus = 'error';
     let memoryScopeKey = '';
     /** SessionStop 钩子需要的上下文：run 过程中可能抛异常，catch 里也要能补跑一次（保持外层可见） */
     /** @type {{cfg: any, sandboxPolicy: any, runId: string|null, projectRoot: string|null}|null} */
@@ -357,11 +383,15 @@ function register(ctx) {
     };
     try {
       const cfg = agent.loadConfig(projectRoot);
+      const piiInput = piiLib.apply(prompt || '', cfg.pii);
+      if (cfg.pii && cfg.pii.mode === 'redact') prompt = piiInput.text;
       // 执行隔离策略：工具子进程 / 扩展 / 项目命令统一生效（strict 模式下能力不足会拒绝执行）
       const sandboxPolicy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: userDataDir() });
       sandbox.setDefaultPolicy(sandboxPolicy);
       const maxConcurrentRuns = Number(cfg.limits && cfg.limits.maxConcurrentRuns) || 2;
-      cfg.requestBudget = new RequestBudget(cfg.limits.maxTotalTokens, { retryLimit: cfg.limits.maxTotalRetries });
+      cfg.requestBudget = new RequestBudget(cfg.limits.maxTotalTokens, {
+        retryLimit: cfg.limits.maxTotalRetries, costLimitUsd: cfg.limits.maxCostUsd, prices: cfg.costPrices,
+      });
       if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
       // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
@@ -441,6 +471,13 @@ function register(ctx) {
         resumeScope = originalId;
       }
 
+      runSpan = require('../eventBus.cjs').startSpan(projectRoot, {
+        spanKind: 'run', name: 'agent.run', runId, actor: 'main',
+        attributes: { resumedFrom: resumePlan?.runId || null, nodeId: nodeId || null },
+      });
+      cfg.traceContext = runSpan.context;
+      cfg.traceProjectRoot = projectRoot;
+
       // ---- 成本账本 + 副作用幂等账本 + 检查点写入器 ----
       const costLedger = new CostLedger({ projectRoot, runId, prices: cfg.costPrices });
       cfg.costLedger = costLedger;
@@ -460,7 +497,10 @@ function register(ctx) {
       const sideEffectGuard = createGuard(sideEffectLedger);
       const checkpointSink = (type, payload) => {
         if (!projectRoot) return null;
-        if (type === 'messages') return runCheckpoint.saveMessages(projectRoot, runId, payload && payload.messages, { reason: payload && payload.reason });
+        if (type === 'messages') return runCheckpoint.saveMessages(projectRoot, runId, payload && payload.messages, {
+          reason: payload && payload.reason,
+          controlState: payload && payload.controlState,
+        });
         if (type === 'tool_intent') return runCheckpoint.recordIntent(projectRoot, runId, payload || {});
         if (type === 'tool_commit') return runCheckpoint.recordCommit(projectRoot, runId, payload || {});
         if (type === 'wait_start' || type === 'wait_settle') return runCheckpoint.recordWait(projectRoot, runId, { ...(payload || {}), type });
@@ -485,6 +525,9 @@ function register(ctx) {
         planSessionId: cfg.planSessionId || null,
         sandbox: sandbox.describe(sandboxPolicy),
       });
+      if (cfg.pii && cfg.pii.mode === 'warn' && piiInput.findings.length) {
+        runStore.appendEvent(projectRoot, runId, 'pii_detected', { direction: 'input', findings: piiInput.findings });
+      }
       if (resumePlan && resumePlan.taskPlan && Array.isArray(resumePlan.taskPlan.items) && resumePlan.taskPlan.items.length) {
         const inherited = runCheckpoint.inheritTaskPlan(projectRoot, runId, cfg.planSessionId, resumePlan.taskPlan, resumePlan.runId);
         if (!inherited.ok) {
@@ -644,11 +687,11 @@ function register(ctx) {
           userEntries: userData && userData.ok ? userData.entries : [],
           sessionOverrides: activeSessionOverrides,
         }, async (messages) => {
-          const callCfg = { ...cfg, model: cfg.intent && cfg.intent.model || cfg.model,
+          const callCfg = { ...cfg, modelTaskType: 'intent', model: cfg.intent && cfg.intent.model || cfg.model,
             maxTokens: 300, reasoningEffort: null };
           const startedAt = Date.now();
           const res = await agent.chatCompletion(callCfg, messages, { timeoutMs: 5000, signal: controller.signal });
-          agent.recordCost(cfg, { kind: 'intent', model: callCfg.model, usage: res && res.usage,
+          agent.recordCost(cfg, { kind: 'intent', model: res && res.actualModel || callCfg.model, usage: res && res.usage,
             latencyMs: Date.now() - startedAt, runId: cfg.costRunId });
           return res && res.content || '';
         });
@@ -739,6 +782,9 @@ function register(ctx) {
       /** 确定性任务路由结论（P0-3）：进事件流，也用来说明「为什么这一轮没分类」 */
       /** @type {{task: string, ambiguous: boolean, reason: string}|null} */
       let taskRoute = null;
+      if (resumePlan && resumePlan.modelTaskType && cfg.modelRouting?.routes?.[resumePlan.modelTaskType]) {
+        cfg.modelTaskType = resumePlan.modelTaskType;
+      }
       /** @type {any} */
       let classifier = null;
       const runSteers = [];
@@ -758,8 +804,10 @@ function register(ctx) {
             mode: cfg.prompt && cfg.prompt.canvasRules,
           });
           taskRoute = taskRouter.routeTask({ prompt, canvas: preLayers.canvas === true, canvasSummary });
+          if (cfg.modelRouting?.routes?.[taskRoute.task]) cfg.modelTaskType = taskRoute.task;
           runStore.appendEvent(projectRoot, runId, 'task_route', {
             task: taskRoute.task,
+            modelTaskType: cfg.modelTaskType || 'main',
             ambiguous: taskRoute.ambiguous,
             reason: taskRoute.reason,
             mode: intentCfg.mode || null,
@@ -781,7 +829,7 @@ function register(ctx) {
               signal: controller.signal,
               // 走主通道（modelQueue + requestBudget + 重试 + 成本账本），不另开一条绕过预算的路
               callModel: async ({ messages: classifierMessages, model, maxTokens, timeoutMs, signal }) => {
-                const callCfg = Object.assign({}, cfg, { maxTokens: maxTokens || cfg.maxTokens });
+                const callCfg = Object.assign({}, cfg, { modelTaskType: 'intent', maxTokens: maxTokens || cfg.maxTokens });
                 if (model) callCfg.model = model;
                 const startedAt = Date.now();
                 // signal 来自分类器透传（不是这里闭包捕获）：接口显式，用例注入假 signal 即可锁这一跳
@@ -790,7 +838,7 @@ function register(ctx) {
                 // （kind='intent'，所以「意图识别花了多少」在成本面板里单独可查，不混进主对话）
                 if (res && res.usage) agent.recordCost(cfg, {
                   kind: 'intent',
-                  model: callCfg.model,
+                  model: res && res.actualModel || callCfg.model,
                   usage: res && res.usage,
                   attempt: res && res.httpAttempts,
                   latencyMs: Date.now() - startedAt,
@@ -1123,6 +1171,10 @@ function register(ctx) {
             sendDelta({ kind: 'file_change', fileChange: { path: rel, kind, detail } });
           },
           ragConfig: cfg.rag,
+          modelRuntime: { budget: cfg.requestBudget, queue: modelQueue, prices: cfg.costPrices,
+            traceContext: cfg.traceContext, traceProjectRoot: projectRoot,
+            onUsage: (entry) => agent.recordCost(cfg, entry) },
+          traceContext: cfg.traceContext,
         });
         // 记下 run 级上下文：插话后重判（A1）要就地替换它的 intentPolicyValue
         runContext = context;
@@ -1172,6 +1224,11 @@ function register(ctx) {
           // 主循环每轮 drain 一次；插话作为 user 消息进请求体（见 agent.cjs 的注入点注释）
           steering: steerQueue,
         });
+        const piiOutput = piiLib.apply(result.content || '', cfg.pii);
+        if (cfg.pii && cfg.pii.mode === 'redact' && piiOutput.changed) result.content = piiOutput.text;
+        if (cfg.pii && cfg.pii.mode === 'warn' && piiOutput.findings.length) {
+          runStore.appendEvent(projectRoot, runId, 'pii_detected', { direction: 'output', findings: piiOutput.findings });
+        }
       } finally {
         steerQueue.close();
         steeringQueues.delete(runId);
@@ -1200,6 +1257,9 @@ function register(ctx) {
       // status 取值保持既有语义不变（UI 与续跑判定按它过滤），避免影响既有读取路径
       const terminalOutcome = agentState.describeOutcome({ ...result, state: result.state });
       const terminalState = result.state || terminalOutcome.state;
+      runTraceStatus = terminalState === 'CANCELLED' ? 'cancelled' : terminalState === 'LIMIT_REACHED' ? 'limit'
+        : terminalState === 'COMPLETED' ? 'ok' : 'error';
+      runSpan.event('run.outcome', { state: terminalState, usage: result.usage, stopReason: result.stopReason || null });
       const runStatus = terminalState
         ? agentState.toRunStatus(terminalState)
         : result.error ? 'error' : result.aborted ? 'cancelled' : 'completed';
@@ -1240,6 +1300,8 @@ function register(ctx) {
         outcome: terminalOutcome,
       };
       out.cost = costLedger.summary(runId);
+      out.costBudget = cfg.requestBudget.costSnapshot();
+      runStore.appendEvent(projectRoot, runId, 'cost_budget', out.costBudget);
       out.alerts = alertDispatcher.recent(5);
       out.sandbox = { mode: sandboxPolicy.mode, backend: sandbox.capabilities().backend, degraded: sandboxPolicy.degraded };
       if (resumePlan) out.resumedFrom = resumePlan.runId;
@@ -1269,6 +1331,8 @@ function register(ctx) {
       if (bridge) bridge.cleanup();
       return out;
     } catch (e) {
+      runTraceStatus = e?.name === 'AbortError' ? 'cancelled' : 'error';
+      if (runSpan) runSpan.event('run.exception', { message: String(e?.message || e) });
       if (runId) activeRequests.delete(runId);
       if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
       // MCP 会话在 run 结束时统一关闭：会话复用是本轮的优化，但**不能**留下孤儿 server 进程
@@ -1282,8 +1346,10 @@ function register(ctx) {
       return { ok: false, error: String((e && e.message) || e) };
     } finally {
       if (memoryScopeKey) activeMemorySessions.delete(memoryScopeKey);
+      if (runSpan) runSpan.end(runTraceStatus);
     }
-  });
+  };
+  ipcMain.handle('agent:chat', registeredChatHandler);
 
   ipcMain.handle('agent:stop', (_event, requestId) => {
     const controller = requestId ? (activeRequests.get(requestId) || activeRequests.get(runStore.normalizeRunId(requestId))) : null;
@@ -1313,4 +1379,4 @@ function lastToolFaceProfiles(projectRoot, runId) {
   return null;
 }
 
-module.exports = { register, activeRequests, saveDoc, lastToolFaceProfiles };
+module.exports = { register, activeRequests, saveDoc, lastToolFaceProfiles, runWorkflowChat };

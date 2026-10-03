@@ -115,6 +115,7 @@ function register(registry) {
       { entries: picked.entries, matched: picked.matched, terms: picked.terms },
     );
   });
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["remember","recall"]);
 }
 
 module.exports = { register };

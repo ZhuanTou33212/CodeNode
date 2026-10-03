@@ -13,6 +13,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
+// Cached project indexes must never retain a previous Run's budget or signal.
+const retrievalRuntime = new AsyncLocalStorage();
 const { shouldSkipDir, isBinaryFileName } = require('../tools/toolFiles.cjs');
 const { globToRegExp } = require('../tools/impl/shared.cjs');
 const { createEmbedder, cosine } = require('../embedder/index.cjs');
@@ -150,6 +153,7 @@ function normalizeOptions(options) {
     rerankTopK: clampInteger(o.rerankTopK, DEFAULTS.rerankTopK, 4, 40),
     rerankTimeoutMs: clampInteger(o.rerankTimeoutMs, DEFAULTS.rerankTimeoutMs, 1000, 60000),
     rerankClient: typeof o.rerankClient === 'function' ? o.rerankClient : null,
+    rerankMaxCostUsd: o.rerankMaxCostUsd == null || o.rerankMaxCostUsd === '' ? null : Number(o.rerankMaxCostUsd),
     minCoverage: clampNumber(o.minCoverage, DEFAULTS.minCoverage, 0.05, 1),
     include: normalizePatterns(o.include),
     exclude: normalizePatterns(o.exclude),
@@ -510,6 +514,11 @@ class LocalRagIndex {
   }
 
   ensureEmbedder() {
+    const runtime = retrievalRuntime.getStore();
+    if (runtime && (this.options.embedProvider || 'none') !== 'none') {
+      if (!runtime.embedders.has(this)) runtime.embedders.set(this, createEmbedder({ ...this.options, ...runtime }));
+      return runtime.embedders.get(this);
+    }
     if (this.embedder) return this.embedder;
     const provider = (this.options.embedProvider || 'none').toLowerCase();
     if (provider === 'none') {
@@ -805,6 +814,11 @@ class LocalRagIndex {
   }
 
   async retrieve(query, options) {
+    const runtime = options && options.runtime;
+    return retrievalRuntime.run(runtime ? { ...runtime, embedders: new Map() } : null, () => this.retrieveWithRuntime(query, options));
+  }
+
+  async retrieveWithRuntime(query, options) {
     const opts = options || {};
     const started = Date.now();
     const stats = this.refresh(opts.refresh === true);
@@ -982,6 +996,7 @@ class LocalRagIndex {
           url: this.options.rerankUrl, model: this.options.rerankModel,
           key: this.options.rerankKey, timeoutMs: this.options.rerankTimeoutMs,
           client: this.options.rerankClient,
+          ...(retrievalRuntime.getStore() || {}), maxCostUsd: this.options.rerankMaxCostUsd,
         });
         if (scores) {
           const ordered = [...scores].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));

@@ -79,6 +79,7 @@ function register(registry) {
       }, { modelContent: text });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["read_skill"]);
 }
 
 module.exports = { register, listSkills, DEFAULT_MAX_CHARS };

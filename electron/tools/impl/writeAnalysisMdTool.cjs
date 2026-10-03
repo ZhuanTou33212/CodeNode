@@ -107,6 +107,7 @@ function register(registry) {
       });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["write_analysis_md"]);
 }
 
 module.exports = { register };

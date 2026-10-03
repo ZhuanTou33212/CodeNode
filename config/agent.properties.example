@@ -1,4 +1,8 @@
 # CodeNode Agent 配置（本地，api_key 不入库不提交）
+# PII 处理：off（默认）| warn（只检测）| redact（输入和最终输出均脱敏）
+# agent.pii.mode=off
+# agent.pii.categories=email,phone   # 另可选 card,national_id_cn,ssn_us
+# agent.grounding.semantic_mode=off  # off（默认）| warn | enforce；仅来源带正文片段时生效
 api_base=https://api.deepseek.com
 api_key=
 model=deepseek-v4-flash
@@ -48,6 +52,19 @@ max_tokens=32768
 # agent.stream_idle_timeout_ms=120000   # 停滞判定：连续这么久没有任何分片才认为卡死（有数据就重置）
 # agent.stream_max_attempts=2           # 流中途断线/停滞 → 丢弃半截、整轮重发的次数（0=旧行为：半截+报错）
 # agent.max_total_retries=12            # 单个 Run 内所有模型 HTTP 重试的共享上限（父 Agent / 子 Agent / 预处理共用；0=禁止重试）
+# agent.max_cost_usd=0                  # 单个 Run 的费用硬上限（美元）；0=关闭。开启后每个实际模型都须有 cost.price.<model> 单价。
+# 费用在请求前按输入和最大输出预留；子代理共享父额度。供应商未回 usage 时保留预留上界，不当成免费。
+# 此上限按配置单价约束本地请求，不代替供应商账单；输入估算、单价与供应商计费规则须保持一致。
+# cost.image_input_tokens.<model>=32768 # 含图片且费用硬上限开启时必填：实际模型每图输入 Token 上界，按供应商计费规则配置。
+# 未配置图像上界时硬预算模式拒发含图请求；不会把图片压缩字节或远程 URL 长度当作计费上界。
+# 显式模型路由：不配置即沿用当前模型；跨服务候选必须指定自己的 api_key_env。
+# agent.model_candidate.fast.model=your-fast-model
+# agent.model_candidate.backup.model=your-backup-model
+# agent.model_candidate.backup.api_base=https://your-approved-provider.example/v1
+# agent.model_candidate.backup.api_key_env=CODENODE_BACKUP_API_KEY
+# agent.model_route.code=fast           # 可映射 code/research/ops/canvas/orchestration/chat；无匹配沿用 main。
+# agent.model_route.subagent=fast       # 用途还包括 main/intent/compression/compaction。
+# agent.model_fallbacks=backup          # 显式允许的备用候选；故障切换仍共用请求次数、Token 和费用上限。
 # agent.truncation_nudges=4             # 回答触到 max_tokens 时最多补问几次（让它从断点接着写）
 # 单进程并发与单轮累计 token 上限
 # agent.max_concurrent_runs=2
@@ -130,6 +147,7 @@ soul_file=config/soul.md
 # rag.rerank_key=
 # rag.rerank_top_k=24
 # rag.rerank_timeout_ms=10000
+# rag.rerank_max_cost_usd=0.001          # 每次重排请求的费用上界；开启 Run 费用硬上限时必填，明确免费的本地重排填 0。
 # retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
 
 # ---------- 向量后端（chunk 向量存放与检索方式） ----------

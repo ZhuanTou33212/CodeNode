@@ -22,10 +22,12 @@ const FATAL_STREAM_ANOMALIES = new Set([
 ]);
 // 协议适配层（S13）：OpenAI 兼容 / Anthropic Messages / Gemini 原生 / Azure OpenAI 共用一个请求构造
 const protocolLib = require('./modelProtocol.cjs');
+const modelRouting = require('./modelRouting.cjs');
 // 上下文压缩（照 Codex CLI 的做法）：窗口逼近上限时用交接摘要替换助手长文/工具结果
 const compactionLib = require('./compaction.cjs');
 // P1-2 动态上下文预算（键名与分配算法集中在那一处）
 const dynamicContextLib = require('./dynamicContextBudget.cjs');
+const piiLib = require('./pii.cjs');
 const costAttribution = require('./costAttribution.cjs');
 const costLedgerLib = require('./costLedger.cjs');
 // 上下文预算：每次请求前把最旧的超大工具结果裁成占位符（见 electron/contextBudget.cjs 顶部注释）
@@ -178,11 +180,14 @@ function loadConfig(projectRoot) {
     compaction: parseCompactionConfig(cfg),
     sandbox: parseSandboxConfig(cfg),
     costPrices: parseCostPrices(cfg),
+    costImageInputTokens: require('./costBudget.cjs').parseImageTokenBounds(cfg),
+    modelRouting: modelRouting.parseConfig(cfg),
     alertThresholds: parseAlertThresholds(cfg),
     alertWebhook: String(cfg['alerts.webhook'] || '').trim(),
     memory: parseMemoryConfig(cfg),
     // P1-2 动态上下文预算（记忆 / RAG / 画布 / 技能共用一个池子）
     dynamicContext: parseDynamicContextConfig(cfg),
+    pii: piiLib.parseConfig(cfg),
   };
 }
 
@@ -288,6 +293,8 @@ function parseRagConfig(cfg) {
     rerankKey: cfg['rag.rerank_key'] || '',
     rerankTopK: configInteger(cfg, 'rag.rerank_top_k', 24, 4, 40),
     rerankTimeoutMs: configInteger(cfg, 'rag.rerank_timeout_ms', 10000, 1000, 60000),
+    rerankMaxCostUsd: cfg['rag.rerank_max_cost_usd'] == null || cfg['rag.rerank_max_cost_usd'] === ''
+      ? null : require('./costBudget.cjs').parseCostLimit(cfg['rag.rerank_max_cost_usd']),
     minCoverage: configNumber(cfg, 'rag.min_coverage', 0.2, 0.05, 1),
     include: configList(cfg, 'rag.include'),
     exclude: configList(cfg, 'rag.exclude'),
@@ -350,8 +357,10 @@ function parsePromptConfig(cfg) {
 
 function parseGroundingConfig(cfg) {
   const mode = String(cfg['agent.grounding.mode'] || 'warn').trim().toLowerCase();
+  const semantic = String(cfg['agent.grounding.semantic_mode'] || 'off').trim().toLowerCase();
   return {
     mode: mode === 'enforce' ? 'enforce' : 'warn',
+    semanticMode: ['warn', 'enforce'].includes(semantic) ? semantic : 'off',
     maxRetries: configInteger(cfg, 'agent.grounding.max_retries', 1, 0, 3),
   };
 }
@@ -493,6 +502,7 @@ function parseLimitsConfig(cfg) {
     maxTotalTokens: configInteger(cfg, 'agent.max_total_tokens', 600000, 10000, 4000000),
     // One retry quota is shared by the supervisor, helpers, and child agents.
     maxTotalRetries: configInteger(cfg, 'agent.max_total_retries', 12, 0, 100),
+    maxCostUsd: require('./costBudget.cjs').parseCostLimit(cfg['agent.max_cost_usd']),
     // 循环硬上限（此前是 agent.cjs 里的源码常量，无法按项目调整）——默认值与旧常量一致。
     maxToolIterations: configInteger(cfg, 'agent.max_tool_iterations', 12, 1, 200),
     maxTotalToolCalls: configInteger(cfg, 'agent.max_total_tool_calls', 100, 1, 2000),
@@ -1265,19 +1275,33 @@ function maxAttemptsFor(cfg) {
 /**
  * @param {any} cfg
  * @param {Array<any>} messages
- * @param {{ signal?: AbortSignal, tools?: any, timeoutMs?: number }} [options]
+ * @param {{ signal?: AbortSignal, tools?: any, timeoutMs?: number, taskType?: string, onModelEvent?: Function }} [options]
  */
 async function chatCompletion(cfg, messages, options = {}) {
   // Count actual HTTP sends, including connection retries.
   const attemptsRef = { count: 0, maxAttempts: maxAttemptsFor(cfg) };
   const result = await require('./requestQueue.cjs').modelQueue.run(options.signal,
-    () => require('./requestBudget.cjs').withAttemptBudget(
-      cfg,
-      messages,
-      [],
-      () => chatCompletionInternal(cfg, messages, { ...options, attemptsRef }),
-      attemptsRef,
-    ));
+    async () => {
+      const span = cfg.traceProjectRoot ? eventBus.startSpan(cfg.traceProjectRoot, {
+        spanKind: 'model', name: 'model.request', runId: cfg.costRunId || cfg.traceContext?.runId,
+        parent: cfg.traceContext, actor: cfg.costKind || 'main', attributes: { taskType: cfg.modelTaskType || 'main' },
+      }) : null;
+      try {
+        const result = await modelRouting.run(cfg, { ...options, timeoutMs: Number.isFinite(options.timeoutMs) ? options.timeoutMs : 120000,
+          waitForRetry: (attempt, signal) => waitForRetry(retryDelay(cfg, attempt), signal),
+        }, options.onModelEvent || cfg.onModelEvent, attemptsRef,
+        (actualCfg, attemptOptions) => require('./requestBudget.cjs').withAttemptBudget(
+          { ...actualCfg, traceContext: span ? span.context : actualCfg.traceContext, traceProjectRoot: cfg.traceProjectRoot }, messages, [],
+          () => chatCompletionInternal(actualCfg, messages, { ...attemptOptions, attemptsRef }), attemptsRef,
+        ));
+        if (span) span.end(result?.error ? 'error' : 'ok', { model: result.actualModel || cfg.model, usage: result.usage });
+        return { ...result, traceContext: span?.context || cfg.traceContext,
+          requestTraceContext: attemptsRef.lastAttemptTraceContext || span?.context || cfg.traceContext };
+      } catch (error) {
+        if (span) span.end(eventBus.errorStatus(error), { error, model: cfg.model });
+        throw error;
+      }
+    });
   return { ...result, httpAttempts: attemptsRef.count };
 }
 
@@ -1322,7 +1346,7 @@ async function chatCompletionInternal(cfg, messages, { signal, timeoutMs = 12000
             await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
             continue;
           }
-          throw Object.assign(new Error(message), { retryable: false });
+          throw Object.assign(new Error(message), { retryable: false, status: res.status });
         }
         /** @type {any} */
         const data = await res.json();
@@ -1465,13 +1489,29 @@ async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
       maxAttemptsFor(cfg) + Math.max(0, Math.floor(restarts)),
   };
   const result = await require('./requestQueue.cjs').modelQueue.run(options.signal,
-    () => require('./requestBudget.cjs').withAttemptBudget(
-      cfg,
-      messages,
-      options.tools,
-      () => chatCompletionStreamInternal(cfg, messages, onEvent, { ...options, attemptsRef }),
-      attemptsRef,
-    ));
+    async () => {
+      const span = cfg.traceProjectRoot ? eventBus.startSpan(cfg.traceProjectRoot, {
+        spanKind: 'model', name: 'model.stream', runId: cfg.costRunId || cfg.traceContext?.runId,
+        parent: cfg.traceContext, actor: cfg.costKind || 'main', attributes: { taskType: cfg.modelTaskType || 'main' },
+      }) : null;
+      try {
+        const result = await modelRouting.run(cfg, {
+          ...options, timeoutMs: Number.isFinite(options.timeoutMs) ? options.timeoutMs
+            : Number(cfg?.reliability?.turnTimeoutMs) || DEFAULT_TURN_TIMEOUT_MS,
+          waitForRetry: (attempt, signal) => waitForRetry(retryDelay(cfg, attempt), signal),
+        }, onEvent, attemptsRef,
+        (actualCfg, attemptOptions) => require('./requestBudget.cjs').withAttemptBudget(
+          { ...actualCfg, traceContext: span ? span.context : actualCfg.traceContext, traceProjectRoot: cfg.traceProjectRoot }, messages, options.tools,
+          () => chatCompletionStreamInternal(actualCfg, messages, onEvent, { ...attemptOptions, attemptsRef }), attemptsRef,
+        ));
+        if (span) span.end(result?.error ? 'error' : 'ok', { model: result.actualModel || cfg.model, usage: result.usage });
+        return { ...result, traceContext: span?.context || cfg.traceContext,
+          requestTraceContext: attemptsRef.lastAttemptTraceContext || span?.context || cfg.traceContext };
+      } catch (error) {
+        if (span) span.end(eventBus.errorStatus(error), { error, model: cfg.model });
+        throw error;
+      }
+    });
   return { ...result, httpAttempts: attemptsRef.count };
 }
 
@@ -1538,7 +1578,7 @@ async function streamOnce(cfg, messages, onEvent, { signal, timeoutMs = DEFAULT_
           await waitForRetry(retryDelay(cfg, attempt, res.headers && res.headers.get ? res.headers.get('retry-after') : null), controller.signal);
           continue;
         }
-        throw Object.assign(new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`), { retryable: false });
+        throw Object.assign(new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`), { retryable: false, status: res.status });
       } catch (error) {
         if (finishStreamAttempt) finishStreamAttempt(null, { failed: true, partialChars: partialChars() });
         finishStreamAttempt = null;
@@ -1692,7 +1732,9 @@ async function chatCompletionStreamInternal(cfg, messages, onEvent, options = {}
       // 用户主动停止：原样抛出（主循环按 signal.aborted 归类为 CANCELLED）
       if (signal && signal.aborted) throw error;
       if (error && (error.code === 'BUDGET_EXCEEDED' || error.code === 'RETRY_BUDGET_EXCEEDED' ||
-        error.code === 'REQUEST_ATTEMPT_LIMIT')) throw error;
+        error.code === 'REQUEST_ATTEMPT_LIMIT' || error.code === 'COST_BUDGET_EXCEEDED' ||
+        error.code === 'COST_PRICE_MISSING' || error.code === 'COST_CONFIG_INVALID' ||
+        error.code === 'MODEL_ROUTING_CONFIG_INVALID')) throw error;
       const stalled = !!(error && error.stalled);
       const timedOut = !!(error && error.timedOut) || Date.now() - startedAt >= timeoutMs;
       if (error && error.partial) partial = error.partial;
@@ -1973,12 +2015,12 @@ async function runCompressionBatchRequest(cfg, batch, signal, options, budget) {
   try {
     const startedAt = Date.now();
     /** @type {any} */
-    const body = { ...cfg, model, maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
+    const body = { ...cfg, model, modelTaskType: 'compression', costKind: 'compression', maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
     if (comp.reasoning !== true) body.reasoningEffort = false;
     const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
     if (res.usage) recordCost(cfg, {
       kind: 'compression',
-      model,
+      model: res.actualModel || model,
       usage: res.usage,
       attempt: res.httpAttempts,
       latencyMs: Date.now() - startedAt,
@@ -2104,11 +2146,11 @@ async function compressToolContent(cfg, toolName, text, signal, options) {
   try {
     const startedAt = Date.now();
     /** @type {any} */
-    const body = { ...cfg, model, maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
+    const body = { ...cfg, model, modelTaskType: 'compression', costKind: 'compression', maxTokens: Math.min(cfg.maxTokens || 8192, comp.maxOutputTokens || 4096) };
     // 摘要/搬运类任务不需要思考链：默认关掉 reasoning（agent.compression.reasoning=true 可打开）
     if (comp.reasoning !== true) body.reasoningEffort = false;
     const res = await chat(body, messages, { timeoutMs: comp.timeoutMs || 60000, signal });
-    if (res.usage) recordCost(cfg, { kind: 'compression', model, usage: res.usage, attempt: res.httpAttempts,
+    if (res.usage) recordCost(cfg, { kind: 'compression', model: res.actualModel || model, usage: res.usage, attempt: res.httpAttempts,
       latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { tool: toolName, perAttempt: true } });
     const out = String(res.content || '').trim();
     if (!out) return degradedOriginalText(text, '模型返回空摘要');
@@ -2339,7 +2381,7 @@ function citationTrusted(parsed, trusted) {
 }
 
 /** 校验最终回答中的引用位置（path#Lx-Ly 与 scalar:<key>）是否落在本轮真实读过的来源里。 */
-function validateRagGrounding(content, toolCalls) {
+function validateRagGrounding(content, toolCalls, options = {}) {
   const allowed = new Set();
   let requiresCitation = false;
   for (const call of toolCalls || []) {
@@ -2371,6 +2413,21 @@ function validateRagGrounding(content, toolCalls) {
   let status = 'valid';
   if (invalid.length) status = 'invalid';
   else if (requiresCitation && validUsed.length === 0) status = 'missing';
+  const semanticMode = options.semanticMode === 'warn' || options.semanticMode === 'enforce' ? options.semanticMode : 'off';
+  const snippets = [];
+  for (const call of toolCalls || []) {
+    for (const source of Array.isArray(call && call.data && call.data.sources) ? call.data.sources : []) {
+      const text = source && (source.text || source.content || source.snippet);
+      if (text) snippets.push(String(text));
+    }
+  }
+  const semantic = semanticMode === 'off' ? { status: 'off', supported: null } : snippets.length === 0
+    ? { status: 'not_available', supported: null }
+    : { status: 'available', supported: validUsed.length > 0 && snippets.some((text) => {
+      const words = String(content || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3);
+      const hits = words.filter((word) => text.toLowerCase().includes(word)).length;
+      return words.length === 0 || hits / words.length >= 0.1;
+    }) };
   return {
     status,
     valid: status === 'valid',
@@ -2378,6 +2435,7 @@ function validateRagGrounding(content, toolCalls) {
     allowed: [...allowed],
     used: [...used],
     invalid,
+    semantic,
   };
 }
 
@@ -2696,6 +2754,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     tools && tools.context && typeof tools.context.projectRoot === 'function' ? tools.context.projectRoot() : null;
   const emitTrace = (event, rootOverride) =>
     logToolTrace(rootOverride || traceProjectRoot(), Object.assign({ runId: (cfg && cfg.costRunId) || null }, event));
+  cfg = { ...cfg, onModelEvent: (event) => emitTrace(event) };
   let totalToolCalls = 0;
   let loopIterations = 0;
   /**
@@ -2800,14 +2859,18 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     const compactCfg = compactionCfg.model
       ? { ...cfg, model: compactionCfg.model, maxTokens: compactionCfg.maxOutputTokens, reasoningEffort: compactionCfg.reasoning ? cfg.reasoningEffort : '' }
       : { ...cfg, maxTokens: compactionCfg.maxOutputTokens, reasoningEffort: compactionCfg.reasoning ? cfg.reasoningEffort : '' };
+    compactCfg.modelTaskType = 'compaction';
+    compactCfg.costKind = 'compaction';
+    let compactActualModel = compactCfg.model;
     const startedAt = Date.now();
     let summary = '';
     let failure = '';
     try {
       const res = await chatCompletion(compactCfg, built.messages, { signal, timeoutMs: compactionCfg.timeoutMs });
+      compactActualModel = res.actualModel || compactCfg.model;
       summary = String((res && res.content) || '').trim();
       if (res && res.usage) {
-        recordCost(cfg, { kind: 'compaction', model: compactCfg.model, usage: res.usage, attempt: res.httpAttempts,
+        recordCost(cfg, { kind: 'compaction', model: compactActualModel, usage: res.usage, attempt: res.httpAttempts,
           latencyMs: Date.now() - startedAt, runId: cfg.costRunId, meta: { perAttempt: true } });
       }
     } catch (error) {
@@ -2884,7 +2947,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       machineTurnsDropped: machineTurns,
       summaryChars: summary.length,
       droppedByCharCap: built.dropped,
-      model: compactCfg.model,
+      model: compactActualModel,
     });
     onDelta &&
       onDelta({
@@ -2904,7 +2967,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
     // 断点续跑：压缩后的历史必须立刻落检查点，否则恢复时会拿回旧的长历史（等于白压）
     if (tools && tools.context && typeof tools.context.checkpointMessages === 'function') {
       try {
-        tools.context.checkpointMessages(messages, 'compacted');
+        tools.context.checkpointMessages(messages, 'compacted', {
+          model: cfg.model,
+          modelTaskType: cfg.modelTaskType || 'main',
+          reasoningEffort: cfg.reasoningEffort || null,
+          compacted: compactionCount,
+          contextTrims: contextTrimCount,
+          contextTrimmedChars,
+          overflowRecoveries,
+        });
       } catch {}
     }
     return { ok: true, summary };
@@ -3148,6 +3219,11 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       const payload = { tools: tools && tools.registry ? tools.registry.toOpenAiTools() : null };
       const turnStartedAt = Date.now();
       const onEvent = (ev) => {
+        if (ev.kind === 'model_route' || ev.kind === 'model_fallback' || ev.kind === 'model_retry') {
+          emitTrace({ ...ev, turnId: iter });
+          onDelta && onDelta(ev);
+          return;
+        }
         if (ev.kind === 'stream_restart') {
           // 流中途断了、这一轮要整轮重发：**本轮的**累加与界面上的半截输出都必须作废，
           // 否则重发出来的完整回答会接在半截后面（用户看到两遍开头）。
@@ -3236,6 +3312,12 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         }
       };
       const res = await sendTurn();
+      if (res && res.traceContext && tools && tools.context) {
+        // Tool calls belong under the model span that produced them. The
+        // context object is intentionally mutable only inside the trusted
+        // main loop; tool-facing execution contexts receive a snapshot.
+        tools.context.traceContextValue = res.traceContext;
+      }
       modelTurns += 1;
       /** 只在模型请求成功返回后计数；允许迭代上限不代表这份摘要实际被后续请求复用。 */
       const realizedCompressionCarries = [];
@@ -3362,11 +3444,13 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         // 外层**不再**额外汇总记一次 —— 否则同一个子代理会被记两遍（账本与成本告警约 2 倍失真）。
         recordCost(cfg, {
           kind: (cfg && cfg.costKind) || 'main',
-          model: cfg.model,
+          model: res.actualModel || cfg.model,
           usage: res.usage,
           attempt: res.httpAttempts,
           latencyMs: Date.now() - turnStartedAt,
           runId: cfg.costRunId,
+          traceContext: res.requestTraceContext || res.traceContext || cfg.traceContext || null,
+          attemptId: res.httpAttempts ? 'http#' + String(res.httpAttempts) : null,
           meta: { ...(attribution ? { attribution } : {}), perAttempt: true },
         });
         totalTokens = Number(usage.total_tokens) || totalTokens;
@@ -3489,6 +3573,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           const callId = tc.callId || tc.id || ('call_' + iter + '_' + totalToolCalls);
           // 副作用幂等 + 检查点：写操作先登记意图，中断后续跑时凭账本跳过已提交的写操作
           let sideEffectToken = null;
+          let sideEffectGuardError = null;
           let deduped = false;
           let dedupReason = '';
           if (!malformed && !truncatedToolCall && tools.context && typeof tools.context.beginSideEffect === 'function') {
@@ -3517,12 +3602,21 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
                   tools.context.checkpoint('tool_intent', { callId, tool: tc.name, argsDigest: guard.argsDigest || require('./sideEffects.cjs').digest(args), effect: guard.effect, idemKey: guard.idemKey, actor: turnActor });
                 }
               }
-            } catch {}
+            } catch (error) {
+              sideEffectGuardError = error;
+            }
           }
           // JSON 不完整与整轮 length 截断都不能执行；后者即使 JSON 恰好完整，也可能缺后续调用。
           let result;
           let repeated = false;
-          if (deduped) {
+          if (sideEffectGuardError) {
+            result = require('./tools/result.cjs').AgentToolResult.failure(
+              sideEffectGuardError.code === 'EFFECT_UNKNOWN' ? 'EFFECT_UNKNOWN' : 'SYSTEM_ERROR',
+              '副作用状态检查未通过，本次未执行 ' + tc.name + '：' + String(sideEffectGuardError.message || sideEffectGuardError),
+              { executed: false, sideEffectStatus: sideEffectGuardError.code === 'EFFECT_UNKNOWN' ? 'unknown' : 'guard-failed' },
+              { retryable: false },
+            );
+          } else if (deduped) {
             // 幂等去重：该写操作已提交过，直接复用结论，绝不重复产生副作用。
             // 文案来自账本（含行为者归因），失败时退回中性描述，不编造「上次中断前」这类事实。
             result = require('./tools/result.cjs').AgentToolResult.ok(
@@ -3532,7 +3626,7 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
             repeated = true;
           }
           const cacheKey = !deduped && CACHEABLE_TOOLS.has(tc.name) ? tc.name + '\u0000' + canonicalArgs(tc.args) : null;
-          if (deduped) {
+          if (sideEffectGuardError || deduped) {
             // 已在上方构造结果，跳过执行
           } else if (malformed) {
             // **拒绝执行**：拿解析失败后的 {} 去调工具，会让写操作在没有参数的情况下真的执行
@@ -3577,8 +3671,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
           if (sideEffectToken && tools.context) {
             try {
               if (result.ok) await tools.context.commitSideEffect(sideEffectToken, { ok: true, result: result.text });
-              else await tools.context.failSideEffect(sideEffectToken, result.text);
-            } catch {}
+              else await tools.context.failSideEffect(sideEffectToken, result);
+            } catch (error) {
+              result = require('./tools/result.cjs').AgentToolResult.failure(
+                'EFFECT_UNKNOWN',
+                '工具已返回，但副作用状态无法可靠保存；请先核对真实状态，禁止自动重放：' + String(error.message || error),
+                { executed: true, sideEffectStatus: 'unknown', tool: tc.name },
+                { retryable: false },
+              );
+            }
             if (typeof tools.context.checkpoint === 'function') {
               tools.context.checkpoint('tool_commit', {
                 callId,
@@ -4003,7 +4104,15 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
         });
         // 断点续跑：每轮结束保存对话快照，崩溃后能凭它重建上下文而不是重新问用户
         if (tools.context && typeof tools.context.checkpointMessages === 'function') {
-          tools.context.checkpointMessages(messages, 'round_end');
+          tools.context.checkpointMessages(messages, 'round_end', {
+            model: cfg.model,
+            modelTaskType: cfg.modelTaskType || 'main',
+            reasoningEffort: cfg.reasoningEffort || null,
+            compacted: compactionCount,
+            contextTrims: contextTrimCount,
+            contextTrimmedChars,
+            overflowRecoveries,
+          });
         }
         if (capped) {
           stopReason = 'tool_limit';
@@ -4015,8 +4124,8 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       // P6：enforce 模式下，引用不可信的答案不允许直接交付 —— 先给一次订正机会
       // （enforce 之外一律不进入这个分支，warn 行为与之前逐字一致）。
       if (groundingEnforce && groundingRetries < maxGroundingRetries) {
-        const pending = validateRagGrounding(content, allToolCalls);
-        if (pending.status === 'invalid' || pending.status === 'missing') {
+        const pending = validateRagGrounding(content, allToolCalls, { semanticMode: groundingCfg.semanticMode });
+        if (pending.status === 'invalid' || pending.status === 'missing' || (groundingCfg.semanticMode === 'enforce' && pending.semantic && pending.semantic.supported === false)) {
           groundingRetries += 1;
           messages.push({ role: 'assistant', content: content });
           messages.push({ role: 'user', content: groundingRetryPrompt(pending) });
@@ -4060,10 +4169,10 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       onDelta && onDelta({ kind: 'limit_reached', error, stopReason, state: outcome.state, limitKind: outcome.limitKind, wrapUp: wrapUp.data, text: wrapUp.text });
       return { content: wrapped, reasoning, toolCalls: allToolCalls, usage, error, stopReason, state: outcome.state, outcome, iterations: modelTurns, wrapUp: wrapUp.data, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount };
     }
-    const grounding = validateRagGrounding(content, allToolCalls);
+    const grounding = validateRagGrounding(content, allToolCalls, { semanticMode: groundingCfg.semanticMode });
     const warning = groundingWarning(grounding);
     // enforce 模式下仍未通过 = 交付门槛不达标：如实上报（既不静默放过，也不把提示写进正文）
-    const groundingBlocked = groundingEnforce && (grounding.status === 'invalid' || grounding.status === 'missing');
+    const groundingBlocked = groundingEnforce && (grounding.status === 'invalid' || grounding.status === 'missing' || (groundingCfg.semanticMode === 'enforce' && grounding.semantic && grounding.semantic.supported === false));
     // 校验结果只作为独立事件上报（界面另有来源徽标），不拼进交付内容：
     // 引用校验本身可能误判，把提示写进回答正文会污染交付文本。
     if (warning) onDelta && onDelta({ kind: 'grounding', grounding, warning });
@@ -4110,11 +4219,22 @@ async function runAgentChat({ cfg, messages, onDelta, tools, signal, timeoutMs =
       return { content, reasoning, toolCalls: allToolCalls, usage, aborted: true, state: outcome.state, outcome, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
     }
     const error = String((e && e.message) || e);
+    const budgetStopReason = ({
+      COST_BUDGET_EXCEEDED: 'cost_limit',
+      RETRY_BUDGET_EXCEEDED: 'retry_limit',
+      BUDGET_EXCEEDED: 'token_limit',
+    })[e && e.code] || null;
     const outcome = machine.isTerminal()
       ? describeOutcome({ state: machine.state })
-      : finalizeState({ error }, 'exception:' + error.slice(0, 120));
-    onDelta && onDelta({ kind: 'error', error, state: outcome.state });
-    return { content, reasoning, toolCalls: allToolCalls, usage, error, state: outcome.state, outcome, iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
+      : finalizeState({ error, stopReason: budgetStopReason }, budgetStopReason || 'exception:' + error.slice(0, 120));
+    onDelta && onDelta({ kind: 'error', error, state: outcome.state, ...(budgetStopReason ? { stopReason: budgetStopReason } : {}) });
+    if (budgetStopReason) {
+      emitTrace({ kind: 'budget_limit', code: e.code, stopReason: budgetStopReason, limitKind: outcome.limitKind });
+      onDelta && onDelta({ kind: 'limit_reached', error, stopReason: budgetStopReason, state: outcome.state, limitKind: outcome.limitKind });
+    }
+    return { content, reasoning, toolCalls: allToolCalls, usage, error, state: outcome.state, outcome,
+      ...(budgetStopReason ? { stopReason: budgetStopReason } : {}),
+      iterations: modelTurns, contextTrims: contextTrimCount, contextTrimmedChars, compacted: compactionCount, overflowRecoveries };
   }
 }
 

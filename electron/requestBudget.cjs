@@ -1,4 +1,5 @@
 'use strict';
+const { CostBudget } = require('./costBudget.cjs');
 /**
  * 请求前预算预留（防止单次运行把额度烧穿）。
  *
@@ -74,7 +75,7 @@ function usageTotal(usage) {
 class RequestBudget {
   /**
    * @param {number} limit
-   * @param {{parent?: RequestBudget|null, scope?: string, retryLimit?: number}} [options]
+   * @param {{parent?: RequestBudget|null, scope?: string, retryLimit?: number, costLimitUsd?: number, prices?: any}} [options]
    *   parent：父预算（S9 父子链）。子代理的独立配额仍受父总量约束，不绕过 run 上限。
    */
   constructor(limit, options) {
@@ -89,6 +90,7 @@ class RequestBudget {
     // Retry credits live at the run root. Child budgets delegate to their parent.
     this.retryLimit = Number.isFinite(Number(o.retryLimit)) ? Math.max(0, Math.floor(Number(o.retryLimit))) : null;
     this.retriesUsed = 0;
+    this.money = this.parent ? this.parent.money : new CostBudget({ limitUsd: o.costLimitUsd, prices: o.prices });
   }
 
   claimRetry() {
@@ -107,6 +109,25 @@ class RequestBudget {
   wouldExceed(amount) {
     return !Number.isFinite(amount) || amount < 0 || this.used + this.reserved + amount > this.limit;
   }
+
+  /** Atomically reserve both resources before a network request can start. */
+  reserveRequest(model, input, output, prices, options = {}) {
+    const tokenSettle = this.reserve(input + output);
+    let costSettle;
+    try {
+      costSettle = this.money.reserveTokens(model, options.costInputTokens == null ? input : options.costInputTokens, output, prices);
+    } catch (error) {
+      tokenSettle({ total_tokens: 0 });
+      throw error;
+    }
+    return (usage, options = {}) => {
+      tokenSettle(options.notSent ? { total_tokens: 0 } : usage);
+      costSettle(usage, options);
+    };
+  }
+
+  reserveFixedCost(amountUsd) { return this.money.reserveFixed(amountUsd); }
+  costSnapshot() { return this.money.snapshot(); }
 
   reserve(amount) {
     const fmt = (n) => Math.round(n).toLocaleString('en-US');
@@ -212,6 +233,18 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
   const input = estimateInputTokens(messages, tools);
   const output = Number(cfg && cfg.maxTokens) || 8192;
   const budget = cfg && cfg.requestBudget;
+  const images = collectImageUrls(messages);
+  let costInputTokens = input;
+  if (images.length && budget && budget.costSnapshot().enabled) {
+    const perImage = cfg.costImageInputTokens && cfg.costImageInputTokens[cfg.model];
+    if (!Number.isSafeInteger(perImage) || perImage <= 0) {
+      throw Object.assign(new Error('已启用费用硬上限：含图片请求须配置 cost.image_input_tokens.' + cfg.model + '，声明该模型每张图片的输入 Token 上界。'),
+        { code: 'COST_IMAGE_BOUND_MISSING', retryable: false });
+    }
+    // Image bytes / URL length are useful for coarse context estimates, but
+    // cannot bound visual billing. Add the declared per-model image ceiling.
+    costInputTokens += images.length * perImage;
+  }
   /** @type {Set<Function>} */
   const pending = new Set();
   ref.beginAttempt = () => {
@@ -222,7 +255,7 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
     }
     let settle = null;
     try {
-      settle = budget ? budget.reserve(input + output) : null;
+      settle = budget ? budget.reserveRequest(cfg.model, input, output, cfg.costPrices, { costInputTokens }) : null;
     } catch (error) {
       if (error && typeof error === 'object') error.retryable = false;
       throw error;
@@ -230,20 +263,33 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
     try {
       if (ref.count > 0 && budget && typeof budget.claimRetry === 'function') budget.claimRetry();
     } catch (error) {
-      if (settle) settle({ total_tokens: 0 });
+      if (settle) settle(null, { notSent: true });
       if (error && typeof error === 'object') error.retryable = false;
       throw error;
     }
     const number = ++ref.count;
+    const span = cfg.traceContext && cfg.traceProjectRoot ? require('./eventBus.cjs').startSpan(cfg.traceProjectRoot, {
+      spanKind: 'attempt', name: 'model.http', runId: cfg.costRunId || cfg.traceContext.runId,
+      parent: cfg.traceContext, actor: cfg.costKind || 'main', attemptId: String(number),
+      attributes: { model: cfg.model, number, reservedInputTokens: input, reservedOutputTokens: output },
+    }) : null;
+    ref.lastAttemptTraceContext = span && span.context || ref.lastAttemptTraceContext || cfg.traceContext || null;
+    const startedAt = Date.now();
     let finished = false;
-    /** @param {any} usage @param {{failed?: boolean, partialChars?: number}} [details] */
+    /** @param {any} usage @param {{failed?: boolean, partialChars?: number, cancelled?: boolean}} [details] */
     const finish = (usage, details = {}) => {
       if (finished) return;
       finished = true;
       pending.delete(finish);
       const actual = usageTotal(usage);
-      const known = Number.isFinite(actual) && actual >= 0;
-      if (settle) settle(known ? { total_tokens: actual } : null);
+      // A failed stream may only contain the provider's initial input-usage
+      // frame. Treat it as incomplete even when it has a numeric total.
+      const known = details.failed !== true && Number.isFinite(actual) && actual >= 0;
+      if (settle) settle(known ? usage : null);
+      if (span) span.end(details.cancelled || cfg.traceSignal?.aborted ? 'cancelled' : details.failed ? 'error' : 'ok', {
+        model: cfg.model, usage: known ? usage : null,
+        attributes: { billingUnknown: !known, partialChars: Math.max(0, Number(details.partialChars) || 0) },
+      });
       if ((details.failed || !usage) && cfg && cfg.costLedger && typeof cfg.costLedger.record === 'function') {
         const visibleOutput = Math.min(output, Math.ceil(Math.max(0, Number(details.partialChars) || 0) / 4));
         const estimate = known ? usage : {
@@ -260,6 +306,8 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
             estimated: !known,
             billingUnknown: !known,
             attempt: number,
+            latencyMs: Date.now() - startedAt,
+            traceContext: span && span.context || cfg.traceContext || null,
             runId: cfg.costRunId,
             meta: {
               perAttempt: true,
@@ -277,7 +325,7 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
   try {
     return await operation();
   } finally {
-    for (const finish of [...pending]) finish(null, { failed: true });
+    for (const finish of [...pending]) finish(null, { failed: true, cancelled: cfg.traceSignal?.aborted === true });
     delete ref.beginAttempt;
   }
 }

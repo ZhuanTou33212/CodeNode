@@ -152,6 +152,7 @@ function register(registry) {
       }
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["web_search"]);
 }
 
 module.exports = { register, parseWebSearchConfig, normalizeResults, buildQueryUrl, DEFAULTS };

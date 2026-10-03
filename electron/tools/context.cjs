@@ -47,10 +47,12 @@ class AgentToolContext {
     this.conversationSupplier = o.conversationHistory || null;
     this.fileChangeNotifier = o.notifyFileChange || null;
     this.ragConfigValue = o.ragConfig || {};
+    this.modelRuntimeValue = o.modelRuntime || null;
     this.scalarStoreValue = o.scalarStore || null;
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
     this.runIdValue = o.runId || '';
+    this.traceContextValue = o.traceContext || null;
     this.sourceMessageIdValue = o.sourceMessageId || '';
     this.planSessionIdValue = o.planSessionId || '';
     this.planOwnerExistsValue = typeof o.planOwnerExists === 'function' ? o.planOwnerExists : null;
@@ -94,6 +96,7 @@ class AgentToolContext {
   }
 
   runId() { return this.runIdValue; }
+  traceContext() { return this.traceContextValue; }
   sourceMessageId() { return this.sourceMessageIdValue; }
   planSessionId() { return this.planSessionIdValue; }
   planOwnerExists(taskId) {
@@ -200,7 +203,10 @@ class AgentToolContext {
     if (!this.confirmHandler) return false;
     const waitId = 'wait-' + randomUUID();
     const toolCallId = request.toolCallId || null;
-    const started = this.checkpoint('wait_start', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null });
+    const started = this.checkpoint('wait_start', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null,
+      what: String(what || '').slice(0, 160), level: String(level || ConfirmationLevel.WRITE),
+      capability: request.capability || null, scope: request.scope || null,
+      detailDigest: require('../sideEffects.cjs').digest(String(detail || '')) });
     if (this.checkpointSink && !started) {
       this.audit(JSON.stringify({ kind: 'approval_wait_persist_failed', runId: this.runIdValue, waitId, toolCallId }));
       return false;
@@ -217,7 +223,8 @@ class AgentToolContext {
       outcome = 'error';
       return false;
     } finally {
-      if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null, outcome })) {
+      if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null, outcome,
+        detailDigest: require('../sideEffects.cjs').digest(String(detail || '')) })) {
         this.audit(JSON.stringify({ kind: 'approval_wait_settle_persist_failed', runId: this.runIdValue, waitId }));
         throw new Error('审批结算无法持久化，拒绝继续执行');
       }
@@ -332,6 +339,8 @@ class AgentToolContext {
     return this.ragConfigValue || {};
   }
 
+  modelRuntime() { return this.modelRuntimeValue ? { ...this.modelRuntimeValue, signal: this.signalValue } : null; }
+
   /** 写入执行检查点（runCheckpoint.cjs）：工具意图/结果、对话快照及用户等待起止记录。 */
   checkpoint(type, payload) {
     if (!this.checkpointSink) return null;
@@ -343,8 +352,8 @@ class AgentToolContext {
   }
 
   /** 保存对话快照用于断点续跑（每轮工具循环结束时调用） */
-  checkpointMessages(messages, reason) {
-    return this.checkpoint('messages', { messages, reason: reason || 'round_end' });
+  checkpointMessages(messages, reason, controlState) {
+    return this.checkpoint('messages', { messages, reason: reason || 'round_end', controlState: controlState || null });
   }
 
   /** 执行隔离策略（sandbox.cjs 解析结果）；工具启动子进程时应交给 sandbox.guardedSpawn。
@@ -368,25 +377,18 @@ class AgentToolContext {
    */
   async beginSideEffect(toolName, args, options) {
     if (!this.sideEffectGuardValue || typeof this.sideEffectGuardValue.begin !== 'function') return { skip: false, token: null };
-    try {
-      return await this.sideEffectGuardValue.begin(toolName, args, { taskId: this.taskIdValue, role: this.roleValue }, options);
-    } catch {
-      return { skip: false, token: null };
-    }
+    // A failed guard is not permission to execute without a durable intent.
+    return await this.sideEffectGuardValue.begin(toolName, args, { taskId: this.taskIdValue, role: this.roleValue }, options);
   }
 
   async commitSideEffect(token, info) {
     if (!token || !this.sideEffectGuardValue || typeof this.sideEffectGuardValue.commit !== 'function') return;
-    try {
-      await this.sideEffectGuardValue.commit(token, info);
-    } catch {}
+    return await this.sideEffectGuardValue.commit(token, info);
   }
 
   async failSideEffect(token, error) {
     if (!token || !this.sideEffectGuardValue || typeof this.sideEffectGuardValue.fail !== 'function') return;
-    try {
-      await this.sideEffectGuardValue.fail(token, error);
-    } catch {}
+    return await this.sideEffectGuardValue.fail(token, error);
   }
 
   /** 本地标量存储；未启用时返回 null。 */
@@ -454,10 +456,12 @@ class AgentToolContext {
       conversationHistory: this.conversationSupplier,
       notifyFileChange: this.fileChangeNotifier,
       ragConfig: this.ragConfigValue,
+      modelRuntime: o.modelRuntime || this.modelRuntimeValue,
       scalarStore: this.scalarStoreValue,
       undo: this.undoAction,
       redo: this.redoAction,
       runId: o.runId || this.runIdValue,
+      traceContext: o.traceContext || this.traceContextValue,
       sourceMessageId: o.sourceMessageId || this.sourceMessageIdValue,
       taskId: o.taskId || this.taskIdValue,
       role: o.role || this.roleValue,

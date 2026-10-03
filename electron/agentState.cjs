@@ -52,6 +52,9 @@ const LIMIT_KIND_BY_STOP_REASON = Object.freeze({
   tool_limit: 'tool_calls',
   context_overflow: 'context_window',
   length_truncated: 'output_tokens',
+  cost_limit: 'cost_usd',
+  retry_limit: 'retries',
+  token_limit: 'tokens',
 });
 
 /** 允许的迁移（未列出的迁移一律拒绝并记为 anomaly，避免状态静默跳变）

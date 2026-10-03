@@ -19,6 +19,10 @@
 const fs = require('fs');
 const path = require('path');
 const runStore = require('./runStore.cjs');
+const { randomBytes } = require('crypto');
+const { performance } = require('perf_hooks');
+const { redact } = require('./redaction.cjs');
+const traceTree = require('./traceTree.cjs');
 
 const SCHEMA_VERSION = 1;
 const EVENTS_FILE = 'events.jsonl';
@@ -54,7 +58,7 @@ function normalizeEvent(event) {
     if (key in record) continue;
     record[key] = value;
   }
-  return record;
+  return redact(record);
 }
 
 /**
@@ -71,6 +75,81 @@ function emit(projectRoot, event) {
   } catch {
     return null;
   }
+}
+
+/** Explicit span lifecycle; context is an immutable propagation token, not a mutable global. */
+function startSpan(projectRoot, spec = {}) {
+  const parent = traceTree.contextFields(spec.parent || {});
+  const traceId = parent.traceId || spec.traceId || randomBytes(16).toString('hex');
+  const spanId = randomBytes(8).toString('hex');
+  const runId = spec.runId == null ? spec.parent?.runId || null : String(spec.runId);
+  const base = { traceId, spanId, parentSpanId: parent.spanId, runId,
+    spanKind: String(spec.spanKind || 'operation'), name: String(spec.name || spec.spanKind || 'operation'),
+    actor: spec.actor || null, turnId: spec.turnId ?? null, toolCallId: spec.toolCallId ?? null, attemptId: spec.attemptId ?? null };
+  const context = Object.freeze({ traceId, spanId, runId, parentSpanId: parent.spanId });
+  const started = performance.now();
+  let ended = false;
+  const startRecord = emit(projectRoot, { ...base, kind: 'span_start', attributes: spec.attributes || {} });
+  return {
+    context,
+    recorded: !!startRecord,
+    end(status = 'ok', details = {}) {
+      if (ended) return null;
+      ended = true;
+      const error = details.error instanceof Error
+        ? { name: details.error.name, message: details.error.message, code: /** @type {any} */ (details.error).code || null }
+        : details.error || null;
+      return emit(projectRoot, { ...base, kind: 'span_end',
+        status: traceTree.TERMINAL.has(status) ? status : 'error', latencyMs: Math.max(0, performance.now() - started),
+        usage: details.usage || null, model: details.model || null, error, attributes: details.attributes || {} });
+    },
+    event(name, attributes = {}) {
+      return emit(projectRoot, { ...base, kind: 'span_event', name: String(name), attributes });
+    },
+  };
+}
+
+function errorStatus(error) {
+  if (error?.name === 'AbortError' || error?.code === 'CANCELLED') return 'cancelled';
+  if (['BUDGET_EXCEEDED', 'RETRY_BUDGET_EXCEEDED', 'COST_BUDGET_EXCEEDED', 'REQUEST_ATTEMPT_LIMIT'].includes(error?.code)) return 'limit';
+  return 'error';
+}
+
+async function withSpan(projectRoot, spec, operation) {
+  const span = startSpan(projectRoot, spec);
+  try {
+    const result = await operation(span);
+    span.end(result?.aborted ? 'cancelled' : result?.ok === false || result?.error ? 'error' : 'ok', {
+      usage: result?.usage, model: result?.actualModel || result?.model, error: result?.error,
+    });
+    return result;
+  } catch (error) { span.end(errorStatus(error), { error }); throw error; }
+}
+
+/** Read errors are evidence gaps. Never silently call a truncated/corrupt trace complete. */
+function readTraceEvents(projectRoot) {
+  const events = [], diagnostics = [];
+  let contents;
+  try { contents = fs.readFileSync(eventsPath(projectRoot), 'utf8'); }
+  catch (error) { return { events, diagnostics: [{ code: error?.code === 'ENOENT' ? 'EVENT_FILE_MISSING' : 'EVENT_FILE_UNREADABLE' }] }; }
+  let lineNumber = 0;
+  for (const line of contents.split(/\r?\n/)) {
+    lineNumber++;
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (!event || typeof event !== 'object' || Array.isArray(event) || typeof event.kind !== 'string') {
+        diagnostics.push({ code: 'INVALID_EVENT_LINE', line: lineNumber });
+      } else events.push(redact(event));
+    } catch { diagnostics.push({ code: 'CORRUPT_EVENT_LINE', line: lineNumber }); }
+  }
+  return { events, diagnostics };
+}
+
+/** Full selected traces include their parents even when a child Run is selected. */
+function exportTrace(projectRoot, options = {}) {
+  const input = readTraceEvents(projectRoot);
+  return traceTree.buildTraceTree(input.events, { ...options, diagnostics: input.diagnostics });
 }
 
 /**
@@ -92,7 +171,7 @@ function readEvents(projectRoot) {
     if (!trimmed) continue;
     try {
       const obj = JSON.parse(trimmed);
-      if (obj && typeof obj === 'object' && obj.kind) events.push(obj);
+      if (obj && typeof obj === 'object' && obj.kind) events.push(redact(obj));
     } catch {
       // 坏行（断电 / 半写）不影响其余事件 —— 与 runStore 的策略一致
     }
@@ -279,4 +358,10 @@ module.exports = {
   summarize,
   bridge,
   formatEvent,
+  startSpan,
+  withSpan,
+  errorStatus,
+  readTraceEvents,
+  exportTrace,
+  buildTraceTree: traceTree.buildTraceTree,
 };

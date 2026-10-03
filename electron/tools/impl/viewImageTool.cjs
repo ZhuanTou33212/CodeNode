@@ -86,6 +86,7 @@ function register(registry) {
       );
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["view_image"]);
 }
 
 module.exports = { register, MIME_BY_EXT };

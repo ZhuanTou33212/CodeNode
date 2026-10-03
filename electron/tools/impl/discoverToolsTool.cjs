@@ -140,6 +140,7 @@ function register(registry) {
       );
     },
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["discover_tools"]);
 }
 
 module.exports = { register, MAX_ENABLE };

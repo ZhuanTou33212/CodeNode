@@ -125,10 +125,11 @@ function auditLog(projectRoot, entry) {
  *   dialog: import('electron').Dialog,
  *   getFocusedWindow: () => import('electron').BrowserWindow | null,
  *   sandbox: any,
+ *   runWorkflowChat: (event: any, payload: any) => Promise<any>,
  * }} ctx
  */
 function register(ctx) {
-  const { ipcMain, dialog, getFocusedWindow, sandbox } = ctx;
+  const { ipcMain, dialog, getFocusedWindow, sandbox, runWorkflowChat } = ctx;
 
   /** 与 Agent 工具共用同一套执行隔离策略（同一把锁，不留后门） */
   function spawnProjectProcess(tokens, base, cwd) {
@@ -375,6 +376,54 @@ function register(ctx) {
     return runProjectCommand(root || '.', command, timeoutSeconds);
   });
 
+  ipcMain.handle('project:workflow-state', (_event, root, workflowId, request) => {
+    return require('../workflowState.cjs').dispatch(root, workflowId, request);
+  });
+
+  ipcMain.handle('project:workflow-execute', async (event, root, workflowId, request) => {
+    const focused = getFocusedWindow();
+    if (!focused || event.sender !== focused.webContents || (event.senderFrame && event.senderFrame !== focused.webContents.mainFrame)) {
+      return { ok: false, error: '工作流执行请求必须来自当前主窗口主 frame' };
+    }
+    const graph = request && request.graph;
+    const host = {
+      ownerAlive: () => !event.sender.isDestroyed() && (!event.senderFrame || !event.senderFrame.isDestroyed()),
+      confirm: async (info) => {
+        if (!host.ownerAlive()) return false;
+        const result = await dialog.showMessageBox(focused, {
+          type: 'warning', title: '确认工作流节点执行',
+          message: String(info.label || '工作流节点'),
+          detail: (info.review ? '之前执行结果可能未知，需要先核对副作用。\n' : '') + '可能写入：' + String(info.writeScope || '未声明'),
+          buttons: ['取消', '确认执行'], defaultId: 0, cancelId: 0,
+        });
+        return result.response === 1 && host.ownerAlive();
+      },
+      run: async (node, fullGraph, state) => {
+        const data = node.data || {};
+        const prompt = String(data.prompt || '').trim();
+        const explicit = prompt.match(/^(?:run:|\$)\s*(.+)$/i);
+        const command = explicit && explicit[1] ? explicit[1].trim() : /^(npm|npx|node|git|python3?|py|java|javac|mvn|mvnw|gradle|go|cargo|cmd|powershell|pwsh)\b/i.test(prompt) ? prompt : '';
+        if (['start', 'end', 'file', 'object', 'scope'].includes(node.type || '')) return { ok: true, output: '结构节点已通过' };
+        if (command) {
+          const response = await runProjectCommand(root, command, 180);
+          return { ok: !!response.ok, output: '运行：' + command + '\n' + String(response.output || response.error || '') };
+        }
+        if (!prompt || !['task', 'stage', 'tool'].includes(node.type || '')) return { ok: false, output: '无执行内容：该节点需要填写 Prompt 或命令' };
+        if (typeof runWorkflowChat !== 'function') return { ok: false, output: 'Agent 工作流执行器未接线' };
+        const input = fullGraph.edges.filter((edge) => edge.target === node.id).map((edge) => ({ id: edge.source, output: state.outputs[edge.source] || '' }));
+        const response = await runWorkflowChat(event, {
+          projectRoot: root,
+          prompt: `执行工作流节点「${String(data.label || node.id)}」：\n${prompt}\n上游结果：\n${input.map((item) => item.id + ': ' + item.output).join('\n') || '无'}\n输出名称：${String(data.outputName || data.label || node.id)}\n完成条件：${String(data.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(data.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
+          history: [], canvasSummary: JSON.stringify(fullGraph.nodes.map((item) => ({ id: item.id, type: item.type, label: item.data?.label, status: item.data?.status }))),
+          nodeId: node.id, requestId: 'workflow-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+          document: { root: fullGraph },
+        });
+        return { ok: !!response.ok && response.aborted !== true, output: 'Agent：' + String(response.reply || response.error || '无返回内容') };
+      },
+    };
+    return require('../workflowState.cjs').execute(root, workflowId, request, host);
+  });
+
   ipcMain.handle('project:run:start', async (event, root, command, timeoutSeconds) => {
     return startProjectStream(event, root || '.', command, timeoutSeconds);
   });
@@ -393,13 +442,23 @@ function register(ctx) {
   });
 
   ipcMain.handle('extensions:list', async (_event, root) => {
-    const builtins = toolkit.buildDefaultRegistryWithConfig({}).listTools().map((tool) => ({
+    const builtinRegistry = toolkit.buildDefaultRegistryWithConfig({});
+    const builtins = builtinRegistry.listTools().map((tool) => {
+      const descriptor = builtinRegistry.descriptorOf(tool.name);
+      return {
       name: tool.name,
       kind: '内置工具',
       description: tool.description,
       enabled: true,
       source: 'CodeNode Toolkit',
-    }));
+      contract: descriptor ? {
+        explicit: descriptor.source === 'explicit',
+        outputSchema: descriptor.outputSchema != null,
+        readOnly: descriptor.readOnly === true,
+        timeoutMs: descriptor.timeoutMs == null ? null : descriptor.timeoutMs,
+      } : undefined,
+      };
+    });
     const files = [
       root && path.join(root, '.codenode', 'extensions.json'),
       root && path.join(root, 'config', 'extensions.json'),
@@ -416,6 +475,12 @@ function register(ctx) {
             description: String(item.description || ''),
             enabled: item.enabled !== false,
             source: file,
+            contract: {
+              explicit: true,
+              outputSchema: !!(item.outputSchema),
+              readOnly: item.readOnly === true,
+              timeoutMs: Number.isFinite(Number(item.timeoutMs)) ? Number(item.timeoutMs) : null,
+            },
           });
         }
         break;

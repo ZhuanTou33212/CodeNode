@@ -1486,6 +1486,7 @@ class SubagentManager {
         }, { modelContent });
       }
     );
+    require('./tools/builtInOutputSchemas.cjs').declareOutputContracts(registry, ['delegate_task', 'get_subagent_task', 'review_subagent_result', 'cancel_subagent_task', 'delegate_tasks', 'merge_subagent_results']);
   }
 
   async delegate(context, args) {
@@ -1503,6 +1504,12 @@ class SubagentManager {
       task: { taskId, executionId: randomUUID(), runId: this.runId, role: args.role, objective: args.objective, status: 'queued', queuedAt,
         deadline: new Date(Date.now() + totalMs).toISOString(), executionSettled: false },
     };
+    const traceRoot = typeof context.projectRoot === 'function' ? context.projectRoot() : null;
+    const parentTrace = typeof context.traceContext === 'function' ? context.traceContext() : null;
+    const traceSpan = traceRoot ? require('./eventBus.cjs').startSpan(traceRoot, {
+      spanKind: 'subagent', name: 'agent.subtask', runId: this.runId, parent: parentTrace,
+      actor: taskId, attributes: { role: String(args.role || ''), taskId },
+    }) : null;
     const cancel = () => {
       const task = this.tasks.get(taskId) || lifecycle.task;
       task.cancelReason = task.cancelReason || (lifecycle.timedOut ? 'deadline_exceeded' : 'parent_cancelled');
@@ -1521,7 +1528,7 @@ class SubagentManager {
       if ((parent && parent.aborted) || (typeof context.cancelled === 'function' && context.cancelled())) controller.abort();
       release = await this.scheduler.acquire(parallelSafeTask(args), controller.signal);
       if (controller.signal.aborted) throw new Error('子任务已取消');
-      const executionContext = context.fork({ signal: controller.signal, readOnly: context.readOnly() });
+      const executionContext = context.fork({ signal: controller.signal, readOnly: context.readOnly(), traceContext: traceSpan?.context || parentTrace });
       result = await this.executeTask(executionContext, { ...args, taskId }, lifecycle);
     } catch (error) {
       result = AgentToolResult.error(String((error && error.message) || error), { taskId, status: 'failed' });
@@ -1530,6 +1537,9 @@ class SubagentManager {
       if (parent) parent.removeEventListener('abort', onParentAbort);
       controller.signal.removeEventListener('abort', cancel);
       const task = this.tasks.get(taskId) || lifecycle.task;
+      if (traceSpan) traceSpan.end(controller.signal.aborted ? 'cancelled' : result?.ok ? 'ok' : 'error', {
+        usage: result?.data?.usage || null, attributes: { status: task.status || null, requiresReview: task.requiresReview === true },
+      });
       const started = !!task.startedAt;
       if (controller.signal.aborted) {
         transitionTask(task, lifecycle.timedOut ? 'blocked' : 'cancelled');
@@ -1738,9 +1748,16 @@ class SubagentManager {
       const childCfg = {
         ...this.cfg,
         costKind: 'subagent',
+        modelTaskType: 'subagent',
+        traceContext: typeof childContext.traceContext === 'function' ? childContext.traceContext() : this.cfg.traceContext,
+        traceProjectRoot: this.cfg.traceProjectRoot || context.projectRoot(),
         limits: { ...(this.cfg.limits || {}), maxToolIterations: task.maxTurns },
         ...(childBudget && childBudget !== this.cfg.requestBudget ? { requestBudget: childBudget } : {}),
       };
+      childContext.modelRuntimeValue = { budget: childCfg.requestBudget,
+        queue: require('./requestQueue.cjs').modelQueue, prices: childCfg.costPrices,
+        traceContext: childCfg.traceContext, traceProjectRoot: childCfg.traceProjectRoot,
+        onUsage: (entry) => this.agent.recordCost(childCfg, entry) };
       // 子代理的 system prompt：身份 + 工作范围 + **真实注册表里的**可用工具 + 职责技能 + 项目 Skill + 运行规则。
       // 工具清单取自 childRegistry（不是手写名单），永远不会与角色权限裁剪漂移。
       const childTools = childRegistry.listTools().map((spec) => ({ name: spec.name, description: spec.description }));

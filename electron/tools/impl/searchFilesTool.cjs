@@ -119,6 +119,7 @@ function register(registry) {
         sourceVersions: outcome.result.sourceVersions || {} }, { modelContent: text });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["search_files"]);
 }
 
 module.exports = { register };

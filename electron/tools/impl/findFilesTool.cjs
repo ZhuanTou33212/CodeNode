@@ -91,6 +91,7 @@ function register(registry) {
       return AgentToolResult.ok(text, { count: total, offset, nextOffset, files: page }, { modelContent: text });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["find_files"]);
 }
 
 module.exports = { register };

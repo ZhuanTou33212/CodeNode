@@ -75,6 +75,7 @@ function register(registry) {
       }
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["analyze_project"]);
 }
 
 module.exports = { register };

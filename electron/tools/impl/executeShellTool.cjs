@@ -584,6 +584,7 @@ function register(registry) {
         : AgentToolResult.error(head + body, { code: 'TIMEOUT', jobId, status: job.status, exitCode: job.exitCode, timedOut: true, ...page });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["execute_shell","poll_job"]);
 }
 
 // 导出收集器与前台 spawn 选项：用例要断言「输出有界」「POSIX 前台 detached」，

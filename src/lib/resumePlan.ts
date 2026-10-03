@@ -18,6 +18,17 @@ export interface ResumeStepLike {
   idemKey?: string | null;
 }
 
+export interface ResumeWaitLike {
+  waitId?: string;
+  kind?: string;
+  toolCallId?: string | null;
+  taskId?: string | null;
+  what?: string | null;
+  level?: string | null;
+  capability?: string | null;
+  scope?: string[] | null;
+}
+
 export interface ResumePlanLike {
   ok?: boolean;
   runId?: string;
@@ -34,6 +45,7 @@ export interface ResumePlanLike {
   pendingSteps?: ResumeStepLike[];
   completedSteps?: ResumeStepLike[];
   skippedByLedger?: { tool?: string; idemKey?: string | null; reason?: string }[];
+  pendingWaits?: ResumeWaitLike[];
 }
 
 export interface ResumePlanView {

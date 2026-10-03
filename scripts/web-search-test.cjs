@@ -197,7 +197,7 @@ function registry(enabled, config) {
      */
     /** @type {any} */
     let handler = null;
-    webSearch.register({ register: (_name, _desc, _schema, fn) => { handler = fn; } });
+    webSearch.register({ register: (_name, _desc, _schema, fn) => { handler = fn; }, declareContract: () => true });
     assert(typeof handler === 'function', '未能从 register 捕获 handler');
     const inner = await handler(contextFor(config, policyDeny), { query: 'x' });
     check('[F] 工具自身也拦（纵深防御：注册表门禁之外的第二道）', inner.ok === false && /sandbox\.network=deny/.test(String(inner.text)), String(inner.text).slice(0, 80));

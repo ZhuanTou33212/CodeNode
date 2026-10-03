@@ -105,6 +105,7 @@ const HONEST = { content: '结论：alpha 是首行 [a.txt#L1-L2]。' };
       agent.parseGroundingConfig({ 'agent.grounding.mode': 'ENFORCE!' }).mode === 'warn');
     check('A3 enforce 可配置且重试次数被钳制',
       agent.parseGroundingConfig({ 'agent.grounding.mode': 'enforce', 'agent.grounding.max_retries': '9' }).maxRetries === 3);
+    check('A4 semantic_mode 默认关闭且只接受 warn/enforce', agent.parseGroundingConfig({}).semanticMode === 'off' && agent.parseGroundingConfig({ 'agent.grounding.semantic_mode': 'enforce' }).semanticMode === 'enforce');
   }
 
   // ======================= B. warn（默认）：只上报，不拦 =======================

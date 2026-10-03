@@ -50,6 +50,7 @@ function register(registry) {
       return AgentToolResult.ok(lines.join('  |  '), { ...info, root, workerMode: outcome.mode });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["project_info"]);
 }
 
 module.exports = { register };

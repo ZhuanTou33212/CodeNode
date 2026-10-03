@@ -138,6 +138,7 @@ function register(registry) {
       }
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["edit_file"]);
 }
 
 module.exports = { register };

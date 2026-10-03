@@ -106,6 +106,8 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 更多资料：[模型协议](docs/model-protocol-multi-provider-2026-09-23.md) · [项目检索](docs/agentic-rag-scalar-vector.md) · [发布流程](docs/release-process.md)
 
+当前补齐工作及逐项验收范围见[生产能力补齐记录](docs/production-gap-roadmap.md)。[模型路由说明](docs/model-routing.md)介绍显式候选、任务映射和故障切换；可配置 Run 费用硬上限，实际模型、重试及检索辅助请求共用额度。
+
 ## 许可证
 
 [MIT](LICENSE)

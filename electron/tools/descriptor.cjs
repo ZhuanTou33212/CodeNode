@@ -19,6 +19,8 @@
  */
 'use strict';
 
+const { normalizeOutputSchema } = require('./outputSchema.cjs');
+
 /** 只读工具：可安全重复执行、结果可缓存、可在只读上下文里执行 */
 const READ_ONLY_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
@@ -171,7 +173,9 @@ function normalizeDescriptor(input) {
     version: String(d.version || '1'),
     description: String(d.description || ''),
     inputSchema: d.inputSchema == null ? null : d.inputSchema,
-    outputSchema: d.outputSchema == null ? null : d.outputSchema,
+    // Success/partial payload contract: validates AgentToolResult.data. null/'none'
+    // preserve legacy tools; unsupported assertions fail before the tool can run.
+    outputSchema: normalizeOutputSchema(d.outputSchema),
     readOnly,
     // 未声明时：只读工具视为幂等（重放安全），写工具视为不幂等
     idempotent: d.idempotent === undefined ? readOnly : d.idempotent === true,

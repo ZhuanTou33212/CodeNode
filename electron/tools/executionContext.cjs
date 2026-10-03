@@ -114,7 +114,7 @@ function safeCall(fn, fallback) {
  * 组装一次工具调用的执行上下文。
  * @param {any} source 底层 AgentToolContext（或另一个 ExecutionContext —— 会先解包，支持套娃调用）
  * @param {any} descriptor 该工具的契约
- * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string }} [callInfo]
+ * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string, traceContext?: any }} [callInfo]
  */
 function createExecutionContext(source, descriptor, callInfo) {
   const base = (source && executionContextBases.get(source)) || source || {};
@@ -184,6 +184,8 @@ function createExecutionContext(source, descriptor, callInfo) {
   }, false);
 
   const ctx = {};
+  const traceContext = info.traceContext || safeCall(() => base.traceContext(), null);
+  ctx.traceContext = () => traceContext;
 
   // ---- 面 1：标识与运行信息（每个动作都能带回 runId/turnId/toolCallId/attemptId） ----
   ctx.exec = Object.freeze({
@@ -253,7 +255,7 @@ function createExecutionContext(source, descriptor, callInfo) {
   const checkpointHybrid = (type, payload) => safeCall(() => base.checkpoint(type, payload), null);
   checkpointHybrid.toolIntent = (payload) => safeCall(() => base.checkpoint('tool_intent', payload), null);
   checkpointHybrid.toolCommit = (payload) => safeCall(() => base.checkpoint('tool_commit', payload), null);
-  checkpointHybrid.messages = (messages, reason) => safeCall(() => base.checkpointMessages(messages, reason), null);
+  checkpointHybrid.messages = (messages, reason, controlState) => safeCall(() => base.checkpointMessages(messages, reason, controlState), null);
   ctx.checkpoint = checkpointHybrid;
 
   const uiHybrid = (action, args) => (allow('ui.interact') ? base.ui(action, args) : Promise.resolve(deny('ui') || false));
@@ -304,9 +306,19 @@ function createExecutionContext(source, descriptor, callInfo) {
     if (typeof base.planSessionId === 'function') ctx.planSessionId = () => safeCall(() => base.planSessionId(), '');
     if (typeof base.planOwnerExists === 'function') ctx.planOwnerExists = (taskId) => safeCall(() => base.planOwnerExists(taskId), false) === true;
   }
+  // Only retrieval needs access to the request budget for embeddings/reranking.
+  if (toolName === 'retrieve_context' && typeof base.modelRuntime === 'function') {
+    ctx.modelRuntime = () => ({ ...base.modelRuntime(), traceContext,
+      traceProjectRoot: safeCall(() => base.projectRoot(), null) });
+  }
   for (const [method, rule] of Object.entries(GATED_METHODS)) {
     if (HYBRID_METHODS.includes(method)) continue;
     if (typeof base[method] !== 'function') continue;
+    if (method === 'fork') {
+      ctx.fork = (overrides) => allow(...rule.caps)
+        ? base.fork({ ...(overrides || {}), traceContext }) : (deny(method), rule.fallback);
+      continue;
+    }
     ctx[method] = (...args) => (allow(...rule.caps) ? base[method](...args) : (deny(method), rule.fallback));
   }
 

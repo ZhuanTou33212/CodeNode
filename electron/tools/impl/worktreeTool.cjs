@@ -169,6 +169,7 @@ function register(registry) {
       return AgentToolResult.error('未知 action：' + action + '（可选 list / create / inspect_merge / merge / remove）', { code: 'ARG_SCHEMA', tool: 'worktree' });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["worktree"]);
 }
 
 module.exports = { register };

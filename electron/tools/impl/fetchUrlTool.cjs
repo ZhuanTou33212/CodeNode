@@ -20,5 +20,6 @@ function register(registry) {
         return AgentToolResult.error('抓取失败：' + error.message);
       }
     });
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["fetch_url"]);
 }
 module.exports = { register };

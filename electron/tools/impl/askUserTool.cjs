@@ -32,6 +32,7 @@ function register(registry) {
       return AgentToolResult.ok('用户回答：' + answer, { answer });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["ask_user"]);
 }
 
 module.exports = { register };

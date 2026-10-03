@@ -20,7 +20,7 @@ const EXPECTED = {
   'project.cjs': [
     'graph:save', 'graph:open',
     'project:choose', 'project:create', 'project:list', 'project:read', 'project:write', 'project:search',
-    'project:run', 'project:run:start', 'project:run:stop', 'project:run:input',
+    'project:run', 'project:run:start', 'project:run:stop', 'project:run:input', 'project:workflow-state', 'project:workflow-execute',
     'project:save', 'project:load', 'extensions:list',
   ],
   'agent.cjs': [
@@ -29,7 +29,7 @@ const EXPECTED = {
     'agent:events',
     'agent:plan-read',
     'agent:rollback-plan', 'agent:rollback-apply', 'agent:steer',
-    'agent:subagents',
+    'agent:subagents', 'agent:feedback', 'agent:feedback-export', 'agent:feedback-review', 'agent:time-travel',
   ],
 };
 

@@ -317,6 +317,7 @@ function register(registry) {
       );
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["read_file"]);
 }
 
 module.exports = { register };

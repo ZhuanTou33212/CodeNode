@@ -147,6 +147,7 @@ function register(registry) {
       return AgentToolResult.ok(lines.join('\n'), data);
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["code_review"]);
 }
 
 module.exports = { register };

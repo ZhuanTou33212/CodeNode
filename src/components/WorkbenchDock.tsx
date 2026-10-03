@@ -12,6 +12,7 @@ import { summarizeResumePlan } from '../lib/resumePlan';
 import RunReplayPanel from './RunReplayPanel';
 import RagSettingsPanel from './RagSettingsPanel';
 import { prepareTemplate, missingTemplateDeps, parseTemplateDeps, type TemplateDeps } from '../lib/workflowTemplate';
+import { workflowGraph, workflowSignature, workflowReviewIds } from '../lib/workflowRunState';
 import type { Graph } from '../types';
 import type { Node } from '@xyflow/react';
 
@@ -71,6 +72,9 @@ type ResumePlan = {
   completedSteps?: { tool: string; idemKey: string | null; at: string | null }[];
   skippedByLedger?: { tool: string; idemKey: string | null; reason: string }[];
   unknownEffects?: { tool: string; effect: string }[];
+  pendingWaits?: { waitId: string; kind: string; toolCallId: string | null; taskId: string | null; what?: string | null; level?: string | null }[];
+  checkpointCount?: number;
+  messageCheckpointCount?: number;
 };
 
 type MetricsView = {
@@ -343,11 +347,17 @@ function RunsPanel() {
   const createCheckpoint = useCheckpointStore((s) => s.create);
   const [items, setItems] = useState<RunItem[]>([]);
   const [running, setRunning] = useState(false);
+  const workflowRunning = useRef(false);
   const cancel = useRef(false);
-  const runStateKey = `codenode.runstate.${root || 'no-project'}.${useSessionStore((s) => s.activeId) || 'canvas'}`;
+  const workflowId = useSessionStore((s) => s.activeId) || 'canvas';
+  const runStateKey = `codenode.runstate.${root || 'no-project'}.${workflowId}`;
+  const executionSignature = workflowSignature(workflowGraph(nodes, edges));
   const [resumeAvailable, setResumeAvailable] = useState(false);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [resumePlan, setResumePlan] = useState<ResumePlan | null>(null);
+  // Time Travel selection is kept in the recovery panel so the chosen
+  // checkpoint is visible and reviewable before a branch is created.
+  const [timeTravelCheckpoint, setTimeTravelCheckpoint] = useState<string>('');
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   // §4.2：Run 级文件回滚
   const [rollbackRuns, setRollbackRuns] = useState<AgentRun[]>([]);
@@ -369,11 +379,21 @@ function RunsPanel() {
   const view = resumePlan ? summarizeResumePlan(resumePlan, resumePlan.prompt) : null;
 
   useEffect(() => {
-    let saved: { completed?: string[]; outputs?: Record<string, string>; attempts?: Record<string, number> } = {};
-    try { saved = JSON.parse(localStorage.getItem(runStateKey) || '{}'); setResumeAvailable(!!localStorage.getItem(runStateKey)); } catch {}
-    const completed = new Set(saved.completed || []);
-    setItems(nodes.map((n) => ({ id: n.id, label: String((n.data as Record<string, unknown>)?.label || n.id), type: n.type || 'task', status: completed.has(n.id) ? 'done' : String((n.data as Record<string, unknown>)?.status || 'pending') as RunItem['status'], output: saved.outputs?.[n.id], attempts: saved.attempts?.[n.id] || 0 })));
-  }, [nodes.length, runStateKey]);
+    let alive = true;
+    if (workflowRunning.current) return () => { alive = false; };
+    setItems(nodes.map((n) => ({ id: n.id, label: String(n.data?.label || n.id), type: n.type || 'task', status: 'pending' })));
+    setResumeAvailable(false);
+    if (root && nodes.length && window.codenode?.workflowState) {
+      void window.codenode.workflowState(root, workflowId, { action: 'read', graph: workflowGraph(nodes, edges) }).then((result) => {
+        if (!alive || workflowRunning.current || !result.ok || !result.state) return;
+        const state = result.state;
+        setResumeAvailable(state.hasHistory && !state.complete);
+        setItems(nodes.map((n) => ({ id: n.id, label: String(n.data?.label || n.id), type: n.type || 'task',
+          status: state.completed.includes(n.id) ? 'done' : 'pending', output: state.outputs[n.id], attempts: state.attempts[n.id] || 0 })));
+      }).catch(() => {});
+    }
+    return () => { alive = false; };
+  }, [executionSignature, root, workflowId]);
 
   useEffect(() => {
     let alive = true;
@@ -466,7 +486,11 @@ function RunsPanel() {
   const inspectResume = async (runId: string) => {
     if (!root || !window.codenode?.agentResumePlan) return;
     setRecoveryBusy(true);
-    try { setResumePlan(await window.codenode.agentResumePlan(root, runId)); }
+    try {
+      const plan = await window.codenode.agentResumePlan(root, runId);
+      setResumePlan(plan);
+      setTimeTravelCheckpoint(String(Math.max(0, Number(plan.messageCheckpointCount || 0) - 1)));
+    }
     catch (e) { reportError('查看恢复计划失败', e, report); }
     finally { setRecoveryBusy(false); }
   };
@@ -524,6 +548,23 @@ function RunsPanel() {
     ).finally(() => setRecoveryBusy(false));
   };
 
+  const createTimeTravel = () => {
+    const api = window.codenode;
+    if (busy || !root || !resumePlan?.runId || !api?.agentTimeTravel) return;
+    const sourceRunId = resumePlan.runId;
+    setRecoveryBusy(true);
+    void fireAndReport(async () => {
+      const max = Math.max(0, Number(resumePlan.messageCheckpointCount || 0) - 1);
+      const parsed = Number(timeTravelCheckpoint);
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) throw new Error('请选择有效的消息检查点');
+      const index = parsed;
+      const branchId = 'time-travel-' + Date.now().toString(36);
+      const result = await api.agentTimeTravel(root, sourceRunId, branchId, index);
+      if (!result.ok) throw new Error(result.error || '无法创建 Time Travel 分支');
+      report('已创建 Time Travel 分支：' + branchId + '；源 Run 和外部副作用保持不变，继续前需要人工复核');
+    }, '创建 Time Travel 分支失败', report).finally(() => setRecoveryBusy(false));
+  };
+
   /** 立即停掉所有在跑的 Agent 请求（#7：「全部停止」出口） */
   const stopEverything = () => {
     const ids = stopAll();
@@ -574,95 +615,77 @@ function RunsPanel() {
   };
 
   const start = async () => {
-    if (running || !nodes.length) return;
+    if (workflowRunning.current || !nodes.length) return;
     cancel.current = false;
-    createCheckpoint('运行前自动检查点');
-    const order = topoNodes(nodes, edges);
-    let saved: { completed?: string[]; outputs?: Record<string, string>; attempts?: Record<string, number> } = {};
-    try { saved = JSON.parse(localStorage.getItem(runStateKey) || '{}'); } catch {}
-    const completed = new Set(saved.completed || []);
-    const outputs = { ...(saved.outputs || {}) };
-    const attempts = { ...(saved.attempts || {}) };
-    setRunning(true);
-    setItems(order.map((node) => ({ id: node.id, label: String((node.data as Record<string, unknown>)?.label || node.id), type: node.type || 'task', status: completed.has(node.id) ? 'done' : 'pending', output: outputs[node.id], attempts: attempts[node.id] || 0 })));
-    for (const node of order) {
-      if (cancel.current) break;
-      if (completed.has(node.id)) continue;
-      const label = String((node.data as Record<string, unknown>)?.label || node.id);
-      const contract = node.data as Record<string, unknown>;
-      const upstream = edges.filter((edge) => edge.target === node.id).map((edge) => ({ id: edge.source, label: String((nodes.find((item) => item.id === edge.source)?.data as Record<string, unknown> | undefined)?.label || edge.source), output: outputs[edge.source] || '' }));
-      const input = upstream.map((item) => `${item.label} (${item.id}): ${item.output || '尚无输出'}`).join('\n');
-      const missing = upstream.filter((item) => !completed.has(item.id) || !item.output);
-      if (contract.requiresInput && (!upstream.length || missing.length)) {
-        const failure = !upstream.length ? '需要上游输出，但没有连入节点' : '缺少上游输出：' + missing.map((item) => item.label).join('、');
-        updateNodeData(node.id, { status: 'blocked' });
-        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure } : item));
-        break;
-      }
-      if (contract.confirmWrite && !window.confirm(`即将执行「${label}」\n可能写入：${String(contract.writeScope || '未声明范围')}\n继续执行？`)) {
-        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure: '用户取消写入确认' } : item));
-        updateNodeData(node.id, { status: 'blocked' });
-        break;
-      }
-      if ((attempts[node.id] || 0) > 0 && ['task', 'stage', 'tool'].includes(node.type || '') && !window.confirm(`正在重跑「${label}」。上次尝试可能已经写入文件或画布；请先检查当前状态。\n已声明范围：${String(contract.writeScope || '未声明')}\n继续重跑？`)) {
-        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure: '重跑前需要复核副作用' } : item));
-        break;
-      }
-      attempts[node.id] = (attempts[node.id] || 0) + 1;
-      updateNodeData(node.id, { status: 'running' });
-      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: 'running', input, attempts: attempts[node.id] } : x));
-      const command = commandFromNode(node);
-      const prompt = String((node.data as Record<string, unknown>)?.prompt || '').trim();
-      let output = command ? `运行：${command}` : '';
-      let failed = false;
-      if (['start', 'end', 'file', 'object', 'scope'].includes(node.type || '')) {
-        output = '结构节点已通过';
-      } else if (command && root && window.codenode?.runProjectCommand) {
-        const res = await window.codenode.runProjectCommand(root, command, 180);
-        output += `\n${res.output || ''}`;
-        failed = !res.ok;
-      } else if (!command && prompt && root && window.codenode?.agentChat && ['task', 'stage', 'tool'].includes(node.type || '')) {
-        const requestId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const planSessionId = useSessionStore.getState().activeId;
-        const memoryConversationId = useSessionStore.getState().memoryConversationId;
-        const memoryTaskEpoch = useSessionStore.getState().memoryTaskEpoch;
-        const res = await window.codenode.agentChat({
-          projectRoot: root,
-          prompt: `执行工作流节点「${label}」：\n${prompt}\n上游结果：\n${input.slice(0, 6000) || '无'}\n输出名称：${String(contract.outputName || label)}\n完成条件：${String(contract.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(contract.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
-          history: [],
-          canvasSummary: JSON.stringify(nodes.map((item) => ({ id: item.id, type: item.type, label: (item.data as Record<string, unknown>)?.label, status: (item.data as Record<string, unknown>)?.status }))),
-          nodeId: node.id,
-          requestId,
-          sessionId: planSessionId || undefined,
-          memoryConversationId: memoryConversationId || undefined,
-          memoryTaskEpoch,
-          document: { root: useGraphStore.getState().getDocument() },
-          projectFile: useProjectStore.getState().projectFile || undefined,
-        });
-        output = `Agent：${res.reply || res.error || '无返回内容'}`;
-        failed = !res.ok;
-      } else if (!command && prompt) {
-        output = '需要项目根目录和 Agent 配置才能执行此节点';
-        failed = true;
-      } else {
-        output = '无执行内容：该节点需要填写 Prompt 或以 run:/$/命令开头';
-        failed = true;
-      }
-      updateNodeData(node.id, { status: failed ? 'failed' : 'done' });
-      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: failed ? 'failed' : 'done', output, failure: failed ? (command ? '命令失败' : 'Agent 或配置失败') : undefined } : x));
-      outputs[node.id] = output;
-      if (!failed) completed.add(node.id);
-      try { localStorage.setItem(runStateKey, JSON.stringify({ completed: [...completed], outputs, attempts, updatedAt: Date.now() })); } catch {}
-      if (failed) break;
+    const orphan = nodes.find((node) => node.data?.requiresInput && !edges.some((edge) => edge.target === node.id));
+    if (orphan) {
+      updateNodeData(orphan.id, { status: 'blocked' });
+      setItems((list) => list.map((item) => item.id === orphan.id ? { ...item, status: 'blocked', failure: '需要上游输出，但没有连入节点' } : item));
+      return;
     }
-    runFlow();
-    createCheckpoint('运行后检查点');
-    void saveProject();
-    if (!cancel.current && order.every((node) => completed.has(node.id))) {
-      try { localStorage.removeItem(runStateKey); } catch {}
-      setResumeAvailable(false);
-    } else setResumeAvailable(true);
-    setRunning(false);
+    const api = window.codenode;
+    if (!root || !api?.workflowState) { report('工作流恢复存储不可用，无法开始执行'); return; }
+    const graph = workflowGraph(nodes, edges);
+    const originalSignature = workflowSignature(graph);
+    const stillCurrent = () => root === useProjectStore.getState().root && workflowId === (useSessionStore.getState().activeId || 'canvas')
+      && originalSignature === workflowSignature(workflowGraph(useGraphStore.getState().nodes, useGraphStore.getState().edges));
+    const assertCurrent = () => { if (!stillCurrent()) throw new Error('项目或工作流执行合同已变化，请重新检查后运行'); };
+    workflowRunning.current = true;
+    setRunning(true);
+    createCheckpoint('运行前自动检查点');
+    try {
+      let result = await api.workflowState(root, workflowId, { action: 'read', graph });
+      if (!result.ok || !result.state) throw new Error(result.error || '读取工作流恢复记录失败');
+      if (result.state.complete) {
+        result = await api.workflowState(root, workflowId, { action: 'restart', graph, expectedRevision: result.state.revision });
+        if (!result.ok || !result.state) throw new Error(result.error || '无法开始新的工作流运行');
+      }
+      let state = result.state;
+      let legacy = false;
+      try { legacy = !!localStorage.getItem(runStateKey); } catch {}
+      if (legacy && !window.confirm('检测到旧版工作流执行记录，无法确认之前操作的完整结果。请核对当前文件和画布后，确认重新运行。')) return;
+      const order = state.order.map((id) => nodes.find((node) => node.id === id)!);
+      setItems(order.map((node) => ({ id: node.id, label: String(node.data?.label || node.id), type: node.type || 'task', status: state.completed.includes(node.id) ? 'done' : 'pending', output: state.outputs[node.id], attempts: state.attempts[node.id] || 0 })));
+      for (const node of order) {
+        if (cancel.current) break;
+        assertCurrent();
+        if (state.completed.includes(node.id)) continue;
+        const contract = node.data as Record<string, unknown>;
+        const label = String(contract.label || node.id);
+        const upstream = edges.filter((edge) => edge.target === node.id).map((edge) => ({ id: edge.source, label: String(nodes.find((item) => item.id === edge.source)?.data?.label || edge.source), output: state.outputs[edge.source] || '' }));
+        const input = upstream.map((item) => `${item.label} (${item.id}): ${item.output || '尚无输出'}`).join('\n');
+        const missing = upstream.filter((item) => !state.completed.includes(item.id) || !item.output);
+        const block = (failure: string) => {
+          updateNodeData(node.id, { status: 'blocked' });
+          setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure } : item));
+        };
+        if (contract.requiresInput && missing.length) { block('缺少上游输出：' + missing.map((item) => item.label).join('、')); break; }
+        if (state.pending.some((item) => item.active)) { block('工作流节点仍在执行，不能重复运行'); break; }
+        assertCurrent();
+        const executed = await api.workflowExecute(root, workflowId, {
+          graph, nodeId: node.id, expectedRevision: state.revision, legacyRecovery: legacy,
+        });
+        if (!executed.ok || !executed.state) { block(executed.error || '主进程工作流执行失败'); break; }
+        state = executed.state;
+        if (legacy) { try { localStorage.removeItem(runStateKey); } catch {} legacy = false; }
+        let output = '';
+        const failed = executed.executionOk !== true;
+        output = String(executed.output || '');
+        assertCurrent();
+        updateNodeData(node.id, { status: failed ? 'failed' : 'done' });
+        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: failed ? 'failed' : 'done', output, failure: failed ? output : undefined } : item));
+        if (failed) break;
+      }
+      setResumeAvailable(state.hasHistory && !state.complete);
+      if (stillCurrent()) { runFlow(); createCheckpoint('运行后检查点'); void saveProject(); }
+    } catch (error) { reportError('工作流已停止', error, report); }
+    finally {
+      workflowRunning.current = false;
+      setRunning(false);
+      if (!stillCurrent()) {
+        setItems(useGraphStore.getState().nodes.map((node) => ({ id: node.id, label: String(node.data?.label || node.id), type: node.type || 'task', status: 'pending' })));
+      }
+    }
   };
 
   return (
@@ -710,7 +733,23 @@ function RunsPanel() {
                 </div>
               ) : null}
               {view.pendingLabels.length ? <div>待办 {view.pendingLabels.length} 步：{view.pendingLabels.slice(0, 8).join('、')}</div> : null}
+              {resumePlan.pendingWaits?.length ? <div>待处理审批：{resumePlan.pendingWaits.map((item) => item.what || item.toolCallId || item.waitId).slice(0, 6).join('、')}（旧令牌不会恢复，确认后会重新签发一次性令牌）</div> : null}
               <div className="dock-recovery-actions">
+                <label className="dock-time-travel-picker">
+                  <span>分支检查点</span>
+                  <select
+                    value={timeTravelCheckpoint}
+                    onChange={(event) => setTimeTravelCheckpoint(event.target.value)}
+                    disabled={busy || recoveryBusy || !resumePlan.messageCheckpointCount}
+                    aria-label="选择 Time Travel 消息检查点"
+                  >
+                    {Array.from({ length: Number(resumePlan.messageCheckpointCount || 0) }, (_, index) => {
+                      const latest = Number(resumePlan.messageCheckpointCount || 0) - 1;
+                      return <option key={index} value={String(index)}>#{index}{index === latest ? '（最新）' : ''}</option>;
+                    })}
+                  </select>
+                </label>
+                <button onClick={createTimeTravel} disabled={busy || recoveryBusy || !window.codenode?.agentTimeTravel || !resumePlan.messageCheckpointCount}>创建 Time Travel 分支</button>
                 <button className="dock-danger" onClick={forceResume} disabled={busy} title={view.forceResumePrompt}>了解风险，强制续跑</button>
                 <button onClick={retryResume} disabled={busy} title={view.retryPrompt}>按当前状态重试</button>
               </div>
@@ -824,7 +863,7 @@ function ExtensionsPanel() {
     return () => { alive = false; };
   }, [root]);
   const groups = ['内置工具', 'MCP', '插件', 'Skills', 'Hooks', '项目扩展'];
-  return <div className="dock-extensions"><div className="dock-run-toolbar"><div><strong>扩展与工具</strong><span className="dock-file-meta">工具按注册表统一管理；项目可通过 .codenode/extensions.json 声明扩展</span></div><span className="dock-extension-count">{loading ? '加载中…' : `${items.length} 个已发现`}</span></div><div className="dock-extension-cards">{groups.slice(1).map((group) => <div className="dock-extension-card" key={group}><span className="dock-extension-icon">{group[0]}</span><div><strong>{group}</strong><p>可通过项目扩展清单接入</p></div><span className="dock-extension-state">可用</span></div>)}</div><div className="dock-tool-list">{items.map((item) => <div className="dock-tool-row" key={`${item.source}-${item.name}`}><span className="dock-tool-state" /><div><strong>{item.name}</strong><span>{item.kind} · {item.source}</span><p>{item.description || '无描述'}</p></div></div>)}</div></div>;
+  return <div className="dock-extensions"><div className="dock-run-toolbar"><div><strong>扩展与工具</strong><span className="dock-file-meta">工具按注册表统一管理；项目可通过 .codenode/extensions.json 声明扩展</span></div><span className="dock-extension-count">{loading ? '加载中…' : `${items.length} 个已发现`}</span></div><div className="dock-extension-cards">{groups.slice(1).map((group) => <div className="dock-extension-card" key={group}><span className="dock-extension-icon">{group[0]}</span><div><strong>{group}</strong><p>可通过项目扩展清单接入</p></div><span className="dock-extension-state">可用</span></div>)}</div><div className="dock-tool-list">{items.map((item) => <div className="dock-tool-row" key={`${item.source}-${item.name}`}><span className="dock-tool-state" /><div><strong>{item.name}</strong><span>{item.kind} · {item.source}</span><p>{item.description || '无描述'}</p>{item.contract ? <small>{item.contract.outputSchema ? '输出契约' : '未声明输出契约'} · {item.contract.readOnly ? '只读' : '可写'}{item.contract.timeoutMs != null ? ` · ${item.contract.timeoutMs}ms` : ''}</small> : null}</div></div>)}</div></div>;
 }
 
 export default function WorkbenchDock() {

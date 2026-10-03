@@ -81,6 +81,7 @@ const runStore = require('./runStore.cjs');
 const sandbox = require('./sandbox.cjs');
 // IPC 按域拆出的模块（各自导出 register(ctx)，依赖显式传入；auditLog 也随工程域搬走了）
 const { auditLog } = require('./ipc/project.cjs');
+const agentIpc = require('./ipc/agent.cjs');
 
 // ---------------------------------------------------------------------------
 // IPC 接线区：各域实现在 electron/ipc/*.cjs，依赖显式传入（这里只有 app 相关的 userData 目录）
@@ -88,8 +89,9 @@ const { auditLog } = require('./ipc/project.cjs');
 const ipcContext = { ipcMain, userDataDir: () => app.getPath('userData') };
 require('./ipc/models.cjs').register({ ...ipcContext, agent });
 require('./ipc/metrics.cjs').register({ ...ipcContext, agent, sandbox, runStore });
-require('./ipc/project.cjs').register({ ...ipcContext, dialog, getFocusedWindow: () => BrowserWindow.getFocusedWindow(), sandbox });
-require('./ipc/agent.cjs').register(ipcContext);
+agentIpc.register(ipcContext);
+require('./ipc/project.cjs').register({ ...ipcContext, dialog, getFocusedWindow: () => BrowserWindow.getFocusedWindow(), sandbox,
+  runWorkflowChat: agentIpc.runWorkflowChat });
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 

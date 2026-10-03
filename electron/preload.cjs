@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('codenode', {
   writeProjectFile: (root, relPath, content, backup) => ipcRenderer.invoke('project:write', root, relPath, content, backup),
   searchProject: (root, query, maxResults) => ipcRenderer.invoke('project:search', root, query, maxResults),
   runProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run', root, command, timeoutSeconds),
+  workflowState: (root, workflowId, request) => ipcRenderer.invoke('project:workflow-state', root, workflowId, request),
+  workflowExecute: (root, workflowId, request) => ipcRenderer.invoke('project:workflow-execute', root, workflowId, request),
   startProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run:start', root, command, timeoutSeconds),
   stopProjectCommand: (sessionId) => ipcRenderer.invoke('project:run:stop', sessionId),
   sendProjectCommandInput: (sessionId, input) => ipcRenderer.invoke('project:run:input', sessionId, input),
@@ -36,9 +38,13 @@ contextBridge.exposeInMainWorld('codenode', {
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),
+  agentFeedback: (root, payload) => ipcRenderer.invoke('agent:feedback', root, payload),
+  agentFeedbackExport: (root, options) => ipcRenderer.invoke('agent:feedback-export', root, options),
+  agentFeedbackReview: (root, id, expectedOutput, reviewer) => ipcRenderer.invoke('agent:feedback-review', root, id, expectedOutput, reviewer),
   agentResumePlan: (root, runId) => ipcRenderer.invoke('agent:resume-plan', root, runId),
   agentReadPlan: (root, sessionId) => ipcRenderer.invoke('agent:plan-read', root, sessionId),
   agentResumeStart: (root, runId, replacementRunId) => ipcRenderer.invoke('agent:resume-start', root, runId, replacementRunId),
+  agentTimeTravel: (root, sourceRunId, branchRunId, checkpointIndex) => ipcRenderer.invoke('agent:time-travel', root, sourceRunId, branchRunId, checkpointIndex),
   // 运行指标 / 成本 / 告警 / 执行隔离状态
   agentMetrics: (root) => ipcRenderer.invoke('agent:metrics', root),
   onAgentAlert: (cb) => {

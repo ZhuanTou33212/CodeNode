@@ -161,9 +161,15 @@ async function main() {
   const sandboxPolicy = sandbox.resolvePolicy(cfg.sandbox, { projectRoot, userDataDir: path.join(projectRoot, '.codenode') });
   sandbox.setDefaultPolicy(sandboxPolicy);
   cfg.requestBudget = new RequestBudget(cfg.limits && cfg.limits.maxTotalTokens,
-    { retryLimit: cfg.limits && cfg.limits.maxTotalRetries });
+    { retryLimit: cfg.limits && cfg.limits.maxTotalRetries, costLimitUsd: cfg.limits && cfg.limits.maxCostUsd, prices: cfg.costPrices });
   const runId = runStore.normalizeRunId('run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
   cfg.costRunId = runId;
+  const runSpan = require('../electron/eventBus.cjs').startSpan(projectRoot, {
+    spanKind: 'run', name: 'agent.run', runId, actor: 'main', attributes: { headless: true },
+  });
+  cfg.traceContext = runSpan.context;
+  cfg.traceProjectRoot = projectRoot;
+  cfg.costLedger = new (require('../electron/costLedger.cjs').CostLedger)({ projectRoot, runId, prices: cfg.costPrices });
 
   const denied = [];
   /**
@@ -196,6 +202,8 @@ async function main() {
     prompt,
     mode: cfg.tools.toolProfile,
   });
+  const taskRoute = require('../electron/taskRouter.cjs').routeTask({ prompt, canvas: false });
+  if (cfg.modelRouting?.routes?.[taskRoute.task]) cfg.modelTaskType = taskRoute.task;
   const registeredTools = registry.listTools().map((tool) => tool.name);
   let toolFace = {
     applied: false,
@@ -229,6 +237,7 @@ async function main() {
   const context = new AgentToolContext({
     projectRoot,
     runId,
+    traceContext: cfg.traceContext,
     sourceMessageId: runId,
     confirm,
     askUser: async () => {
@@ -241,6 +250,10 @@ async function main() {
       } catch {}
     },
     sandbox: sandboxPolicy,
+    ragConfig: cfg.rag,
+    modelRuntime: { budget: cfg.requestBudget, queue: require('../electron/requestQueue.cjs').modelQueue,
+      traceContext: cfg.traceContext, traceProjectRoot: projectRoot,
+      prices: cfg.costPrices, onUsage: (entry) => agent.recordCost(cfg, entry) },
     // web_search 后端配置（未启用时工具未注册，这里是「配了才用得上」的那份）
     webSearchConfig: ws,
     signal: undefined,
@@ -320,6 +333,7 @@ async function main() {
       timeoutMs: args.timeout ? Math.max(10, Math.floor(args.timeout)) * 1000 : null,
     });
   } catch (error) {
+    runSpan.end(error?.name === 'AbortError' ? 'cancelled' : 'error', { error });
     const message = String((error && error.message) || error);
     runStore.finishRun(projectRoot, runId, 'error', { error: message, headless: true });
     emit(args, { kind: 'error', error: message });
@@ -331,6 +345,8 @@ async function main() {
   const state = (result && result.state) || null;
   const failed = !!(result && result.error) || (state && state !== 'COMPLETED');
   const status = state === 'COMPLETED' ? 'completed' : state === 'CANCELLED' ? 'cancelled' : state === 'LIMIT_REACHED' ? 'limit' : failed ? 'error' : 'completed';
+  runSpan.end(state === 'CANCELLED' ? 'cancelled' : state === 'LIMIT_REACHED' ? 'limit' : failed ? 'error' : 'ok',
+    { usage: result?.usage, attributes: { state, stopReason: result?.stopReason || null } });
   runStore.finishRun(projectRoot, runId, status === 'completed' ? 'completed' : status === 'limit' ? 'error' : status, {
     state,
     stopReason: (result && result.stopReason) || null,
