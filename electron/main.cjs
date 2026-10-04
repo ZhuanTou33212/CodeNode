@@ -500,6 +500,9 @@ function createWindow() {
 // 该分支同步执行、在所有既有逻辑之前完成，`app.exit()` 立即结束进程，
 // 因此不会触发下面的 app.whenReady() 窗口创建，对既有行为零改动。
 if (process.argv.includes('--codenode-selftest')) {
+  // safeStorage needs Electron readiness. Do not create a normal window in
+  // this branch, and wait before encrypting/decrypting self-test model data.
+  app.whenReady().then(() => {
   const selfTest = require('./selfTest.cjs');
   let code = 1;
   try {
@@ -508,14 +511,19 @@ if (process.argv.includes('--codenode-selftest')) {
   } catch (error) {
     code = selfTest.emitResult({ ok: false, kind: 'codenode-selftest', error: String((error && error.stack) || error) }, process.argv);
   }
-  app.exit(code);
-}
+  // Normal shutdown lets Chromium flush the newly created encryption key.
+  // app.exit() can leave seeded models unreadable in the next process.
+  process.exitCode = code;
+  app.quit();
+  }).catch((error) => { console.error(error); app.exit(1); });
+} else {
 app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

@@ -652,7 +652,7 @@ function RunsPanel() {
         if (state.completed.includes(node.id)) continue;
         const contract = node.data as Record<string, unknown>;
         const label = String(contract.label || node.id);
-        const upstream = edges.filter((edge) => edge.target === node.id).map((edge) => ({ id: edge.source, label: String(nodes.find((item) => item.id === edge.source)?.data?.label || edge.source), output: state.outputs[edge.source] || '' }));
+        const upstream = (state.selectedInputs[node.id] || []).map((item) => ({ ...item, label: String(nodes.find((candidate) => candidate.id === item.id)?.data?.label || item.id) }));
         const input = upstream.map((item) => `${item.label} (${item.id}): ${item.output || '尚无输出'}`).join('\n');
         const missing = upstream.filter((item) => !state.completed.includes(item.id) || !item.output);
         const block = (failure: string) => {

@@ -112,6 +112,7 @@ interface WorkflowStateDto {
   graphDigest: string;
   completed: string[];
   skipped: string[];
+  selectedInputs: Record<string, { id: string; output: string }[]>;
   outputs: Record<string, string>;
   attempts: Record<string, number>;
   reviews: Record<string, string>;

@@ -68,6 +68,21 @@ try {
   const branchSource = prepare('branch', 'source', branched); settle('branch', branchSource, 'source-result', branched);
   const branchView = call('branch', 'read', {}, branched).state;
   check(branchView.skipped.includes('consumer') && branchView.complete, '条件边不满足时下游节点被安全跳过');
+  const routes = clone(graph);
+  routes.nodes.push({ id: 'unused', type: 'task', data: { prompt: 'never execute' } }, { id: 'merge', type: 'task', data: { requiresInput: true } });
+  routes.edges = [
+    { source: 'source', target: 'consumer', data: { condition: { op: 'contains', value: 'yes' } } },
+    { source: 'source', target: 'unused', data: { condition: { op: 'contains', value: 'no' } } },
+    { source: 'unused', target: 'merge' }, { source: 'consumer', target: 'merge' },
+  ];
+  settle('routes', prepare('routes', 'source', routes), 'yes', routes);
+  settle('routes', prepare('routes', 'consumer', routes), 'selected result', routes);
+  const selected = call('routes', 'read', {}, routes).state;
+  check(selected.skipped.includes('unused') && selected.selectedInputs.merge.length === 1 && selected.selectedInputs.merge[0].id === 'consumer', '合流只消费被选中分支的输出');
+  check(settle('routes', prepare('routes', 'merge', routes), 'merged', routes).executionOk, 'requiresInput 合流不被跳过分支阻塞');
+  const chain = clone(branched); chain.nodes.push({ id: 'tail', type: 'task', data: { prompt: 'never' } }); chain.edges.push({ source: 'consumer', target: 'tail' });
+  settle('skip-chain', prepare('skip-chain', 'source', chain), 'source-result', chain);
+  check(call('skip-chain', 'read', {}, chain).state.skipped.includes('tail'), '跳过会传播到普通后继且不执行');
   const contractGraph = clone(graph); contractGraph.nodes[0].data.completionCondition = 'contains:verified';
   const contractPrepared = prepare('contract', 'source', contractGraph);
   const contractFailed = settle('contract', contractPrepared, 'source-result', contractGraph);

@@ -413,11 +413,13 @@ function runSelfTest(options = {}) {
       && result.data.markerHits.projectFile;
     checks.versionMatch = expectVersion ? pkg.version === expectVersion : true;
 
-    if (!checks.modelsConfigReadable) warnings.push('未找到 models.json（首次运行时应用会自动初始化，或本次为纯 verify 模式）');
+    if (result.data.modelsConfig.error) warnings.push('模型配置不可读：' + result.data.modelsConfig.error);
+    else if (!checks.modelsConfigReadable) warnings.push('未找到 models.json（首次运行时应用会自动初始化，或本次为纯 verify 模式）');
     if (result.markerProvided && !checks.markerIntact) warnings.push('种子标记在部分数据中丢失，升级/回滚可能损坏用户数据');
     if (expectVersion && !checks.versionMatch) warnings.push('程序版本与期望不一致：实际 ' + pkg.version + '，期望 ' + expectVersion);
 
     result.ok = checks.projectRootExists
+      && !result.data.modelsConfig.error
       && checks.versionMatch
       && (result.markerProvided ? checks.markerIntact : true);
   } catch (error) {

@@ -102,14 +102,16 @@ function snapshot(state, graph) {
   const reviews = Object.create(null);
   const inputs = Object.create(null);
   const skipped = [];
+  const selectedInputs = Object.create(null);
   for (const id of graph.order) {
     const prior = state.records.filter((record) => record.nodeId === id);
     attempts[id] = prior.length;
     // Persisted outputs and edge order define exactly what is fed downstream.
     const allIncoming = graph.edges.filter((edge) => edge.target === id);
-    const incoming = allIncoming.filter((edge) => conditions.evaluate(edge.condition, outputs[edge.source] || '')).map((edge) => ({ id: edge.source, output: outputs[edge.source] || '' }));
+    const incoming = allIncoming.filter((edge) => !skipped.includes(edge.source) && completed.includes(edge.source) && conditions.evaluate(edge.condition, outputs[edge.source] || '')).map((edge) => ({ id: edge.source, output: outputs[edge.source] || '' }));
+    selectedInputs[id] = incoming;
     inputs[id] = digest(incoming);
-    if (allIncoming.length && allIncoming.every((edge) => edge.condition) && allIncoming.every((edge) => Object.prototype.hasOwnProperty.call(outputs, edge.source)) && incoming.length === 0) {
+    if (allIncoming.length && allIncoming.every((edge) => completed.includes(edge.source)) && incoming.length === 0 && !prior.some((record) => record.phase === 'prepared' || record.phase === 'failed')) {
       skipped.push(id);
       completed.push(id);
       outputs[id] = '';
@@ -123,7 +125,7 @@ function snapshot(state, graph) {
   }
   const pending = state.records.filter((record) => record.phase === 'prepared' || record.phase === 'failed')
     .map((record) => ({ id: record.id, nodeId: record.nodeId, label: record.label, active: record.phase === 'prepared' && live(record) }));
-  return { revision: state.revision, schemaVersion: graph.schemaVersion, graphDigest: graph.digest, completed, skipped, outputs, attempts, reviews, inputs, pending,
+  return { revision: state.revision, schemaVersion: graph.schemaVersion, graphDigest: graph.digest, completed, skipped, selectedInputs, outputs, attempts, reviews, inputs, pending,
     hasHistory: state.records.length > 0, complete: completed.length === graph.nodes.length, order: graph.order };
 }
 
@@ -157,7 +159,7 @@ function transact(root, workflowId, request = {}) {
         if ([...required].some((id) => !approved.has(id))) return { ok: false, needsReview: true, error: '旧执行可能已产生副作用，必须先复核再重跑', state: view };
         const incoming = graph.edges.filter((edge) => edge.target === node.id);
         if (incoming.some((edge) => !view.completed.includes(edge.source)) ||
-            (node.data.requiresInput && (!incoming.length || incoming.some((edge) => !view.outputs[edge.source])))) {
+            (node.data.requiresInput && (!view.selectedInputs[node.id].length || view.selectedInputs[node.id].some((item) => !item.output)))) {
           fail('上游节点尚未完成或缺少必要输出');
         }
         for (const record of data.records) if (record.phase === 'prepared' || record.phase === 'failed') { record.phase = 'reviewed'; record.reviewedAt = new Date().toISOString(); }

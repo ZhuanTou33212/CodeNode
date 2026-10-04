@@ -410,7 +410,7 @@ function register(ctx) {
         }
         if (!prompt || !['task', 'stage', 'tool'].includes(node.type || '')) return { ok: false, output: '无执行内容：该节点需要填写 Prompt 或命令' };
         if (typeof runWorkflowChat !== 'function') return { ok: false, output: 'Agent 工作流执行器未接线' };
-        const input = fullGraph.edges.filter((edge) => edge.target === node.id).map((edge) => ({ id: edge.source, output: state.outputs[edge.source] || '' }));
+        const input = state.selectedInputs[node.id] || [];
         const response = await runWorkflowChat(event, {
           projectRoot: root,
           prompt: `执行工作流节点「${String(data.label || node.id)}」：\n${prompt}\n上游结果：\n${input.map((item) => item.id + ': ' + item.output).join('\n') || '无'}\n输出名称：${String(data.outputName || data.label || node.id)}\n完成条件：${String(data.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(data.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
