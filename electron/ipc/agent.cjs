@@ -193,7 +193,7 @@ function register(ctx) {
   ipcMain.handle('agent:config', async (_event, projectRoot) => {
     const cfg = agent.loadConfig(projectRoot);
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
-    const store = modelStore.getModels(userDataDir(), cfg);
+    const store = modelStore.readUsableModels(userDataDir(), cfg);
     return {
       configured: !!cfg.apiKey,
       model: cfg.model,

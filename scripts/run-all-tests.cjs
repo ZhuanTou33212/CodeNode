@@ -85,6 +85,7 @@ const CORE = [
   // 不能只靠开发者手动运行专项脚本。
   'test:extension-contract',
   'test:pii',
+  'test:provider-models',
   'test:context-capability',
   'test:side-effect-idem',
   'test:save-project',
@@ -181,7 +182,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);

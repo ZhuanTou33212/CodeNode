@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('codenode', {
     return () => ipcRenderer.removeListener('agent:alert', listener);
   },
   modelsList: () => ipcRenderer.invoke('models:list'),
+  modelsDiscover: (provider, apiKey) => ipcRenderer.invoke('models:discover', provider, apiKey),
+  modelsConnect: (ticket, selectedId) => ipcRenderer.invoke('models:connect', ticket, selectedId),
   modelsSave: (model) => ipcRenderer.invoke('models:save', model),
   modelsDelete: (id) => ipcRenderer.invoke('models:delete', id),
   modelsActive: (id) => ipcRenderer.invoke('models:active', id),

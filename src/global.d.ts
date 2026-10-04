@@ -97,6 +97,7 @@ interface ModelSpecDto {
   apiBase?: string;
   apiKey?: string;
   apiKeySet?: boolean;
+  apiKeyError?: boolean;
   contextWindow: number;
   priceInput: number;
   priceInputHit: number;
@@ -190,6 +191,8 @@ interface CodenodeApi {
   ragCheck: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
   ragSave: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null }>;
+  modelsDiscover: (provider: string, apiKey: string) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; error?: string }>;
+  modelsConnect: (ticket: string, selectedId: string) => Promise<{ ok: boolean; error?: string }>;
   modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsActive: (id: string) => Promise<{ ok: boolean; activeId?: string | null; error?: string }>;

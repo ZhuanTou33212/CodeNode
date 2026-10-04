@@ -142,8 +142,45 @@ function getModels(userDataDir, cfg) {
 
 /** 按 id 查找模型配置 */
 function findModel(userDataDir, cfg, id) {
-  const store = getModels(userDataDir, cfg);
-  return store.models.find((m) => m && m.id === id) || null;
+  const store = readUsableModels(userDataDir, cfg);
+  const model = store.models.find((m) => m && m.id === id) || null;
+  if (model && model.apiKeyError) throw new Error('该模型的 Key 无法解密，请在管理模型中重新连接供应商');
+  return model;
+}
+
+function readRawModels(userDataDir) {
+  try {
+    const data = JSON.parse(fs.readFileSync(modelsFile(userDataDir), 'utf8'));
+    if (!data || !Array.isArray(data.models)) throw new Error('模型配置损坏，请先修复配置文件');
+    return data;
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function readUsableModels(userDataDir, cfg) {
+  const raw = readRawModels(userDataDir);
+  if (!raw) return getModels(userDataDir, cfg);
+  return { activeId: raw.activeId || null, models: raw.models.map((model) => {
+    try { return { ...model, apiKey: decryptSecret(model.apiKey) }; }
+    catch { return { ...model, apiKey: '', apiKeyError: true }; }
+  }) };
+}
+function saveConnection(userDataDir, models, apiKey, activeId) {
+  const raw = readRawModels(userDataDir) || { models: [] };
+  const encrypted = encryptSecret(apiKey);
+  const ids = new Set(models.map((model) => model.id));
+  const next = [...raw.models.filter((model) => !ids.has(model.id)), ...models.map((model) => ({ ...model, apiKey: encrypted }))];
+  fs.mkdirSync(userDataDir, { recursive: true });
+  const file = modelsFile(userDataDir); const temp = file + '.' + require('crypto').randomUUID() + '.tmp';
+  try { fs.writeFileSync(temp, JSON.stringify({ models: next, activeId }, null, 2), { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
+  finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+}
+function activateModel(userDataDir, id) {
+  const raw = readRawModels(userDataDir);
+  if (!raw || !raw.models.some((model) => model.id === id)) throw new Error('模型不存在');
+  const selected = raw.models.find((model) => model.id === id);
+  decryptSecret(selected.apiKey); // Only the selected Key needs to be readable.
+  const file = modelsFile(userDataDir); const temp = file + '.' + require('crypto').randomUUID() + '.tmp';
+  try { fs.writeFileSync(temp, JSON.stringify({ ...raw, activeId: id }, null, 2), { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
+  finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
 }
 
 /**
@@ -176,6 +213,9 @@ function normalizeModelInput(model) {
 }
 
 module.exports = {
+  readUsableModels,
+  saveConnection,
+  activateModel,
   getModels,
   findModel,
   readModels,

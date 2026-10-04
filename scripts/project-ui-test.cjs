@@ -17,6 +17,14 @@ const originalSaveDialog = dialog.showSaveDialog;
 const originalOpenDialog = dialog.showOpenDialog;
 dialog.showSaveDialog = async () => ({ canceled: false, filePath: projectFile });
 dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [invalidFile] });
+if (process.env.CODENODE_MODELS_UI_TEST === '1') {
+  require(process.env.CODENODE_UI_TEST_PACKAGE
+    ? path.join(path.resolve(process.env.CODENODE_UI_TEST_PACKAGE), 'resources', 'app.asar', 'electron', 'providerModels.cjs')
+    : '../electron/providerModels.cjs').discover = async (provider, key) => {
+    assert.equal(provider, 'deepseek'); assert.equal(key, 'synthetic-ui-key');
+    return ['alpha', 'beta'].map((name) => ({ id: 'deepseek:' + name, model: name, label: name, provider: 'deepseek', apiBase: 'https://api.deepseek.com', contextWindow: 128000, supportsEffort: false, priceInput: 0, priceInputHit: 0, priceOutput: 0 }));
+  };
+}
 require(process.env.CODENODE_UI_TEST_PACKAGE
   ? path.join(path.resolve(process.env.CODENODE_UI_TEST_PACKAGE), 'resources', 'app.asar', 'electron', 'main.cjs')
   : '../electron/main.cjs');
@@ -48,6 +56,50 @@ app.whenReady().then(async () => {
     console.log('AGENT VIEW', JSON.stringify(agentView));
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
+    if (process.env.CODENODE_MODELS_UI_TEST === '1') {
+      const modelFile = path.join(app.getPath('userData'), 'models.json');
+      const locked = { id: 'legacy', label: 'Legacy', model: 'legacy', apiKey: 'safe:v1:invalid-cipher' };
+      fs.writeFileSync(modelFile, JSON.stringify({ models: [locked], activeId: 'legacy' }));
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().openModelManager()');
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog")?.textContent.includes("需重新连接")'), '失效 Key 恢复提示');
+      assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".mm-connect-dialog input[type=password]").length'), 1);
+      await win.webContents.executeJavaScript(`(() => {
+        const input=document.querySelector('.mm-connect-dialog input[type=password]');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'synthetic-ui-key');
+        input.dispatchEvent(new Event('input',{bubbles:true}));
+      })()`);
+      await sleep(80);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.mm-connect-dialog button')).find(b=>b.textContent==='获取模型').click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelectorAll(".mm-choice").length===2'), '实时模型列表');
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog input[type=password]").value'), '');
+      await win.webContents.executeJavaScript('document.querySelectorAll(".mm-choice")[1].click()');
+      await sleep(80);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.mm-connect-dialog button')).find(b=>b.textContent==='连接并使用').click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('!Array.from(document.querySelectorAll(".mm-connect-dialog button")).some(b=>b.textContent==="连接并使用")'), '保存连接');
+      const stored = JSON.parse(fs.readFileSync(modelFile,'utf8'));
+      assert.equal(stored.activeId, 'deepseek:beta');
+      assert.deepEqual(stored.models.find(model=>model.id==='legacy'), locked);
+      assert.equal(fs.readFileSync(modelFile,'utf8').includes('synthetic-ui-key'), false);
+      const usable = require('../electron/modelStore.cjs').readUsableModels(app.getPath('userData'), {});
+      assert.equal(usable.models.find(model=>model.id==='deepseek:beta').apiKey, 'synthetic-ui-key');
+      assert.equal(usable.models.find(model=>model.id==='legacy').apiKeyError, true);
+      win.setSize(500, 740);
+      await sleep(200);
+      const narrow = await win.webContents.executeJavaScript(`(() => { const dialog=document.querySelector('.mm-connect-dialog'); const input=dialog.querySelector('input[type=password]'); const a=dialog.getBoundingClientRect(), b=input.getBoundingClientRect(); return {width:a.width, window:innerWidth, inputWidth:b.width, overflow:dialog.scrollWidth>dialog.clientWidth}; })()`);
+      assert.ok(narrow.width < narrow.window && narrow.inputWidth > 100 && !narrow.overflow, '窄窗口模型管理控件必须可见');
+      win.setSize(1300, 850);
+      await sleep(200);
+      if (process.env.CODENODE_UI_CAPTURE === '1') {
+        win.showInactive();
+        await sleep(200);
+        const screenshot = await Promise.race([win.webContents.capturePage(), sleep(5000).then(() => { throw new Error('Screenshot timed out'); })]);
+        fs.mkdirSync(path.join(__dirname, '..', 'out'), { recursive: true });
+        fs.writeFileSync(path.join(__dirname, '..', 'out', 'model-connection-ui.png'), screenshot.toPNG());
+        win.hide();
+      }
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeModelManager()');
+      console.log('MODEL CONNECTION UI: PASS (locked-key recovery, select model, encrypted save, legacy preservation)');
+    }
 
     fs.writeFileSync(invalidFile, 'invalid cnode file');
     await win.webContents.executeJavaScript('window.__codenodeProject.setState({root:null,projectFile:null})');

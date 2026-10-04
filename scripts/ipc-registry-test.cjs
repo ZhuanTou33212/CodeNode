@@ -15,7 +15,7 @@ const os = require('os');
 const path = require('path');
 
 const EXPECTED = {
-  'models.cjs': ['models:list', 'models:save', 'models:delete', 'models:active'],
+  'models.cjs': ['models:list', 'models:save', 'models:delete', 'models:active', 'models:discover', 'models:connect'],
   'metrics.cjs': ['agent:metrics'],
   'project.cjs': [
     'graph:save', 'graph:open',

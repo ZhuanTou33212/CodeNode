@@ -132,6 +132,8 @@
     "test:tool-descriptor": "node scripts/tool-descriptor-test.cjs",
     "test:extension-contract": "node scripts/extensions-contract-test.cjs",
     "test:pii": "node scripts/pii-test.cjs",
+    "test:provider-models": "node scripts/provider-models-test.cjs",
+    "test:model-connection-ui": "node scripts/run-electron.cjs scripts/model-connection-ui-test.cjs",
     "test:context-capability": "node scripts/context-capability-test.cjs",
     "test:fixture-shape": "node scripts/fixture-shape-test.cjs",
     "test:real-model-pr": "node scripts/real-model-pr-test.cjs",

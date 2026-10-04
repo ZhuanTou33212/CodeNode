@@ -298,7 +298,7 @@ function PromptComposer() {
         >
           {models.length === 0 && <option value="">未配置模型</option>}
           {models.map((m) => (
-            <option key={m.id} value={m.id}>
+            <option key={m.id} value={m.id} disabled={m.apiKeyError}>
               {m.label}
             </option>
           ))}

@@ -669,7 +669,7 @@ async function main() {
       const removedMethods = ['modelsPresets', 'modelsPresetApply', 'modelsTest', 'modelsFetch'];
       check('I2 preload 不再暴露这四条通道', removedMethods.every((m) => !preloadSrc.includes(m)));
       check('I3 类型声明同步（global.d.ts 里也没有）', removedMethods.every((m) => !dts.includes(m)));
-      check('I4 主进程只剩原有的四条模型通道', (ipcSrc.match(/ipcMain\.handle\(/g) || []).length === 4,
+        check('I4 主进程包含模型发现与确认连接通道', (ipcSrc.match(/ipcMain\.handle\(/g) || []).length === 6 && ipcSrc.includes('models:discover') && ipcSrc.includes('models:connect'),
         'handles=' + (ipcSrc.match(/ipcMain\.handle\(/g) || []).length);
       check('I5 模型管理仍在 App 里挂载（没把入口一起删掉）', /<ModelManager \/>/.test(read('src/App.tsx')));
       check('I6 「支持推理强度」仍然进了运行期（按模型置空 reasoningEffort）', /sel\.supportsEffort === false/.test(agentIpc));
