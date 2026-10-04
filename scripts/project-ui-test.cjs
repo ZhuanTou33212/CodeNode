@@ -17,7 +17,9 @@ const originalSaveDialog = dialog.showSaveDialog;
 const originalOpenDialog = dialog.showOpenDialog;
 dialog.showSaveDialog = async () => ({ canceled: false, filePath: projectFile });
 dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [invalidFile] });
-require('../electron/main.cjs');
+require(process.env.CODENODE_UI_TEST_PACKAGE
+  ? path.join(path.resolve(process.env.CODENODE_UI_TEST_PACKAGE), 'resources', 'app.asar', 'electron', 'main.cjs')
+  : '../electron/main.cjs');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(check, label) {
@@ -40,6 +42,12 @@ app.whenReady().then(async () => {
     const opened = await win.webContents.executeJavaScript('({root:window.__codenodeProject.getState().root,file:window.__codenodeProject.getState().projectFile})');
     assert.equal(opened.root, root);
     assert.equal(opened.file, projectFile);
+    await win.webContents.executeJavaScript('document.querySelector(".side-badge").click()');
+    await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".pp-input") || !!document.querySelector(".crash")'), 'Agent 侧栏');
+    const agentView = await win.webContents.executeJavaScript(`(() => { const panel=document.querySelector('.side-panel'); const input=document.querySelector('.pp-input'); return { crash:document.querySelector('.crash')?.textContent, panel:panel?.getBoundingClientRect().toJSON(), input:input?.getBoundingClientRect().toJSON(), text:panel?.textContent }; })()`);
+    console.log('AGENT VIEW', JSON.stringify(agentView));
+    assert.ok(!agentView.crash, agentView.crash);
+    assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
 
     fs.writeFileSync(invalidFile, 'invalid cnode file');
     await win.webContents.executeJavaScript('window.__codenodeProject.setState({root:null,projectFile:null})');
