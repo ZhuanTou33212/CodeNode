@@ -257,8 +257,8 @@ function PromptComposer() {
         rows={1}
         placeholder={
           canVision
-            ? '输入 prompt…（Enter 发送，Shift+Enter 换行；可粘贴 / 拖入图片）'
-            : '输入 prompt…（Enter 发送，Shift+Enter 换行）'
+            ? '描述任务，或粘贴图片…'
+            : '描述你想完成的任务…'
         }
         onChange={(e) => {
           setText(e.target.value);
@@ -345,7 +345,7 @@ function PromptComposer() {
             fileRef.current?.click();
           }}
         >
-          🖼
+          ＋
         </button>
 
         {busy ? (
@@ -378,7 +378,7 @@ function PromptComposer() {
             disabled={(!text.trim() && !attachments.length) || busy}
             title="发送 (Enter)"
           >
-            发送
+            ↑
           </button>
         )}
       </div>
@@ -409,7 +409,7 @@ export default function AgentPanel() {
             {active ? active.label : '未选择会话'}
           </span>
           <span className={`chat-win-status ${streaming ? 'st-running' : 'st-done'}`}>
-            {streaming ? '思考中…' : active && active.status === 'active' ? '进行中' : '就绪'}
+            {streaming ? '思考中…' : '就绪'}
           </span>
           <button
             className="ap-new"
@@ -420,7 +420,6 @@ export default function AgentPanel() {
           </button>
         </div>
         <div className="ap-head-meta">
-          <span className="ap-hint">对话常驻此面板；输入框固定在底部</span>
           <UsageMeter />
         </div>
       </div>

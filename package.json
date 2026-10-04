@@ -171,7 +171,8 @@
     "test:compaction-tail": "node scripts/compaction-tail-test.cjs",
     "test:intent-cost-gate": "node scripts/intent-cost-gate-test.cjs",
     "test:dynamic-context": "node scripts/dynamic-context-budget-test.cjs",
-    "test:tool-projection": "node scripts/tool-result-projection-test.cjs"
+    "test:tool-projection": "node scripts/tool-result-projection-test.cjs",
+    "test:workbench-clean-ui": "node scripts/run-electron.cjs scripts/workbench-clean-ui-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

@@ -7,9 +7,14 @@ export type SideTab = 'agent' | 'node' | 'project' | 'preview';
 /** 侧栏宽度边界：下限保证输入控件可用，上限避免把画布挤没 */
 export const SIDE_WIDTH_MIN = 260;
 export const SIDE_WIDTH_MAX = 520;
-export const SIDE_WIDTH_DEFAULT = 300;
+export const SIDE_WIDTH_DEFAULT = 360;
+function savedTheme(): 'light' | 'dark' {
+  try { return localStorage.getItem('codenode.theme') === 'light' ? 'light' : 'dark'; } catch { return 'dark'; }
+}
 
 interface UiState {
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
   /** 右侧侧栏（原「检查器」+ 原左侧「项目管理」合并后的唯一面板） */
   sideOpen: boolean;
   sideTab: SideTab;
@@ -58,6 +63,12 @@ interface UiState {
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useUiStore = create<UiState>((set, get) => ({
+  theme: savedTheme(),
+  toggleTheme: () => set((state) => {
+    const theme = state.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('codenode.theme', theme); } catch {}
+    return { theme };
+  }),
   sideOpen: false,
   sideTab: 'agent',
   sideWidth: SIDE_WIDTH_DEFAULT,

@@ -3985,3 +3985,162 @@ textarea:focus-visible {
 .dock-replay-file {
   word-break: break-all;
 }
+
+/* Unified workbench: quiet surfaces, readable controls, one primary accent. */
+.app.ui-clean { background: #151719; color: #e4e5e7; }
+.ui-clean .toolbar { height: 54px; min-height: 54px; padding: 0 18px; gap: 10px; background: #181a1d; border-bottom: 1px solid #2b2d31; box-shadow: none; overflow: visible; }
+.ui-clean .app-brand { color: #f2f3f4; font-size: 15px; font-weight: 650; letter-spacing: -.3px; gap: 0; margin-right: 10px; }
+.ui-clean .app-brand::before { display: none; }
+.ui-clean .toolbar-group { padding: 0 4px; border: none; gap: 4px; }
+.ui-clean .toolbar button, .ui-clean .toolbar summary { background: transparent; border: 1px solid transparent; color: #b7bbc2; padding: 7px 10px; min-height: 32px; font-size: 12px; border-radius: 7px; white-space: nowrap; }
+.ui-clean .toolbar button:hover:not(:disabled), .ui-clean .toolbar summary:hover { background: #26292e; color: #f5f5f6; border-color: transparent; }
+.ui-clean .toolbar button:disabled { opacity: .28; }
+.ui-clean .toolbar-side { color: #b7bbc2 !important; background: transparent !important; border-color: transparent !important; }
+.ui-clean .toolbar-side.is-on { color: #e4e5e7 !important; background: #2a2d32 !important; border-color: transparent !important; }
+.ui-clean .toolbar-run { color: #e4e5e7 !important; background: transparent !important; border-color: transparent !important; }
+.ui-clean .toolbar-vector { color: #17191c !important; background: #e5e7eb !important; border-color: transparent !important; font-weight: 600; }
+.ui-clean .toolbar-dropdown { position: relative; flex: none; }
+.ui-clean .toolbar-dropdown summary { cursor: pointer; list-style: none; user-select: none; }
+.ui-clean .toolbar-dropdown summary::-webkit-details-marker { display: none; }
+.ui-clean .toolbar-menu { position: absolute; top: calc(100% + 9px); left: 0; width: 190px; padding: 6px; display: flex; flex-direction: column; gap: 2px; background: #24272c; border: 1px solid #3b3e45; border-radius: 10px; box-shadow: 0 12px 32px #0006; z-index: 300; }
+.ui-clean .toolbar-menu button { text-align: left; width: 100%; }
+.ui-clean .app-body, .ui-clean .canvas-wrap { background: #151719; }
+.ui-clean .canvas-wrap::after, .ui-clean .toolbar::before, .ui-clean .side-panel::before { display: none; }
+.ui-clean .react-flow__background { opacity: .35; }
+.ui-clean .side-panel { padding: 18px 16px 14px; background: #1b1d21; border-right: 1px solid #303239; box-shadow: none; backdrop-filter: none; }
+.ui-clean .sp-head { margin-bottom: 16px; }
+.ui-clean .sp-head-name { font-size: 14px; font-weight: 600; }
+.ui-clean .sp-head-meta { color: #818791; font-size: 11px; }
+.ui-clean .sp-close { color: #9298a2; border: 0; background: transparent; }
+.ui-clean .sp-tabs { padding: 0; gap: 12px; border: 0; border-bottom: 1px solid #303239; border-radius: 0; background: transparent; margin-bottom: 18px; }
+.ui-clean .sp-tab { background: transparent; border-radius: 0; padding: 8px 0 10px; font-size: 12px; min-height: 34px; flex: 1; color: #9096a1; }
+.ui-clean .sp-tab.is-active { background: transparent; box-shadow: inset 0 -2px #d8dbe0; color: #f0f1f2; }
+.ui-clean .sp-tab-dot { width: 4px; height: 4px; opacity: .7; }
+.ui-clean .ap-head { padding: 0 0 12px; border: 0; flex-direction: row; align-items: center; gap: 8px; }
+.ui-clean .ap-head-top { flex: 1; min-width: 0; }
+.ui-clean .ap-head-meta { flex: none; }
+.ui-clean .ap-session { font-size: 12px; color: #c1c5cd; }
+.ui-clean .chat-win-status { font-size: 10px; color: #878f9b; background: transparent; }
+.ui-clean .ap-new { background: transparent; color: #aeb5c0; border: 0; padding: 4px 6px; }
+.ui-clean .ap-usage { opacity: .65; }
+.ui-clean .ap-body { padding: 14px 2px; }
+.ui-clean .cs-msg { padding: 0; margin-bottom: 24px; background: transparent; border: 0; box-shadow: none; }
+.ui-clean .cs-msg-label { color: #939ba8; font-size: 11px; font-weight: 500; margin-bottom: 7px; }
+.ui-clean .cs-msg-text { color: #d7dbe1; font-size: 13px; line-height: 1.75; user-select: text; overflow-wrap: anywhere; }
+.ui-clean .cs-msg-feedback { display: flex; gap: 8px; margin-top: 8px; opacity: 0; transition: opacity 120ms ease; }
+.ui-clean .cs-msg:hover .cs-msg-feedback, .ui-clean .cs-msg:focus-within .cs-msg-feedback { opacity: 1; }
+.ui-clean .cs-msg-feedback button { border: 0; background: transparent; padding: 2px 0; color: #8a929f; font-size: 10px; }
+.ui-clean .cs-msg-feedback button.active { color: #c5d3ee; }
+.ui-clean .pp-composer { padding: 12px; gap: 10px; background: #24272c; border: 1px solid #3b3f47; border-radius: 14px; box-shadow: none; }
+.ui-clean .pp-composer:focus-within { border-color: #6c7482; }
+.ui-clean .pp-input { min-height: 64px; max-height: 140px; font-size: 13px; line-height: 1.7; color: #e2e5e9; scrollbar-width: thin; }
+.ui-clean .pp-input::placeholder { color: #959ca8; }
+.ui-clean .pp-controls { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
+.ui-clean .pp-model { grid-column: 1 / -1; width: 100%; max-width: none; min-width: 0; background: transparent; border: 0; color: #cbd1db; padding: 6px 0; font-size: 12px; }
+.ui-clean .pp-effort { grid-column: 1; width: auto; max-width: 150px; background: transparent; border: 0; color: #979fab; padding: 5px 0; }
+.ui-clean .pp-attach-btn { grid-column: 2; width: 30px; height: 30px; padding: 0; color: #b6beca; background: transparent; border: 0; font-size: 19px; }
+.ui-clean .pp-send { grid-column: 3; width: 30px; height: 30px; min-height: 30px; padding: 0; border-radius: 50%; background: #e5e7eb; color: #16191d; border: 0; font-size: 19px; }
+.ui-clean .pp-send:disabled { background: #363b43; color: #858d9b; opacity: 1; }
+.ui-clean .pp-steer { grid-column: 1 / -1; width: 100%; flex-wrap: wrap; margin: 0; }
+.ui-clean .pp-steer-input { min-width: 100px; width: auto; flex: 1; }
+.ui-clean .pp-stop { font-size: 11px; width: 48px; border-radius: 8px; background: #383c45; color: #e5e7eb; }
+.ui-clean .status-bar { background: #181a1d; border-top: 1px solid #2b2d31; color: #77808e; font-size: 10px; height: 26px; }
+.ui-clean .side-badge { background: #24272c; box-shadow: none; border: 1px solid #383d46; }
+.canvas-welcome { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 3; width: min(430px, calc(100% - 48px)); text-align: center; color: #a6adba; }
+.canvas-welcome-eyebrow { font-size: 10px; letter-spacing: .18em; color: #747c88; }
+.canvas-welcome h2 { font-size: 24px; letter-spacing: -.6px; font-weight: 550; color: #e0e3e8; margin: 16px 0 10px; }
+.canvas-welcome p { font-size: 13px; line-height: 1.8; margin: 0 0 22px; }
+.canvas-welcome-actions { display: flex; justify-content: center; gap: 10px; margin-bottom: 24px; }
+.canvas-welcome-actions button { padding: 9px 16px; background: #25292f; border: 1px solid #3d444e; color: #d3d8e0; border-radius: 9px; }
+.canvas-welcome small { color: #6f7886; font-size: 10px; }
+@media (hover: none) { .ui-clean .cs-msg-feedback { opacity: 1; } }
+@media (max-width: 780px) { .ui-clean .toolbar { padding: 0 10px; gap: 4px; } .ui-clean .toolbar-spacer { display: flex; } .ui-clean .toolbar-vector { display: inline-flex; } .ui-clean .toolbar-primary-actions, .ui-clean .toolbar-save { display: none; } .ui-clean .toolbar-group { padding: 0; } .ui-clean .toolbar button, .ui-clean .toolbar summary { padding-inline: 7px; } .canvas-welcome h2 { font-size: 20px; } }
+@media (max-width: 480px) { .ui-clean .app-brand { font-size: 13px; margin-right: 0; } .ui-clean .toolbar-vector { font-size: 0 !important; } .ui-clean .toolbar-vector::after { content: '＋节点'; font-size: 11px; } .canvas-welcome-actions { flex-direction: column; } }
+.ui-clean .toolbar-menu .toolbar-overflow-small { display: none; }
+@media (max-width: 780px) { .ui-clean .toolbar-menu button { display: block; } }
+@media (max-width: 780px) { .ui-clean .toolbar-dropdown .toolbar-menu button { display: block !important; } }
+
+/* Day / night glass material shared by every workbench surface. */
+:root, html[data-theme="dark"] {
+  --glass-text: #edf3fc; --glass-muted: #a8b7cd; --glass-faint: #8294ad;
+  --glass-surface: rgba(19, 30, 52, .52); --glass-sheet: rgba(23, 36, 59, .78);
+  --glass-control: rgba(216, 232, 255, .065); --glass-selected: rgba(159, 197, 255, .18);
+  --glass-border: rgba(222, 237, 255, .17); --glass-edge: rgba(242, 249, 255, .32);
+  --glass-shadow: 0 12px 40px rgba(3, 9, 24, .18); --glass-accent: #b6d6ff;
+  --glass-base: #101c34; --glass-scrim: rgba(4, 12, 27, .32);
+  --bg: #101c34; --bg-panel: rgba(23,36,59,.78); --bg-panel-2: rgba(216,232,255,.075);
+  --text: #edf3fc; --text-dim: #a8b7cd; --border: rgba(222,237,255,.17);
+}
+html[data-theme="light"] {
+  --glass-text: #21334e; --glass-muted: #51647d; --glass-faint: #637892;
+  --glass-surface: rgba(255, 255, 255, .38); --glass-sheet: rgba(249, 253, 255, .77);
+  --glass-control: rgba(255, 255, 255, .32); --glass-selected: rgba(103, 155, 230, .17);
+  --glass-border: rgba(255, 255, 255, .62); --glass-edge: rgba(255,255,255,.95);
+  --glass-shadow: 0 12px 40px rgba(51, 78, 120, .10); --glass-accent: #275990;
+  --glass-base: #d9e8f4; --glass-scrim: rgba(45, 68, 99, .16);
+  --bg: #d9e8f4; --bg-panel: rgba(249,253,255,.77); --bg-panel-2: rgba(255,255,255,.35);
+  --text: #21334e; --text-dim: #51647d; --border: rgba(111,145,184,.22);
+}
+.app.glass-theme.theme-dark {
+  background: radial-gradient(ellipse at 12% 18%, rgba(43,98,137,.6), transparent 56%), radial-gradient(ellipse at 87% 77%, rgba(83,61,124,.5), transparent 57%), linear-gradient(135deg,#0d2035,#192a45 48%,#172038);
+}
+.app.glass-theme.theme-light {
+  background: radial-gradient(ellipse at 9% 15%,rgba(255,255,255,.94),transparent 55%),radial-gradient(ellipse at 84% 18%,rgba(193,226,239,.85),transparent 52%),radial-gradient(ellipse at 70% 87%,rgba(213,205,241,.8),transparent 55%),linear-gradient(125deg,#d5e9ef,#edf2f8 50%,#d8e3f1);
+}
+.glass-theme.ui-clean { color: var(--glass-text); }
+.glass-theme.ui-clean .app-body, .glass-theme.ui-clean .canvas-wrap { background: transparent; }
+.glass-theme.ui-clean :is(.toolbar,.side-panel,.status-bar,.workbench-dock,.side-badge) {
+  background: var(--glass-surface); border-color: var(--glass-border); color: var(--glass-text);
+  backdrop-filter: blur(24px) saturate(145%); -webkit-backdrop-filter: blur(24px) saturate(145%);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+}
+.glass-theme.ui-clean .side-panel { background: var(--glass-surface); box-shadow: inset -1px 0 0 var(--glass-edge); }
+.glass-theme.ui-clean .toolbar { box-shadow: inset 0 1px 0 var(--glass-edge); }
+.glass-theme.ui-clean .status-bar { box-shadow: inset 0 1px 0 var(--glass-edge); }
+.glass-theme.ui-clean .react-flow__background { opacity: .24; }
+.glass-theme.ui-clean .toolbar :is(button,summary) { color: var(--glass-text); }
+.glass-theme.ui-clean .toolbar :is(button,summary):hover:not(:disabled) { background: var(--glass-control); border-color: var(--glass-border); }
+.glass-theme.ui-clean .toolbar :is(.toolbar-vector,.toolbar-side.is-on,.toolbar-run) { color: var(--glass-text) !important; background: var(--glass-selected) !important; border-color: var(--glass-border) !important; box-shadow: inset 0 1px 0 var(--glass-edge); }
+.glass-theme.ui-clean .toolbar .toolbar-side:not(.is-on) { color: var(--glass-text) !important; }
+.glass-theme.ui-clean .toolbar-theme { font-size: 19px; width: 34px; padding: 4px; background: var(--glass-control); border-color: var(--glass-border); }
+.glass-theme.ui-clean .toolbar-menu, .glass-theme .add-menu, .glass-theme .hover-pop { background: var(--glass-sheet); border-color: var(--glass-border); color: var(--glass-text); backdrop-filter: blur(30px) saturate(150%); box-shadow: inset 0 1px 0 var(--glass-edge),var(--glass-shadow); }
+.glass-theme.ui-clean :is(.sp-head-name,.sp-head-meta,.sp-tab,.ap-session,.ap-new,.chat-win-status,.cs-msg-label,.cs-msg-text,.app-brand) { color: var(--glass-text); }
+.glass-theme.ui-clean :is(.sp-head-meta,.ap-new,.chat-win-status,.cs-msg-label) { color: var(--glass-muted); }
+.glass-theme.ui-clean .sp-tabs { border-color: var(--glass-border); }
+.glass-theme.ui-clean .sp-tab.is-active { box-shadow: inset 0 -2px var(--glass-accent); color: var(--glass-accent); }
+.glass-theme.ui-clean .sp-tab:hover { background: var(--glass-control); }
+.glass-theme.ui-clean .pp-composer { background: var(--glass-control); border-color: var(--glass-border); backdrop-filter: blur(14px); box-shadow: inset 0 1px 0 var(--glass-edge), 0 8px 24px rgba(30,50,80,.06); }
+.glass-theme.ui-clean .pp-composer:focus-within { border-color: var(--glass-accent); }
+.glass-theme.ui-clean :is(.pp-input,.pp-model,.pp-effort,.pp-attach-btn) { color: var(--glass-text); background: transparent; }
+.glass-theme.ui-clean .pp-input::placeholder { color: var(--glass-muted); }
+.glass-theme.ui-clean .pp-send { background: var(--glass-selected); color: var(--glass-text); border: 1px solid var(--glass-border); box-shadow: inset 0 1px 0 var(--glass-edge); }
+.glass-theme.ui-clean .pp-send:disabled { background: var(--glass-control); color: var(--glass-faint); box-shadow: none; }
+.glass-theme.ui-clean .canvas-welcome :is(h2,p) { color: var(--glass-text); }
+.glass-theme.ui-clean .canvas-welcome :is(small,.canvas-welcome-eyebrow) { color: var(--glass-muted); }
+.glass-theme.ui-clean .canvas-welcome-actions button { background: var(--glass-surface); border-color: var(--glass-border); color: var(--glass-text); backdrop-filter: blur(14px); box-shadow: inset 0 1px 0 var(--glass-edge),var(--glass-shadow); }
+.glass-theme :is(.mm-mask,.tool-dialog-mask) { background: var(--glass-scrim); backdrop-filter: blur(7px); }
+.glass-theme :is(.mm-dialog,.tool-dialog,.dock-recovery-plan,.dock-extension-card,.ap-plan,.ap-resume-review,.dock-recovery-review) { background: var(--glass-sheet); color: var(--glass-text); border-color: var(--glass-border); backdrop-filter: blur(30px) saturate(145%); box-shadow: inset 0 1px 0 var(--glass-edge),var(--glass-shadow); }
+.glass-theme :is(.mm-head,.mm-foot,.dock-tabs,.dock-file-head,.dock-run-toolbar,.dock-terminal-head,.dock-problems,.dock-editor-tabs) { background: var(--glass-control); color: var(--glass-text); border-color: var(--glass-border); }
+.glass-theme :is(.mm-choice,.mm-provider-row button,.mm-input,.mm-btn,.dock-search input,.dock-terminal-input input,.tool-dialog-input,.tool-dialog-opt,.inspector-field input,.inspector-field textarea,.inspector-field select,.pm-search input) { background: var(--glass-control); color: var(--glass-text); border-color: var(--glass-border); }
+.glass-theme :is(.mm-choice[aria-selected="true"],.mm-btn.primary,.tool-dialog-btn.allow) { background: var(--glass-selected); color: var(--glass-accent); border-color: var(--glass-border); }
+.glass-theme :is(.mm-intro,.mm-connect-note,.mm-choice small,.mm-field label,.inspector-field label,.sp-subhead,.sp-path,.pm-root,.dock-file-meta,.status-hint) { color: var(--glass-muted); }
+.glass-theme :is(.mm-title,.mm-model-heading,.tool-dialog-title,.tool-dialog-what,.dock-file-path,.dock-checkpoint strong) { color: var(--glass-text); }
+.glass-theme :is(.dock-editor,.dock-diff,.dock-terminal,.dock-runs,.dock-checkpoints,.dock-replay,.dock-terminal-output,.dock-code-wrap,.pm-preview-content,.dock-tool-list) { background: transparent; color: var(--glass-text); }
+.glass-theme :is(.wf-node,.wf-scope) { background: var(--glass-surface); color: var(--glass-text); border-color: var(--glass-border); backdrop-filter: blur(18px); box-shadow: inset 0 1px 0 var(--glass-edge),var(--glass-shadow); }
+.glass-theme :is(.wf-node-title,.wf-vector-title,.wf-vector-foot) { background: var(--glass-control); color: var(--glass-text); border-color: var(--glass-border); }
+.glass-theme .vs-scope { --vbg: transparent; --vbg-deep: transparent; --vpanel: var(--glass-surface); --vpanel2: var(--glass-control); --vpanel3: var(--glass-selected); --vpanel4: var(--glass-selected); --vborder: var(--glass-border); --vborder2: var(--glass-edge); --vline: var(--glass-border); --vtext: var(--glass-text); --vtext2: var(--glass-muted); --vtext3: var(--glass-faint); --vtext4: var(--glass-faint); }
+.glass-theme :is(.wf-vector-rail,.vs-node-dock,.vs-stage) { background: var(--glass-surface); border-color: var(--glass-border); }
+.glass-theme :is(.wf-node-label,.wf-node-subtitle,.wf-node-desc,.wf-vector-foot,.vs-empty,.inspector-pre) { color: var(--glass-text); }
+.glass-theme :is(.cs-msg-feedback button,.dock-empty,.mm-empty) { color: var(--glass-muted); }
+.glass-theme select option { background: var(--glass-base); color: var(--glass-text); }
+html[data-theme="light"] .glass-theme .dock-code-editor { color: #203650; caret-color: #203650; }
+html[data-theme="light"] .glass-theme .dock-code-highlight { color: #203650; }
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) { .glass-theme { --glass-surface: var(--glass-base); --glass-sheet: var(--glass-base); } .glass-theme :is(.toolbar,.side-panel,.workbench-dock,.mm-dialog,.tool-dialog,.wf-node,.pp-composer) { backdrop-filter: none; } }
+html[data-theme="light"] .gate { background: radial-gradient(ellipse at 15% 20%,#ffffff,transparent 60%),linear-gradient(135deg,#d9edf3,#e9e4f6); color: var(--glass-text); }
+html[data-theme="dark"] .gate { background: radial-gradient(ellipse at 15% 20%,#224564,transparent 65%),linear-gradient(135deg,#101c34,#292a4e); color: var(--glass-text); }
+html[data-theme] .gate-card { background: var(--glass-sheet); border-color: var(--glass-border); color: var(--glass-text); backdrop-filter: blur(30px) saturate(140%); box-shadow: inset 0 1px 0 var(--glass-edge),var(--glass-shadow); }
+html[data-theme] .gate-card :is(h1,.gate-sub,.gate-btn,.gate-recent-title,.gate-recent-path) { color: var(--glass-text); }
+html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(--glass-control); border-color: var(--glass-border); }
+.glass-theme :is(.tool-dialog-detail,.tool-dialog-level,.tool-dialog-options,.tool-dialog-free,.tool-dialog-btn,.dock-run-item pre,.dock-replay-main,.dock-replay-kind,.dock-replay-ts) { color: var(--glass-text); border-color: var(--glass-border); }
+.glass-theme :is(.dock-run-item,.dock-checkpoint,.dock-tool-row,.tool-dialog-options,.pm-preview-head) { background: var(--glass-control); border-color: var(--glass-border); }
+@media (max-width: 480px) { .glass-theme.ui-clean .toolbar { gap: 2px; padding-inline: 7px; } .glass-theme.ui-clean .toolbar-theme { width: 28px; padding-inline: 3px; } .glass-theme.ui-clean .toolbar button,.glass-theme.ui-clean .toolbar summary { padding-inline: 5px; } }

@@ -433,6 +433,19 @@ export default function Canvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#2a2f3a" />
       </ReactFlow>
+      {!nodes.length && <div className="canvas-welcome">
+        <span className="canvas-welcome-eyebrow">WORKSPACE</span>
+        <h2>从一个想法开始</h2>
+        <p>让 Agent 处理项目，或用节点组织你的工作流。</p>
+        <div className="canvas-welcome-actions">
+          <button onClick={() => { useUiStore.getState().setSideTab('agent'); window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('.pp-input')?.focus(), 0); }}>开始对话</button>
+          <button onClick={() => {
+            const rect = canvasRef.current?.getBoundingClientRect();
+            if (rect) useUiStore.getState().openAddMenu(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          }}>＋ 添加节点</button>
+        </div>
+        <small>Shift + A 添加节点 · 中键拖动画布</small>
+      </div>}
       {cutLine.length > 1 ? (
         <svg
           className="wf-cut-line"

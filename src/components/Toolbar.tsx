@@ -1,4 +1,5 @@
 import { useReactFlow } from '@xyflow/react';
+import { useEffect } from 'react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { newProject, openProject, openProjectFile, saveProject } from '../lib/projectActions';
@@ -6,6 +7,16 @@ import { NODE_TEMPLATES } from '../nodes';
 import type { VectorData } from '../types';
 
 export default function Toolbar() {
+  useEffect(() => {
+    const closeMenus = (event: Event) => {
+      document.querySelectorAll<HTMLDetailsElement>('.toolbar-dropdown[open]').forEach((menu) => {
+        if (event instanceof KeyboardEvent ? event.key === 'Escape' : !menu.contains(event.target as Node)) menu.open = false;
+      });
+    };
+    document.addEventListener('pointerdown', closeMenus);
+    document.addEventListener('keydown', closeMenus);
+    return () => { document.removeEventListener('pointerdown', closeMenus); document.removeEventListener('keydown', closeMenus); };
+  }, []);
   const undo = useGraphStore((s) => s.undo);
   const redo = useGraphStore((s) => s.redo);
   const canUndo = useGraphStore((s) => s.past.length > 0);
@@ -18,6 +29,8 @@ export default function Toolbar() {
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
   const sideOpen = useUiStore((s) => s.sideOpen);
+  const theme = useUiStore((s) => s.theme);
+  const toggleTheme = useUiStore((s) => s.toggleTheme);
   const toggleSide = useUiStore((s) => s.toggleSide);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
@@ -26,10 +39,10 @@ export default function Toolbar() {
   return (
     <header className="toolbar">
       <div className="app-brand">
-        CodeNode<span className="app-brand-sub">Next</span>
+        CodeNode
       </div>
 
-      <div className="toolbar-group">
+      <details className="toolbar-group toolbar-dropdown"><summary>项目⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
         <button title="新建项目：选择目录并创建空白工作区 (Ctrl+N)" onClick={() => void newProject()}>
           新建
         </button>
@@ -39,32 +52,31 @@ export default function Toolbar() {
         <button title="打开 .cnode 工程文件" onClick={() => void openProjectFile()}>
           打开文件
         </button>
-        <button title="保存到项目 workflow.cnode (Ctrl+S)" onClick={() => void saveProject()}>
-          保存
-        </button>
-      </div>
+        <button className="toolbar-overflow-small" onClick={() => void saveProject()}>保存</button>
+      </div></details>
+      <button className="toolbar-save" title="保存项目 (Ctrl+S)" onClick={() => void saveProject()}>保存</button>
 
       <div className="toolbar-group">
         <button title="撤销 (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
-          ↶ 撤销
+          ↶
         </button>
         <button title="重做 (Ctrl+Y)" disabled={!canRedo} onClick={redo}>
-          ↷ 重做
+          ↷
         </button>
       </div>
 
       <div className="toolbar-group">
         <button
           className={`toolbar-side ${sideOpen ? 'is-on' : ''}`}
-          title="显示 / 隐藏右侧侧栏：节点属性 · 项目文件 · 文件预览 (Ctrl+B)"
+          title="显示 / 隐藏左侧面板 (Ctrl+B)"
           aria-pressed={sideOpen}
           onClick={toggleSide}
         >
-          ◧ 侧栏
+          侧栏
         </button>
       </div>
 
-      <div className="toolbar-group toolbar-ops">
+      <div className="toolbar-group toolbar-primary-actions">
         <button title="打开代码编辑器" onClick={() => openDock('editor')}>
           编辑
         </button>
@@ -79,6 +91,11 @@ export default function Toolbar() {
         >
           运行
         </button>
+      </div>
+      <details className="toolbar-group toolbar-dropdown"><summary>更多⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
+        <button className="toolbar-overflow-small" onClick={() => openDock('editor')}>编辑</button>
+        <button className="toolbar-overflow-small" onClick={() => openDock('terminal')}>终端</button>
+        <button className="toolbar-overflow-small" disabled={!nodeCount} onClick={() => openDock('runs')}>运行</button>
         <button
           title="复制节点 (Ctrl+D)"
           disabled={!selectedId}
@@ -132,9 +149,10 @@ export default function Toolbar() {
         <button title="聚焦全部 (Z)" onClick={() => fitView({ padding: 0.2 })}>
           聚焦
         </button>
-      </div>
+      </div></details>
 
       <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
+        <button className="toolbar-theme" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换到日间主题' : '切换到夜间主题'} title={theme === 'dark' ? '日间主题' : '夜间主题'}>{theme === 'dark' ? '☀' : '☾'}</button>
         <button
           className="toolbar-vector"
           title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"

@@ -56,6 +56,43 @@ app.whenReady().then(async () => {
     console.log('AGENT VIEW', JSON.stringify(agentView));
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
+    if (process.env.CODENODE_WORKBENCH_UI_TEST === '1') {
+      assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".canvas-welcome")'), true);
+      const modelWidth = await win.webContents.executeJavaScript(`document.querySelector('.pp-model').getBoundingClientRect().width`);
+      assert.ok(modelWidth >= 250, 'model selector must have its own readable row');
+      await win.webContents.executeJavaScript(`document.querySelectorAll('.toolbar-dropdown')[1].open=true`);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.toolbar-menu button')).find(b=>b.textContent.trim()==='恢复').click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".dock-checkpoints")'), '恢复菜单入口');
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeDock()');
+      win.showInactive(); await sleep(200);
+      fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+      const capture = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
+      fs.writeFileSync(path.join(__dirname,'..','out','workbench-clean.png'),capture.toPNG());
+      fs.writeFileSync(path.join(__dirname,'..','out','workbench-glass-dark.png'),capture.toPNG());
+      await win.webContents.executeJavaScript('document.querySelector(".toolbar-theme").click()');
+      await waitFor(async () => await win.webContents.executeJavaScript('document.documentElement.dataset.theme==="light"'), '日间主题');
+      await sleep(250);
+      assert.equal(await win.webContents.executeJavaScript('localStorage.getItem("codenode.theme")'), 'light');
+      const material = await win.webContents.executeJavaScript(`(() => { const panel=getComputedStyle(document.querySelector('.side-panel')); return {background:panel.backgroundColor,blur:panel.backdropFilter}; })()`);
+      assert.ok(material.background.startsWith('rgba(') && material.blur.includes('blur'), '主题应使用透明玻璃材质');
+      const dayCapture = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
+      fs.writeFileSync(path.join(__dirname,'..','out','workbench-glass-light.png'),dayCapture.toPNG());
+      win.setSize(500,740); await sleep(200);
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().setSideTab("agent")');
+      await sleep(100);
+      const narrow = await win.webContents.executeJavaScript(`(() => { const toolbar=document.querySelector('.toolbar'); const input=document.querySelector('.pp-input'); return {overflow:toolbar.scrollWidth>toolbar.clientWidth,input:input.getBoundingClientRect().width}; })()`);
+      assert.ok(!narrow.overflow && narrow.input>200, 'narrow window toolbar and composer must remain usable');
+      win.hide(); win.setSize(1300,850);
+      await sleep(100);
+      await win.webContents.executeJavaScript('document.querySelector(".toolbar-vector").click()');
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".wf-vector-stage .vs-stage")'), '画布节点绘图区');
+      const nodeLayout = await win.webContents.executeJavaScript(`(() => { const node=document.querySelector('.wf-vector'); const rail=node.querySelector('.wf-vector-rail'); return {welcome:!!document.querySelector('.canvas-welcome'),railOverflow:rail.scrollWidth>rail.clientWidth,stage:node.querySelector('.wf-vector-stage').getBoundingClientRect().width}; })()`);
+      assert.ok(!nodeLayout.welcome && !nodeLayout.railOverflow && nodeLayout.stage>100, '画布节点绘图区和工具仍可操作');
+      win.webContents.reload();
+      await waitFor(async () => await win.webContents.executeJavaScript('!!window.__codenodeUi && document.documentElement.dataset.theme==="light"').catch(()=>false), '重载后保留日间主题');
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().theme'), 'light');
+      console.log('WORKBENCH CLEAN UI: PASS (menus, empty state, model row, narrow window)');
+    }
     if (process.env.CODENODE_MODELS_UI_TEST === '1') {
       const modelFile = path.join(app.getPath('userData'), 'models.json');
       const locked = { id: 'legacy', label: 'Legacy', model: 'legacy', apiKey: 'safe:v1:invalid-cipher' };

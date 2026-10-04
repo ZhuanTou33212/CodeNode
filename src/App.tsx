@@ -60,6 +60,8 @@ export default function App() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const sideOpen = useUiStore((s) => s.sideOpen);
+  const theme = useUiStore((s) => s.theme);
+  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; }, [theme]);
   const dockOpen = useUiStore((s) => s.dockOpen);
   const booted = useUiStore((s) => s.booted);
   const projectRoot = useProjectStore((s) => s.root);
@@ -224,7 +226,7 @@ export default function App() {
   if (!projectRoot) return <ProjectGate />;
 
   return (
-    <div className="app">
+    <div className={`app ui-clean glass-theme theme-${theme}`}>
       <Toolbar />
       <div className={`app-body side-left${dockOpen ? ' has-dock' : ''}`}>
         {sideOpen ? <SidePanel /> : <InspectorBadge />}
