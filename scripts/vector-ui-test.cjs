@@ -601,6 +601,14 @@ async function main() {
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: resize.x + 80, y: resize.y + 60, button: 'left', clickCount: 1 });
     await waitFor(cdp, `(() => { const d = window.__codenodeStore.getState().nodes.find(n => n.id === ${JSON.stringify(secondId)}).data; return d.width > ${resize.nodeWidth + 30} && d.height > ${resize.nodeHeight + 20}; })()`, 3000, '拖动边角后尺寸变大');
     ok('拖动边角会放大整个画布节点', true);
+    await cdp.eval(`window.__codenodeStore.getState().updateNodeData(${JSON.stringify(secondId)}, {width:650,height:460})`);
+    await sleep(250);
+    const compactLayout = await cdp.eval(`(() => { const node=document.querySelector('.react-flow__node-vector[data-id="${secondId}"]'); const rail=node.querySelector('.wf-vector-rail'); const dock=node.querySelector('.vs-node-dock'); return {railOverflow:rail.scrollWidth>rail.clientWidth, dockWidth:parseFloat(getComputedStyle(dock).width)}; })()`);
+    ok('窄节点工具栏无横向溢出且属性栏自动缩窄', !compactLayout.railOverflow && compactLayout.dockWidth <= 181, JSON.stringify(compactLayout));
+    await cdp.eval(`document.querySelector('.react-flow__node-vector[data-id="${secondId}"] [aria-label="放大节点并适应窗口"]').click()`);
+    await sleep(400);
+    const expanded = await cdp.eval(`(() => { const data=window.__codenodeStore.getState().nodes.find(n=>n.id===${JSON.stringify(secondId)}).data; const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(); return {width:data.width,height:data.height,expectedW:Math.max(560,Math.round(canvas.width-80)),expectedH:Math.max(380,Math.round(canvas.height-80))}; })()`);
+    ok('放大入口按可用窗口调整节点尺寸', expanded.width===expanded.expectedW && expanded.height===expanded.expectedH, JSON.stringify(expanded));
 
     /* ========== 15. 样式归属：节点与连线用本地 Blender 那套，不被覆盖 ========== */
     // 背景：n0_12 的「session surface」主题在后面又写了一遍 .wf-node/.wf-scope/.react-flow__edge-path
