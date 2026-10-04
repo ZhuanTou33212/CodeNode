@@ -32,11 +32,11 @@ function register(ctx) {
   });
 
   const pending = new Map();
-  ipcMain.handle('models:discover', async (event, provider, apiKey) => {
+  ipcMain.handle('models:discover', async (event, provider, apiKey, options) => {
     try {
       for (const [id, entry] of pending) if (entry.expires < Date.now() || entry.sender === event.sender.id) pending.delete(id);
       if (pending.size >= 16) return { ok: false, error: '连接请求过多，请稍后重试' };
-      const models = await providerModels.discover(provider, apiKey);
+      const models = await providerModels.discover(provider, apiKey, undefined, options || {});
       const ticket = randomUUID();
       pending.set(ticket, { sender: event.sender.id, models, apiKey: apiKey.trim(), expires: Date.now() + 600000 });
       const timer = setTimeout(() => pending.delete(ticket), 600000); timer.unref();

@@ -83,6 +83,8 @@ app.whenReady().then(async () => {
       const usable = require('../electron/modelStore.cjs').readUsableModels(app.getPath('userData'), {});
       assert.equal(usable.models.find(model=>model.id==='deepseek:beta').apiKey, 'synthetic-ui-key');
       assert.equal(usable.models.find(model=>model.id==='legacy').apiKeyError, true);
+      const providerEntries = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll("select[aria-label=供应商] option")).map(o=>o.value)');
+      assert.ok(providerEntries.includes('kimi') && providerEntries.includes('minimax') && providerEntries.includes('custom'), '主流供应商和兼容入口必须出现在 UI');
       win.setSize(500, 740);
       await sleep(200);
       const narrow = await win.webContents.executeJavaScript(`(() => { const dialog=document.querySelector('.mm-connect-dialog'); const input=dialog.querySelector('input[type=password]'); const a=dialog.getBoundingClientRect(), b=input.getBoundingClientRect(); return {width:a.width, window:innerWidth, inputWidth:b.width, overflow:dialog.scrollWidth>dialog.clientWidth}; })()`);
