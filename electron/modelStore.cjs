@@ -1,3 +1,4 @@
+const { deduplicateModels } = require('./modelIdentity.cjs');
 const { capabilities } = require('./modelEffort.cjs');
 /**
  * CodeNode 模型接入配置存储（多个模型：名称 / 模型 ID / API 地址 / API Key / 上下文 / 价格）
@@ -144,7 +145,7 @@ function getModels(userDataDir, cfg) {
 /** 按 id 查找模型配置 */
 function findModel(userDataDir, cfg, id) {
   const store = readUsableModels(userDataDir, cfg);
-  const model = store.models.find((m) => m && m.id === id) || null;
+  const model = store.models.find((m) => m && m.id === (store.modelAliases?.[id] || id)) || null;
   if (model && model.apiKeyError) throw new Error('该模型的 Key 无法解密，请在管理模型中重新连接供应商');
   return model;
 }
@@ -159,10 +160,10 @@ function readRawModels(userDataDir) {
 function readUsableModels(userDataDir, cfg) {
   const raw = readRawModels(userDataDir);
   if (!raw) return getModels(userDataDir, cfg);
-  return { activeId: raw.activeId || null, models: raw.models.map((model) => {
+  return deduplicateModels(raw.models.map((model) => {
     try { return { ...model, apiKey: decryptSecret(model.apiKey) }; }
     catch { return { ...model, apiKey: '', apiKeyError: true }; }
-  }) };
+  }), raw.activeId);
 }
 function saveConnection(userDataDir, models, apiKey, activeId) {
   const raw = readRawModels(userDataDir) || { models: [] };

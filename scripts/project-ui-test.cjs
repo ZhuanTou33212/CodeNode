@@ -217,7 +217,11 @@ app.whenReady().then(async () => {
       const capture = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
       fs.writeFileSync(path.join(__dirname,'..','out','workbench-clean.png'),capture.toPNG());
       fs.writeFileSync(path.join(__dirname,'..','out','workbench-glass-dark.png'),capture.toPNG());
-      await win.webContents.executeJavaScript('document.querySelector(".toolbar-theme").click()');
+      assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".toolbar-theme")'), false);
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().openSettings("general")');
+      await sleep(80);
+      await win.webContents.executeJavaScript('document.querySelector(".settings-theme-toggle").click()');
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeSettings()');
       await waitFor(async () => await win.webContents.executeJavaScript('document.documentElement.dataset.theme==="light"'), '日间主题');
       await sleep(250);
       assert.equal(await win.webContents.executeJavaScript('localStorage.getItem("codenode.theme")'), 'light');

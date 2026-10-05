@@ -30,8 +30,6 @@ export default function Toolbar() {
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
   const sideOpen = useUiStore((s) => s.navigationOpen);
-  const theme = useUiStore((s) => s.theme);
-  const toggleTheme = useUiStore((s) => s.toggleTheme);
   const toggleSide = useUiStore((s) => s.toggleNavigation);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
@@ -135,7 +133,6 @@ export default function Toolbar() {
       </div></details>
 
       <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
-        <button className="toolbar-theme" onClick={toggleTheme} aria-label={theme === 'dark' ? '切换到日间主题' : '切换到夜间主题'} title={theme === 'dark' ? '日间主题' : '夜间主题'}>{theme === 'dark' ? '☀' : '☾'}</button>
         <button
           className="toolbar-vector"
           title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"

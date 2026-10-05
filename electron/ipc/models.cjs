@@ -28,7 +28,7 @@ function register(ctx) {
 
   ipcMain.handle('models:list', async () => {
     const store = modelStore.readUsableModels(userDataDir(), agent.loadConfig(null));
-    return { models: modelStore.toPublicModels(store.models), activeId: store.activeId };
+    return { models: modelStore.toPublicModels(store.models), activeId: store.activeId, modelAliases: store.modelAliases };
   });
 
   const pending = new Map();

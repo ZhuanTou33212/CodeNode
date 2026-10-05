@@ -142,7 +142,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
         const res = await api.modelsList();
         const list = (res.models || []).filter((m) => m && m.id);
         if (!list.length) return;
-        const stored = get().modelId;
+        const storedId = get().modelId;
+        const stored = storedId ? res.modelAliases?.[storedId] || storedId : null;
         const active = res.activeId && list.some((m) => m.id === res.activeId) ? res.activeId : list[0].id;
         // 优先保留用户上次选择；不存在则用主进程激活的模型
         const next = stored && list.some((m) => m.id === stored) ? stored : active;
