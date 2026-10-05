@@ -41,7 +41,7 @@ function register(ctx) {
       pending.set(ticket, { sender: event.sender.id, models, apiKey: apiKey.trim(), expires: Date.now() + 600000 });
       const timer = setTimeout(() => pending.delete(ticket), 600000); timer.unref();
       event.sender.once('destroyed', () => { clearTimeout(timer); pending.delete(ticket); });
-      return { ok: true, ticket, models };
+      return { ok: true, ticket, models, apiKeyPreview: modelStore.maskApiKey(apiKey.trim()) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
   ipcMain.handle('models:connect', async (event, ticket, selectedId) => {

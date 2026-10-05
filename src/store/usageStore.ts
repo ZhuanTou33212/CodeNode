@@ -11,6 +11,7 @@ export interface ModelSpec {
   apiBase?: string;
   apiKey?: string;
   apiKeySet?: boolean;
+  apiKeyPreview?: string;
   apiKeyError?: boolean;
   contextWindow: number;
   priceInput: number;

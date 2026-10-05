@@ -3,6 +3,8 @@ const { capabilities } = require('../electron/modelEffort.cjs');
 const { discover } = require('../electron/providerModels.cjs');
 const { buildRequest } = require('../electron/modelProtocol.cjs');
 (async () => {
+  assert.equal(require('../electron/modelStore.cjs').maskApiKey('sk-e5fd0xxxxxxxx20f9'), 'sk-e5fd0*****20f9');
+  assert.equal(require('../electron/modelStore.cjs').maskApiKey('short'), '*****');
   assert.deepEqual(capabilities({model:'deepseek-flash'}).effortLevels,['low','high','max']);
   assert.deepEqual(capabilities({model:'gpt-6.1-sol'}).effortLevels,['low','medium','high','xhigh','max']);
   assert.deepEqual(capabilities({model:'gpt-6-sol'}).effortLevels,['none','low','medium','high','xhigh','max']);

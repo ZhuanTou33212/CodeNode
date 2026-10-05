@@ -48,9 +48,14 @@ function decryptSecret(value) {
   return raw;
 }
 
+function maskApiKey(value) {
+  const key = String(value || '');
+  if (!key) return '';
+  return key.length > 12 ? key.slice(0, 8) + '*****' + key.slice(-4) : '*'.repeat(key.length);
+}
 function toPublicModel(model) {
   const { apiKey, ...rest } = model || {};
-  return { ...rest, ...capabilities(model), apiKey: '', apiKeySet: !!apiKey };
+  return { ...rest, ...capabilities(model), apiKey: '', apiKeySet: !!apiKey, apiKeyPreview: maskApiKey(apiKey) };
 }
 
 function toPublicModels(models) {
@@ -224,6 +229,7 @@ module.exports = {
   writeModels,
   seedModels,
   toPublicModel,
+  maskApiKey,
   toPublicModels,
   normalizeModelInput,
   encryptSecret,
