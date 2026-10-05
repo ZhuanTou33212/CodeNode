@@ -241,7 +241,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (active) sessions[active.id] = { ...active, status: 'completed' };
     }
     const id = uid('canvas');
-    const label = '画布' + (order.length + 1);
+    const usedLabels = new Set(Object.values(sessions).filter(canvas => !canvas.archived).map(canvas => canvas.label));
+    let number = 1;
+    while (usedLabels.has('画布' + number)) number++;
+    const label = '画布' + number;
     const blank: SessionCanvas = {
       id,
       label,

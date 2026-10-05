@@ -119,6 +119,13 @@ app.whenReady().then(async () => {
       await sleep(80);
       assert.equal(await win.webContents.executeJavaScript('window.__codenodeSession.getState().order.length'), archiveCount, 'restoring all archived canvases must not create a replacement');
       assert.equal(await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId'), null);
+      await win.webContents.executeJavaScript('window.__codenodeSession.getState().newCanvas()');
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeSession.getState().current().label'), '画布1', 'new canvas after clearing the visible list must restart at 1');
+      await win.webContents.executeJavaScript('window.__codenodeSession.getState().newCanvas()');
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeSession.getState().current().label'), '画布2');
+      await win.webContents.executeJavaScript('(() => { const state=window.__codenodeSession.getState(); const first=state.order.find(id=>!state.sessions[id].archived && state.sessions[id].label==="画布1"); state.setArchived(first,true); state.newCanvas(); })()');
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeSession.getState().current().label'), '画布1', 'reuse an available number without renaming canvas 2');
+      await win.webContents.executeJavaScript('(() => { const state=window.__codenodeSession.getState(); const originals=state.order.slice(0,'+archiveCount+').map(id=>state.sessions[id]); state.restoreSessions(originals,state.messages); })()');
       await win.webContents.executeJavaScript('(() => { const store=window.__codenodeSession; store.getState().order.forEach(id=>store.getState().setArchived(id,false)); })()');
       await sleep(80);
       await win.webContents.executeJavaScript('window.__codenodeSession.getState().switchSession('+JSON.stringify(originalSession)+')');
