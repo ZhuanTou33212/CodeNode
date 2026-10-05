@@ -43,6 +43,9 @@ app.whenReady().then(async () => {
   try {
     await waitFor(async () => win && await win.webContents.executeJavaScript('!!document.querySelector(".gate-actions")').catch(() => false), '启动页');
     win.hide();
+    const modelFixtures = require('../electron/modelStore.cjs').seedModels({apiKey:'synthetic-ui-key'});
+    fs.mkdirSync(app.getPath('userData'),{recursive:true});
+    fs.writeFileSync(path.join(app.getPath('userData'),'models.json'),JSON.stringify({models:modelFixtures,activeId:modelFixtures[0].id}));
     const alternateRoot = path.join(root, 'alternate-project');
     fs.mkdirSync(alternateRoot, {recursive:true});
     const alternateFile = path.join(alternateRoot, 'alternate.cnode');
@@ -306,7 +309,21 @@ app.whenReady().then(async () => {
       const lockedRow = await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(button=>button.textContent.includes('Legacy'))?.disabled`);
       assert.equal(lockedRow, false, 'locked models must explain recovery instead of silently disabling selection');
       await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(button=>button.textContent.includes('Legacy')).click()`);
-      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".mm-connect-dialog")'), '失效 Key 引导重连');
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".mm-connect-dialog")'), '无可用 Key 时提示填写');
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog").textContent.includes("请填写 Legacy 的 API Key")'));
+      assert.equal(JSON.parse(fs.readFileSync(modelFile,'utf8')).activeId,'deepseek:beta');
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeModelManager()');
+      const blankKeyStore = JSON.parse(fs.readFileSync(modelFile,'utf8'));
+      blankKeyStore.models.push({id:'openai-empty',label:'OpenAI empty key',model:'gpt-6.1-sol',provider:'openai',apiBase:'https://api.openai.com/v1',apiKey:'',supportsEffort:true});
+      fs.writeFileSync(modelFile,JSON.stringify(blankKeyStore));
+      await win.webContents.executeJavaScript('document.querySelector(".pp-model").click()');
+      await sleep(80);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-footer button')).find(b=>b.textContent.includes('刷新')).click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).some(b=>b.textContent.includes('OpenAI empty key'))`), '无 Key 模型列表');
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(b=>b.textContent.includes('OpenAI empty key')).click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".mm-connect-dialog")'), '提示填写 API Key');
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog select").value'), 'openai');
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog").textContent.includes("请填写 OpenAI empty key 的 API Key")'));
       assert.equal(JSON.parse(fs.readFileSync(modelFile,'utf8')).activeId,'deepseek:beta');
       await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeModelManager()');
       console.log('MODEL CONNECTION UI: PASS (locked-key recovery, select model, encrypted save, legacy preservation)');

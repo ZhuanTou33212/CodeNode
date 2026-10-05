@@ -31,6 +31,7 @@ interface UiState {
   viewport: { x: number; y: number; zoom: number };
   pendingViewport: { x: number; y: number; zoom: number } | null;
   modelManagerOpen: boolean;
+  modelConnectionTarget: { provider?: string; model?: string; apiBase?: string; label?: string } | null;
   hoverScopeId: string | null;
   dockOpen: boolean;
   dockTab: 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions' | 'rag';
@@ -55,7 +56,7 @@ interface UiState {
   setViewport: (v: { x: number; y: number; zoom: number }) => void;
   setPendingViewport: (v: { x: number; y: number; zoom: number }) => void;
   applyPendingViewport: () => { x: number; y: number; zoom: number } | null;
-  openModelManager: () => void;
+  openModelManager: (target?: UiState['modelConnectionTarget']) => void;
   closeModelManager: () => void;
   openDock: (tab?: UiState['dockTab']) => void;
   closeDock: () => void;
@@ -90,6 +91,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   pendingViewport: null,
   modelManagerOpen: false,
+  modelConnectionTarget: null,
   hoverScopeId: null,
   dockOpen: false,
   dockTab: 'editor',
@@ -116,8 +118,8 @@ export const useUiStore = create<UiState>((set, get) => ({
     if (v) set({ pendingViewport: null });
     return v;
   },
-  openModelManager: () => set({ modelManagerOpen: true }),
-  closeModelManager: () => set({ modelManagerOpen: false }),
+  openModelManager: (target) => set({ modelManagerOpen: true, modelConnectionTarget: target || null }),
+  closeModelManager: () => set({ modelManagerOpen: false, modelConnectionTarget: null }),
   openDock: (tab) => tab === 'rag' || tab === 'extensions' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
   closeDock: () => set({ dockOpen: false }),
   setDockTab: (tab) => tab === 'rag' || tab === 'extensions' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, dockTab: tab }),

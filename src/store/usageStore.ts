@@ -156,9 +156,10 @@ export const useUsageStore = create<UsageState>((set, get) => {
     setModel: async (id) => {
       const model = get().models.find(item => item.id === id);
       if (!model) return false;
-      if (model.apiKeyError) {
-        useUiStore.getState().setToast('此模型的 Key 需要重新连接');
-        useUiStore.getState().openModelManager();
+      const keyless = model.auth === 'none' || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(model.apiBase || '');
+      if (model.apiKeyError || (model.apiKeySet === false && !keyless)) {
+        const provider = model.provider || (/deepseek/i.test(model.apiBase || model.model) ? 'deepseek' : /api\.openai/i.test(model.apiBase || '') ? 'openai' : /anthropic/i.test(model.apiBase || '') ? 'anthropic' : /googleapis/i.test(model.apiBase || '') ? 'gemini' : 'custom');
+        useUiStore.getState().openModelManager({ provider, model: model.model, apiBase: model.apiBase, label: model.label });
         return false;
       }
       try {
