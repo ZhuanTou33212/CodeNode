@@ -28,10 +28,10 @@ export default function Toolbar() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
-  const sideOpen = useUiStore((s) => s.sideOpen);
+  const sideOpen = useUiStore((s) => s.navigationOpen);
   const theme = useUiStore((s) => s.theme);
   const toggleTheme = useUiStore((s) => s.toggleTheme);
-  const toggleSide = useUiStore((s) => s.toggleSide);
+  const toggleSide = useUiStore((s) => s.toggleNavigation);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
   const { fitView, getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
@@ -56,7 +56,7 @@ export default function Toolbar() {
       <div className="toolbar-group">
         <button
           className={`toolbar-side ${sideOpen ? 'is-on' : ''}`}
-          title="显示 / 隐藏左侧面板 (Ctrl+B)"
+          title="显示 / 隐藏项目导航"
           aria-pressed={sideOpen}
           onClick={toggleSide}
         >
@@ -146,6 +146,7 @@ export default function Toolbar() {
           className="toolbar-vector"
           title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"
           onClick={() => {
+            useUiStore.getState().setSideTab('node');
             const template = NODE_TEMPLATES.vector;
             const vd = template.data as VectorData;
             const w = vd.width ?? 1040;

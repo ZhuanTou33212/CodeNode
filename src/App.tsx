@@ -5,7 +5,7 @@ import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
 import ProjectNavigation from './components/ProjectNavigation';
-import InspectorBadge from './components/InspectorBadge';
+import AgentPanel from './components/side/AgentPanel';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
@@ -61,6 +61,7 @@ export default function App() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const sideOpen = useUiStore((s) => s.sideOpen);
+  const sideTab = useUiStore(s => s.sideTab);
   const theme = useUiStore((s) => s.theme);
   useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; }, [theme]);
   const dockOpen = useUiStore((s) => s.dockOpen);
@@ -83,9 +84,11 @@ export default function App() {
   // 窄窗口优先保留画布与 Prompt：侧栏改为浮层，过窄时默认收起。
   useEffect(() => {
     let wasNarrow = window.innerWidth <= 860;
+    if (window.innerWidth <= 600) useUiStore.setState({ navigationOpen: false });
     if (wasNarrow && useUiStore.getState().sideOpen) useUiStore.getState().setSideOpen(false);
     const onResize = () => {
       const isNarrow = window.innerWidth <= 860;
+      if (window.innerWidth <= 600) useUiStore.setState({ navigationOpen: false });
       if (isNarrow && !wasNarrow && useUiStore.getState().sideOpen) {
         useUiStore.getState().setSideOpen(false);
       }
@@ -157,12 +160,13 @@ export default function App() {
       // Ctrl+B：开合右侧侧栏（对齐 VS Code 的习惯）
       if (mod && e.key.toLowerCase() === 'b') {
         e.preventDefault();
-        useUiStore.getState().toggleSide();
+        useUiStore.getState().toggleNavigation();
         return;
       }
 
       if (e.code === 'KeyA' && e.shiftKey && !mod) {
         e.preventDefault();
+        useUiStore.getState().setSideTab('node');
         const m = useUiStore.getState().lastMouse;
         useUiStore.getState().openAddMenu(m.x, m.y);
         return;
@@ -231,8 +235,16 @@ export default function App() {
       <Toolbar />
       <div className={`app-body side-left${dockOpen ? ' has-dock' : ''}`}>
         <ProjectNavigation />
-        {sideOpen ? <SidePanel /> : <InspectorBadge />}
-        <Canvas />
+        <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
+          <nav className="workspace-tabs" aria-label="工作区视图">
+            {([['agent', 'Agent'], ['node', '画布'], ['project', '文件'], ['preview', '预览']] as const).map(([tab, label]) => <button key={tab} aria-pressed={sideTab === tab} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
+          </nav>
+          <div className="workspace-content">
+            <div className="conversation-workspace" hidden={sideTab !== 'agent'}><AgentPanel /></div>
+            {sideTab !== 'agent' && (sideOpen || sideTab !== 'node') && <SidePanel />}
+            <div className="workspace-canvas" aria-hidden={sideTab !== 'node'}><Canvas /></div>
+          </div>
+        </main>
         <AddMenu />
         <WorkbenchDock />
       </div>

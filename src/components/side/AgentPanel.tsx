@@ -365,7 +365,7 @@ function PromptComposer() {
   );
 }
 
-/** 标签页 0：Agent 对话（原画布左上角悬浮会话面板，现并入侧栏标签） */
+/** 主工作区对话：记录滚动，输入框固定在底部。 */
 export default function AgentPanel() {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
@@ -415,8 +415,8 @@ export default function AgentPanel() {
       >
         {messages.length === 0 && (
           <div className="cs-chat-empty">
-            （暂无对话）
-            <div className="sp-empty-hint">在下方输入 prompt 开始；Agent 的工作流步骤会出现在画布上。</div>
+            有什么想做的？
+            <div className="sp-empty-hint"></div>
           </div>
         )}
         {messages.map((m, i) => (

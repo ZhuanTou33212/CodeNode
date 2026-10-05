@@ -17,7 +17,7 @@ export default function ModelPicker({ busy }: { busy: boolean }) {
   const theme = useUiStore(s => s.theme);
   useLayoutEffect(() => {
     if (!open) return;
-    const place = () => { const rect = trigger.current?.getBoundingClientRect(); if (rect) setPosition({ left: Math.max(8, Math.min(rect.left, innerWidth - 304)), bottom: innerHeight - rect.top + 8 }); };
+    const place = () => { const rect = trigger.current?.getBoundingClientRect(); if (rect) setPosition({ left: Math.max(8, Math.min(rect.left, innerWidth - (innerWidth >= 600 ? 480 : 304))), bottom: innerHeight - rect.top + 8 }); };
     place(); window.addEventListener('resize', place);
     return () => window.removeEventListener('resize', place);
   }, [open]);

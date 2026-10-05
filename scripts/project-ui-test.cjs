@@ -50,22 +50,35 @@ app.whenReady().then(async () => {
     const opened = await win.webContents.executeJavaScript('({root:window.__codenodeProject.getState().root,file:window.__codenodeProject.getState().projectFile})');
     assert.equal(opened.root, root);
     assert.equal(opened.file, projectFile);
-    await win.webContents.executeJavaScript('document.querySelector(".side-badge").click()');
+
     await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".pp-input") || !!document.querySelector(".crash")'), 'Agent 侧栏');
-    const agentView = await win.webContents.executeJavaScript(`(() => { const panel=document.querySelector('.side-panel'); const input=document.querySelector('.pp-input'); return { crash:document.querySelector('.crash')?.textContent, panel:panel?.getBoundingClientRect().toJSON(), input:input?.getBoundingClientRect().toJSON(), text:panel?.textContent }; })()`);
+    win.webContents.on('console-message', (_event, details) => { if (details.level === 'error') console.log('RENDER ERROR', details.message); });
+    const agentView = await win.webContents.executeJavaScript(`(() => { const panel=document.querySelector('.conversation-workspace'); const input=document.querySelector('.pp-input'); return { crash:document.querySelector('.crash')?.textContent, panel:panel?.getBoundingClientRect().toJSON(), input:input?.getBoundingClientRect().toJSON(), text:panel?.textContent }; })()`);
     console.log('AGENT VIEW', JSON.stringify(agentView));
+    const centered = await win.webContents.executeJavaScript(`(() => { const a=document.querySelector('.workspace-main').getBoundingClientRect(), b=document.querySelector('.pp-composer').getBoundingClientRect(); return {offset:Math.abs((a.left+a.right-b.left-b.right)/2),bottom:a.bottom-b.bottom,width:b.width,sideAgent:!!document.querySelector('.side-panel .pp-input')}; })()`);
+    assert.ok(centered.offset < 2 && centered.bottom < 35 && centered.width > 600 && !centered.sideAgent, 'Agent composer must be centered at the bottom of the main workspace');
+
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
     if (process.env.CODENODE_WORKBENCH_UI_TEST === '1') {
       assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".canvas-welcome")'), true);
       const modelWidth = await win.webContents.executeJavaScript(`document.querySelector('.pp-model').getBoundingClientRect().width`);
-      assert.ok(modelWidth >= 250, 'model selector must have its own readable row');
+      assert.ok(modelWidth >= 120, 'model selector must remain readable in the composer');
       assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".canvas-welcome button").length'), 0);
       assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".project-navigation")'), true);
       assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".project-nav-foot button").length'), 0);
       await win.webContents.executeJavaScript('document.querySelector(".project-actions summary").click()');
       assert.deepEqual(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-actions[open] button")).map(b=>b.textContent)'), ['新建项目', '打开项目', '打开工程文件']);
       await win.webContents.executeJavaScript('document.querySelector(".project-actions summary").click()');
+      await win.webContents.executeJavaScript(`(() => { const input=document.querySelector('.pp-input'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'draft retained'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+      await sleep(80);
+      for (const view of ['node','project','preview','agent']) {
+        console.log('VIEW SWITCH', view);
+        await win.webContents.executeJavaScript(`window.__codenodeUi.getState().setSideTab('${view}')`);
+        await sleep(80);
+        assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.workspace-${view}') !== null`));
+      }
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), 'draft retained');
       const originalSession = await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId');
       await win.webContents.executeJavaScript('document.querySelector(".project-nav-new").click()');
       await sleep(100);
@@ -103,7 +116,7 @@ app.whenReady().then(async () => {
       await waitFor(async () => await win.webContents.executeJavaScript('document.documentElement.dataset.theme==="light"'), '日间主题');
       await sleep(250);
       assert.equal(await win.webContents.executeJavaScript('localStorage.getItem("codenode.theme")'), 'light');
-      const material = await win.webContents.executeJavaScript(`(() => { const panel=getComputedStyle(document.querySelector('.side-panel')); return {background:panel.backgroundColor,blur:panel.backdropFilter}; })()`);
+      const material = await win.webContents.executeJavaScript(`(() => { const panel=getComputedStyle(document.querySelector('.conversation-workspace')); return {background:panel.backgroundColor,blur:panel.backdropFilter}; })()`);
       assert.ok(material.background.startsWith('rgba(') && material.blur.includes('blur'), '主题应使用透明玻璃材质');
       const dayCapture = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
       fs.writeFileSync(path.join(__dirname,'..','out','workbench-glass-light.png'),dayCapture.toPNG());
