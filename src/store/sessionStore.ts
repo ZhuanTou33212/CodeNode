@@ -259,13 +259,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setArchived: (id, archived) => {
     const s = get();
-    if (!s.sessions[id] || s.streaming) return;
+    if (!s.sessions[id] || s.streaming || !!s.sessions[id].archived === archived) return;
     get().syncActiveGraph();
     set(state => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id], archived } } }));
     if (archived && id === s.activeId) {
       const next = s.order.find(other => other !== id && !get().sessions[other]?.archived);
-      if (next) get().switchSession(next); else get().newCanvas();
-    }
+      if (next) get().switchSession(next);
+      else {
+        loadGraph(emptyDoc());
+        set({ activeId: null, activePlanSessionId: null, progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null });
+      }
+    } else if (!archived && !s.activeId) get().switchSession(id);
   },
 
   switchSession: (id) => {
@@ -329,7 +333,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     if (!id) {
       set({ sessions, order, activeId: null, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: null, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
-      if (order.length) get().newCanvas();
+      loadGraph(emptyDoc());
       return;
     }
     loadGraph(sessions[id].doc);
@@ -346,23 +350,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   startOnCurrent: (prompt) => {
     let active = get().current();
     if (!active) {
-      if (get().order.length === 0) {
-        // 尚无任何画布：创建画布1
-        const id = uid('canvas');
-        const first: SessionCanvas = {
-          id,
-          label: '画布1',
-          prompt: prompt || '',
-          doc: emptyDoc(),
-          status: 'active',
-          createdAt: Date.now(),
-          nodeCount: 0,
-        };
-        set({ sessions: { [id]: first }, order: [id], activeId: id, memoryConversationId: get().memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
-        loadGraph(emptyDoc());
-        return;
-      }
-      get().switchSession(get().order[0]);
+      const existing = get().order.find(id => !get().sessions[id]?.archived);
+      if (existing) get().switchSession(existing); else get().newCanvas();
       active = get().current();
     }
     if (!active) return;

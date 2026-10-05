@@ -1,3 +1,4 @@
+import { useSessionStore } from '../store/sessionStore';
 import { useReactFlow } from '@xyflow/react';
 import { useEffect } from 'react';
 import { useGraphStore } from '../store/graphStore';
@@ -139,6 +140,7 @@ export default function Toolbar() {
           className="toolbar-vector"
           title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"
           onClick={() => {
+            if (!useSessionStore.getState().current()) useSessionStore.getState().newCanvas();
             useUiStore.getState().setSideTab('node');
             const template = NODE_TEMPLATES.vector;
             const vd = template.data as VectorData;
