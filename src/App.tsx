@@ -16,6 +16,7 @@ import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
 import ModelManager from './components/ModelManager';
 import WorkbenchDock from './components/WorkbenchDock';
+import GlobalSettings from './components/GlobalSettings';
 import { getActiveVectorNode } from './vector/vectorStore';
 
 function isTypingTarget(): boolean {
@@ -100,6 +101,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (useUiStore.getState().settingsOpen || useUiStore.getState().modelManagerOpen) return;
       const mod = e.ctrlKey || e.metaKey;
 
       // 启动门禁页（还没有工程）：只保留与「取得工程」有关的快捷键。
@@ -237,12 +239,12 @@ export default function App() {
         <ProjectNavigation />
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
           <nav className="workspace-tabs" aria-label="工作区视图">
-            {([['agent', 'Agent'], ['node', '画布'], ['project', '文件'], ['preview', '预览']] as const).map(([tab, label]) => <button key={tab} aria-pressed={sideTab === tab} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
+            {([['agent', '工作台'], ['project', '文件'], ['preview', '预览']] as const).map(([tab, label]) => <button key={tab} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
           </nav>
           <div className="workspace-content">
-            <div className="conversation-workspace" hidden={sideTab !== 'agent'}><AgentPanel /></div>
+            <div className="conversation-workspace" hidden={sideTab === 'project' || sideTab === 'preview'}><AgentPanel /></div>
             {sideTab !== 'agent' && (sideOpen || sideTab !== 'node') && <SidePanel />}
-            <div className="workspace-canvas" aria-hidden={sideTab !== 'node'}><Canvas /></div>
+            <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>
           </div>
         </main>
         <AddMenu />
@@ -250,6 +252,7 @@ export default function App() {
       </div>
       <StatusBar />
       <ToolDialog />
+      <GlobalSettings />
       <ModelManager />
     </div>
   );

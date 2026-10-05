@@ -10,6 +10,7 @@ const LAST_ROOT_KEY = 'codenode.lastProjectRoot';
 const LAST_FILE_KEY = 'codenode.lastProjectFile';
 
 interface SessionPayload {
+  archived?: boolean;
   id?: string;
   label?: string;
   prompt?: string;
@@ -43,6 +44,7 @@ function buildPayload() {
       status: s.status,
       createdAt: s.createdAt,
       nodeCount: s.nodeCount,
+      archived: !!s.archived,
       summary: s.summary || '',
       root: s.doc.root,
     }));
@@ -109,6 +111,7 @@ function applyLoaded(
       status: sd.status === 'active' || sd.status === 'completed' ? (sd.status as 'active' | 'completed') : 'active',
       createdAt: sd.createdAt || Date.now(),
       nodeCount: sd.nodeCount || 0,
+      archived: !!sd.archived,
       summary: sd.summary || '',
       doc: {
         root: { nodes: (sd.root?.nodes as never[]) || [], edges: (sd.root?.edges as never[]) || [] } as Graph,

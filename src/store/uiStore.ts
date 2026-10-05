@@ -13,6 +13,10 @@ function savedTheme(): 'light' | 'dark' {
 }
 
 interface UiState {
+  settingsOpen: boolean;
+  settingsTab: 'general' | 'rag' | 'extensions' | 'archived';
+  openSettings: (tab?: UiState['settingsTab']) => void;
+  closeSettings: () => void;
   navigationOpen: boolean;
   toggleNavigation: () => void;
   theme: 'light' | 'dark';
@@ -65,6 +69,10 @@ interface UiState {
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useUiStore = create<UiState>((set, get) => ({
+  settingsOpen: false,
+  settingsTab: 'general',
+  openSettings: (tab = 'general') => set({ settingsOpen: true, settingsTab: tab }),
+  closeSettings: () => set({ settingsOpen: false }),
   navigationOpen: true,
   toggleNavigation: () => set(state => ({ navigationOpen: !state.navigationOpen })),
   theme: savedTheme(),
@@ -110,9 +118,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   openModelManager: () => set({ modelManagerOpen: true }),
   closeModelManager: () => set({ modelManagerOpen: false }),
-  openDock: (tab) => set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
+  openDock: (tab) => tab === 'rag' || tab === 'extensions' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
   closeDock: () => set({ dockOpen: false }),
-  setDockTab: (tab) => set({ dockOpen: true, dockTab: tab }),
+  setDockTab: (tab) => tab === 'rag' || tab === 'extensions' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, dockTab: tab }),
   setEditorTarget: (editorTarget) => set({ editorTarget }),
   setBooted: (v) => set({ booted: v }),
   setResumePlanNotice: (plan, prompt) => {

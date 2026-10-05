@@ -74,6 +74,7 @@ interface SessionState {
   /** 直接在当前画布上阅读并制作（不新建画布） */
   startOnCurrent: (prompt: string) => void;
   switchSession: (id: string) => void;
+  setArchived: (id: string, archived: boolean) => void;
   syncActiveGraph: () => void;
   restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null, memoryConversationId?: string, memoryTaskEpoch?: number) => void;
 
@@ -258,6 +259,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ sessions, order, activeId: id, memoryConversationId: s.memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
   },
 
+  setArchived: (id, archived) => {
+    const s = get();
+    if (!s.sessions[id] || s.streaming) return;
+    get().syncActiveGraph();
+    set(state => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id], archived } } }));
+    if (archived && id === s.activeId) {
+      const next = s.order.find(other => other !== id && !get().sessions[other]?.archived);
+      if (next) get().switchSession(next); else get().newCanvas();
+    }
+  },
+
   switchSession: (id) => {
     const s = get();
     if (id === s.activeId || !s.sessions[id]) return;
@@ -297,9 +309,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions[s.id] = s;
       order.push(s.id);
     }
-    let id = activeId && sessions[activeId] ? activeId : null;
+    let id = activeId && sessions[activeId] && !sessions[activeId].archived ? activeId : null;
     if (!id) {
-      const active = order.map((x) => sessions[x]).find((x) => x.status === 'active');
+      const active = order.map((x) => sessions[x]).find((x) => x.status === 'active' && !x.archived);
       id = active ? active.id : null;
     }
     if (!id) {
@@ -308,16 +320,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       let bestCount = -1;
       for (const oid of order) {
         const s = sessions[oid];
+        if (s?.archived) continue;
         const c = s ? s.nodeCount : 0;
         if (c > bestCount) {
           bestCount = c;
           best = oid;
         }
       }
-      id = best || order[order.length - 1] || null;
+      id = best || null;
     }
     if (!id) {
       set({ sessions, order, activeId: null, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: null, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
+      if (order.length) get().newCanvas();
       return;
     }
     loadGraph(sessions[id].doc);

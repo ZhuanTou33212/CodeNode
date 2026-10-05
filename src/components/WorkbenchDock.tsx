@@ -10,7 +10,6 @@ import { useSending } from '../lib/useSending';
 import { fireAndReport, reportError } from '../lib/reportError';
 import { summarizeResumePlan } from '../lib/resumePlan';
 import RunReplayPanel from './RunReplayPanel';
-import RagSettingsPanel from './RagSettingsPanel';
 import { prepareTemplate, missingTemplateDeps, parseTemplateDeps, type TemplateDeps } from '../lib/workflowTemplate';
 import { workflowGraph, workflowSignature, workflowReviewIds } from '../lib/workflowRunState';
 import type { Graph } from '../types';
@@ -89,8 +88,6 @@ const TABS: { id: DockTab; label: string }[] = [
   { id: 'terminal', label: '终端' },
   { id: 'runs', label: '工作流运行' },
   { id: 'checkpoints', label: '检查点' },
-  { id: 'extensions', label: '扩展' },
-  { id: 'rag', label: '检索设置' },
 ];
 
 function lineDiff(before: string, after: string) {
@@ -852,7 +849,7 @@ function CheckpointsPanel() {
   return <div className="dock-checkpoints"><div className="dock-run-toolbar"><div><strong>可恢复检查点</strong><span className="dock-file-meta">自动保留最近 30 个，浏览器重启后仍可恢复</span></div><button className="dock-primary" onClick={() => create('手动检查点')}>立即创建</button></div>{items.length === 0 ? <div className="dock-empty">还没有检查点。运行工作流前后会自动创建。</div> : <div className="dock-checkpoint-list">{items.map((item) => <div className="dock-checkpoint" key={item.id}><div><strong>{item.label}</strong><span>{new Date(item.createdAt).toLocaleString()} · {item.doc.root.nodes.length} 节点</span></div><div><button onClick={() => { if (restore(item.id)) useUiStore.getState().setToast('已恢复检查点：' + item.label); }}>恢复</button><button className="dock-danger" onClick={() => remove(item.id)}>删除</button></div></div>)}</div>}</div>;
 }
 
-function ExtensionsPanel() {
+export function ExtensionsPanel() {
   const root = useProjectStore((s) => s.root);
   const [items, setItems] = useState<ProjectExtensionDto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -873,5 +870,5 @@ export default function WorkbenchDock() {
   const close = useUiStore((s) => s.closeDock);
   const setTab = useUiStore((s) => s.setDockTab);
   if (!open) return null;
-  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'editor' && <EditorPanel />}{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}{tab === 'extensions' && <ExtensionsPanel />}{tab === 'rag' && <RagSettingsPanel />}</div></section>;
+  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'editor' && <EditorPanel />}{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}</div></section>;
 }

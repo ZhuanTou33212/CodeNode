@@ -68,9 +68,6 @@ export default function Toolbar() {
         <button title="打开代码编辑器" onClick={() => openDock('editor')}>
           编辑
         </button>
-        <button title="打开终端" onClick={() => openDock('terminal')}>
-          终端
-        </button>
         <button
           className="toolbar-run"
           title="按连线拓扑连续执行工作流"
@@ -83,7 +80,6 @@ export default function Toolbar() {
       <details className="toolbar-group toolbar-dropdown"><summary>更多⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
         <button className="toolbar-overflow-small" onClick={() => void saveProject()}>保存</button>
         <button className="toolbar-overflow-small" onClick={() => openDock('editor')}>编辑</button>
-        <button className="toolbar-overflow-small" onClick={() => openDock('terminal')}>终端</button>
         <button className="toolbar-overflow-small" disabled={!nodeCount} onClick={() => openDock('runs')}>运行</button>
         <button
           title="复制节点 (Ctrl+D)"
@@ -131,9 +127,6 @@ export default function Toolbar() {
         </button>
         <button title="打开检查点与恢复历史" onClick={() => openDock('checkpoints')}>
           恢复
-        </button>
-        <button title="查看内置工具与项目扩展" onClick={() => openDock('extensions')}>
-          扩展
         </button>
         <button title="聚焦全部 (Z)" onClick={() => fitView({ padding: 0.2 })}>
           聚焦

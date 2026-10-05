@@ -86,6 +86,39 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript('document.querySelector(".project-nav-sessions button").click()');
       await sleep(100);
       assert.equal(await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId'), originalSession);
+      const samePage = await win.webContents.executeJavaScript(`(() => { const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(), composer=document.querySelector('.pp-composer').getBoundingClientRect(); return {canvas:canvas.height,composer:composer.height,separated:canvas.bottom<=composer.top,visible:getComputedStyle(document.querySelector('.workspace-canvas')).visibility}; })()`);
+      assert.ok(samePage.canvas > 150 && samePage.composer > 80 && samePage.separated && samePage.visible === 'visible', 'canvas and composer must be usable together on the same page');
+      await win.webContents.executeJavaScript('document.querySelector(".session-archive").click()');
+      await waitFor(async () => cnode.decodeCnode(fs.readFileSync(projectFile)).canvases?.sessions.some(s=>s.id===originalSession && s.archived), '归档写入工程');
+      assert.notEqual(await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId'), originalSession);
+      win.webContents.reload();
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".gate-recent-item")').catch(()=>false), '重启后的最近工程');
+      await win.webContents.executeJavaScript('document.querySelector(".gate-recent-item").click()');
+      await waitFor(async () => await win.webContents.executeJavaScript(`!!document.querySelector('.pp-input') && window.__codenodeSession?.getState().sessions['${originalSession}']?.archived === true`).catch(()=>false), '重启后保留归档');
+      await win.webContents.executeJavaScript('document.querySelector(".global-settings-trigger").click()');
+      await sleep(100);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.settings-layout nav button')).find(b=>b.textContent==='已归档聊天').click()`);
+      await sleep(100);
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".settings-content").textContent.includes("画布1")'));
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.settings-content button')).find(b=>b.textContent==='恢复').click()`);
+      await waitFor(async () => cnode.decodeCnode(fs.readFileSync(projectFile)).canvases?.sessions.some(s=>s.id===originalSession && !s.archived), '恢复写入工程');
+      for (const setting of ['检索','扩展']) {
+        await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.settings-layout nav button')).find(b=>b.textContent==='${setting}').click()`);
+        await sleep(100);
+        assert.ok(await win.webContents.executeJavaScript('document.querySelector(".settings-content h2").textContent === '+JSON.stringify(setting)));
+      }
+      win.showInactive(); await sleep(150);
+      fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+      const settingsShot = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
+      fs.writeFileSync(path.join(__dirname,'..','out','global-settings.png'),settingsShot.toPNG());
+      win.hide();
+      await win.webContents.executeJavaScript('document.querySelector(".settings-close").click()');
+      assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".toolbar button")).some(b=>b.textContent.trim()==="终端")'), false);
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().openDock("editor")');
+      await sleep(100);
+      assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".dock-tabs button")).filter(b=>b.textContent==="终端").length'), 1);
+      assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".dock-tabs button")).some(b=>["检索设置","扩展"].includes(b.textContent))'), false);
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeDock()');
       await win.webContents.executeJavaScript(`document.querySelector('.pp-model').click()`);
       await sleep(100);
       await win.webContents.executeJavaScript(`document.querySelector('.hermes-settings-trigger').click()`);
@@ -116,7 +149,7 @@ app.whenReady().then(async () => {
       await waitFor(async () => await win.webContents.executeJavaScript('document.documentElement.dataset.theme==="light"'), '日间主题');
       await sleep(250);
       assert.equal(await win.webContents.executeJavaScript('localStorage.getItem("codenode.theme")'), 'light');
-      const material = await win.webContents.executeJavaScript(`(() => { const panel=getComputedStyle(document.querySelector('.conversation-workspace')); return {background:panel.backgroundColor,blur:panel.backdropFilter}; })()`);
+      const material = await win.webContents.executeJavaScript(`(() => { const panel=getComputedStyle(document.querySelector('.pp-composer')); return {background:panel.backgroundColor,blur:panel.backdropFilter}; })()`);
       assert.ok(material.background.startsWith('rgba(') && material.blur.includes('blur'), '主题应使用透明玻璃材质');
       const dayCapture = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
       fs.writeFileSync(path.join(__dirname,'..','out','workbench-glass-light.png'),dayCapture.toPNG());

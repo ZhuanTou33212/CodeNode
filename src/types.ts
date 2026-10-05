@@ -170,6 +170,7 @@ export type SessionDoc = {
 
 /** 一个会话画布（每次 Agent 制作任务的输出画布） */
 export type SessionCanvas = {
+  archived?: boolean;
   id: string;
   label: string;
   prompt: string;

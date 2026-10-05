@@ -4240,3 +4240,43 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .workspace-project .side-panel, .workspace-preview .side-panel { width: 100% !important; max-width: none !important; position: relative !important; left: auto !important; flex: 1; }
 .app-body.has-dock > .workspace-main { margin-bottom: var(--dock-h); }
 @media(max-width:600px) { .workspace-tabs { padding: 8px 12px; } .conversation-workspace { padding: 0 12px 12px; } .workspace-node .side-panel { left: 0; } }
+
+/* Canvas and conversation share one workbench. */
+.workspace-agent .workspace-content, .workspace-node .workspace-content { flex-direction: column; }
+.workspace-agent .workspace-canvas, .workspace-node .workspace-canvas { position: relative !important; visibility: visible !important; pointer-events: auto !important; flex: 1; min-height: 120px; order: 0; }
+.workspace-agent .conversation-workspace, .workspace-node .conversation-workspace { order: 1; height: clamp(220px,32vh,300px); flex: none; padding: 0 clamp(12px,4vw,48px) 14px; background: transparent; backdrop-filter: none; }
+.workspace-agent .conversation-workspace .ap-head, .workspace-node .conversation-workspace .ap-head { display: none; }
+.conversation-workspace .pp-input { min-height: 44px; max-height: 100px; }
+.workspace-node .workspace-content > .side-panel { position: absolute; left: 0; top: 0; bottom: clamp(220px,32vh,300px); z-index: 20; }
+.project-session-row { display: flex; position: relative; align-items: center; }
+.project-session-row > button:first-child { flex: 1; min-width: 0; padding-right: 30px !important; }
+.project-session-row .session-archive { position: absolute; right: 6px; width: 24px; padding: 4px !important; opacity: 0; }
+.project-session-row:hover .session-archive, .project-session-row:focus-within .session-archive { opacity: 1; }
+.glass-theme .global-settings-trigger { margin-top: auto; text-align: left; padding: 12px !important; border: 0; background: transparent; color: var(--glass-muted); }
+.settings-mask { position: fixed; inset: 0; z-index: 700; display: flex; padding: 24px; align-items: center; justify-content: center; background: rgba(20,30,50,.16); backdrop-filter: blur(12px); }
+.global-settings { display: flex; flex-direction: column; width: min(1040px,100%); height: min(760px,100%); border: 1px solid var(--glass-border); border-radius: 18px; background: var(--glass-sheet); color: var(--glass-text); backdrop-filter: blur(28px); box-shadow: var(--glass-shadow); overflow: hidden; }
+.global-settings > header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--glass-border); }
+.settings-layout { display: flex; flex: 1; min-height: 0; }
+.settings-layout > nav { width: 180px; flex: none; padding: 16px 10px; border-right: 1px solid var(--glass-border); }
+.glass-theme .global-settings button { background: transparent; color: var(--glass-text); border: 1px solid var(--glass-border); border-radius: 8px; padding: 8px 12px; }
+.settings-layout > nav button { display: block; width: 100%; text-align: left; margin-bottom: 6px; border: 0 !important; }
+.settings-layout > nav button[aria-pressed="true"] { background: var(--glass-selected); }
+.settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 24px; }
+.settings-content h2 { margin: 0 0 20px; font-size: 22px; }
+.settings-scope { color: var(--glass-muted); font-size: 12px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--glass-border); }
+.settings-content .dock-rag-settings { max-width: none; }
+.settings-content .dock-extensions { min-width: 0; }
+@media(max-width:600px) { .settings-mask { padding: 10px; } .settings-layout > nav { width: 112px; } .settings-content { padding: 14px; } .workspace-agent .conversation-workspace,.workspace-node .conversation-workspace { padding: 0 12px 12px; height: 220px; } }
+
+.settings-collapsed { position: absolute; left: 8px; bottom: 8px; z-index: 60; }
+.app-body { --dock-h: clamp(180px,34vh,360px); }
+.conversation-workspace .ap-body { padding: 6px 4px; }
+.conversation-workspace .cs-chat-empty { padding-top: 8px; font-size: 16px; }
+@media (max-height:700px) { .app-body.has-dock .conversation-workspace { height: 170px; } .app-body.has-dock .pp-input { min-height: 32px; } }
+
+.global-settings :is(strong,h3,code,.dock-tool-row strong) { color: var(--glass-text); }
+.global-settings .dock-extension-cards { grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); }
+.global-settings .dock-extension-card { background: var(--glass-control); border-color: var(--glass-border); }
+.global-settings :is(.dock-extension-card p,.dock-tool-row span,.dock-tool-row p,.dock-tool-row small) { color: var(--glass-muted); }
+@media(max-width:600px) { .global-settings .dock-rag-settings { grid-template-columns: 1fr; } .global-settings .dock-rag-actions { flex-wrap: wrap; } }
