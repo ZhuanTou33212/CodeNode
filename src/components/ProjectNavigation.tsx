@@ -17,6 +17,7 @@ export default function ProjectNavigation() {
   const toggle = useUiStore(s => s.toggleNavigation);
   const [error, setError] = useState('');
   const [revision, refresh] = useState(0);
+  const [projectOrder, setProjectOrder] = useState<string[]>(() => { try { const value = JSON.parse(localStorage.getItem('codenode.projectOrder') || '[]'); return Array.isArray(value) ? value.filter(key => typeof key === 'string') : []; } catch { return []; } });
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [renaming, setRenaming] = useState<string | null>(null);
   const [meta, setMeta] = useState<Record<string, { name?: string; pinned?: boolean; hidden?: boolean }>>(() => { try { return JSON.parse(localStorage.getItem('codenode.projectNavigation') || '{}'); } catch { return {}; } });
@@ -30,8 +31,21 @@ export default function ProjectNavigation() {
     setError('');
     try { await operation(); const state = useProjectStore.getState(); changeMeta(state.projectFile || state.root || '', { hidden: false }); } catch (cause) { setError(cause instanceof Error ? cause.message : '打开项目失败'); }
   };
-  const recent = readRecentProjects().filter(item => item.root !== root);
-  const projects = [{ root: root || '', file: file || undefined, name: projectNameOf(root || file || '当前项目') }, ...recent].filter(item => !meta[item.file || item.root]?.hidden).sort((a,b) => Number(!!meta[b.file || b.root]?.pinned)-Number(!!meta[a.file || a.root]?.pinned));
+  const identity = (path: string) => path.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+  const recent = readRecentProjects();
+  const projects = [{ root: root || '', file: file || undefined, name: projectNameOf(root || file || '当前项目') }, ...recent.filter(item => identity(item.root) !== identity(root || ''))].filter(item => !meta[item.file || item.root]?.hidden);
+  const candidateKeys = projects.map(item => identity(item.root));
+  const candidateSignature = JSON.stringify(candidateKeys);
+  useEffect(() => {
+    const candidates: string[] = JSON.parse(candidateSignature);
+    setProjectOrder(previous => {
+      const next = [...previous, ...candidates.filter(key => !previous.includes(key))];
+      localStorage.setItem('codenode.projectOrder', JSON.stringify(next));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [candidateSignature]);
+  const rank = (path: string) => { const key = identity(path); const index = projectOrder.indexOf(key); return index >= 0 ? index : projectOrder.length + candidateKeys.indexOf(key); };
+  projects.sort((a,b) => Number(!!meta[b.file || b.root]?.pinned)-Number(!!meta[a.file || a.root]?.pinned) || rank(a.root)-rank(b.root));
   void revision;
   if (!open) return <><button className="project-nav-toggle" aria-label="展开项目导航" onClick={toggle}>☰</button><button className="global-settings-trigger settings-collapsed" aria-label="全局设置" onClick={() => useUiStore.getState().openSettings()}>⚙</button></>;
   return <aside className="project-navigation" aria-label="项目与会话">
@@ -40,12 +54,12 @@ export default function ProjectNavigation() {
     <div className="project-nav-title"><span>项目</span><details className="project-actions"><summary aria-label="项目操作">＋</summary><div><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(newProject); }}>新建项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProject); }}>打开项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProjectFile); }}>打开工程文件</button></div></details></div>
     <div className="project-nav-scroll">
       {projects.map(project => {
-        const key = project.file || project.root, current = project.root === root;
+        const key = project.file || project.root, current = identity(project.root) === identity(root || '');
         const name = meta[key]?.name || project.name;
         const folded = collapsed[key] ?? !current;
         return <section className="project-group" key={key}>
           <div className="project-group-row">
-            <button className="project-group-name" aria-expanded={!folded} title={project.root} onClick={() => { setCollapsed(state => ({ ...state, [key]: !folded })); if (!current) void act(() => openRecentProject(project)); }}><span>{folded ? '›' : '⌄'}</span><span>▱</span><span>{name}</span>{meta[key]?.pinned && <small>置顶</small>}</button>
+            <button className="project-group-name" aria-expanded={!folded} title={project.root} onClick={() => { setCollapsed(state => ({ ...state, [key]: !folded })); if (!current && folded) void act(() => openRecentProject(project)); }}><span>{folded ? '›' : '⌄'}</span><span>▱</span><span>{name}</span>{meta[key]?.pinned && <small>置顶</small>}</button>
             <button className="project-new-chat" aria-label={`在 ${name} 新建聊天`} disabled={streaming} onClick={() => void act(async () => { if (!current) await openRecentProject(project); useSessionStore.getState().newCanvas(); useUiStore.getState().setSideTab('agent'); })}>＋</button>
             <details className="project-row-menu"><summary aria-label={`${name} 项目菜单`}>⋯</summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute('open')}>
               <button onClick={() => changeMeta(key, { pinned: !meta[key]?.pinned })}>{meta[key]?.pinned ? '取消置顶' : '置顶'}</button>

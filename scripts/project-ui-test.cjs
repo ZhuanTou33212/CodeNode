@@ -43,6 +43,11 @@ app.whenReady().then(async () => {
   try {
     await waitFor(async () => win && await win.webContents.executeJavaScript('!!document.querySelector(".gate-actions")').catch(() => false), '启动页');
     win.hide();
+    const alternateRoot = path.join(root, 'alternate-project');
+    fs.mkdirSync(alternateRoot, {recursive:true});
+    const alternateFile = path.join(alternateRoot, 'alternate.cnode');
+    fs.writeFileSync(alternateFile, cnode.encodeCnode({graph:{nodes:[],edges:[]},canvases:{sessions:[{id:'alternate-session',label:'另一项目聊天',status:'active',createdAt:Date.now(),nodeCount:0,root:{nodes:[],edges:[]}}],messages:[]}}));
+    await win.webContents.executeJavaScript('localStorage.setItem("codenode.recentProjects", '+JSON.stringify(JSON.stringify([{root:alternateRoot,file:alternateFile,name:'alternate-project',openedAt:Date.now()}]))+')');
     await win.webContents.executeJavaScript('document.querySelectorAll(".gate-actions .gate-btn")[1].click()');
     await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".app") && !!window.__codenodeProject.getState().root'), '新建后进入工作台');
     assert.equal(fs.existsSync(projectFile), true);
@@ -52,7 +57,7 @@ app.whenReady().then(async () => {
     assert.equal(opened.file, projectFile);
 
     await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".pp-input") || !!document.querySelector(".crash")'), 'Agent 侧栏');
-    win.webContents.on('console-message', (_event, details) => { if (details.level === 'error') console.log('RENDER ERROR', details.message); });
+    win.webContents.on('console-message', event => { if (event.level === 'error') console.log('RENDER ERROR', event.message); });
     const agentView = await win.webContents.executeJavaScript(`(() => { const panel=document.querySelector('.conversation-workspace'); const input=document.querySelector('.pp-input'); return { crash:document.querySelector('.crash')?.textContent, panel:panel?.getBoundingClientRect().toJSON(), input:input?.getBoundingClientRect().toJSON(), text:panel?.textContent }; })()`);
     console.log('AGENT VIEW', JSON.stringify(agentView));
     const centered = await win.webContents.executeJavaScript(`(() => { const a=document.querySelector('.workspace-main').getBoundingClientRect(), b=document.querySelector('.pp-composer').getBoundingClientRect(); return {offset:Math.abs((a.left+a.right-b.left-b.right)/2),bottom:a.bottom-b.bottom,width:b.width,sideAgent:!!document.querySelector('.side-panel .pp-input')}; })()`);
@@ -79,7 +84,17 @@ app.whenReady().then(async () => {
         assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.workspace-${view}') !== null`));
       }
       assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), 'draft retained');
-      await win.webContents.executeJavaScript('document.querySelector(".project-group-name").click()');
+      const beforeProjectOrder = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)');
+      await win.webContents.executeJavaScript('document.querySelectorAll(".project-group-name")[1].click()');
+      await waitFor(async () => await win.webContents.executeJavaScript('window.__codenodeProject.getState().root === '+JSON.stringify(alternateRoot)+' && window.__codenodeProject.getState().projectFile === '+JSON.stringify(alternateFile)+' && !!window.__codenodeSession.getState().sessions["alternate-session"]'), '展开其他项目');
+      assert.deepEqual(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)'), beforeProjectOrder, 'expanding another project must not reorder projects');
+      await win.webContents.executeJavaScript('document.querySelectorAll(".project-group-name")[1].click()');
+      await sleep(100);
+      assert.deepEqual(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)'), beforeProjectOrder);
+      await win.webContents.executeJavaScript('document.querySelectorAll(".project-group-name")[0].click()');
+      await waitFor(async () => await win.webContents.executeJavaScript('window.__codenodeProject.getState().root === '+JSON.stringify(root)+' && window.__codenodeProject.getState().projectFile === '+JSON.stringify(projectFile)), '返回原项目');
+      assert.deepEqual(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)'), beforeProjectOrder);
+      await win.webContents.executeJavaScript('(() => { const button=document.querySelector(".project-group-name"); if (button.getAttribute("aria-expanded") === "true") button.click(); })()');
       await sleep(80);
       assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".project-session-row").length'), 0);
       await win.webContents.executeJavaScript('document.querySelector(".project-group-name").click()');
@@ -103,6 +118,7 @@ app.whenReady().then(async () => {
       await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".gate-recent-item")').catch(()=>false), '重启后的最近工程');
       await win.webContents.executeJavaScript('document.querySelector(".gate-recent-item").click()');
       await waitFor(async () => await win.webContents.executeJavaScript(`!!document.querySelector('.pp-input') && window.__codenodeSession?.getState().sessions['${originalSession}']?.archived === true`).catch(()=>false), '重启后保留归档');
+      assert.deepEqual(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)'), beforeProjectOrder, 'project order must survive reload and reopening');
       await win.webContents.executeJavaScript('document.querySelector(".global-settings-trigger").click()');
       await sleep(100);
       await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.settings-layout nav button')).find(b=>b.textContent==='已归档聊天').click()`);
