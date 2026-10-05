@@ -79,6 +79,14 @@ app.whenReady().then(async () => {
         assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.workspace-${view}') !== null`));
       }
       assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), 'draft retained');
+      await win.webContents.executeJavaScript('document.querySelector(".project-group-name").click()');
+      await sleep(80);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".project-session-row").length'), 0);
+      await win.webContents.executeJavaScript('document.querySelector(".project-group-name").click()');
+      await sleep(80);
+      await win.webContents.executeJavaScript(`document.querySelector('.project-row-menu summary').click(); Array.from(document.querySelectorAll('.project-row-menu button')).find(b=>b.textContent==='置顶').click()`);
+      await sleep(80);
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".project-group-name").textContent.includes("置顶")'));
       const originalSession = await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId');
       await win.webContents.executeJavaScript('document.querySelector(".project-nav-new").click()');
       await sleep(100);
@@ -159,6 +167,23 @@ app.whenReady().then(async () => {
       const narrow = await win.webContents.executeJavaScript(`(() => { const toolbar=document.querySelector('.toolbar'); const input=document.querySelector('.pp-input'); return {overflow:toolbar.scrollWidth>toolbar.clientWidth,input:input.getBoundingClientRect().width}; })()`);
       assert.ok(!narrow.overflow && narrow.input>200, 'narrow window toolbar and composer must remain usable');
       win.hide(); win.setSize(1300,850);
+      await sleep(100);
+      await win.webContents.executeJavaScript(`(() => { const graph=window.__codenodeStore.getState(); graph.addNode({id:'phase-one',type:'task',position:{x:40,y:40},data:{label:'阶段一',prompt:'',status:'pending'}}); graph.addNode({id:'phase-two',type:'stage',position:{x:400,y:40},data:{label:'阶段二',prompt:'第二阶段原文',status:'pending'}}); graph.setSelectedIds(['phase-one']); })()`);
+      await sleep(100);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".wf-prompt").length'), 0);
+      await win.webContents.executeJavaScript(`(() => { const input=document.querySelector('.pp-input'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'第一阶段任务'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+      await sleep(100);
+      await win.webContents.executeJavaScript('document.querySelector(".pp-send").click()');
+      await sleep(200);
+      await waitFor(async () => cnode.decodeCnode(fs.readFileSync(projectFile)).canvases?.sessions.some(s=>s.root?.nodes.some(n=>n.id==='phase-one' && n.data.prompt==='第一阶段任务')), '节点 Prompt 写入工程');
+      await win.webContents.executeJavaScript('window.__codenodeStore.getState().setSelectedIds(["phase-two"])');
+      await sleep(100);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), '第二阶段原文');
+      await win.webContents.executeJavaScript('window.__codenodeStore.getState().updateNodeData("phase-one",{status:"running"})');
+      await sleep(100);
+      assert.ok(await win.webContents.executeJavaScript('!!document.querySelector(".wf-node-task.wf-status-running")'));
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".conversation-workspace").textContent.includes("你好")'), false);
+      await win.webContents.executeJavaScript('window.__codenodeStore.getState().clear()');
       await sleep(100);
       await win.webContents.executeJavaScript('document.querySelector(".toolbar-vector").click()');
       await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".wf-vector-stage .vs-stage")'), '画布节点绘图区');

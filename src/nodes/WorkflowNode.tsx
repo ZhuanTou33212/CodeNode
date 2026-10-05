@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, type CSSProperties } from 'react';
+import { memo, type CSSProperties } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import type { WorkflowNodeData } from '../types';
@@ -31,27 +31,6 @@ const TYPE_ACCENT: Record<string, string> = {
   object: '#06b6d4',
 };
 
-/** prompt 自适应高度的 textarea：随内容自动撑高 */
-function AutoPrompt({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.max(el.scrollHeight, 46) + 'px';
-  }, [value]);
-  return (
-    <textarea
-      ref={ref}
-      className="wf-prompt nodrag"
-      rows={2}
-      placeholder={placeholder}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
-}
-
 function WorkflowNode({ id, data, selected }: NodeProps) {
   const d = data as unknown as WorkflowNodeData & { objectName?: string };
   const status = d.status || 'pending';
@@ -67,7 +46,7 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
   const nodeStyle = { borderColor: `${accent}b8`, '--wf-accent': accent } as CSSProperties;
 
   return (
-    <div className={`wf-node wf-node-${nodeType || 'default'} ${selected ? 'is-selected' : ''} ${isObject ? 'wf-object-node' : ''}`} style={nodeStyle}>
+    <div className={`wf-node wf-node-${nodeType || 'default'} wf-status-${status} ${selected ? 'is-selected' : ''} ${isObject ? 'wf-object-node' : ''}`} style={nodeStyle}>
       {!isStart && <Handle type="target" position={Position.Left} className="wf-handle" />}
       <div className="wf-node-title">
         <span className="wf-status-dot" style={{ background: STATUS_COLOR[status] }} title={status} />
@@ -83,11 +62,7 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
           onChange={(e) => updateNodeData(id, { objectName: e.target.value })}
         />
       ) : promptable ? (
-        <AutoPrompt
-          value={d.prompt || ''}
-          onChange={(v) => updateNodeData(id, { prompt: v })}
-          placeholder="任务 prompt…"
-        />
+        <div className="wf-prompt-preview" title={d.prompt || '选中节点，在底部输入任务'}>{d.prompt || '选中后在底部输入任务'}</div>
       ) : null}
       <div className="wf-node-footer">
         <span className="wf-status-text" style={{ color: STATUS_COLOR[status] }}>

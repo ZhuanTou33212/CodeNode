@@ -659,9 +659,11 @@ function RunsPanel() {
         if (contract.requiresInput && missing.length) { block('缺少上游输出：' + missing.map((item) => item.label).join('、')); break; }
         if (state.pending.some((item) => item.active)) { block('工作流节点仍在执行，不能重复运行'); break; }
         assertCurrent();
+        updateNodeData(node.id, { status: 'running' });
+        setItems(list => list.map(item => item.id === node.id ? { ...item, status: 'running' } : item));
         const executed = await api.workflowExecute(root, workflowId, {
           graph, nodeId: node.id, expectedRevision: state.revision, legacyRecovery: legacy,
-        });
+        }).catch(error => { updateNodeData(node.id, { status: 'failed' }); throw error; });
         if (!executed.ok || !executed.state) { block(executed.error || '主进程工作流执行失败'); break; }
         state = executed.state;
         if (legacy) { try { localStorage.removeItem(runStateKey); } catch {} legacy = false; }

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useGraphStore } from '../../store/graphStore';
+import { saveProject } from '../../lib/projectActions';
 import { useChatStore } from '../../store/chatStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useUiStore } from '../../store/uiStore';
@@ -126,6 +128,8 @@ function UsageMeter() {
  */
 function PromptComposer() {
   const [text, setText] = useState('');
+  const selectedNode = useGraphStore(s => s.nodes.find(n => n.id === s.selectedId && ['task','stage','tool'].includes(n.type || '')));
+  const inputText = selectedNode ? String(selectedNode.data.prompt || '') : text;
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [modelSearch, setModelSearch] = useState('');
   useEffect(() => {
@@ -174,7 +178,7 @@ function PromptComposer() {
   };
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
-  const canVision = model?.vision === true;
+  const canVision = !selectedNode && model?.vision === true;
 
   useEffect(() => {
     void loadModels();
@@ -209,6 +213,7 @@ function PromptComposer() {
   };
 
   const send = async () => {
+    if (selectedNode && !busy) { await saveProject(); return; }
     const prompt = text.trim();
     if ((!prompt && !attachments.length) || busy) return;
     const toSend = attachments;
@@ -244,7 +249,8 @@ function PromptComposer() {
         void addFiles(files);
       }}
     >
-      {attachments.length > 0 && (
+      {selectedNode && <div className="node-prompt-context"><span>阶段 · {String(selectedNode.data.label || selectedNode.id)}</span><button aria-label="返回对话" onClick={() => useGraphStore.getState().setSelectedIds([])}>×</button></div>}
+      {!selectedNode && attachments.length > 0 && (
         <div className="pp-attach-list">
           {attachments.map((a, i) => (
             <div className="pp-attach" key={i} title={`${a.name || '图片'}（${fmtBytes(a.bytes || 0)}）`}>
@@ -264,15 +270,17 @@ function PromptComposer() {
       <textarea
         ref={taRef}
         className="pp-input"
-        value={text}
+        value={inputText}
         rows={1}
+        disabled={busy}
+        onFocus={() => { if (selectedNode) useGraphStore.getState().commit(); }}
         placeholder={
-          canVision
+          selectedNode ? '输入此阶段的任务…' : canVision
             ? '描述任务，或粘贴图片…'
             : '描述你想完成的任务…'
         }
         onChange={(e) => {
-          setText(e.target.value);
+          if (selectedNode) useGraphStore.getState().updateNodeData(selectedNode.id, { prompt: e.target.value }); else setText(e.target.value);
           const el = taRef.current;
           if (el) {
             el.style.height = 'auto';
@@ -311,6 +319,7 @@ function PromptComposer() {
         />
         <button
           className={`pp-attach-btn${canVision ? '' : ' is-off'}`}
+          disabled={!!selectedNode}
           title={
             canVision
               ? '添加图片（也可直接粘贴 / 拖入）'
@@ -354,10 +363,10 @@ function PromptComposer() {
           <button
             className="pp-send"
             onClick={() => void send()}
-            disabled={(!text.trim() && !attachments.length) || busy}
-            title="发送 (Enter)"
+            disabled={(!selectedNode && !text.trim() && !attachments.length) || busy}
+            title={selectedNode ? '保存阶段 Prompt (Enter)' : '发送 (Enter)'}
           >
-            ↑
+            {selectedNode ? '保存' : '↑'}
           </button>
         )}
       </div>
@@ -413,13 +422,8 @@ export default function AgentPanel() {
         aria-relevant="additions text"
         aria-label="Agent 对话记录"
       >
-        {messages.length === 0 && (
-          <div className="cs-chat-empty">
-            有什么想做的？
-            <div className="sp-empty-hint"></div>
-          </div>
-        )}
-        {messages.map((m, i) => (
+
+        {messages.filter(m => !(m.role === 'assistant' && /^(你好[，,]?\s*我能为你做什么[？?]?|你好[，,]?\s*我能为你做些什么[？?]?)$/.test(m.content.trim()))).map((m, i) => (
           <MessageViewMemo key={i} msg={m} />
         ))}
       </div>

@@ -4280,3 +4280,27 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .global-settings .dock-extension-card { background: var(--glass-control); border-color: var(--glass-border); }
 .global-settings :is(.dock-extension-card p,.dock-tool-row span,.dock-tool-row p,.dock-tool-row small) { color: var(--glass-muted); }
 @media(max-width:600px) { .global-settings .dock-rag-settings { grid-template-columns: 1fr; } .global-settings .dock-rag-actions { flex-wrap: wrap; } }
+
+.node-prompt-context { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--glass-accent); }
+.node-prompt-context button { background: transparent; border: 0; color: inherit; }
+.conversation-workspace .pp-send:has(+ *) { flex: none; }
+.conversation-workspace .pp-send[title^="保存"] { width: auto; padding: 0 10px; border-radius: 8px; font-size: 12px; }
+.wf-prompt-preview { padding: 10px 14px; color: var(--glass-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.glass-theme .wf-node.wf-status-running { border-color: #f59e0b; box-shadow: 0 0 0 2px rgba(245,158,11,.35), 0 0 24px rgba(245,158,11,.3); background: color-mix(in srgb,var(--glass-surface) 80%,#f59e0b 20%); }
+.wf-status-running .wf-status-dot { animation: stage-pulse 1.2s ease-in-out infinite; }
+@keyframes stage-pulse { 50% { box-shadow: 0 0 0 5px rgba(245,158,11,.25); } }
+@media(prefers-reduced-motion:reduce) { .wf-status-running .wf-status-dot { animation:none; } }
+
+.project-group { margin: 5px 0 14px; }
+.project-group-row { display: flex; align-items: center; gap: 2px; position: relative; }
+.glass-theme .project-group-row button { padding: 7px 4px; background: transparent; border: 0; color: var(--glass-text); }
+.project-group-name { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; text-align: left; }
+.project-group-name > span:nth-child(3) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-group-name small { font-size: 9px; color: var(--glass-muted); }
+.project-group-row .project-new-chat, .project-row-menu summary { opacity: 0; }
+.project-group-row:hover .project-new-chat, .project-group-row:hover summary, .project-group-row:focus-within .project-new-chat, .project-group-row:focus-within summary { opacity: 1; }
+.project-row-menu { position: relative; flex: none; }
+.project-row-menu summary { cursor: pointer; list-style: none; padding: 5px; }
+.project-row-menu > div { position: absolute; top: 100%; right: 0; z-index: 250; width: 150px; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 10px; padding: 5px; box-shadow: var(--glass-shadow); backdrop-filter: blur(24px); }
+.project-row-menu > div button { display: block; width: 100%; text-align: left; padding: 9px !important; }
+.project-rename { width: 100%; padding: 7px; color: var(--glass-text); border: 1px solid var(--glass-border); background: var(--glass-control); border-radius: 6px; }

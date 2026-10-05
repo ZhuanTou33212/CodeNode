@@ -31,8 +31,8 @@ function nameOf(filePath: string): string {
 }
 
 function buildPayload() {
+  useSessionStore.getState().syncActiveGraph();
   const ss = useSessionStore.getState();
-  ss.syncActiveGraph();
   const active = ss.current();
   const sessions = ss.order
     .map((id) => ss.sessions[id])

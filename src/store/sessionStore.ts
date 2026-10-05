@@ -214,9 +214,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       createdAt: Date.now(),
       nodeCount: 0,
     };
-    const messages: SessionMsg[] = greeting
-      ? [{ role: 'assistant', content: greeting, status: 'done' }]
-      : [];
+    const messages: SessionMsg[] = [];
     set({
       sessions: { [id]: first },
       order: [id],

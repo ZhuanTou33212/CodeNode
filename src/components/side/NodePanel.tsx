@@ -95,16 +95,7 @@ export default function NodePanel({ onOpenFile }: { onOpenFile: (relPath: string
       </div>
 
       {(node.type === 'task' || node.type === 'stage' || node.type === 'tool') && (
-        <><div className="inspector-field">
-          <label>任务 Prompt</label>
-          <textarea
-            value={String(d.prompt || '')}
-            rows={4}
-            placeholder="该节点的执行 prompt…"
-            onFocus={beginEdit}
-            onChange={(e) => updateNodeData(node.id, { prompt: e.target.value })}
-          />
-        </div>
+        <>
         <div className="inspector-field"><label><input type="checkbox" checked={Boolean(d.requiresInput)} onFocus={beginEdit} onChange={(e) => updateNodeData(node.id, { requiresInput: e.target.checked })} /> 需要上游输出</label><div className="sp-empty-hint">当前连线输入：{flow?.input?.length ? flow.input.map((item) => item.label).join('、') : '无'}</div>{d.requiresInput && !flow?.input?.length ? <div className="task-trace-warning">缺少输入连线，运行时会阻塞</div> : null}</div>
         <div className="inspector-field"><label>输出名称</label><input value={String(d.outputName || '')} placeholder="例如：测试结果" onFocus={beginEdit} onChange={(e) => updateNodeData(node.id, { outputName: e.target.value })} /></div>
         <div className="inspector-field"><label>完成条件（支持 contains:文本 / equals:文本；自然语言需人工核对）</label><textarea value={String(d.completionCondition || '')} rows={2} placeholder="例如：contains:verified，或命令退出码为 0" onFocus={beginEdit} onChange={(e) => updateNodeData(node.id, { completionCondition: e.target.value })} /></div>

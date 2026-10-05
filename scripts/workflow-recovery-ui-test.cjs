@@ -46,6 +46,8 @@ ipcMain.handle('workflow-test:run', (_event, selectedRoot, command) => {
 });
 ipcMain.handle('workflow-test:execute', async (event, selectedRoot, id, request) => {
   assert.strictEqual(selectedRoot, root);
+  const stageStatus = await event.sender.executeJavaScript(`window.__codenodeStore.getState().nodes.find(n=>n.id===${JSON.stringify(request.nodeId)})?.data.status`);
+  assert.strictEqual(stageStatus, 'running', 'executing stage must light up before the main-process request');
   if (failPrepare) return { ok: false, error: '模拟恢复记录写入失败' };
   const originalRename = fs.renameSync;
   if (failSettle) fs.renameSync = (from, to) => { if (String(to).endsWith('.json')) throw new Error('模拟执行结果写入失败'); return originalRename(from, to); };
