@@ -4144,3 +4144,47 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .glass-theme :is(.tool-dialog-detail,.tool-dialog-level,.tool-dialog-options,.tool-dialog-free,.tool-dialog-btn,.dock-run-item pre,.dock-replay-main,.dock-replay-kind,.dock-replay-ts) { color: var(--glass-text); border-color: var(--glass-border); }
 .glass-theme :is(.dock-run-item,.dock-checkpoint,.dock-tool-row,.tool-dialog-options,.pm-preview-head) { background: var(--glass-control); border-color: var(--glass-border); }
 @media (max-width: 480px) { .glass-theme.ui-clean .toolbar { gap: 2px; padding-inline: 7px; } .glass-theme.ui-clean .toolbar-theme { width: 28px; padding-inline: 3px; } .glass-theme.ui-clean .toolbar button,.glass-theme.ui-clean .toolbar summary { padding-inline: 5px; } }
+
+/* Independent project navigation and conversation column. */
+.glass-theme .project-navigation { width: 216px; flex: 0 0 216px; display: flex; flex-direction: column; min-height: 0; padding: 18px 12px 14px; background: var(--glass-surface); backdrop-filter: blur(24px) saturate(145%); border-right: 1px solid var(--glass-border); color: var(--glass-text); z-index: 22; }
+.project-nav-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; padding: 0 8px; }
+.project-nav-head strong { font-size: 14px; font-weight: 600; }
+.glass-theme .project-navigation button { background: transparent; border: 0; color: var(--glass-text); text-align: left; font-size: 12px; border-radius: 8px; }
+.glass-theme .project-navigation button:hover { background: var(--glass-control); }
+.project-nav-head button { padding: 4px 6px; }
+.project-nav-new { padding: 10px 8px; margin-bottom: 22px; }
+.project-nav-title { display: flex; justify-content: space-between; align-items: center; padding: 0 8px; margin-bottom: 8px; font-size: 11px; color: var(--glass-muted); }
+.project-nav-title button { font-size: 16px !important; padding: 2px 6px; }
+.project-nav-scroll { overflow-y: auto; flex: 1; min-height: 0; }
+.project-nav-current { padding: 10px 8px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-nav-sessions { display: flex; flex-direction: column; gap: 3px; margin-bottom: 16px; }
+.project-nav-sessions button { padding: 9px 10px 9px 26px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.glass-theme .project-nav-sessions button.active { background: var(--glass-selected); color: var(--glass-accent); }
+.project-nav-recent { padding: 10px 8px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-nav-foot { padding-top: 12px; border-top: 1px solid var(--glass-border); display: flex; flex-direction: column; gap: 3px; }
+.project-nav-foot button { padding: 8px; color: var(--glass-muted) !important; }
+.project-nav-error { font-size: 11px; color: #d17171; padding: 8px; overflow-wrap: anywhere; }
+.glass-theme .project-nav-toggle { position: absolute; left: 12px; top: 10px; z-index: 24; width: 30px; padding: 5px; color: var(--glass-text); background: var(--glass-surface); border: 1px solid var(--glass-border); }
+.ui-clean .project-navigation + .side-panel { border-right: 1px solid var(--glass-border); }
+.ui-clean .project-nav-toggle + .side-panel .sp-head { padding-left: 28px; }
+.ui-clean .sp-pane-agent .ap-head { margin-bottom: 6px; }
+.ui-clean .sp-pane-agent .ap-body { padding-top: 6px; }
+.canvas-welcome { pointer-events: none; }
+.glass-theme.ui-clean .canvas-welcome p { font-size: 12px; color: var(--glass-faint); }
+@media(max-width:1100px) { .glass-theme .project-navigation { width: 180px; flex-basis: 180px; } }
+@media(max-width:860px) { .glass-theme .project-navigation { width: 160px; flex-basis: 160px; } .ui-clean .side-panel { left: 172px; max-width: calc(100% - 184px); } }
+@media(max-width:600px) { .glass-theme .project-navigation { position: absolute; left: 0; top: 0; bottom: 0; width: 200px; z-index: 150; background: var(--glass-sheet); box-shadow: var(--glass-shadow); } .ui-clean .side-panel { left: 10px; max-width: calc(100% - 20px); } }
+.pp-model-picker { position: relative; grid-column: 1 / -1; min-width: 0; }
+.pp-model-picker > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; list-style: none; }
+.pp-model-picker > summary::-webkit-details-marker { display: none; }
+.glass-theme .pp-model-menu { position: absolute; bottom: calc(100% + 10px); left: 0; width: 100%; z-index: 180; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 12px; padding: 8px; backdrop-filter: blur(28px); box-shadow: var(--glass-shadow); }
+.pp-model-menu > input { width: 100%; min-width: 0; padding: 8px; background: transparent; border: 0; border-bottom: 1px solid var(--glass-border); color: var(--glass-text); font: inherit; outline: none; }
+.pp-model-options { max-height: min(300px,40vh); overflow-y: auto; }
+.pp-model-group { padding: 12px 8px 5px; font-size: 10px; color: var(--glass-muted); text-transform: uppercase; }
+.glass-theme .pp-model-menu button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; background: transparent; border: 0; padding: 8px; color: var(--glass-text); font-size: 12px; }
+.pp-model-option button > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.glass-theme .pp-model-menu button.active, .glass-theme .pp-model-menu button:hover { background: var(--glass-selected); }
+.pp-model-settings > summary { padding: 6px 12px; font-size: 11px; color: var(--glass-muted); cursor: pointer; list-style: none; }
+.pp-model-effort { margin: 2px 8px 6px; padding: 4px; border: 1px solid var(--glass-border); border-radius: 8px; background: var(--glass-control); }
+.glass-theme .pp-model-effort button[aria-pressed="true"] { color: var(--glass-accent); background: var(--glass-selected); }
+.pp-model-manage { border-top: 1px solid var(--glass-border) !important; margin-top: 4px; border-radius: 0 !important; }

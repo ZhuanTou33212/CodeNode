@@ -2,7 +2,7 @@ import { useReactFlow } from '@xyflow/react';
 import { useEffect } from 'react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
-import { newProject, openProject, openProjectFile, saveProject } from '../lib/projectActions';
+import { saveProject } from '../lib/projectActions';
 import { NODE_TEMPLATES } from '../nodes';
 import type { VectorData } from '../types';
 
@@ -42,18 +42,6 @@ export default function Toolbar() {
         CodeNode
       </div>
 
-      <details className="toolbar-group toolbar-dropdown"><summary>项目⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
-        <button title="新建项目：选择目录并创建空白工作区 (Ctrl+N)" onClick={() => void newProject()}>
-          新建
-        </button>
-        <button title="打开项目目录：载入其中的 workflow.cnode (Ctrl+O)" onClick={() => void openProject()}>
-          打开
-        </button>
-        <button title="打开 .cnode 工程文件" onClick={() => void openProjectFile()}>
-          打开文件
-        </button>
-        <button className="toolbar-overflow-small" onClick={() => void saveProject()}>保存</button>
-      </div></details>
       <button className="toolbar-save" title="保存项目 (Ctrl+S)" onClick={() => void saveProject()}>保存</button>
 
       <div className="toolbar-group">
@@ -93,6 +81,7 @@ export default function Toolbar() {
         </button>
       </div>
       <details className="toolbar-group toolbar-dropdown"><summary>更多⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
+        <button className="toolbar-overflow-small" onClick={() => void saveProject()}>保存</button>
         <button className="toolbar-overflow-small" onClick={() => openDock('editor')}>编辑</button>
         <button className="toolbar-overflow-small" onClick={() => openDock('terminal')}>终端</button>
         <button className="toolbar-overflow-small" disabled={!nodeCount} onClick={() => openDock('runs')}>运行</button>

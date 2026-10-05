@@ -13,6 +13,8 @@ function savedTheme(): 'light' | 'dark' {
 }
 
 interface UiState {
+  navigationOpen: boolean;
+  toggleNavigation: () => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
   /** 右侧侧栏（原「检查器」+ 原左侧「项目管理」合并后的唯一面板） */
@@ -63,6 +65,8 @@ interface UiState {
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useUiStore = create<UiState>((set, get) => ({
+  navigationOpen: true,
+  toggleNavigation: () => set(state => ({ navigationOpen: !state.navigationOpen })),
   theme: savedTheme(),
   toggleTheme: () => set((state) => {
     const theme = state.theme === 'dark' ? 'light' : 'dark';

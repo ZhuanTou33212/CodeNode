@@ -11,7 +11,7 @@ import PreviewPanel from './PreviewPanel';
 const TABS: { id: SideTab; label: string; title: string }[] = [
   { id: 'agent', label: 'Agent', title: 'Agent 对话与会话画布' },
   { id: 'node', label: '节点', title: '选中节点属性' },
-  { id: 'project', label: '项目', title: '项目文件树' },
+  { id: 'project', label: '文件', title: '项目文件树' },
   { id: 'preview', label: '预览', title: '文件内容预览' },
 ];
 

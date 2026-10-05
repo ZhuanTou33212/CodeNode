@@ -4,6 +4,7 @@ import Toolbar from './components/Toolbar';
 import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
+import ProjectNavigation from './components/ProjectNavigation';
 import InspectorBadge from './components/InspectorBadge';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
@@ -229,6 +230,7 @@ export default function App() {
     <div className={`app ui-clean glass-theme theme-${theme}`}>
       <Toolbar />
       <div className={`app-body side-left${dockOpen ? ' has-dock' : ''}`}>
+        <ProjectNavigation />
         {sideOpen ? <SidePanel /> : <InspectorBadge />}
         <Canvas />
         <AddMenu />

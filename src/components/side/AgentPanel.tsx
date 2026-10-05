@@ -126,6 +126,16 @@ function UsageMeter() {
 function PromptComposer() {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const [modelSearch, setModelSearch] = useState('');
+  useEffect(() => {
+    const closePicker = (event: Event) => {
+      document.querySelectorAll<HTMLDetailsElement>('.pp-model-picker[open]').forEach(picker => {
+        if (event instanceof KeyboardEvent ? event.key === 'Escape' : !picker.contains(event.target as Node)) picker.open = false;
+      });
+    };
+    document.addEventListener('pointerdown', closePicker); document.addEventListener('keydown', closePicker);
+    return () => { document.removeEventListener('pointerdown', closePicker); document.removeEventListener('keydown', closePicker); };
+  }, []);
   const [dragOver, setDragOver] = useState(false);
   // #7：`sending` 是派生值（inflight.size() > 0），不再是可被并发覆盖的单值全局标志
   const sending = useSending();
@@ -284,39 +294,22 @@ function PromptComposer() {
 
       {/* 控件行：模型 / 推理强度 / 发送（紧凑一行，保证输入框常驻面板底部） */}
       <div className="pp-controls">
-        <select
-          className="pb-select pp-model"
-          value={model ? model.id : ''}
-          title={model ? `当前模型：${model.label}` : '选择模型'}
-          onChange={(e) => {
-            if (e.target.value === '__manage') {
-              useUiStore.getState().openModelManager();
-              return;
-            }
-            if (e.target.value) setModel(e.target.value);
-          }}
-        >
-          {models.length === 0 && <option value="">未配置模型</option>}
-          {models.map((m) => (
-            <option key={m.id} value={m.id} disabled={m.apiKeyError}>
-              {m.label}
-            </option>
-          ))}
-          <option value="__manage">管理模型…</option>
-        </select>
-
-        {model && model.supportsEffort && (
-          <select
-            className="pb-select pp-effort"
-            value={effort}
-            title="推理强度"
-            onChange={(e) => setEffort(e.target.value as ReasoningEffort)}
-          >
-            <option value="low">推理低</option>
-            <option value="medium">推理中</option>
-            <option value="high">推理高</option>
-          </select>
-        )}
+        <details className="pp-model-picker">
+          <summary className="pp-model" title={model?.label || '选择模型'}>{model?.label || '选择模型'}{model?.supportsEffort ? ` · ${{low:'低',medium:'中',high:'高'}[effort]}` : ''}<span>⌄</span></summary>
+          <div className="pp-model-menu" aria-label="模型选择">
+            <input aria-label="搜索对话模型" placeholder="搜索模型…" value={modelSearch} onChange={event => setModelSearch(event.target.value)} />
+            <div className="pp-model-options">
+              {[...new Set(models.map(item => item.providerLabel || item.provider || '已连接'))].map(group => <section key={group}>
+                <div className="pp-model-group">{group}</div>
+                {models.filter(item => (item.providerLabel || item.provider || '已连接') === group && (item.label + ' ' + item.model).toLowerCase().includes(modelSearch.toLowerCase())).map(item => <div key={item.id} className="pp-model-option">
+                  <button className={item.id === modelId ? 'active' : ''} disabled={item.apiKeyError || busy} onClick={() => setModel(item.id)}><span>{item.label}</span><span>{item.id === modelId ? '✓' : ''}</span></button>
+                  {item.id === modelId && item.supportsEffort && <details className="pp-model-settings"><summary>推理设置 ›</summary><div className="pp-model-effort" role="group" aria-label="推理强度">{(['low','medium','high'] as ReasoningEffort[]).map(level => <button key={level} aria-pressed={effort === level} disabled={busy} onClick={() => setEffort(level)}><span>{{low:'低',medium:'中',high:'高'}[level]}</span><span>{effort === level ? '✓' : ''}</span></button>)}</div></details>}
+                </div>)}
+              </section>)}
+            </div>
+            <button className="pp-model-manage" onClick={event => { event.currentTarget.closest('details.pp-model-picker')?.removeAttribute('open'); useUiStore.getState().openModelManager(); }}>管理模型…</button>
+          </div>
+        </details>
 
         <input
           ref={fileRef}
@@ -391,7 +384,6 @@ export default function AgentPanel() {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
   const active = useSessionStore((s) => (s.activeId ? s.sessions[s.activeId] : null));
-  const sessionCount = useSessionStore((s) => s.order.length);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   // 新消息 / 流式增量时保持贴底
@@ -411,13 +403,6 @@ export default function AgentPanel() {
           <span className={`chat-win-status ${streaming ? 'st-running' : 'st-done'}`}>
             {streaming ? '思考中…' : '就绪'}
           </span>
-          <button
-            className="ap-new"
-            title={`新建空白会话画布（当前 ${sessionCount} 个）`}
-            onClick={() => useSessionStore.getState().newCanvas()}
-          >
-            ＋ 新会话
-          </button>
         </div>
         <div className="ap-head-meta">
           <UsageMeter />
