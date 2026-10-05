@@ -71,6 +71,9 @@ interface SessionState {
   beginWorkSession: (prompt: string) => void;
   /** 用户手动新建空白画布 */
   newCanvas: () => void;
+  newConversation: () => void;
+  draftRevision: number;
+  newConversationPending: boolean;
   /** 直接在当前画布上阅读并制作（不新建画布） */
   startOnCurrent: (prompt: string) => void;
   switchSession: (id: string) => void;
@@ -181,6 +184,8 @@ function validMemoryConversationId(value: string | undefined): boolean {
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
+  draftRevision: 0,
+  newConversationPending: false,
   sessions: {},
   order: [],
   activeId: null,
@@ -233,6 +238,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   beginWorkSession: (prompt) => {
+    get().syncActiveGraph();
     const s = get();
     let sessions = { ...s.sessions };
     const order = [...s.order];
@@ -257,7 +263,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     sessions = { ...sessions, [id]: blank };
     order.push(id);
     loadGraph(blank.doc);
-    set({ sessions, order, activeId: id, memoryConversationId: s.memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
+    set({ newConversationPending: false, sessions, order, activeId: id, memoryConversationId: s.memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
   },
 
   setArchived: (id, archived) => {
@@ -285,6 +291,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const savedPlan = s.plansBySessionId[id] || null;
     set({
       activeId: id,
+      newConversationPending: false,
+      messages: target.messages || s.messages,
+      memoryConversationId: target.memoryConversationId || s.memoryConversationId,
       activePlanSessionId: id,
       progress: null,
       plan: savedPlan ? savedPlan.items : null,
@@ -298,7 +307,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!active) return;
     const doc = snapshotGraph();
     set((s) => ({
-      sessions: { ...s.sessions, [active.id]: { ...active, doc, nodeCount: countNodes(doc) } },
+      sessions: { ...s.sessions, [active.id]: { ...active, doc, nodeCount: countNodes(doc), messages: clone(s.messages), memoryConversationId: s.memoryConversationId } },
     }));
   },
 
@@ -340,10 +349,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     loadGraph(sessions[id].doc);
-    set({ sessions, order, activeId: id, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: id, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
+    set({ sessions, order, activeId: id, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: id, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: sessions[id].messages || messages || [], progress: null });
   },
 
   getDocument: () => snapshotGraph(),
+
+  newConversation: () => {
+    if (get().streaming) return;
+    get().syncActiveGraph();
+    loadGraph(emptyDoc());
+    set(state => ({ activeId: null, activePlanSessionId: null, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, memoryConversationId: uid('memory'), memoryTaskEpoch: state.memoryTaskEpoch + 1, draftRevision: state.draftRevision + 1, newConversationPending: true }));
+  },
 
   newCanvas: () => {
     set((s) => ({ memoryTaskEpoch: s.memoryTaskEpoch + 1 }));
@@ -353,7 +369,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   startOnCurrent: (prompt) => {
     let active = get().current();
     if (!active) {
-      const existing = get().order.find(id => !get().sessions[id]?.archived);
+      const existing = get().newConversationPending ? null : get().order.find(id => !get().sessions[id]?.archived);
       if (existing) get().switchSession(existing); else get().newCanvas();
       active = get().current();
     }

@@ -50,7 +50,7 @@ export default function ProjectNavigation() {
   if (!open) return <><button className="project-nav-toggle" aria-label="展开项目导航" onClick={toggle}>☰</button><button className="global-settings-trigger settings-collapsed" aria-label="全局设置" onClick={() => useUiStore.getState().openSettings()}>⚙</button></>;
   return <aside className="project-navigation" aria-label="项目与会话">
     <div className="project-nav-head"><strong>CodeNode</strong><button aria-label="收起项目导航" onClick={toggle}>☰</button></div>
-    <button className="project-nav-new" disabled={streaming} onClick={() => { useSessionStore.getState().newCanvas(); useUiStore.getState().setSideTab('agent'); }}>＋ 新对话</button>
+    <button className="project-nav-new" disabled={streaming} onClick={() => { useSessionStore.getState().newConversation(); useUiStore.getState().setSideTab('agent'); void saveProject(); }}>＋ 新对话</button>
     <div className="project-nav-title"><span>项目</span><details className="project-actions"><summary aria-label="项目操作">＋</summary><div><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(newProject); }}>新建项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProject); }}>打开项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProjectFile); }}>打开工程文件</button></div></details></div>
     <div className="project-nav-scroll">
       {projects.map(project => {
@@ -60,7 +60,7 @@ export default function ProjectNavigation() {
         return <section className="project-group" key={key}>
           <div className="project-group-row">
             <button className="project-group-name" aria-expanded={!folded} title={project.root} onClick={() => { setCollapsed(state => ({ ...state, [key]: !folded })); if (!current && folded) void act(() => openRecentProject(project)); }}><span>{folded ? '›' : '⌄'}</span><span>▱</span><span>{name}</span>{meta[key]?.pinned && <small>置顶</small>}</button>
-            <button className="project-new-chat" aria-label={`在 ${name} 新建聊天`} disabled={streaming} onClick={() => void act(async () => { if (!current) await openRecentProject(project); useSessionStore.getState().newCanvas(); useUiStore.getState().setSideTab('agent'); })}>＋</button>
+            <button className="project-new-chat" aria-label={`在 ${name} 新建聊天`} disabled={streaming} onClick={() => void act(async () => { if (!current) await openRecentProject(project); useSessionStore.getState().newConversation(); useUiStore.getState().setSideTab('agent'); void saveProject(); })}>＋</button>
             <details className="project-row-menu"><summary aria-label={`${name} 项目菜单`}>⋯</summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute('open')}>
               <button onClick={() => changeMeta(key, { pinned: !meta[key]?.pinned })}>{meta[key]?.pinned ? '取消置顶' : '置顶'}</button>
               <button onClick={() => setRenaming(key)}>编辑名称</button>

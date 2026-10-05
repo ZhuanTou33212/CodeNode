@@ -1,3 +1,4 @@
+const { capabilities } = require('./modelEffort.cjs');
 'use strict';
 const { request } = require('./publicHttp.cjs');
 const PROVIDERS = Object.freeze({
@@ -60,12 +61,12 @@ async function discover(provider, key, transport = request, options = {}) {
       if (provider === 'openai' && !/^(gpt-|chatgpt-|o[1-9])/i.test(id)) continue;
       if (provider === 'openai' && /image|realtime|audio|transcrib|tts|embedding/i.test(id)) continue;
       const modalities = row.input_modalities || row.modalities?.input || row.architecture?.input_modalities || [];
-      const effort = row.supported_reasoning_efforts || row.reasoning_efforts || [];
+      const effort = capabilities({ ...row, model: id });
       found.set(id, { id: identity + ':' + id, model: id, label: row.display_name || row.displayName || row.name || id,
         provider, providerLabel: spec.label, apiBase: spec.base, protocol: spec.protocol,
         auth: local && !key.trim() ? 'none' : '',
         contextWindow: Number(row.context_window || row.context_length || row.inputTokenLimit) || 128000,
-        supportsEffort: effort.length > 0, vision: modalities.includes('image') || row.capabilities?.vision === true,
+        ...effort, supportsEffort: effort.effortLevels.length > 0, vision: modalities.includes('image') || row.capabilities?.vision === true,
         priceInput: 0, priceInputHit: 0, priceOutput: 0, enabled: true });
     }
     page = spec.protocol === 'gemini' ? body.nextPageToken : body.has_more ? body.last_id : '';

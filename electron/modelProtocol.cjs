@@ -357,8 +357,15 @@ function buildAnthropicRequest(cfg, messages, /** @type {{ stream?: boolean, too
    * 关思考（reasoningEffort 为 null）时**整个字段都不下发** —— 这才对应 UI 上「不支持推理强度」的语义。
    */
   if (cfg.reasoningEffort) {
-    const budget = thinkingBudgetFor(cfg);
-    if (budget > 0) body.thinking = { type: 'enabled', budget_tokens: budget };
+    const caps = require('./modelEffort.cjs').capabilities({model: cfg.model});
+    if (caps.effortLevels.includes(cfg.reasoningEffort)) {
+      body.output_config = { effort: cfg.reasoningEffort };
+      if (/^deepseek-/.test(cfg.model || '')) body.thinking = { type: 'enabled' };
+      else if (!/claude-opus-4-5/.test(cfg.model || '')) body.thinking = { type: 'adaptive' };
+    } else {
+      const budget = thinkingBudgetFor(cfg);
+      if (budget > 0) body.thinking = { type: 'enabled', budget_tokens: budget };
+    }
   }
   if (stream) body.stream = true;
   return { protocol: 'anthropic', url: base + '/v1/messages', headers, body };
@@ -574,7 +581,7 @@ function buildGeminiRequest(cfg, messages, /** @type {{ stream?: boolean, tools?
     const effort = String(cfg.reasoningEffort).toLowerCase();
     const budget = Object.prototype.hasOwnProperty.call(EFFORT_TO_GEMINI_BUDGET, effort) ? EFFORT_TO_GEMINI_BUDGET[effort] : 8192;
     // 2.5 pro 不接受 thinkingBudget=0；0 只在 flash 系列合法，这里给 128 兜底更安全
-    generationConfig.thinkingConfig = { thinkingBudget: budget === 0 ? 128 : budget };
+    generationConfig.thinkingConfig = /^gemini-3/.test(cfg.model || '') ? { thinkingLevel: effort } : { thinkingBudget: budget === 0 ? 128 : budget };
   }
   if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
   return { protocol: 'gemini', url, headers, body };

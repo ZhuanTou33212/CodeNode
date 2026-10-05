@@ -1,3 +1,4 @@
+const { capabilities } = require('./modelEffort.cjs');
 /**
  * CodeNode 模型接入配置存储（多个模型：名称 / 模型 ID / API 地址 / API Key / 上下文 / 价格）
  * 持久化在 userData/models.json；首次运行时用 agent.properties 生成默认项。
@@ -48,7 +49,7 @@ function decryptSecret(value) {
 
 function toPublicModel(model) {
   const { apiKey, ...rest } = model || {};
-  return { ...rest, apiKey: '', apiKeySet: !!apiKey };
+  return { ...rest, ...capabilities(model), apiKey: '', apiKeySet: !!apiKey };
 }
 
 function toPublicModels(models) {

@@ -103,6 +103,8 @@ interface ModelSpecDto {
   priceInputHit: number;
   priceOutput: number;
   supportsEffort: boolean;
+  effortLevels?: string[];
+  defaultEffort?: string;
   /** 是否支持图片输入（多模态） */
   vision?: boolean;
   enabled?: boolean;

@@ -425,7 +425,8 @@ function register(ctx) {
       } else if (reqModel) {
         cfg.model = reqModel;
       }
-      if (reqEffort) cfg.reasoningEffort = reqEffort;
+      const effortCaps = require('../modelEffort.cjs').capabilities(sel || { model: cfg.model });
+      cfg.reasoningEffort = sel?.supportsEffort === false || !effortCaps.effortLevels.length ? null : effortCaps.effortLevels.includes(reqEffort) ? reqEffort : effortCaps.defaultEffort;
       /**
        * 本地/自建服务（Ollama、LM Studio、llama.cpp、one-api 网关）可以**免鉴权**：
        * 这类模型配置 auth = 'none' 或地址是本机回环，空 Key 是合法配置 ——

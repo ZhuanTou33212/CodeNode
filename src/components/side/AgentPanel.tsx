@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useProjectStore } from '../../store/projectStore';
+import { projectNameOf } from '../../lib/recentProjects';
 import { useGraphStore } from '../../store/graphStore';
 import { saveProject } from '../../lib/projectActions';
 import { useChatStore } from '../../store/chatStore';
@@ -131,6 +133,10 @@ function PromptComposer() {
   const selectedNode = useGraphStore(s => s.nodes.find(n => n.id === s.selectedId && ['task','stage','tool'].includes(n.type || '')));
   const inputText = selectedNode ? String(selectedNode.data.prompt || '') : text;
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const pendingDraft = useSessionStore(s => s.newConversationPending);
+  const projectRoot = useProjectStore(s => s.root);
+  const draftRevision = useSessionStore(s => s.draftRevision);
+  useEffect(() => { setText(''); setAttachments([]); if (draftRevision) window.setTimeout(() => taRef.current?.focus(), 0); }, [draftRevision]);
   const [modelSearch, setModelSearch] = useState('');
   useEffect(() => {
     const closePicker = (event: Event) => {
@@ -249,6 +255,7 @@ function PromptComposer() {
         void addFiles(files);
       }}
     >
+      {pendingDraft && !selectedNode && <div className="node-prompt-context">新对话 · {projectNameOf(projectRoot || '当前项目')}</div>}
       {selectedNode && <div className="node-prompt-context"><span>阶段 · {String(selectedNode.data.label || selectedNode.id)}</span><button aria-label="返回对话" onClick={() => useGraphStore.getState().setSelectedIds([])}>×</button></div>}
       {!selectedNode && attachments.length > 0 && (
         <div className="pp-attach-list">

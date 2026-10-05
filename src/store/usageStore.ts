@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+export type ReasoningEffort = string;
 
 /** 模型接入配置（与 electron modelStore.cjs 中 models.json 的结构一致） */
 export interface ModelSpec {
@@ -16,6 +16,8 @@ export interface ModelSpec {
   priceInputHit: number;
   priceOutput: number;
   supportsEffort: boolean;
+  effortLevels?: string[];
+  defaultEffort?: string;
   /** 是否支持图片输入（多模态）。只有为 true 时才允许给该模型附加图片 */
   vision?: boolean;
   enabled?: boolean;
@@ -99,7 +101,7 @@ function loadPrefs(): { modelId: string | null; effort: ReasoningEffort; budget:
       const budget = Number(p.budget);
       return {
         modelId: typeof p.modelId === 'string' ? p.modelId : null,
-        effort: p.effort === 'low' || p.effort === 'high' ? p.effort : 'medium',
+        effort: typeof p.effort === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(p.effort) ? p.effort : 'medium',
         budget: Number.isFinite(budget) && budget > 0 ? budget : 5,
       };
     }
@@ -143,18 +145,23 @@ export const useUsageStore = create<UsageState>((set, get) => {
         const active = res.activeId && list.some((m) => m.id === res.activeId) ? res.activeId : list[0].id;
         // 优先保留用户上次选择；不存在则用主进程激活的模型
         const next = stored && list.some((m) => m.id === stored) ? stored : active;
-        set({ models: list, modelId: next });
+        const model = list.find(item => item.id === next);
+        const effort = model?.effortLevels?.includes(get().effort) ? get().effort : model?.defaultEffort || '';
+        set({ models: list, modelId: next, effort });
         savePrefs(next, get().effort, get().budget);
       } catch {}
     },
 
     setModel: (id) => {
-      set({ modelId: id });
+      const model = get().models.find(item => item.id === id);
+      set({ modelId: id, effort: model?.effortLevels?.includes(get().effort) ? get().effort : model?.defaultEffort || '' });
       savePrefs(id, get().effort, get().budget);
       const api = window.codenode;
       if (api && api.modelsActive) void api.modelsActive(id);
     },
     setEffort: (effort) => {
+      const model = get().models.find(item => item.id === get().modelId);
+      if (!model?.effortLevels?.includes(effort)) return;
       set({ effort });
       savePrefs(get().modelId, effort, get().budget);
     },

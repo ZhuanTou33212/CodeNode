@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useUsageStore, type ReasoningEffort } from '../../store/usageStore';
 import { useUiStore } from '../../store/uiStore';
 
-const LABELS = { low: '低', medium: '中', high: '高' };
+
 export default function ModelPicker({ busy }: { busy: boolean }) {
   const { models, modelId, effort, setModel, setEffort, loadModels } = useUsageStore();
   const model = models.find(item => item.id === modelId) || models[0];
@@ -32,23 +32,24 @@ export default function ModelPicker({ busy }: { busy: boolean }) {
     return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', dismiss); };
   }, [open]);
   const visible = models.filter(item => (item.label + ' ' + item.model).toLowerCase().includes(query.toLowerCase()));
+  const levels = model?.effortLevels || [];
   const right = position.left + 296;
   const settingsLeft = right + 170 < innerWidth ? right + 4 : Math.max(8, position.left - 174);
   return <div className="pp-model-picker">
-    <button ref={trigger} className="pp-model" aria-expanded={open} aria-haspopup="dialog" onClick={() => { setOpen(!open); setSettings(null); }} title={model?.label}>{model?.label || '选择模型'}{model?.supportsEffort ? ` · ${LABELS[effort]}` : ''}<span>⌄</span></button>
+    <button ref={trigger} className="pp-model" aria-expanded={open} aria-haspopup="dialog" onClick={() => { setOpen(!open); setSettings(null); }} title={model?.label}>{model?.label || '选择模型'}{model?.supportsEffort && levels.length ? ` · ${effort}` : ''}<span>⌄</span></button>
     {open && createPortal(<div className={`glass-theme theme-${theme} hermes-picker-layer`}>
       <div ref={menu} className="hermes-model-menu" role="dialog" aria-label="模型选择" style={{ left: position.left, bottom: position.bottom }}>
         <input autoFocus aria-label="搜索对话模型" placeholder="搜索模型" value={query} onChange={event => { setQuery(event.target.value); setSettings(null); }} />
         <div className="hermes-model-list" onScroll={() => setSettings(null)}>
           {[...new Set(visible.map(item => item.providerLabel || item.provider || '已连接'))].map(group => <section key={group}><div className="hermes-provider">{group}</div>{visible.filter(item => (item.providerLabel || item.provider || '已连接') === group).map(item => <div className="hermes-model-row" key={item.id}>
             <button disabled={busy || item.apiKeyError} className={item.id === modelId ? 'active' : ''} onClick={() => { setModel(item.id); setSettings(null); if (!item.supportsEffort) setOpen(false); }}><span>{item.label}</span><span>{item.id === modelId ? '✓' : ''}</span></button>
-            {item.id === modelId && item.supportsEffort && <button className="hermes-settings-trigger" aria-label="模型推理设置" aria-expanded={!!settings} onMouseEnter={event => setSettings(event.currentTarget.getBoundingClientRect())} onClick={event => setSettings(settings ? null : event.currentTarget.getBoundingClientRect())}>›</button>}
+            {item.id === modelId && (item.effortLevels?.length || 0) > 0 && <button className="hermes-settings-trigger" aria-label="模型推理设置" aria-expanded={!!settings} onMouseEnter={event => setSettings(event.currentTarget.getBoundingClientRect())} onClick={event => setSettings(settings ? null : event.currentTarget.getBoundingClientRect())}>›</button>}
           </div>)}</section>)}
           {!visible.length && <p>没有匹配的模型</p>}
         </div>
         <div className="hermes-model-footer"><button disabled={busy} onClick={() => { setSettings(null); void loadModels(); }}>↻ 刷新模型</button><button onClick={() => { setOpen(false); setSettings(null); useUiStore.getState().openModelManager(); }}>⚙ 管理模型…</button></div>
       </div>
-      {settings && model?.supportsEffort && <div ref={flyout} className="hermes-effort-menu" role="group" aria-label="推理强度" style={{ left: settingsLeft, top: Math.max(8, Math.min(settings.top, innerHeight - 180)) }}><div className="hermes-provider">推理强度</div>{(['low','medium','high'] as ReasoningEffort[]).map(level => <button key={level} aria-pressed={effort === level} disabled={busy} onClick={() => setEffort(level)}><span>{LABELS[level]}</span><span>{effort === level ? '✓' : ''}</span></button>)}</div>}
+      {settings && model?.supportsEffort && <div ref={flyout} className="hermes-effort-menu" role="group" aria-label="推理强度" style={{ left: settingsLeft, top: Math.max(8, Math.min(settings.top, innerHeight - (levels.length * 34 + 45))) }}><div className="hermes-provider">Reasoning effort</div>{levels.map(level => <button key={level} aria-pressed={effort === level} disabled={busy} onClick={() => setEffort(level)}><span>{level}</span><span>{effort === level ? '✓' : ''}</span></button>)}</div>}
     </div>, document.body)}
   </div>;
 }
