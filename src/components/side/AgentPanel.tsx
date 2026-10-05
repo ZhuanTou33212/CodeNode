@@ -13,6 +13,7 @@ import { PlanCard } from '../PlanCard';
 import { IntentBadge } from '../IntentBadge';
 import ResumePlanNotice from './ResumePlanNotice';
 import HoverPopover from './HoverPopover';
+import ModelPicker from './ModelPicker';
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -294,22 +295,7 @@ function PromptComposer() {
 
       {/* 控件行：模型 / 推理强度 / 发送（紧凑一行，保证输入框常驻面板底部） */}
       <div className="pp-controls">
-        <details className="pp-model-picker">
-          <summary className="pp-model" title={model?.label || '选择模型'}>{model?.label || '选择模型'}{model?.supportsEffort ? ` · ${{low:'低',medium:'中',high:'高'}[effort]}` : ''}<span>⌄</span></summary>
-          <div className="pp-model-menu" aria-label="模型选择">
-            <input aria-label="搜索对话模型" placeholder="搜索模型…" value={modelSearch} onChange={event => setModelSearch(event.target.value)} />
-            <div className="pp-model-options">
-              {[...new Set(models.map(item => item.providerLabel || item.provider || '已连接'))].map(group => <section key={group}>
-                <div className="pp-model-group">{group}</div>
-                {models.filter(item => (item.providerLabel || item.provider || '已连接') === group && (item.label + ' ' + item.model).toLowerCase().includes(modelSearch.toLowerCase())).map(item => <div key={item.id} className="pp-model-option">
-                  <button className={item.id === modelId ? 'active' : ''} disabled={item.apiKeyError || busy} onClick={() => setModel(item.id)}><span>{item.label}</span><span>{item.id === modelId ? '✓' : ''}</span></button>
-                  {item.id === modelId && item.supportsEffort && <details className="pp-model-settings"><summary>推理设置 ›</summary><div className="pp-model-effort" role="group" aria-label="推理强度">{(['low','medium','high'] as ReasoningEffort[]).map(level => <button key={level} aria-pressed={effort === level} disabled={busy} onClick={() => setEffort(level)}><span>{{low:'低',medium:'中',high:'高'}[level]}</span><span>{effort === level ? '✓' : ''}</span></button>)}</div></details>}
-                </div>)}
-              </section>)}
-            </div>
-            <button className="pp-model-manage" onClick={event => { event.currentTarget.closest('details.pp-model-picker')?.removeAttribute('open'); useUiStore.getState().openModelManager(); }}>管理模型…</button>
-          </div>
-        </details>
+        <ModelPicker busy={busy} />
 
         <input
           ref={fileRef}

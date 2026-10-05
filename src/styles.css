@@ -4188,3 +4188,21 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .pp-model-effort { margin: 2px 8px 6px; padding: 4px; border: 1px solid var(--glass-border); border-radius: 8px; background: var(--glass-control); }
 .glass-theme .pp-model-effort button[aria-pressed="true"] { color: var(--glass-accent); background: var(--glass-selected); }
 .pp-model-manage { border-top: 1px solid var(--glass-border) !important; margin-top: 4px; border-radius: 0 !important; }
+/* Hermes model picker: two independent floating sheets, never an accordion. */
+.hermes-picker-layer { position: fixed; inset: 0; z-index: 1100; pointer-events: none; }
+.hermes-model-menu,.hermes-effort-menu { position: fixed; pointer-events: auto; background: var(--glass-sheet); border: 1px solid var(--glass-border); backdrop-filter: blur(30px) saturate(140%); box-shadow: var(--glass-shadow); border-radius: 7px; color: var(--glass-text); font-size: 12px; padding: 5px; }
+.hermes-model-menu { width: 296px; max-height: calc(100vh - 100px); display: flex; flex-direction: column; }
+.hermes-model-menu > input { width: 100%; padding: 9px 8px; border: 0; border-bottom: 1px solid var(--glass-border); outline: none; background: transparent; color: var(--glass-text); font: inherit; }
+.hermes-model-list { overflow-y: auto; max-height: min(340px,45vh); }
+.hermes-provider { padding: 10px 8px 5px; font-size: 10px; color: var(--glass-muted); text-transform: uppercase; }
+.hermes-model-row { position: relative; display: flex; align-items: stretch; }
+.hermes-picker-layer button { border: 0; background: transparent; color: var(--glass-text); padding: 7px 8px; font: inherit; text-align: left; border-radius: 3px; }
+.hermes-model-row > button:first-child { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding-right: 32px; }
+.hermes-model-row > button:first-child span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.hermes-picker-layer button.active,.hermes-picker-layer button:hover,.hermes-effort-menu button[aria-pressed=true] { background: var(--glass-selected); }
+.hermes-model-row .hermes-settings-trigger { position: absolute; right: 0; top: 0; bottom: 0; width: 26px; text-align: center; padding: 0; }
+.hermes-model-footer { border-top: 1px solid var(--glass-border); padding-top: 4px; margin-top: 4px; }
+.hermes-model-footer button { display: block; width: 100%; color: var(--glass-muted); }
+.hermes-effort-menu { width: 170px; }
+.hermes-effort-menu button { display: flex; width: 100%; justify-content: space-between; }
+.glass-theme.ui-clean button.pp-model { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 0; margin: 0; border: 0; background: transparent; color: var(--glass-text); font-size: 12px; text-align: left; }
