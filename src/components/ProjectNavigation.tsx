@@ -24,7 +24,7 @@ export default function ProjectNavigation() {
   return <aside className="project-navigation" aria-label="项目与会话">
     <div className="project-nav-head"><strong>CodeNode</strong><button aria-label="收起项目导航" onClick={toggle}>☰</button></div>
     <button className="project-nav-new" onClick={() => { useSessionStore.getState().newCanvas(); useUiStore.getState().setSideTab('agent'); }}>＋ 新对话</button>
-    <div className="project-nav-title"><span>项目</span><button aria-label="打开项目目录" title="打开项目目录" onClick={() => void act(openProject)}>＋</button></div>
+    <div className="project-nav-title"><span>项目</span><details className="project-actions"><summary aria-label="项目操作">＋</summary><div><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(newProject); }}>新建项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProject); }}>打开项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProjectFile); }}>打开工程文件</button></div></details></div>
     <div className="project-nav-scroll">
       <div className="project-nav-current" title={root || ''}>▱ {projectNameOf(root || file || '当前项目')}</div>
       <div className="project-nav-sessions">{order.map(id => {
@@ -34,10 +34,5 @@ export default function ProjectNavigation() {
       {recent.map(item => <button className="project-nav-recent" key={item.file || item.root} title={item.root} onClick={() => void act(() => openRecentProject(item))}>▱ {item.name}</button>)}
     </div>
     {error && <div className="project-nav-error" role="alert">{error}</div>}
-    <div className="project-nav-foot">
-      <button onClick={() => void act(newProject)}>新建项目</button>
-      <button onClick={() => void act(openProjectFile)}>打开工程文件</button>
-      <button onClick={() => useUiStore.getState().setSideTab('project')}>项目文件</button>
-    </div>
   </aside>;
 }

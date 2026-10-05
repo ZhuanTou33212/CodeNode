@@ -5,20 +5,19 @@ const PROVIDERS = [['deepseek', 'DeepSeek'], ['openai', 'OpenAI'], ['anthropic',
 export default function ModelManager() {
   const open = useUiStore(s => s.modelManagerOpen), close = useUiStore(s => s.closeModelManager);
   const [models, setModels] = useState<ModelSpec[]>([]), [choices, setChoices] = useState<ModelSpec[]>([]);
-  const [active, setActive] = useState<string | null>(null);
   const [provider, setProvider] = useState('deepseek'), [key, setKey] = useState('');
   const [apiBase, setApiBase] = useState(''), [modelId, setModelId] = useState('');
-  const [ticket, setTicket] = useState(''), [selected, setSelected] = useState(''), [query, setQuery] = useState('');
+  const [ticket, setTicket] = useState(''), [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const epoch = useRef(0);
   const refresh = async () => {
     const result = await window.codenode?.modelsList();
-    if (result) { setModels(result.models || []); setActive(result.activeId); }
+    if (result) { setModels(result.models || []); }
     await useUsageStore.getState().loadModels();
   };
   useEffect(() => {
     const current = ++epoch.current;
-    setKey(''); setTicket(''); setChoices([]); setQuery(''); setError(''); setBusy(false);
+    setKey(''); setTicket(''); setChoices([]); setError(''); setBusy(false);
     if(open) void refresh().catch(() => { if(current === epoch.current) setError('无法读取模型配置，请检查配置文件'); });
     return () => { epoch.current++; };
   }, [open]);
@@ -39,16 +38,6 @@ export default function ModelManager() {
     } catch(e) { if(current === epoch.current) setError(e instanceof Error ? e.message : '获取模型失败'); }
     finally { if(current === epoch.current) setBusy(false); }
   };
-  const choose = async (id: string) => {
-    if(ticket) { setSelected(id); return; }
-    setBusy(true); setError('');
-    try {
-      const result = await window.codenode?.modelsActive(id);
-      if(!result?.ok) throw new Error(result?.error || '切换失败');
-      useUsageStore.getState().setModel(id); setActive(id);
-    } catch(e) { setError(e instanceof Error ? e.message : '切换失败'); }
-    finally { setBusy(false); }
-  };
   const connect = async () => {
     setBusy(true); setError('');
     try {
@@ -58,23 +47,19 @@ export default function ModelManager() {
     } catch(e) { setError(e instanceof Error ? e.message : '连接失败'); }
     finally { setBusy(false); }
   };
-  const list = ticket ? choices : models;
-  const filtered = list.filter(m => (m.label + ' ' + m.model).toLowerCase().includes(query.toLowerCase()));
   return <div className="mm-mask" onClick={() => { if(!busy) close(); }}><div className="mm-dialog mm-connect-dialog" role="dialog" aria-modal="true" aria-label="管理模型" onClick={e => e.stopPropagation()}>
     <div className="mm-head"><span className="mm-title">管理模型</span><button className="mm-close" aria-label="关闭" disabled={busy} onClick={close}>✕</button></div>
     <div className="mm-connect-body">
-      <p className="mm-intro">连接你的供应商，然后选择模型。</p>
-      {models.some(m => m.apiKeyError) && <div className="mm-error" role="status">部分旧 Key 无法解密。请重新连接对应供应商；旧配置会保留。</div>}
+
+      {models.some(m => m.apiKeyError) && <div className="mm-error" role="status">旧 Key 已失效，需重新连接。</div>}
       <label className="mm-field"><span>供应商</span><select className="mm-input" aria-label="供应商" disabled={busy} value={provider} onChange={e => { epoch.current++; setProvider(e.target.value); setKey(''); setTicket(''); setChoices([]); setError(''); setApiBase(''); setModelId(''); }}>{PROVIDERS.map(([id,label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       {provider === 'custom' && <label className="mm-field"><span>API 地址</span><input className="mm-input" aria-label="API 地址" disabled={busy} value={apiBase} placeholder="例如 https://服务地址/v1 或 http://localhost:11434/v1" onChange={e => { setApiBase(e.target.value); setTicket(''); setChoices([]); }} /></label>}
-      <label className="mm-field"><span>API Key</span><div className="mm-key-row"><input className="mm-input" type="password" autoComplete="off" disabled={busy} value={key} placeholder={provider === 'custom' ? '本机服务可留空；远程服务需填写 Key' : '粘贴供应商的 API Key'} onChange={e => { setKey(e.target.value); setTicket(''); setChoices([]); }} onKeyDown={e => { if(e.key === 'Enter' && (key.trim() || provider === 'custom') && !busy) void discover(); }} /><button className="mm-btn primary" disabled={busy || (!key.trim() && provider !== 'custom')} onClick={() => void discover()}>{busy ? '处理中…' : modelId.trim() ? '添加模型' : '获取模型'}</button></div></label>
-      <details className="mm-connect-note"><summary>供应商未提供模型列表？</summary><label className="mm-field"><span>模型或部署 ID（选填）</span><input className="mm-input" aria-label="模型或部署 ID" disabled={busy} value={modelId} placeholder="使用供应商控制台显示的模型/部署 ID" onChange={e => { setModelId(e.target.value); setTicket(''); setChoices([]); }} /></label><p>手动添加不会验证调用权限，连接后以实际调用结果为准。</p></details>
-      <p className="mm-connect-note">Key 只发送给所选供应商；确认连接后加密保存在本机。</p>
+      <label className="mm-field"><span>API Key</span><div className="mm-key-row"><input className="mm-input" type="password" autoComplete="off" disabled={busy} value={key} placeholder={provider === 'custom' ? '本机服务可留空；远程服务需填写 Key' : '粘贴供应商的 API Key'} onChange={e => { setKey(e.target.value); setTicket(''); setChoices([]); }} onKeyDown={e => { if(e.key === 'Enter' && (key.trim() || provider === 'custom') && !busy) void discover(); }} /><button className="mm-btn primary" disabled={busy || (!key.trim() && provider !== 'custom')} onClick={() => void discover()}>{busy ? '处理中…' : modelId.trim() ? '添加模型' : '连接'}</button></div></label>
+      <details className="mm-connect-note"><summary>高级</summary><label className="mm-field"><span>模型或部署 ID（选填）</span><input className="mm-input" aria-label="模型或部署 ID" disabled={busy} value={modelId} placeholder="使用供应商控制台显示的模型/部署 ID" onChange={e => { setModelId(e.target.value); setTicket(''); setChoices([]); }} /></label><p>手动添加不会验证调用权限，连接后以实际调用结果为准。</p></details>
+
       {error && <div className="mm-error" role="alert">{error}</div>}
-      <div className="mm-model-heading"><strong>{ticket ? '可选模型' : '已连接模型'}</strong><span>{list.length} 个</span></div>
-      <input className="mm-input" aria-label="搜索模型" placeholder="搜索模型…" value={query} onChange={e => setQuery(e.target.value)} />
-      <div className="mm-choice-list" role="listbox" aria-label="模型列表">{filtered.map(m => <button role="option" aria-selected={ticket ? selected === m.id : active === m.id} className="mm-choice" key={m.id} disabled={busy || m.apiKeyError} onClick={() => void choose(m.id)}><span><strong>{m.label}</strong><small>{m.model}</small></span><span>{m.apiKeyError ? '需重新连接' : (ticket ? selected === m.id : active === m.id) ? '✓' : ''}</span></button>)}{!filtered.length && <div className="mm-empty">{list.length ? '没有匹配的模型' : '填写 Key，获取供应商提供的模型列表。'}</div>}</div>
+      {ticket && <><div className="mm-model-heading"><strong>选择模型</strong></div><div className="mm-choice-list" role="listbox" aria-label="模型列表">{choices.map(m => <button role="option" aria-selected={selected === m.id} className="mm-choice" key={m.id} disabled={busy} onClick={() => setSelected(m.id)}><span>{m.label}</span><span>{selected === m.id ? '✓' : ''}</span></button>)}</div></>}
     </div>
-    <div className="mm-foot"><span className="mm-connect-note">实际调用权限以供应商为准。</span><div className="mm-foot-spacer" />{ticket && <button className="mm-btn primary" disabled={busy || !selected} onClick={() => void connect()}>连接并使用</button>}<button className="mm-btn" disabled={busy} onClick={close}>完成</button></div>
+    <div className="mm-foot"><div className="mm-foot-spacer" />{ticket && <button className="mm-btn primary" disabled={busy || !selected} onClick={() => void connect()}>连接并使用</button>}<button className="mm-btn" disabled={busy} onClick={close}>完成</button></div>
   </div></div>;
 }

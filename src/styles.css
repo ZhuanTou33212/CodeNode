@@ -4206,3 +4206,11 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .hermes-effort-menu { width: 170px; }
 .hermes-effort-menu button { display: flex; width: 100%; justify-content: space-between; }
 .glass-theme.ui-clean button.pp-model { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 0; margin: 0; border: 0; background: transparent; color: var(--glass-text); font-size: 12px; text-align: left; }
+.mm-dialog.mm-connect-dialog { width: min(440px,calc(100vw - 32px)); }
+.mm-connect-body { gap: 10px; }
+.mm-connect-body .mm-field { margin-bottom: 6px; }
+.mm-connect-body .mm-error { padding: 0; font-size: 11px; color: var(--glass-muted); }
+.project-actions { position: relative; }
+.project-actions summary { cursor: pointer; list-style: none; padding: 2px 6px; font-size: 16px; }
+.project-actions > div { position: absolute; right: 0; top: 100%; width: 150px; padding: 5px; z-index: 200; border-radius: 8px; background: var(--glass-sheet); border: 1px solid var(--glass-border); backdrop-filter: blur(24px); box-shadow: var(--glass-shadow); }
+.project-actions > div button { display: block; width: 100%; padding: 8px !important; }

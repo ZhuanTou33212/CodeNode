@@ -62,6 +62,10 @@ app.whenReady().then(async () => {
       assert.ok(modelWidth >= 250, 'model selector must have its own readable row');
       assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".canvas-welcome button").length'), 0);
       assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".project-navigation")'), true);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".project-nav-foot button").length'), 0);
+      await win.webContents.executeJavaScript('document.querySelector(".project-actions summary").click()');
+      assert.deepEqual(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-actions[open] button")).map(b=>b.textContent)'), ['新建项目', '打开项目', '打开工程文件']);
+      await win.webContents.executeJavaScript('document.querySelector(".project-actions summary").click()');
       const originalSession = await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId');
       await win.webContents.executeJavaScript('document.querySelector(".project-nav-new").click()');
       await sleep(100);
@@ -126,13 +130,15 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript('window.__codenodeUi.getState().openModelManager()');
       await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog")?.textContent.includes("需重新连接")'), '失效 Key 恢复提示');
       assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".mm-connect-dialog input[type=password]").length'), 1);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".mm-choice").length'), 0);
+
       await win.webContents.executeJavaScript(`(() => {
         const input=document.querySelector('.mm-connect-dialog input[type=password]');
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'synthetic-ui-key');
         input.dispatchEvent(new Event('input',{bubbles:true}));
       })()`);
       await sleep(80);
-      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.mm-connect-dialog button')).find(b=>b.textContent==='获取模型').click()`);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.mm-connect-dialog button')).find(b=>b.textContent==='连接').click()`);
       await waitFor(async () => await win.webContents.executeJavaScript('document.querySelectorAll(".mm-choice").length===2'), '实时模型列表');
       assert.equal(await win.webContents.executeJavaScript('document.querySelector(".mm-connect-dialog input[type=password]").value'), '');
       await win.webContents.executeJavaScript('document.querySelectorAll(".mm-choice")[1].click()');
