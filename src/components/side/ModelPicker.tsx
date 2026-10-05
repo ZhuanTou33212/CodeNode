@@ -11,6 +11,7 @@ export default function ModelPicker({ busy }: { busy: boolean }) {
   const menu = useRef<HTMLDivElement>(null);
   const flyout = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [query, setQuery] = useState('');
   const [settings, setSettings] = useState<DOMRect | null>(null);
   const [position, setPosition] = useState({ left: 0, bottom: 0 });
@@ -42,7 +43,7 @@ export default function ModelPicker({ busy }: { busy: boolean }) {
         <input autoFocus aria-label="搜索对话模型" placeholder="搜索模型" value={query} onChange={event => { setQuery(event.target.value); setSettings(null); }} />
         <div className="hermes-model-list" onScroll={() => setSettings(null)}>
           {[...new Set(visible.map(item => item.providerLabel || item.provider || '已连接'))].map(group => <section key={group}><div className="hermes-provider">{group}</div>{visible.filter(item => (item.providerLabel || item.provider || '已连接') === group).map(item => <div className="hermes-model-row" key={item.id}>
-            <button disabled={busy || item.apiKeyError} className={item.id === modelId ? 'active' : ''} onClick={() => { setModel(item.id); setSettings(null); if (!item.supportsEffort) setOpen(false); }}><span>{item.label}</span><span>{item.id === modelId ? '✓' : ''}</span></button>
+            <button disabled={busy || switching} className={item.id === modelId ? 'active' : ''} onClick={async () => { setSwitching(true); const selected = await setModel(item.id); setSwitching(false); setSettings(null); if (selected || item.apiKeyError) setOpen(false); }}><span>{item.label}</span><span>{item.apiKeyError ? '重新连接' : item.id === modelId ? '✓' : ''}</span></button>
             {item.id === modelId && (item.effortLevels?.length || 0) > 0 && <button className="hermes-settings-trigger" aria-label="模型推理设置" aria-expanded={!!settings} onMouseEnter={event => setSettings(event.currentTarget.getBoundingClientRect())} onClick={event => setSettings(settings ? null : event.currentTarget.getBoundingClientRect())}>›</button>}
           </div>)}</section>)}
           {!visible.length && <p>没有匹配的模型</p>}

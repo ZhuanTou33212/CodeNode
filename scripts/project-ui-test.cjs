@@ -67,6 +67,18 @@ app.whenReady().then(async () => {
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
     if (process.env.CODENODE_WORKBENCH_UI_TEST === '1') {
       assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".canvas-welcome")'), true);
+      const otherModel = await win.webContents.executeJavaScript('window.__codenodeUi && document.querySelector(".pp-model").textContent');
+      await win.webContents.executeJavaScript('document.querySelector(".pp-model").click()');
+      await sleep(80);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(button=>button.textContent.includes('Pro')).click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".pp-model").textContent.includes("Pro")'), '切换到 Pro');
+      assert.equal(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'),'models.json'),'utf8')).activeId, 'deepseek-v4-pro');
+      await win.webContents.executeJavaScript('document.querySelector(".pp-model").click()');
+      await sleep(80);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(button=>button.textContent.includes('Flash')).click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".pp-model").textContent.includes("Flash")'), '切回 Flash');
+      const frame = await win.webContents.executeJavaScript(`(() => {const input=getComputedStyle(document.querySelector('.pp-input')),composer=getComputedStyle(document.querySelector('.pp-composer'));return {input:input.borderWidth,outer:composer.borderWidth,radius:composer.borderRadius};})()`);
+      assert.equal(frame.input, '0px'); assert.equal(frame.outer, '0px'); assert.equal(frame.radius,'26px');
       const modelWidth = await win.webContents.executeJavaScript(`document.querySelector('.pp-model').getBoundingClientRect().width`);
       assert.ok(modelWidth >= 120, 'model selector must remain readable in the composer');
       assert.equal(await win.webContents.executeJavaScript('document.querySelectorAll(".canvas-welcome button").length'), 0);
@@ -288,6 +300,14 @@ app.whenReady().then(async () => {
         fs.writeFileSync(path.join(__dirname, '..', 'out', 'model-connection-ui.png'), screenshot.toPNG());
         win.hide();
       }
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeModelManager()');
+      await win.webContents.executeJavaScript('document.querySelector(".pp-model").click()');
+      await sleep(100);
+      const lockedRow = await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(button=>button.textContent.includes('Legacy'))?.disabled`);
+      assert.equal(lockedRow, false, 'locked models must explain recovery instead of silently disabling selection');
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.hermes-model-row > button:first-child')).find(button=>button.textContent.includes('Legacy')).click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".mm-connect-dialog")'), '失效 Key 引导重连');
+      assert.equal(JSON.parse(fs.readFileSync(modelFile,'utf8')).activeId,'deepseek:beta');
       await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeModelManager()');
       console.log('MODEL CONNECTION UI: PASS (locked-key recovery, select model, encrypted save, legacy preservation)');
     }

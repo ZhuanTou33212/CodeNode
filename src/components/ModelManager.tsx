@@ -43,7 +43,9 @@ export default function ModelManager() {
     try {
       const result = await window.codenode?.modelsConnect(ticket, selected);
       if(!result?.ok) throw new Error(result?.error || '连接失败');
-      useUsageStore.getState().setModel(selected); await refresh(); setTicket(''); setChoices([]);
+      await refresh();
+      if (!await useUsageStore.getState().setModel(selected)) throw new Error('连接已保存，但模型未能激活，请重新选择');
+      setTicket(''); setChoices([]);
     } catch(e) { setError(e instanceof Error ? e.message : '连接失败'); }
     finally { setBusy(false); }
   };

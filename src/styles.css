@@ -4304,3 +4304,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .project-row-menu > div { position: absolute; top: 100%; right: 0; z-index: 250; width: 150px; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 10px; padding: 5px; box-shadow: var(--glass-shadow); backdrop-filter: blur(24px); }
 .project-row-menu > div button { display: block; width: 100%; text-align: left; padding: 9px !important; }
 .project-rename { width: 100%; padding: 7px; color: var(--glass-text); border: 1px solid var(--glass-border); background: var(--glass-control); border-radius: 6px; }
+
+/* One rounded composer surface, without nested input frames. */
+.glass-theme.ui-clean .conversation-workspace .pp-composer { border: 0; border-radius: 26px; padding: 14px 16px; box-shadow: 0 4px 20px rgba(30,50,80,.05); }
+.glass-theme.ui-clean .conversation-workspace .pp-input,
+.glass-theme.ui-clean .conversation-workspace .pp-input:focus { border: 0 !important; outline: none !important; box-shadow: none !important; border-radius: 0; background: transparent !important; }
+.composer-project-context { flex: none; padding: 8px 12px 0; color: var(--glass-muted); font-size: 12px; }

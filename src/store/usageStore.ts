@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useUiStore } from './uiStore';
 
 export type ReasoningEffort = string;
 
@@ -84,7 +85,7 @@ interface UsageState {
   summary: UsageSummary;
   lastUsage: UsageSnapshot | null;
   loadModels: () => Promise<void>;
-  setModel: (id: string) => void;
+  setModel: (id: string) => Promise<boolean>;
   setEffort: (e: ReasoningEffort) => void;
   setBudget: (n: number) => void;
   recordUsage: (u: UsageSnapshot) => void;
@@ -152,12 +153,28 @@ export const useUsageStore = create<UsageState>((set, get) => {
       } catch {}
     },
 
-    setModel: (id) => {
+    setModel: async (id) => {
       const model = get().models.find(item => item.id === id);
-      set({ modelId: id, effort: model?.effortLevels?.includes(get().effort) ? get().effort : model?.defaultEffort || '' });
-      savePrefs(id, get().effort, get().budget);
-      const api = window.codenode;
-      if (api && api.modelsActive) void api.modelsActive(id);
+      if (!model) return false;
+      if (model.apiKeyError) {
+        useUiStore.getState().setToast('此模型的 Key 需要重新连接');
+        useUiStore.getState().openModelManager();
+        return false;
+      }
+      try {
+        const api = window.codenode;
+        if (api?.modelsActive) {
+          const result = await api.modelsActive(id);
+          if (!result?.ok) throw new Error(result?.error || '模型切换失败');
+        }
+        const effort = model.effortLevels?.includes(get().effort) ? get().effort : model.defaultEffort || '';
+        set({ modelId: id, effort });
+        savePrefs(id, effort, get().budget);
+        return true;
+      } catch (error) {
+        useUiStore.getState().setToast(error instanceof Error ? error.message : '模型切换失败');
+        return false;
+      }
     },
     setEffort: (effort) => {
       const model = get().models.find(item => item.id === get().modelId);

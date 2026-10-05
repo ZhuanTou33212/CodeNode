@@ -236,6 +236,8 @@ function PromptComposer() {
   };
 
   return (
+    <>
+      {pendingDraft && !selectedNode && <div className="composer-project-context">新对话 · {projectNameOf(projectRoot || '当前项目')}</div>}
     <div
       className={`pp-composer${dragOver ? ' is-dragover' : ''}`}
       onDragOver={(e) => {
@@ -255,7 +257,6 @@ function PromptComposer() {
         void addFiles(files);
       }}
     >
-      {pendingDraft && !selectedNode && <div className="node-prompt-context">新对话 · {projectNameOf(projectRoot || '当前项目')}</div>}
       {selectedNode && <div className="node-prompt-context"><span>阶段 · {String(selectedNode.data.label || selectedNode.id)}</span><button aria-label="返回对话" onClick={() => useGraphStore.getState().setSelectedIds([])}>×</button></div>}
       {!selectedNode && attachments.length > 0 && (
         <div className="pp-attach-list">
@@ -378,6 +379,7 @@ function PromptComposer() {
         )}
       </div>
     </div>
+    </>
   );
 }
 
