@@ -55,7 +55,12 @@ function resourceKeysFor(name, args, options = {}) {
     pushFile(a.path || a.filePath);
   } else if (tool === 'save_project') {
     keys.push(PROJECT_SAVE_KEY);
-  } else if (tool === 'workbench_edit' || tool === 'ui_control' || tool === 'create_nodes' || tool === 'workbench_connect') {
+  } else if (tool === 'remember') {
+    // 同一 run 的主/子代理写同一份记忆时必须串行；用户级路径可被 CODENODE_HOME 覆盖。
+    pushFile(a.scope === 'user'
+      ? require('../userMemory.cjs').userMemoryPath()
+      : path.join(projectRoot, '.codenode', 'memory.json'));
+  } else if (tool === 'workbench_edit' || tool === 'ui_control') {
     // 画布是**单一资源**：两个 Agent 同时改画布一定互相覆盖，不存在「改不同节点就没事」
     keys.push(CANVAS_KEY);
   }

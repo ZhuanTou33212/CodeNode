@@ -6,12 +6,21 @@ contextBridge.exposeInMainWorld('codenode', {
   chooseProject: () => ipcRenderer.invoke('project:choose'),
   // S8：统一事件流的按 run 回放（时间线 + 摘要）
   replayEvents: (root, options) => ipcRenderer.invoke('agent:events', root, options),
+  // §4.2：Run 级文件回滚 —— 先取只读计划（逐项 restore/delete/skip + 原因），确认后再执行
+  rollbackPlan: (root, runId) => ipcRenderer.invoke('agent:rollback-plan', root, runId),
+  rollbackApply: (root, runId, options) => ipcRenderer.invoke('agent:rollback-apply', root, runId, options),
+  // §4.2：子代理任务视图（跨 run 可查）
+  subagentViews: (root, options) => ipcRenderer.invoke('agent:subagents', root, options),
+  // §4.2：运行中插话（steering）—— 长任务跑偏时不用整停
+  steerAgent: (requestId, text) => ipcRenderer.invoke('agent:steer', requestId, text),
   createProject: () => ipcRenderer.invoke('project:create'),
   listProject: (root) => ipcRenderer.invoke('project:list', root),
   readProjectFile: (root, relPath, options) => ipcRenderer.invoke('project:read', root, relPath, options),
   writeProjectFile: (root, relPath, content, backup) => ipcRenderer.invoke('project:write', root, relPath, content, backup),
   searchProject: (root, query, maxResults) => ipcRenderer.invoke('project:search', root, query, maxResults),
   runProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run', root, command, timeoutSeconds),
+  workflowState: (root, workflowId, request) => ipcRenderer.invoke('project:workflow-state', root, workflowId, request),
+  workflowExecute: (root, workflowId, request) => ipcRenderer.invoke('project:workflow-execute', root, workflowId, request),
   startProjectCommand: (root, command, timeoutSeconds) => ipcRenderer.invoke('project:run:start', root, command, timeoutSeconds),
   stopProjectCommand: (sessionId) => ipcRenderer.invoke('project:run:stop', sessionId),
   sendProjectCommandInput: (sessionId, input) => ipcRenderer.invoke('project:run:input', sessionId, input),
@@ -24,11 +33,18 @@ contextBridge.exposeInMainWorld('codenode', {
   saveProject: (target, payload) => ipcRenderer.invoke('project:save', target, payload),
   loadProject: (target) => ipcRenderer.invoke('project:load', target),
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
+  ragCheck: (root, settings) => ipcRenderer.invoke('agent:rag-check', root, settings),
+  ragSave: (root, settings) => ipcRenderer.invoke('agent:rag-save', root, settings),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),
+  agentFeedback: (root, payload) => ipcRenderer.invoke('agent:feedback', root, payload),
+  agentFeedbackExport: (root, options) => ipcRenderer.invoke('agent:feedback-export', root, options),
+  agentFeedbackReview: (root, id, expectedOutput, reviewer) => ipcRenderer.invoke('agent:feedback-review', root, id, expectedOutput, reviewer),
   agentResumePlan: (root, runId) => ipcRenderer.invoke('agent:resume-plan', root, runId),
+  agentReadPlan: (root, sessionId) => ipcRenderer.invoke('agent:plan-read', root, sessionId),
   agentResumeStart: (root, runId, replacementRunId) => ipcRenderer.invoke('agent:resume-start', root, runId, replacementRunId),
+  agentTimeTravel: (root, sourceRunId, branchRunId, checkpointIndex) => ipcRenderer.invoke('agent:time-travel', root, sourceRunId, branchRunId, checkpointIndex),
   // 运行指标 / 成本 / 告警 / 执行隔离状态
   agentMetrics: (root) => ipcRenderer.invoke('agent:metrics', root),
   onAgentAlert: (cb) => {
@@ -37,6 +53,8 @@ contextBridge.exposeInMainWorld('codenode', {
     return () => ipcRenderer.removeListener('agent:alert', listener);
   },
   modelsList: () => ipcRenderer.invoke('models:list'),
+  modelsDiscover: (provider, apiKey, options) => ipcRenderer.invoke('models:discover', provider, apiKey, options),
+  modelsConnect: (ticket, selectedId) => ipcRenderer.invoke('models:connect', ticket, selectedId),
   modelsSave: (model) => ipcRenderer.invoke('models:save', model),
   modelsDelete: (id) => ipcRenderer.invoke('models:delete', id),
   modelsActive: (id) => ipcRenderer.invoke('models:active', id),

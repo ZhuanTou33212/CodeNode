@@ -39,7 +39,7 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
 const { GraphModel } = require('../electron/tools/GraphModel.cjs');
 const { getScalarStore } = require('../electron/scalars/index.cjs');
-const { datasetVersion, tasks: TASKS } = require('./agent-eval-tasks.cjs');
+const { datasetVersion, tasks: TASKS, modelSubsets } = require('./agent-eval-tasks.cjs');
 
 const EXIT_OK = 0;
 const EXIT_TASK_FAIL = 1;
@@ -52,7 +52,7 @@ const REPORT_DIR_REL = path.join('docs', 'eval-reports');
 /* ------------------------------- 参数解析 ------------------------------- */
 
 function parseArgs(argv) {
-  const opts = { mode: 'offline', requireModel: false, allowModelSkip: false, keep: false, tasks: [], json: false, reportDir: null };
+  const opts = { mode: 'offline', requireModel: false, allowModelSkip: false, keep: false, tasks: [], subsets: [], json: false, reportDir: null };
   for (const raw of argv) {
     const arg = String(raw);
     if (arg === '--mode=offline') opts.mode = 'offline';
@@ -64,6 +64,7 @@ function parseArgs(argv) {
     else if (arg === '--json') opts.json = true;
     else if (arg === '--list') opts.list = true;
     else if (arg.startsWith('--task=')) opts.tasks.push(arg.slice('--task='.length));
+    else if (arg.startsWith('--subset=')) opts.subsets.push(arg.slice('--subset='.length));
     else if (arg.startsWith('--report-dir=')) opts.reportDir = arg.slice('--report-dir='.length);
     else throw new Error('未知参数：' + arg);
   }
@@ -372,12 +373,27 @@ function buildChecks(ctx) {
       const hit = byTool(check.tool).filter((r) => r.compressedChars && r.compressedChars.from > 0);
       if (!hit.length) return { pass: false, detail: `${check.tool} 没有压缩记录` };
       const worst = Math.max(...hit.map((r) => r.compressedChars.to / r.compressedChars.from));
-      return { pass: worst <= check.maxRatio, detail: `压缩后/前 最大比 ${worst.toFixed(3)}（期望 ≤${check.maxRatio}）` };
+      // 判据自带证据：只报「最大比 0.692」看不出是「原文太小导致比值天然偏高」还是「模型没守字符预算」。
+      const rows = hit
+        .map((r) => ({ from: r.compressedChars.from, to: r.compressedChars.to, ratio: r.compressedChars.to / r.compressedChars.from }))
+        .sort((a, b) => b.ratio - a.ratio)
+        .slice(0, 3)
+        .map((r) => `${r.from}→${r.to}(${r.ratio.toFixed(3)})`);
+      return {
+        pass: worst <= check.maxRatio,
+        detail: `压缩后/前 最大比 ${worst.toFixed(3)}（期望 ≤${check.maxRatio}）；压缩记录 ${hit.length} 条，最大的几条：${rows.join(' / ')}`,
+      };
     },
     'context-bounded': (check) => {
       const nonSystem = ctx.messages.filter((m) => m.role !== 'system');
       const longest = nonSystem.reduce((max, m) => Math.max(max, String(m.content || '').length), 0);
-      return { pass: longest <= check.maxChars, detail: `上下文中最长非 system 消息 ${longest} 字符（上限 ${check.maxChars}）` };
+      // 判据必须自带证据：只报「最长 9099 字符」没法定位是**工具结果**没被压缩、还是模型自己回了长文
+      // （前者是 harness 缺陷，后者只是模型啰嗦 —— 处理方式完全不同）。所以把角色 + 片段一起报出来。
+      const worst = nonSystem
+        .map((m) => ({ role: String(m.role || '?'), len: String(m.content || '').length, name: m.name || m.tool_call_id || '', head: String(m.content || '').slice(0, 60).replace(/\s+/g, ' ') }))
+        .sort((a, b) => b.len - a.len)[0];
+      const where = worst ? `；最长者为 role=${worst.role}${worst.name ? '(' + worst.name + ')' : ''}，开头「${worst.head}」` : '';
+      return { pass: longest <= check.maxChars, detail: `上下文中最长非 system 消息 ${longest} 字符（上限 ${check.maxChars}）${where}` };
     },
     'citation-source': (check) => {
       const pattern = new RegExp(check.pattern);
@@ -454,12 +470,27 @@ function writeFixtures(workspace, fixture) {
   }
 }
 
-function buildConfig(task, workspace, mode, modelCfg) {
+// 真机/离线两套口径（预算 / 配置覆盖 / 判据）住在 scripts/lib/eval-limits.cjs ——
+// 抽出去是为了能**离线单测**（不需要真机 Key），并且让「只许放宽 steps-at-most」的白名单在
+// **运行时**也生效（写错的人另有 scripts/real-model-pr-test.cjs 直接判红）。
+const { effectiveBudget, effectiveOverride, effectiveChecks } = require('./lib/eval-limits.cjs');
+
+function buildConfig(task, workspace, opts) {
+  const mode = opts.mode;
+  const modelCfg = opts.modelCfg;
   const cfg = agent.loadConfig(workspace);
-  const override = task.cfgOverride || {};
+  const override = effectiveOverride(task, mode);
+  const budget = effectiveBudget(task, mode);
   cfg.apiBase = mode === 'model' ? modelCfg.apiBase : 'https://scripted.eval.local/v1';
   cfg.apiKey = mode === 'model' ? modelCfg.apiKey : 'scripted-eval-key';
   cfg.model = mode === 'model' ? modelCfg.model : 'scripted-eval/' + task.id;
+  // 协议只在真机档生效：脚本化档走内置 stub（OpenAI 形状），别被 env 带偏
+  if (mode === 'model') {
+    const protocolLib = require('../electron/modelProtocol.cjs');
+    cfg.protocol = protocolLib.normalizeProtocol(modelCfg.protocol || cfg.protocol);
+    cfg.auth = String(modelCfg.auth || cfg.auth || 'auto');
+    cfg.endpoint = String(modelCfg.endpoint || cfg.endpoint || 'standard');
+  }
   cfg.maxTokens = 4096;
   cfg.reasoningEffort = 'low';
   // 评测内重试固定为 1、且不做流式中断重发：脚本化传输的失败必须确定性可判定
@@ -469,16 +500,18 @@ function buildConfig(task, workspace, mode, modelCfg) {
   // 打乱 `steps-at-most` 与脚本轮次的对齐）。压缩本身由 scripts/compaction-test.cjs 单独锁。
   cfg.compaction = { ...agent.loadConfig(null).compaction, enabled: false };
   if (override.compression) cfg.compression = { ...cfg.compression, ...override.compression };
-  if (task.budget && task.budget.maxTotalTokens) {
-    cfg.limits = { ...cfg.limits, maxTotalTokens: task.budget.maxTotalTokens };
+  if (override.limits) cfg.limits = { ...cfg.limits, ...override.limits };
+  if (budget && budget.maxTotalTokens) {
+    cfg.limits = { ...cfg.limits, maxTotalTokens: budget.maxTotalTokens };
   }
   const RequestBudget = require('../electron/requestBudget.cjs').RequestBudget;
-  cfg.requestBudget = new RequestBudget(task.requestBudgetTokens || cfg.limits.maxTotalTokens);
+  cfg.requestBudget = new RequestBudget(task.requestBudgetTokens || (budget && budget.maxTotalTokens) || cfg.limits.maxTotalTokens);
   return cfg;
 }
 
 async function runTask(task, opts) {
   const started = Date.now();
+  const budget = effectiveBudget(task, opts.mode);
   const record = {
     id: task.id,
     title: task.title,
@@ -487,7 +520,7 @@ async function runTask(task, opts) {
     status: 'fail',
     reason: null,
     allowTools: task.allowTools,
-    budget: task.budget,
+    budget,
     durationMs: 0,
     modelSteps: 0,
     toolCalls: 0,
@@ -497,7 +530,10 @@ async function runTask(task, opts) {
 
   if (opts.mode === 'model' && task.realModel !== true) {
     record.status = 'skipped';
-    record.reason = '该任务依赖脚本化模型（确定性注入/预算/取消/崩溃），真实模型模式不适用';
+    // 逐任务给出**具体**的跳过理由（`modelSkipReason`）；没写就退回通用说明。
+    // 「为什么这个任务不能真机跑」必须是任务自己声明的事实，而不是一句模板 ——
+    // 否则下一个人只能靠猜，也就无从判断它该不该补上真机覆盖。
+    record.reason = task.modelSkipReason || '该任务依赖脚本化模型（确定性注入/预算/取消/崩溃），真实模型模式不适用';
     record.durationMs = Date.now() - started;
     return record;
   }
@@ -507,7 +543,7 @@ async function runTask(task, opts) {
   writeFixtures(workspace, task.fixture);
   const before = snapshotWorkspace(workspace);
 
-  const cfg = buildConfig(task, workspace, opts.mode, opts.modelCfg);
+  const cfg = buildConfig(task, workspace, opts);
   const registry = toolkit.buildDefaultRegistryWithConfig({
     toolsEnabled: true,
     toolsAllowed: task.allowTools,
@@ -594,7 +630,7 @@ async function runTask(task, opts) {
   agent.logConversation(workspace, { ts: nowIso(), role: 'user', content: task.prompt, nodeId: null });
 
   let watchdogFired = false;
-  const watchdogMs = (task.budget && task.budget.timeoutMs ? task.budget.timeoutMs : 60000) + 20000;
+  const watchdogMs = (budget && budget.timeoutMs ? budget.timeoutMs : 60000) + 20000;
   const runPromise = agent
     .runAgentChat({
       cfg,
@@ -602,7 +638,7 @@ async function runTask(task, opts) {
       onDelta,
       tools: { registry, context },
       signal: controller.signal,
-      timeoutMs: task.budget && task.budget.timeoutMs ? task.budget.timeoutMs : 60000,
+      timeoutMs: budget && budget.timeoutMs ? budget.timeoutMs : 60000,
     })
     .catch((error) => ({ error: String((error && error.message) || error), toolCalls: [], aborted: controller.signal.aborted }));
 
@@ -660,7 +696,7 @@ async function runTask(task, opts) {
   };
 
   const checkers = buildChecks(ctx);
-  for (const check of task.checks || []) {
+  for (const check of effectiveChecks(task, opts.mode)) {
     const fn = checkers[check.type];
     const name =
       check.type +
@@ -727,6 +763,10 @@ async function main() {
     apiKey: String(process.env.CODENODE_EVAL_API_KEY || '').trim(),
     apiBase: String(process.env.CODENODE_EVAL_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, ''),
     model: String(process.env.CODENODE_EVAL_MODEL || 'deepseek-chat'),
+    // S13：真机档可切到 Claude / Gemini 原生协议或 Azure 端点（留空 = OpenAI 兼容档）
+    protocol: String(process.env.CODENODE_EVAL_PROTOCOL || '').trim(),
+    auth: String(process.env.CODENODE_EVAL_AUTH || '').trim(),
+    endpoint: String(process.env.CODENODE_EVAL_ENDPOINT || '').trim(),
   };
 
   if (opts.list) {
@@ -736,8 +776,18 @@ async function main() {
     return EXIT_OK;
   }
 
-  const selected = opts.tasks.length ? TASKS.filter((t) => opts.tasks.includes(t.id)) : TASKS;
-  const unknown = opts.tasks.filter((id) => !TASKS.some((t) => t.id === id));
+  // `--subset=<名字>`：解析成任务集里声明的集合（真机 PR 只跑便宜子集，见 agent-eval-tasks.cjs 的 modelSubsets）
+  const subsetIds = [];
+  for (const name of opts.subsets) {
+    const ids = modelSubsets && modelSubsets[name];
+    if (!ids) {
+      throw new Error('未知 subset：' + name + '（可选：' + Object.keys(modelSubsets || {}).join(', ') + '）');
+    }
+    subsetIds.push(...ids);
+  }
+  const wanted = [...new Set([...opts.tasks, ...subsetIds])];
+  const selected = wanted.length ? TASKS.filter((t) => wanted.includes(t.id)) : TASKS;
+  const unknown = wanted.filter((id) => !TASKS.some((t) => t.id === id));
   if (unknown.length) throw new Error('未知任务 id：' + unknown.join(', '));
 
   const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-eval-'));
@@ -880,7 +930,10 @@ function finalize(report, started, opts) {
   report.failures = tasks
     .filter((t) => t.status === 'fail')
     .map((t) => ({ id: t.id, title: t.title, required: t.required, failed: t.failed }));
-  report.params.taskTimeouts = tasks.map((t) => ({ id: t.id, timeoutMs: t.budget ? t.budget.timeoutMs : null, maxSteps: t.budget ? t.budget.maxSteps : null }));
+  report.params.taskTimeouts = tasks.map((t) => {
+    const b = effectiveBudget(t, opts.mode);
+    return { id: t.id, timeoutMs: b.timeoutMs || null, maxSteps: b.maxSteps || null };
+  });
   report.exitCode = report.totals.requiredFailed > 0 || !report.harness.selfChecks.every((c) => c.pass) ? EXIT_TASK_FAIL : EXIT_OK;
   report.taskSet = TASKS.map((t) => ({
     id: t.id,
@@ -1018,7 +1071,7 @@ function renderMarkdown(report) {
   lines.push('');
   lines.push('- 本报告由 `scripts/agent-eval.cjs` 自动生成；判据不采信模型自述。');
   lines.push('- 离线模式在 fetch 传输边界注入脚本化 chat 客户端，工具执行、文件系统、shell、Run JSONL 都是真实运行。');
-  lines.push('- 真实模型模式需要 CODENODE_EVAL_API_KEY / CODENODE_EVAL_BASE_URL / CODENODE_EVAL_MODEL；未配置时该模式显式 skipped 且退出码非 0（fail-closed）。');
+  lines.push('- 真实模型模式需要 CODENODE_EVAL_API_KEY / CODENODE_EVAL_BASE_URL / CODENODE_EVAL_MODEL（接 Claude / Gemini 原生或 Azure 端点时另给 CODENODE_EVAL_PROTOCOL / _AUTH / _ENDPOINT）；未配置时该模式显式 skipped 且退出码非 0（fail-closed）。');
   lines.push('- CI 矩阵在 GitHub Actions 上的实跑结果由主 agent 汇总，本报告只覆盖本机执行证据。');
   lines.push('');
   return lines.join('\n');
@@ -1026,10 +1079,15 @@ function renderMarkdown(report) {
 
 main()
   .then((code) => {
-    process.exitCode = code;
+    // The eval harness may touch HTTP clients and child-process transports
+    // whose keep-alive handles outlive the report.  The async main promise is
+    // the authoritative lifecycle boundary: once it resolves, reports and
+    // self-checks are complete, so exit explicitly instead of leaving
+    // npm/run-all-tests waiting on incidental sockets or timers.
+    process.exit(code);
   })
   .catch((error) => {
     console.error('AGENT EVAL: FAIL（runner 异常）');
     console.error(error && error.stack ? error.stack : error);
-    process.exitCode = EXIT_TASK_FAIL;
+    process.exit(EXIT_TASK_FAIL);
   });

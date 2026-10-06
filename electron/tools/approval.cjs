@@ -18,6 +18,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const approvalRules = require('../approvalRules.cjs');
 
 /** 令牌默认有效期（5 分钟：足够用户点一次确认，也不至于长期悬挂） */
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
@@ -47,7 +48,7 @@ function newTokenId() {
 
 class ApprovalService {
   /**
-   * @param {{confirm?: Function|null, trace?: Function|null, now?: () => number, ttlMs?: number, runId?: string, taskId?: string, role?: string}} [options]
+   * @param {{confirm?: Function|null, trace?: Function|null, now?: () => number, ttlMs?: number, runId?: string, taskId?: string, role?: string, projectRoot?: string|null, rules?: Array<any>, riskGate?: Function|null}} [options]
    */
   constructor(options) {
     const o = options || {};
@@ -58,8 +59,22 @@ class ApprovalService {
     this.runId = o.runId || '';
     this.taskId = o.taskId || '';
     this.role = o.role || '';
+    this.projectRoot = o.projectRoot || null;
     /** @type {Map<string, any>} 令牌表（仅内存：重启即失效，不落盘、不进上下文） */
     this.tokens = new Map();
+    /**
+     * 持久化审批规则（来自 <project>/.codenode/approvals.json，见 approvalRules.cjs）。
+     * 命中的请求**不再打扰用户**，但一定留一条 approval_rule_hit 审计 —— 授权面必须可回查。
+     * @type {Array<any>}
+     */
+    this.rules = Array.isArray(o.rules) ? o.rules : [];
+    /**
+     * 风险门禁（意图识别用，**只收紧**）：`(req) => boolean`。
+     * 返回 true 表示「这次审批必须问用户」——即使命中免打扰规则也不放行。
+     * 未注入（null）时不存在这条路径，行为与加这个功能前逐字节一致。
+     * @type {Function|null}
+     */
+    this.riskGate = typeof o.riskGate === 'function' ? o.riskGate : null;
   }
 
   /** 内部：落一条审批事件（trace + 内存事件流，供测试与审计读取） */
@@ -87,9 +102,66 @@ class ApprovalService {
       this._emit('approval_unavailable', { reason: 'NO_CONFIRM_CHANNEL', tool: r.what || null });
       return null;
     }
+    // 持久化规则优先：命中即免打扰（但仍然签发令牌、仍然留审计）
+    const ruleHit = approvalRules.matchRule(this.rules, {
+      capability: r.capability || null,
+      tool: r.what || null,
+      level: r.level || 'WRITE',
+    });
     let approved = false;
+    /**
+     * 风险门禁（意图识别）：命中免打扰规则**也可能**被拉回「问用户」。
+     * 这是**单向**的 —— 门禁只能让审批更严，不存在任何让它更容易通过的路径（I1）。
+     */
+    let gated = false;
+    if (ruleHit && this.riskGate) {
+      try {
+        gated =
+          this.riskGate({
+            capability: r.capability || null,
+            tool: r.what || null,
+            level: r.level || 'WRITE',
+            scope,
+            toolCallId: r.toolCallId || null,
+          }) === true;
+      } catch (error) {
+        gated = false;
+        this._emit('approval_risk_gate_error', { tool: r.what || null, message: String((error && error.message) || error || '') });
+      }
+    }
+    if (ruleHit && !gated) {
+      approved = true;
+      this._emit('approval_rule_hit', {
+        ruleId: ruleHit.id,
+        tool: r.what || null,
+        capability: ruleHit.capability || null,
+        level: r.level || 'WRITE',
+        toolCallId: r.toolCallId || null,
+      });
+    } else if (gated) {
+      // 本该免打扰却被收紧：必须留痕（否则「规则为什么不生效」事后无从归因）
+      this._emit('approval_risk_gate', {
+        ruleId: ruleHit.id,
+        tool: r.what || null,
+        capability: ruleHit.capability || null,
+        level: r.level || 'WRITE',
+        toolCallId: r.toolCallId || null,
+        scope,
+      });
+    }
     try {
-      approved = (await this.confirmHandler(r.level || 'WRITE', r.what || '', r.detail || '')) === true;
+      if (!ruleHit || gated) {
+        approved =
+          (await this.confirmHandler(r.level || 'WRITE', r.what || '', r.detail || '', {
+            capability: r.capability || null,
+            tool: r.what || null,
+            level: r.level || 'WRITE',
+            projectRoot: this.projectRoot || null,
+            toolCallId: r.toolCallId || null,
+            attemptId: r.attemptId || null,
+            scope,
+          })) === true;
+      }
     } catch (error) {
       approved = false;
       this._emit('approval_error', { tool: r.what || null, message: String((error && error.message) || error || '') });
@@ -122,6 +194,32 @@ class ApprovalService {
    * @param {{capability?: string|null, scope?: any, toolCallId?: string|null}} [req]
    * @returns {{valid: boolean, reason: string, token?: any}}
    */
+  /**
+   * 预览「**不带意图识别**时」这次审批会怎么走（纯查询：不弹窗、不签发令牌、无副作用）。
+   *
+   * 用途：审计 P0-3 的动作级取舍 —— 意图分类唯一能改变的是「本来会放行 → 强制问一次」。
+   *   - 命中了免打扰规则（`ruleAllows`）→ 静态层直接放行 → 分类**有意义**；
+   *   - 没命中（`wouldAsk`）→ 静态层无论如何都要问用户 → 分类改不了结果，不必先花一次调用。
+   * @param {{capability?: string|null, tool?: string|null, level?: string, scope?: any}} [req]
+   * @returns {{available: boolean, ruleAllows: boolean, wouldAsk: boolean, rule: object|null, scope: any}}
+   */
+  preview(req = {}) {
+    const r = req || {};
+    const scope = normalizeScope(r.scope);
+    const ruleHit = approvalRules.matchRule(this.rules, {
+      capability: r.capability || null,
+      tool: r.tool || null,
+      level: r.level || 'WRITE',
+    });
+    return {
+      available: !!this.confirmHandler,
+      ruleAllows: !!ruleHit,
+      wouldAsk: !ruleHit,
+      rule: ruleHit ? { capability: ruleHit.capability || null, tool: ruleHit.tool || null, level: ruleHit.level || null } : null,
+      scope,
+    };
+  }
+
   verify(tokenOrId, req) {
     const r = req || {};
     const id = typeof tokenOrId === 'string' ? tokenOrId : tokenOrId && tokenOrId.id;

@@ -14,7 +14,17 @@ const { pathToFileURL } = require('node:url');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ROOT = path.join(__dirname, '..');
-const ASAR = path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar');
+const ASAR = process.env.CODENODE_PACKAGED_ASAR
+  ? path.resolve(process.env.CODENODE_PACKAGED_ASAR)
+  : path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar');
+function removeIsolatedTemp(target, prefix) {
+  if (!target) return;
+  const resolved = path.resolve(target);
+  if (path.dirname(resolved) !== path.resolve(os.tmpdir()) || !path.basename(resolved).startsWith(prefix)) {
+    throw new Error('拒绝清理意外路径：' + resolved);
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
 
 let passed = 0;
 const failures = [];
@@ -39,6 +49,7 @@ require('../electron/main.cjs');
 app.whenReady().then(async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-packaged-'));
   let win = null;
+  let projRoot = null;
   try {
     if (!fs.existsSync(ASAR)) throw new Error('未找到打包产物：' + ASAR + '（先跑 npm run dist:win）');
 
@@ -79,7 +90,7 @@ app.whenReady().then(async () => {
     const js = (code) => win.webContents.executeJavaScript(code);
 
     // 打包后的 App 同样走门禁页；注入临时工程进入工作台
-    const projRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-packaged-proj-'));
+    projRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-packaged-proj-'));
     fs.writeFileSync(path.join(projRoot, 'demo.cnode'), JSON.stringify({ nodes: [], edges: [] }));
     await js(`(async()=>{ await window.__codenodeProject.getState().loadRoot(${JSON.stringify(projRoot)}); return true; })()`);
     await sleep(800);
@@ -126,7 +137,8 @@ app.whenReady().then(async () => {
   } finally {
     try {
       if (win) win.destroy();
-      fs.rmSync(tmp, { recursive: true, force: true });
+      removeIsolatedTemp(tmp, 'codenode-packaged-');
+      removeIsolatedTemp(projRoot, 'codenode-packaged-proj-');
     } catch { /* 清理失败无所谓 */ }
     console.log('\nPACKAGED UI CHECK: ' + (failures.length ? 'FAIL(' + failures.length + ') ' + failures.join(' | ') : 'PASS') + ` [${passed} passed]`);
     app.exit(failures.length ? 1 : 0);

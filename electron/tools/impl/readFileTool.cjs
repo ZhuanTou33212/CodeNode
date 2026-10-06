@@ -1,11 +1,12 @@
 /**
- * read_file：读取项目内文本文件（UTF-8，自动识别语言；二进制/非 UTF-8 拒绝并说明）。
+ * read_file：读取项目内 UTF-8 文本、PDF 文字层与现代 Office 文档正文。
  * 超过 maxLines 截断并标注总行数；analyze=true 返回结构化摘要（import/class/function/变量）而非原文。
  */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // 第 9 项：文本分支的读取上限（含原因区分报错）。2MB 是量测后的取舍：同步读 2MB 实测 7ms，
 // worker 固定往返约 24ms —— 搬 worker 是净变慢，所以这里用上限把最坏情况钉住。
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
@@ -14,6 +15,9 @@ const { resolveInRoot, resolveFileFuzzy, detectLanguage, readTextFile, isSensiti
 const fsRunner = require('../fsRunner.cjs');
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const MAX_READ_LINES_PER_CALL = 500;
+const DEFAULT_READ_CHARS_PER_CALL = 24000;
+const MAX_READ_CHARS_PER_CALL = 48000;
 
 function binarySuggestion(relative) {
   const ext = path.extname(relative).toLowerCase();
@@ -32,11 +36,18 @@ function binarySuggestion(relative) {
     case '.zip':
     case '.cnode':
       return '归档，先解压再分析内部条目';
+    case '.doc':
+    case '.xls':
+    case '.ppt':
+      return '旧版二进制 Office 格式，需先转换为 DOCX/XLSX/PPTX 或 UTF-8 文本';
     case '.pdf':
     case '.docx':
+    case '.docm':
     case '.xlsx':
+    case '.xlsm':
     case '.pptx':
-      return '文档格式，需专用解析器';
+    case '.pptm':
+      return '文档文字不可提取，可能加密、损坏或缺少文字层';
     default:
       return '用 scan_project 或专用工具处理';
   }
@@ -74,16 +85,15 @@ function analyzeStructure(text, maxLines) {
 function register(registry) {
   registry.register(
     'read_file',
-    '读取项目内文本文件（UTF-8，自动识别语言；二进制/非 UTF-8 拒绝并说明解析方法；PDF 自动提取文字层）。' +
-      '超过 maxLines 行时截断并标注总行数与可继续的 offset。' +
-      'offset 为起始行号（1 基，默认 1），大文件请分段读取：先 offset=1，再 offset=201、401…' +
-      'analyze=true 时返回结构化摘要（import/类/函数/变量）而非原文，适合大文件与快速定位。',
+    '读 UTF-8 文本及 PDF、DOCX、XLSX、PPTX；offset/maxLines/charOffset 分页，analyze=true 返回结构摘要。',
     {
       type: 'object',
       properties: {
         path: { type: 'string', description: '项目内相对路径' },
-        maxLines: { type: 'integer', description: '最多读取行数，默认 200' },
+        maxLines: { type: 'integer', description: '最多读取行数，默认 200，单次最多 500；更大的文件用 offset 分段读取' },
+        maxChars: { type: 'integer', description: '本次最多返回字符数，默认 24000，单次最多 48000；超长行可用返回的 charOffset 续读' },
         offset: { type: 'integer', description: '起始行号（1 基，默认 1），大文件用 offset 分段续读' },
+        charOffset: { type: 'integer', description: '从 offset 指定行的第几个字符继续（0 基），用于续读超长行' },
         analyze: { type: 'boolean', description: 'true=只返回结构摘要（不返回原文），默认 false' },
       },
       required: ['path'],
@@ -108,21 +118,38 @@ function register(registry) {
         }
       }
 
+      // #17：敏感判定必须落在 **realpath** 上。resolveInRoot 只保证 realpath 在根内，
+      // 但仓库自带的符号链接（`notes.md -> .env`）在它眼里完全合法；只查模型给的 relative
+      // 等于给凭据开了一条「改个名字就读」的通道，而 read_file 是凭据直接外发进上下文的那条路。
+      if (isSensitivePath(path.relative(fs.realpathSync(root), fs.realpathSync(file)))) {
+        return AgentToolResult.error('出于凭据保护，Agent 不能读取敏感文件：' + relative);
+      }
+
       const analyzeOnly = args.analyze === true;
-      const maxLines = typeof args.maxLines === 'number' && Number.isFinite(args.maxLines) ? Math.max(1, Math.floor(args.maxLines)) : 200;
+      const maxLines = typeof args.maxLines === 'number' && Number.isFinite(args.maxLines)
+        ? Math.max(1, Math.min(MAX_READ_LINES_PER_CALL, Math.floor(args.maxLines)))
+        : 200;
+      const maxChars = typeof args.maxChars === 'number' && Number.isFinite(args.maxChars)
+        ? Math.max(1000, Math.min(MAX_READ_CHARS_PER_CALL, Math.floor(args.maxChars)))
+        : DEFAULT_READ_CHARS_PER_CALL;
       const offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(1, Math.floor(args.offset)) : 1;
+      const requestedCharOffset = typeof args.charOffset === 'number' && Number.isFinite(args.charOffset)
+        ? Math.max(0, Math.floor(args.charOffset))
+        : 0;
 
       const meta = { path: relative, language: detectLanguage(path.basename(file)), binary: false };
       if (fuzzyMatched) {
         meta.matched = path.relative(root, fuzzyMatched).replace(/\\/g, '/');
       }
 
-      // PDF 特殊处理：自动提取文字层（含 CID/Identity-H + ToUnicode 的 Word 型 PDF）
+      // 文档特殊处理：PDF 文字层与现代 Office 正文经文件 worker 提取。
       let text = null;
-      const isPdf = path.extname(relative).toLowerCase() === '.pdf';
+      const ext = path.extname(relative).toLowerCase();
+      const isPdf = ext === '.pdf';
+      const isOffice = ['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm'].includes(ext);
       if (isPdf) {
         meta.language = 'pdf';
-        // P7 收口：PDF 分支是 read_file 里**唯一**的重活 —— 读（≤20MB，实测同步 ~6.6ms）之后还要
+        // P7 收口：PDF/Office 分支是 read_file 里的重活 —— 读（≤20MB）之后还要
         // 跑自研解析（inflate + CMap + 文本重建；实测一个 60MB 文本流光 inflate 就 ~82ms，
         // 真实 PDF 100–300ms 量级）。worker 固定往返只有 ~24ms，所以这是正收益：主线程不再被冻住，
         // 取消也能真的 terminate。
@@ -156,6 +183,34 @@ function register(registry) {
           );
         }
         text = pdfResult.text;
+        meta.sourceSha256 = pdfResult.sha256;
+      } else if (isOffice) {
+        meta.language = ext.slice(1);
+        const outcome = await fsRunner.runFsTask(
+          'readOfficeText',
+          { path: file, maxBytes: MAX_PDF_BYTES },
+          { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+        );
+        if (outcome.cancelled || outcome.timedOut) {
+          return AgentToolResult.failure('CANCELLED', 'Office 文档解析已取消（用户停止）。', { cancelled: true, path: relative });
+        }
+        if (outcome.mode === 'sync-fallback') {
+          context.audit('read_file(Office) worker 不可用，已退回主线程同步解析：' + outcome.fallbackReason);
+        }
+        const officeResult = outcome.result;
+        if (!officeResult || officeResult.ok !== true) {
+          meta.binary = true;
+          if (officeResult && officeResult.errorKind === 'too-large') {
+            return AgentToolResult.error(relative + ' 文档过大（>' + officeResult.limitMb + 'MB），无法读取', meta);
+          }
+          if (officeResult && officeResult.errorKind === 'read-failed') {
+            return AgentToolResult.error(officeResult.error, meta);
+          }
+          return AgentToolResult.error(relative + ' 的文字无法提取（文件可能损坏、加密或没有可读正文）。', meta);
+        }
+        text = officeResult.text;
+        meta.sourceSha256 = officeResult.sha256;
+        meta.extractedTruncated = officeResult.truncated === true;
       } else {
         const read = readTextFile(file, MAX_TEXT_BYTES);
         if (!read.ok) {
@@ -175,6 +230,7 @@ function register(registry) {
           return AgentToolResult.error(relative + ' 是二进制或不可读文件，不能用 read_file 读取（' + reason + '）；请按建议解析：' + binarySuggestion(relative), meta);
         }
         text = read.text;
+        meta.sourceSha256 = read.sha256;
       }
       const lines = text.split('\n');
       meta.lineCount = lines.length;
@@ -206,15 +262,52 @@ function register(registry) {
         );
       }
       const endIdx = Math.min(lines.length, startIdx + maxLines);
-      const content = lines.slice(startIdx, endIdx).join('\n');
-      const truncated = endIdx < lines.length;
+      const bodyLines = [];
+      let bodyChars = 0;
+      let lastLine = startIdx;
+      let nextRead = null;
+      let firstCharOffset = requestedCharOffset;
+      if (firstCharOffset > lines[startIdx].length) firstCharOffset = lines[startIdx].length;
+      for (let lineIndex = startIdx; lineIndex < endIdx; lineIndex += 1) {
+        const lineNumber = lineIndex + 1;
+        const charOffset = lineIndex === startIdx ? firstCharOffset : 0;
+        const remainingLine = lines[lineIndex].slice(charOffset);
+        const separator = bodyLines.length ? 1 : 0;
+        const room = maxChars - bodyChars - separator;
+        if (room <= 0) {
+          nextRead = { offset: lineNumber, charOffset };
+          break;
+        }
+        if (separator) bodyChars += separator;
+        if (remainingLine.length > room) {
+          bodyLines.push(remainingLine.slice(0, room));
+          bodyChars += room;
+          lastLine = lineNumber;
+          nextRead = { offset: lineNumber, charOffset: charOffset + room };
+          break;
+        }
+        bodyLines.push(remainingLine);
+        bodyChars += remainingLine.length;
+        lastLine = lineNumber;
+      }
+      if (!nextRead && endIdx < lines.length) nextRead = { offset: endIdx + 1, charOffset: 0 };
+      const content = bodyLines.join('\n');
+      const truncated = !!nextRead;
       meta.truncated = truncated;
       meta.offset = offset;
+      meta.charOffset = firstCharOffset;
       meta.startLine = Math.min(lines.length, startIdx + 1);
-      meta.endLine = endIdx;
+      meta.endLine = lastLine;
+      if (meta.sourceSha256 && !isPdf) {
+        meta.sourceRangeSha256 = 'sha256:' + crypto.createHash('sha256')
+          .update(lines.slice(startIdx, lastLine).join('\n').replace(/\r(?=\n|$)/g, ''), 'utf8').digest('hex');
+      }
+      meta.nextOffset = nextRead ? nextRead.offset : null;
+      meta.nextCharOffset = nextRead ? nextRead.charOffset : null;
       let suffix = '';
-      if (truncated) {
-        suffix = '\n…（已显示第 ' + meta.startLine + '-' + meta.endLine + ' 行，共 ' + lines.length + ' 行，用 offset=' + (endIdx + 1) + ' 继续读取剩余）';
+      if (nextRead) {
+        suffix = '\n…（本次最多返回 ' + maxChars + ' 字符或 ' + maxLines + ' 行；继续读取请用 offset=' + nextRead.offset +
+          (nextRead.charOffset ? '、charOffset=' + nextRead.charOffset : '') + '，文件共 ' + lines.length + ' 行）';
       } else if (offset > 1) {
         suffix = '\n（已显示第 ' + meta.startLine + '-' + meta.endLine + ' 行，共 ' + lines.length + ' 行）';
       }
@@ -224,6 +317,7 @@ function register(registry) {
       );
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["read_file"]);
 }
 
 module.exports = { register };

@@ -4,6 +4,512 @@
 
 ## [未发布]
 
+### 工具维护（画布编辑入口统一；2026-09-28）
+
+- 删除未接入默认注册表的 `create_nodes` / `workbench_connect` 独立实现；创建、编辑和连线统一通过 `workbench_edit`。
+- 清理对应能力描述、写操作分类、画布资源锁和过期配置文档；工具契约检查不再为未注册实现保留例外。
+
+### 工程质量（门禁数字对齐唯一来源 + 主进程严格档 + 数组参数上限；2026-09-23 审计第 4 轮）
+
+三项独立整改，都在独立 worktree 内完成、各自跑过判据（`npm run check:js` 退出 0 + `npm test` 104/104）：
+
+- **门面数字对齐唯一来源**：README 对「门禁项数」给了三个数字（第 23 行「104 项核心 + 7 项显示」是对的，
+  第 248 行写「103 项核心」、第 256 行写「core 套件（87 项）」）—— 统一到
+  `node scripts/run-all-tests.cjs --list` 的实测输出（「核心套件 (104):」+「显示/浏览器套件 (7):」）。
+  生产边界段的 `agent.max_total_tokens` 默认值也从过期的 250,000 改为出厂值 600,000
+  （`electron/agent.cjs` 的 `configInteger(cfg, 'agent.max_total_tokens', 600000, …)`，
+  `test:agent-limits` 实测回显 `"maxTotalTokens":600000`）。
+- **过期结论就地标注、问题单归档**：`docs/harness-parity-vs-codex-claude-code-2026-09-21.md` 第 5 节 #5 / #7
+  与第 7 节末尾仍写「MCP HTTP transport / web_search / worktree 隔离 / 计划卡仍未做」，而它们已在同日第二批次
+  落地（`a2182cc` / `d7f6abb` / `7d5424f`）；行内补删除线与落地提交，文首补「后续更新」注记说明本文基线
+  （79 项门禁、`6f4521f`）已过期。根目录那份未跟踪的 `deepseek-agent-issues.md` 归档为
+  `docs/agent-issues-intake-2026-09-17.md`，文首附逐条回代码核实结论：第 2/3/4/5/6/7/9 项已落地且各有关联门禁，
+  第 1 项机制齐备但验收标准本轮未实测，第 8 项未核实，第 10/11 项原文即为「不要直接当 bug」。
+- **主进程开 `strictNullChecks`，`check:js` 分两档**：`electron/**`（agent 循环、沙箱、工具注册表、IPC）此前与
+  `src/` 不同 —— 后者 `strict:true`，这一档连 `strictNullChecks` 都没开，null/undefined 解引用全靠人眼。
+  开启后暴露 **94 处**（TS18048 30 / TS2345 22 / TS2322 17 / TS18047 12 / TS2532 3 / TS2810 2 / TS2722 2 / TS2531 2），
+  逐条清完，纪律是**零行为变化**：类型注解（对象字面量加 JSDoc 打断 `null` / `never[]` 的错误推断）、
+  等价改写（`lines.pop() || ''`、先收窄再 `Number(x)`、`resolve()` → `resolve(undefined)`）、
+  少数跨档类型用 `/** @type {any} */` 断言（不产生任何运行时代码）。`check:js` 相应拆两档：
+  `electron/**` 走 `tsconfig.checkjs.json`（严格），`scripts/**` 走新增的 `tsconfig.checkjs-scripts.json`
+  （保留宽松 —— 脚本里大量 mock/夹具是「先声明、后按场景赋值」的形状）。CI 与 `npm run verify` 无需改动。
+- **数组参数一律有长度上限**：13 个数组参数里只有 2 个声明过 `maxItems`（`update_plan.steps`、
+  `retrieve_context.queries`），同族的 `retrieve_context.keys` 反而没有 —— 于是「模型幻觉出几万条
+  operations / connections / list」这条路上没有任何一道闸：参数校验放行，主进程再逐条执行。
+  修法不是给每个 schema 逐个补声明（那会把画布面固定输入推过 `test:token-overhead` 的 9,000 tokens 验收线，
+  实测 9031），而是在 `electron/tools/registry.cjs` 的 `validateInput` 里加
+  `DEFAULT_MAX_ARRAY_ITEMS = 1000` 兜底（显式声明优先）—— **一处收口，将来新增的工具自动受益，且 schema 零变化**。
+  `test:tool-contract` 增 D 段 6 条判据（超限被拒 / 恰好等于上限放行 / 显式声明优先 / 标量与对象负向 /
+  真实工具端到端 / 注册表普查）。
+
+**变异校验（两处，都有判别力）**：① 严格档 —— 往 `electron/attachments.cjs` 注入 `__probeNull.field` → 变红
+（`TS18047`），`scripts/` 注入未知属性 → 脚本档变红（`TS2339`），还原后两档 0 错；② 数组上限 —— 把兜底拿掉
+（`const cap = schema.maxItems;`）后 D1/D5/D6 变红而 D2/D3/D4 保持绿，且 D5 在变异态**实证了漏洞本身**
+（超限数组不再被参数校验拦下、真的走到 workbench_edit 的执行体，返回「工作台不可用（无变更应用）」）。
+
+### 变更（模型管理界面精简：只保留 API Key 入口，协议改按地址自动判定；2026-09-23）
+
+用户反馈：「你只需要提供 api key 接口，其他的根本不需要，请删除」。上一轮加的 UI（厂商预设下拉、「全部加入」、
+接入协议区、测试连接、拉取模型列表）与配套四条 IPC 通道**已全部删除**；协议适配留在后台，改成按 API 地址
+自动判定 —— 用户只填一个 Key（地址与模型 ID），不用选协议/认证/端点。
+
+- **删除**：界面上的预设下拉、协议/认证头/输出上限字段/端点风格选择、Azure 部署名与 api-version 输入、
+  价格提示、测试结果框、模型列表选择器、「测试连接」「拉取模型列表」按钮（含对应 CSS）；
+  主进程的 `models:presets` / `models:preset-apply` / `models:test` / `models:fetch` 四条通道路、
+  `electron/providerPresets.cjs`（32 条预设目录）、`buildModelListRequest` / `parseModelList`；
+  preload 的四条方法与 `global.d.ts` 的对应声明。模型管理界面回到改动前形态（268 行，逐字节还原）。
+- **改为自动判定**（`modelProtocol.resolveProtocol` / `normalizeEndpoint`，只看域名特征、离线确定性）：
+  `api.anthropic.com` → Claude 原生；`generativelanguage.googleapis.com` → Gemini 原生；
+  `*.openai.azure.com` → Azure 端点（部署名路径 + `api-key`）；其余 → OpenAI 兼容 + `Bearer`。
+  「未指定」与「指定 openai」严格区分：`models.json` 里留空 = 按地址判定，写死就以写死为准；
+  归一化对未知/缺省值一律**留空**（钉成 openai 会让「改地址后」突然 404）。
+- **保留**（非界面、也非网络行为）：协议翻译层本身、`config/agent.properties.example` 的可选键、
+  headless（`bin/codenode-agent.cjs`）与评测/冒烟的 `*_PROTOCOL/_AUTH/_ENDPOINT` 环境变量覆盖。
+- **判据**：`test:model-protocol` 94 → **79 条断言**（删掉预设/通道级段落，新增「协议自动判定」G 段与
+  「界面已精简」的负向 I 段：界面里不许再出现预设/协议/认证/端点/测连接/拉列表字样、preload 与类型同步删除、
+  主进程只剩 4 条模型通道、预设库文件确实不存在、`resolveProtocol` 真的被请求构造用到）；核心套件仍 104 项。
+  旧的四条通道 wiring 与预设点名断言随功能一起删除（不留空转判据）。
+
+### 新增（多厂商 / 多协议模型接入：一份 harness 接四档协议；2026-09-23）
+
+原始诉求是「让 CodeNode 兼容市面上所有主流模型的 api key」。改造前的请求只有一种形状 ——
+`apiBase + '/chat/completions'` + `Authorization: Bearer` + 无条件下发 `reasoning_effort` /
+`stream_options` —— 于是**Claude 原生、Gemini 原生、Azure 企业版这三档主流 key 直接不可用**，
+而占绝大多数的 OpenAI 兼容厂商也得靠用户自己填对地址、模型 ID 与那一堆开关。
+
+- **协议适配层**（新增 `electron/modelProtocol.cjs`）：协议（`openai` / `anthropic` / `gemini`）与
+  认证风格（`bearer` / `x-api-key` / `api-key` / `x-goog-api-key` / `query` / `none`）正交给两个正交维度，
+  另加端点风格（`standard` / `azure`）。四件事都收敛到四个纯函数：`buildRequest` 组装
+  URL+认证头+请求体、`parseResponse` 归一非流式响应、`createStreamTranslator` 把原生 SSE 翻成
+  OpenAI SSE 文本、`buildModelListRequest` 拉模型清单。**消息与工具双向往返翻译**：system 提升为顶层
+  （Anthropic）/ `systemInstruction`（Gemini）、`role:'tool'` → `tool_result`（user 消息内，id 对齐）/
+  `functionResponse`（按 id 反查函数名）、`input_schema` / `functionDeclarations`、
+  `thinking.budget_tokens`（按 `max_tokens` 夹住）/ `thinkingConfig.thinkingBudget`、
+  用量映射（Anthropic 的 input/output 分帧 → 只增不减合并；Gemini 的 `usageMetadata` 全量替换）。
+- **流式走「翻译成 OpenAI SSE」而不是各写一套累加器**：中途断线整轮重发、停滞判定、重复/累积分片、
+  usage 帧归并、坏 JSON 记 anomaly 这套已经用测试锁死的语义，四档协议**原样复用**（OpenAI 档 translate
+  是恒等函数，零开销）。
+- **厂商预设 32 条**（新增 `electron/providerPresets.cjs`）：国内 14 家 + 国际 12 家 + 本地/自建 4 类 +
+  自定义，地址 / 协议 / 认证头 / 参考模型 / 上下文 / 价格一次填好；Anthropic、Gemini、Azure 会自动
+  选好各自的协议与认证头（用户不用知道 `/v1/messages` 与 `api-key` 的存在）。
+- **模型管理界面**（`ModelManager.tsx` + `styles.css`）：厂商预设下拉（分组：国内 / 国际 / 本地）、
+  协议 / 认证 / 端点 / 输出上限字段名、Azure 的部署名与 api-version、「测试连接」「拉取模型列表」、
+  把该厂商预设的模型一次全部加入。
+- **不猜、不静默**：`models:test` 真发一次最小请求，失败时**再补一次最小形态请求**（不带工具 / 思考链 /
+  stream_options），据此区分「密钥或地址不对」与「附加字段不认」，并把供应商原话与可照做的建议带回界面；
+  `models:fetch` 按协议问厂商要模型清单（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models`；
+  Azure 明确回复「无此端点，模型由部署决定」）。
+- **「支持推理强度」从摆设变成真开关**：此前只影响界面，不勾也照样下发 `reasoning_effort`（对不认这个
+  字段的网关每次请求都 400）；现在不勾 = 该模型**不下发**这个字段（字段消失，而不是发 `false`）。
+  同理 `max_tokens` / `max_completion_tokens` 按模型选，本地服务（`auth=none` 或回环地址）允许空 Key。
+- **成本口径限定范围**：DeepSeek 的高峰价（UTC 01–04 / 06–10 周一至周五 ×2）此前对**所有**模型生效 ——
+  多厂商接入后会系统性把别家的账算成两倍，现改为只对 DeepSeek 生效。预设里人民币计价的厂商价格一律留 0
+  （0 = 不参与成本统计），避免把 ¥ 记成 $。
+- **负向判据（逐字节）**：`protocol` 未声明 / `= openai` 时，请求的 URL、认证头与请求体（**含字段顺序**）
+  与改造前逐字节一致；关掉可关字段（`reasoning_effort` / `stream_options`）时字段是**消失**而不是发空值。
+- **门禁 `test:model-protocol`（新增，核心套件 103 → 104）**：四个 mock 服务端各自**严格校验自己的协议**
+  （路径 / 认证头 / 禁用字段，不合格回 4xx）并记录原始请求，用例据「服务端收到什么」与「调用方拿到什么」
+  取证：A 组 OpenAI 档逐字节不变（原始报文直接字符串比对）、B 组 Claude 原生（含 thinking 分片、缓存用量、
+  夹预算）、C 组 Gemini 原生（含 schema 子集剥离 `additionalProperties`）、D 组 Azure（api-key 头 + 部署名
+  路径 + `Authorization` 必须缺席）、**E 组端到端**（真实 `runAgentChat` + 真实工具注册表跑完 Claude 原生
+  的两轮工具循环，第 2 轮请求里必须出现 Anthropic 形状的 `tool_result` 且 `tool_use_id` 对得上）、
+  F 组判别力（协议接错 / 认证头接错 → 404/401，证明前四组不是空转）、G 组预设清单点名（22 家主流厂逐个核对，
+  共 32 条）、H 组存储往返（协议别名归一 / 非法值收敛 / seed 不漂移）、I 组接线（四条新通道主进程→preload→
+  类型→UI 四段齐全，且按**函数体内的调用形态**判，不看「字符串出现过」）、**J 组通道级**（注入确定性密钥环桩后
+  真跑 `models:presets` / `preset-apply` / `test` / `fetch`：落盘加密、测连接如实回报协议与延迟、404 带建议与
+  最小形态对照、Azure 无列表端点如实说明、list 只回 `apiKeySet` 布尔）。共 **94 条断言**，全部离线确定性，
+  无网络、无 Key、无 display。
+- **变异校验（7/7 全部被杀）**：真把协议接错地改一遍源码，判据必须红在**预期的那条断言**上 ——
+  ① 不提升 system → B4；② Claude 用 Bearer 认证 → 被服务端 401 拒掉；③ 不剥 Gemini 不认的
+  schema 关键字 → 被 400 拒掉；④ OpenAI 档多下发一个字段 → A3（逐字节）红；⑤ 不下发 thinking → B7；
+  ⑥ 用量帧只替换不合并 → B11；⑦ UI 把「拉取模型列表」的方法名写错 → I 组红。第 ③ 条第一次是**存活**的：
+  夹具里的工具 schema 没带 `additionalProperties`（而生产注册表 `closeInputSchema()` 会加）→ 判据空转；
+  夹具改成与生产同形后立刻被杀。第 ⑦ 条也是先存活（接线断言原本只判「字符串出现过」，写错方法名照样过）→
+  改成按函数体内的**调用形态**正则后才被杀。
+
+### 新增（主 Agent 工具面分层 + 结果单份投影 + 记忆注入预算；2026-09-22）
+
+审计结论：不是「没压缩」，而是**压缩前每轮已经背着过宽的固定工具面和若干重复内容**。这一批只做
+**确定性收益**（不引入任何新的模型调用）：
+
+- **P0-1 工具面按任务分层**：33 个工具 schema 此前无条件常驻（实测 **7,261 tokens/轮**、纯代码固定输入
+  **9,493**）。现在 `--core(+code/canvas/research/orchestration)` 按**确定性规则**定面（`tools/profiles.cjs`，
+  纯函数、无模型调用），注册表新增暴露面（`setExposure`/`exposeNames`/`isExposed`）与
+  **model-visible specs 的 run 内缓存 + 稳定哈希**（`schemaInfo()`；同一轮里 compaction 估算、preflight
+  与正式请求此前各构造一遍 20k 字符 JSON）。用不到的能力由 `discover_tools` 按功能词取回（**只增不减**）。
+  实测：纯代码 19 工具 **5,327**（−43.9%）、调研 −41.8%、编排 −29.3%；**真实请求体单轮输入 7,285 → 3,692
+  tokens（−49.3%）**。
+- **P0-2 工具结果只向模型投影一次**：`find_files` / `search_files` / `execute_shell` / `get_subagent_task`
+  的 `text` 与 `data` 说的是同一件事，此前**发两遍**（随后的 LLM 压缩还要为重复再付一次费）。新增
+  `AgentToolResult.modelContent` 作为「唯一进入上下文的那份」；实测 search_files −53.9%、find_files −56.5%、
+  execute_shell −93.5%，投影后无 `[data]` 段（重复率 0）。结构化 `data` 仍完整交给 UI/审计/回放。
+  失败结果**不投影**（`code`/`retryable`/`userActionRequired` 是判据，不能省）。
+- **P1-2 记忆自动注入有预算、有命中才注入**：无关键词命中不再回退「最近 30/20 条」当固定税；
+  单条 ≤400 字符、两类合计 ≤2,000 tokens（`agent.memory_*`）。选择器语义未动
+  （`recall` 与既有用例依赖「无命中退回最近 N 条」），自动注入走新入口 `buildMemoryInjection`。
+- **规则面与工具面同源**：规则点名的工具不在暴露面里时，对应规则行一并收敛（`RUNTIME_RULE_GATES`）——
+  否则模型会照着规则去调一个不存在的工具（真实故障，不只是浪费）。裁剪生效时追加规则 20 说明
+  `discover_tools` 的用法。
+- **负向判据（逐字节）**：`agent.tool_profile=off` 时，工具面 JSON（26/31/33 三种装配）、
+  `buildSystemPrompt` 三态、`buildToolGuide`、`buildToolContent` 各形态、记忆文本、`loadConfig` 既有键
+  与改动前**逐字节相同**（同进程对照 `git archive HEAD` 的旧代码）。`discover_tools` **只在裁剪生效时注册**
+  —— 否则 off 的请求体会多一个工具 schema，这条判据就不成立。
+- 判据 `test:token-overhead`（A–I 九组：基线 / 各面棘轮 / 负向逐字节 / 规则同源 / 变异 / 取回语义 /
+  **真实请求体** / 记忆预算 / 接线）、`test:tool-projection`（真实执行 search_files/find_files/execute_shell）；
+  核心套件 **94 → 96**。`npm test` 96/96、`check:js` 0 错误、`build` 通过（隔离目录前台跑）。
+- **未达项**：画布档实测 **8,891（−13.1%）**，未达审计估算的 6,000 —— 常驻运行规则直接点名
+  `scan_project`/`analyze_project`/`retrieve_context`/`execute_shell` 等，裁掉会让规则悬空；要更激进可显式配
+  `agent.tool_profile=core,canvas`。明细与取舍见 `docs/tool-face-profiles-2026-09-22.md`。
+
+### 修复（P1-4 收尾：先 compact，再做不可逆硬裁剪；2026-09-22）
+
+审计点名的是一个**时序**问题：硬裁剪把旧工具结果正文换成占位符是不可逆的，而旧流程里
+「字符预算超了」这一轮直接换占位符，语义压缩要到下一轮才触发 —— 那时摘要看到的已经是占位符，
+原始正文再也回不来。
+
+- 动手裁之前先用 `contextBudget.planTrim`（纯函数，零成本）**探一次**「这一轮会不会丢正文」；
+  会丢就先做语义压缩（触发来源 `before-trim`），压完通常就没得裁了。
+- 压缩失败 / 不可用 / 不划算（P1-3 的 ROI 门）→ 才真的换占位符，`lastTrimStats` 仍留给下一轮再试一次
+  压缩（原有 `after-trim` 补救路径与硬裁剪兜底网都没动）。
+- `compaction_done` 事件新增 `trigger` 字段（manual / over-limit / **before-trim** / after-trim /
+  provider-rejected），压缩到底是被哪条路径触发的可回放归因。
+- 判据：`test:compaction-tail` 新增 G 组（端到端真实 run）——`before-trim` 触发、**摘要请求看到的是
+  原始正文而不是占位符**、压完主请求里既无原始正文也无占位符；负向：关掉压缩后硬裁剪照旧兜底
+  （占位符出现、`context_trim` > 0）。
+
+### 优化（P1-2：动态上下文段落共用一个 token 预算；2026-09-22）
+
+审计原文：「记忆、RAG、画布状态共用一个 `DynamicContextBudget`，避免各模块都认为自己只占一点。」
+此前记忆有 2,000 的池子，而**画布摘要与技能索引完全没有上限**。
+
+- 新增 `electron/dynamicContextBudget.cjs`（纯函数）：按 `priority` + 单段 `cap` 把一份总预算分给
+  画布 / 记忆 / 技能 / RAG，并如实记下每段「想要多少 / 拿到多少 / 为什么」
+  （`full` / `capped` / `trimmed` / `starved`）+ `overcommit`。保底 `minTokens` 优先于总预算（不静默饿死）。
+- 出厂：总预算 6,000 tokens；cap 画布 4,000 / 记忆 2,000（与 `agent.memory_budget_tokens` 一致）/
+  技能 800 / RAG 1,500。配置 `agent.dynamic_context_tokens`（0 = 关闭）+ 四段各自的 `*_tokens`。
+- 新增两个纯裁剪函数：`agent.truncateCanvasSummary`（**按节点粒度**，裁完 JSON 仍合法 + 取回提示；
+  坏 JSON 字符级裁并标注）、`agent.truncateSkillsIndex`（整行裁 + `read_skill` 提示）。
+- **不触发时逐字节不变**：各段都装得下时 `granted === desired` → 不重建不裁剪；实测同一项目内容下
+  关闭预算与出厂预算的 system prompt **逐字节一致**（5062 = 5062 字符）。
+- 每次分配落 `context_budget` run 事件（每段 desired/granted/reason），供归因面板使用。
+- 注入给**模型**的画布摘要用裁剪后的那一份；意图分类与工具上下文仍用完整摘要（它们不是提示词固定税）。
+- 判据 `test:dynamic-context-budget`（分配器六条 + 裁剪两条 + 端到端三条 + 接线）。核心套件 **102 → 103**。
+- 没做（如实列出）：`rag` 段的 cap 目前无消费者（本 harness 的 RAG 是按需工具，不常驻注入）；
+  未做真机 A/B（要凭据）。
+
+### 优化（阶段 B / P0-3：意图模型移出默认热路径；2026-09-22）
+
+审计验收线「普通代码 run 的 intent 调用平均 <0.5 次」逐条落地：
+
+- **默认档 `agent.intent_recognition=auto` → `ambiguous`**：新增确定性任务路由 `electron/taskRouter.cjs`
+  （`task` 从工具面判定**派生**，两者不可能互相矛盾），只在「没有任何确定性信号且输入有实质长度」时
+  才花一次分类调用。实测：`读 a.txt` / `把 buildSystemPrompt 改一下` / `统计 data/large.txt …` → **0 次**；
+  `这个怎么弄` → 1 次。
+- **默认档 `agent.intent_action_review=risky` → `authorization-gap`**：只有**外部副作用**
+  （capability ∈ shell.execute / network.request / subagent.delegate / ui.interact）**且静态层本来会放行**
+  的动作才问模型；本地写（write_file / edit_file / workbench_edit / save_project …）不再问。
+  跳过四种情况：只读 / 本地效果 / 本来就会问用户 / 规则已拒绝。
+  **关键反例**（第一版写错、已被判据锁住）：内置工具默认都不声明 `requiresConfirmation`，
+  所以「没命中免打扰规则」**不等于**「用户会被问到」——那种情况下收紧是唯一能让它被问一次的东西，必须问。
+- 复核触发范围补上 `ui.interact`（界面动作为外部副作用，与 `intent.EXTERNAL_CAPABILITIES` 同口径）。
+- 新增 `ApprovalService.preview()`（纯查询：不弹窗、不签发）供取舍判定使用。
+- **面板**：`agent:metrics` 新增 `auxiliary` —— intent / compression 的请求数、输入、输出、净节省
+  （`costAttribution.summarizeAuxiliary` + 账本只读 `records()`）；净节省按 run 取最后一次累计值（不逐轮相加）。
+- 判据 `test:intent-cost-gate`：确定性路由、分类门、动作准入四条、**安全不变量**
+  （跳过 guardian 后用户该被问的仍被问）、全关负向、接线。核心套件 **101 → 102**。
+- 没做（如实列出）：`agent.intent_model` 仍跟随主模型（选便宜模型是部署方知识）；`intent_max_tokens` 仍 1024
+  （"512 + reasoning 关闭"要在真机验证，属审计自己标注的 caveat）；`response_format`/JSON schema 未接
+  （网关兼容性需要回退设计）。
+
+### 新增（P2-2 成本按层归因 / P1-3 压缩收益 / P2-1 输出分档 / P1-4 压缩尾部；2026-09-22）
+
+第三批（审计 P2-2 / P1-3 / P2-1 / P1-4），每一项都带新判据：
+
+- **P2-2 成本按层归因**（新 `electron/costAttribution.cjs`）：主请求同时记十层（system_static /
+  system_dynamic / tool_schema / memory / rag / project_state / history_user / history_assistant /
+  tool_result / attachment）+ 每种工具的 `raw → model` 投影 + 压缩的 `costTokens → savedTokens` +
+  供应商报的缓存命中/未命中；**缓存未命中时记「第一个变化的 prompt 区段」**。只测量、不改行为；
+  未登记段落归 `system_dynamic`（fail-safe）。判据 `test:cost-attribution`（含真 run + 真账本端到端）。
+- **P1-3 压缩改收益驱动**：主口径从字符改成 **token**（出厂 8,000；旧字符阈值降为下界），
+  `剩余轮数 × (R − S) > (R + S)` 才压（审计那条 4.33 轮的算式原样进了判据）；剩余轮数 ≤1 永不压；
+  同类工具累计净亏（≥2 次）自动降级为确定性裁剪；记 `netTokensSaved`（收益口径）与
+  `netTokensImmediate`（单轮差），成本只用**实报** usage；跳过原因进 `compression_skipped` 事件
+  （不再让「该压没压」不可观测）。实测：一条 30,062 token 结果 → 摘要 14 token，剩 3 轮净收益 63,844。
+- **P2-1 输出预算分档**：tool 档 12k / final 档 32k，只往下压、永不越过 `agent.max_tokens`；
+  正文为空却被截断 → **加预算重试一次**（reasoning 吃光额度的场景不再让模型「从断点接着写」一段不存在的内容）。
+  `agent.output_budget_tiers=false` 完全回退旧行为。
+- **P1-4 压缩保留无损操作尾部**：`[system] → [人话] → [摘要] → [最近无损操作组]`；操作组原子
+  （`assistant(tool_calls)` + 配对结果绝不切开、孤儿 tool 消息不留）；触发线统一进
+  `min(window×ratio, inputLimit−buffer, window−max(outputReserve, buffer))`。
+  尾部与「压缩必须真的压下来」的两段式配合：默认**最新操作逐字优先**（`tail_allow_oversized` 默认 true），
+  若压完仍 ≥ 触发线，则按固定部分之外的余量用**严格预算重算一次**（会整组丢弃超大组，纯计算不加调用），
+  trace 记 `tailShrunk` / `tailDroppedForLimit`。
+  **这条是被现有 `test:compaction` 抓出来的真缺陷**：第一版实现让尾部吃光预算 → 压缩后仍超窗 →
+  主请求一次都发不出去（预检直接判超窗）。端到端判据已补：够大窗口尾部原样进历史（实测 6,613 token），
+  紧窗口自动收窄到线下，两种情况主请求都发得出去。
+- **没做**（如实列出）：审计还要求把「先 compact 再硬裁剪」的顺序倒过来 —— 现行顺序把硬裁剪当免费兜底网，
+  倒过来会在可能不需要摘要时先付一次 LLM 调用、削弱恢复链。需要单独一轮 + 完整回退回归，本次未动。
+- 核心套件 **97 → 101**，README 计数同步。
+
+### 优化（P1-1：稳定内容前置 + 规则按面分层；2026-09-22）
+
+prompt cache 命中的是**请求前缀**，而重排前「画布清单 / 项目记忆 / 用户记忆」紧跟回复约束 —— 每个提问都会
+改写第 3 段，等于把后面所有稳定内容（运行规则 ≈3.3k 字符、soul、工具引导）一起踢出缓存。
+
+- **装配顺序**改为：`【回复与编码约束】→【运行规则】→【灵魂设定】→【可用工具】` ⟶ cache boundary ⟶
+  `【任务相关规则】→【项目 Skills】→【项目长期记忆】→【用户级记忆】→【当前画布节点清单】`。
+  段落清单 `PROMPT_SECTIONS` 是唯一来源，未登记的新段落一律按动态处理（fail-open）。
+- **规则块拆两段**：`TASK_RULE_NUMBERS`（2/6/7/12/19/20，按面变化）与 `RUNTIME_RULE_GATES`（工具面门控）
+  指向同一批编号 —— 一条规则要么两处都登记要么都不登记。`splitRuntimeRules()` **只按编号搬整行**，
+  画布建模块按编号 14 的位置进任务段；**规则行集合与拆分前逐字节相同**（用例直接断言），新增字符只有任务段标题（+48）。
+- **实测（探针）**：只改画布内容前缀 7.5% → **99.5%**；只改记忆/技能/用户记忆 7.3% → **97.3%**；
+  跨任务类型 344 → **2,325 字符**。稳定前缀 ≈2,434 字符 ≈1,248 tokens（示例占 system 49%）。
+  两条如实说明：① 重排**不减少上下文占用**，省的是**计费与首 token 延迟**；② 计费降幅取决于供应商缓存价，
+  **本次没做真机 A/B**（需凭据，`test:eval:model` 是那条路径）。
+- **已知边界**：跨任务类型前缀止于工具引导段（面不同→引导不同，属有意保留，棘轮按实测 2,300）；
+  Anthropic 风格显式 cache breakpoint 未做（本 harness 走 OpenAI 兼容面，DeepSeek/OpenAI 都是自动前缀缓存）。
+- 判据 `test:prompt-prefix`（A 段落表/顺序、B **规则零改字**与编号并集完整、C 稳定前缀不动、
+  D 变异判别力、E 跨类型棘轮 + 接线）；顺带把 `update_plan`/`read_skill`/`view_image`/`worktree`/`web_search`
+  的工具引导条目从「描述前 40 字」兜底改成正经一句话。核心套件 **96 → 97**。
+
+### 修复（续跑不重新裁面 + README 门禁计数；2026-09-22）
+
+- **续跑（resume）绝不重新裁面**（真实缺陷）：续跑不分类 → `intentPolicy` 为空 → 画布层可能从「意图救回」
+  变成「省掉」，于是**同一 run 的后半程比前半程更窄**（模型上一轮刚调过的工具突然从 schema 消失，历史里还留着
+  对它的调用）。现在：原 run 记过生效的工具面（`tool_face` 事件）就**原样沿用**，读不到就**退回全量面**
+  （「不知道原来有什么」时，多带 schema 只是多花钱，缩窄是能力静默消失）；`resume` 优先级高于显式配置。
+  判据 `test:token-overhead` 新增 J 组 10 条（含「不加 resuming 就会拿到 auto 面」的判别力断言 + 真从 run
+  记录读回那个面 + 读不到/旧 run 返回 null）。
+- **README 门禁计数对齐唯一来源**：徽章与「亮点速览」写的是 `92 core + 6 display`（还有一处更旧的
+  `87 core + 5 display`），而 `scripts/run-all-tests.cjs --list` 的实际值是 **96 core + 7 display** ——
+  本次 +2（token-overhead / tool-projection），显示套件那 1 项的偏差是**既存过期**，一并按唯一来源改正。
+- 顺带量了除已投影 4 个工具外的**其余全部内置工具**（真实执行 + 比对 text/data）：`read_file` 的 data 只有元数据、
+  `list_directory` 只有计数/游标、`scan_project`/`analyze_project` 的 data 是载荷本身（文本只有一行摘要）——
+  **没有遗留的重复回灌**，审计点名的 4 个就是全部。
+
+### 修复（工具面裁剪的两处边界；2026-09-22）
+
+- **项目扩展 / MCP 工具不再被裁剪隐藏**：暴露面的权威表示改成**隐藏集**（`_hiddenTools`）而不是可见集 ——
+  profile 名单管不到的名字（`.codenode/extensions.json` 的工具、MCP 工具、之后才注册的工具）天然不在隐藏集里，
+  **一律可见（fail-open）**。若按可见白名单实现，用户自己装的能力会静默消失（`namesForProfiles` 同时按
+  这条纪律把「不在任何 profile 名单里」的名字一并放行）。判据：`test:token-overhead` 的 F 组新增 4 条
+  （扩展/MCP 进名单 + 裁剪后仍可见 + 真的在下发 schema 里 + 晚注册工具默认可见）。
+- **`test:mcp-session` 的 D 块改成按会话键断言**：它此前用全局计数 `idleClosed === 1`，而 A/B/C 三段留下的
+  会话也各带空闲定时器（默认 `idleMs=1500`），CI 上正好在 D 的 900ms 窗口里到期 → 偶发失败
+  （本地/其它平台复现不到）。C 段早就改成「按会话键断言，不受别的章节影响」，D 段跟上同一纪律：
+  只问「**这条**会话被回收了吗」，全局计数只要求「至少回收过」。
+
+### 新增（动作级意图复核 + 插话后重判；2026-09-21）
+
+- **A2 动作级复核**：轮级判定看不到「助手接下来真要做什么」—— 真机取证证实了盲区（assistant **没说出来的**
+  越权动作不在输入里）。现在副作用动作在**执行前**会再判一次（证据包多一个 `<planned_action>`）：
+  `registry` 新增**门 1.5**，复核判定收紧时把「本不需要确认」变成**要确认**。只收紧 —— 只读动作不触发、
+  未接线 / 抛错 / 不收紧都维持原判定；`intentReview` 走能力面（`GATED_METHODS`），没写能力的工具连复核都拿不到。
+- **A1 授权可提升**：此前 run 级判定是一次性的 —— 一旦收紧，用户随后明确授权也不生效。现在 `agent:steer`
+  把插话记进 `steers`（**可信证据**，动作复核会自动带上）**并触发轮级重判**，重判结果就地替换 policy
+  （审批 `riskGate` 每次读它 → 立即生效）。安全边界：重判**只在有信号时才允许替换**（纯函数 `canReplacePolicy`）——
+  `unavailable`（没通道 / 超时 / 预算耗尽 / 已取消）时**保持原判定**，否则「重判失败」会变成放宽。
+- 配置：`agent.intent_action_review = off | risky（默认）| every`、`agent.intent_action_max_calls_per_run=5`
+  （与轮级预算**独立**，不互相吃掉）。
+- 判据 `test:intent-action`（**37 条断言**，核心套件 **93 → 94**）；真机全链路探针（`out/probe-intent-e2e.cjs`，
+  真实 IPC + 真模型 + 真实工具循环）验证「动作复核只在写类动作上触发」与「插话 → 重判 → 新判定生效」，
+  并顺带证明「预算耗尽时重判不放宽」；变异 **21/21 → 32/32**（0 skip）。明细见
+  `docs/intent-recognition-2026-09-21.md` §12。
+- **A4 子代理不能绕过收紧**：`context.fork()` 此前没带上意图策略 —— 子代理换一个上下文就绕过去了。
+  现在 fork 继承策略与复核通道（授权来源是**用户对主任务的授权**，而不是主代理给子代理的任务描述 ——
+  后者是 assistant 生成的东西，属不可信证据）。取舍：子代理复核共享主 run 的动作预算；按值继承。
+- **收紧归因**：动作级收紧让「本来不需要确认」的工具弹确认框时，说明里会写明是意图复核判定的结果
+  （不收紧时不追加，避免每次确认都像被意图拦了）。
+
+### 修复（分类期间点「停止」无效；2026-09-21）
+
+意图识别的分类请求发生在 run 真正开始之前，而 `AbortController` 在后段「装配工具」处才创建、
+`activeRequests` 登记得更晚 → **那 1~4 秒里点「停止」完全无效**（`auto` 模式下纯代码会话每轮都要分类一次，
+用户会看到「点了没反应」）。把 controller 与 activeRequests 登记**提前到分类之前**，并给分类调用带上
+`signal`；abort 后分类器按「没有信号」处理（不收紧、不阻断），run 立即返回取消终态。
+判据 `test:agent-state` 的 B6（5 条：分类请求发出过 / **abort 真的传到请求层** / 主循环 0 请求 /
+取消语义与 B4 同口径 / 终态 CANCELLED）；变异 **18/18 → 21/21**。明细见
+`docs/intent-recognition-2026-09-21.md` §11。
+
+同一批把取消信号改成**透传**（§11.1）：`createIntentClassifier({cfg, callModel, trace, signal})` 把 `signal`
+传给 `callModel`（此前 JSDoc 写了但实现靠调用方闭包捕获，那一跳无用例锁住），并让**已 aborted 的 signal
+直接短路**（不判定、不读缓存、连请求都不发起）。`test:intent` 111 → **117** 条断言（新增 6 条：透传同一
+AbortSignal 对象 / 缺省为 null / 已取消 0 请求 / 取消后不吃缓存 / 取消后不收窄）。
+
+### 新增（意图识别的界面展示；2026-09-21）
+
+- **`IntentBadge`（`src/components/IntentBadge.tsx`）+ store 消费 `kind:'intent'`**：一行紧凑标显示
+  意图 / 风险 / 授权 / 置信度；收紧态（`is-tighten` +「审批收紧」）与「输出不完整」（`partial`）各有显式标注，
+  判定依据进 tooltip；**没有信号（`unavailable`）时不显示任何结论**（返回 null，不留空壳、不假装未判定）。
+  挂载在 `AgentPanel` 里紧挨计划卡，样式沿用 `.ap-plan` 的亮度分层与语义色。
+- 判据 `test:intent-ui`（**DISPLAY 组**，18 条断言，offscreen 真实渲染）：空壳、中文文案、风险色阶
+  （高低风险计算色值必须不同）、位置、11px 密度、tooltip 判据、unavailable 不留结论、partial 显式标注、reset。
+  显示组 **6 → 7**；变异校验本轮 **18/18**（新增 2 条 UI 条目）。
+
+### 修复（意图识别的两个真机缺陷；2026-09-21）
+
+拿到 key 后跑真机探针（`out/probe-intent-real.cjs`，6 场景）**当场红了 3/5** —— 这是该功能的第一次真实运行，
+暴露两个脚本化测试**看不见**的缺陷（明细见 `docs/intent-recognition-2026-09-21.md` §9）：
+
+- **思考链吃光输出额度**：供应商的思考链与正文共用 `max_tokens`，而且**关不掉**（不下发 `reasoning_effort`
+  照样思考）。实测 `intent_max_tokens=256` → `reasoning_tokens=256`、**正文为空**（1 个场景）或
+  JSON 被截断（2 个场景）。出厂值 **256 → 1024**（对照实验：`low`+256 勉强够、`1024` 稳）。
+- **截断输出被整体判 invalid**：截断的前半段字段其实完整，一律判 invalid 等于把「我们额度不够」记成
+  「模型判定可疑」→ 每次截断都强制弹确认。新增 `salvageFields` 逐字段自救（`source='partial'`：
+  只抽**完整闭合**字段、仍过枚举校验、缺字段保守回落、**不给 routeHint** 但照常参与收紧）。
+  修复后同一探针 **6/6 解析成功**，含「提示注入被抗住」与「assistant 旁白越权 → authorization=unknown → 收紧」。
+- 判据：`test:intent` 100 → **111** 条断言（新增真机截断 fixture + partial 边界），变异 **12/12 → 16/16**。
+
+### 新增（意图识别 / 授权判定，照 Codex 的 guardian 分类器；2026-09-21）
+
+落地记录见 `docs/intent-recognition-2026-09-21.md`。核心套件 **92 → 93**（+intent）。
+变异校验本批 **12/12** 条有判别力（`out/mutation-spec-intent.json`）。
+
+- **`electron/intent.cjs`**：一次独立的小请求判定这一轮在做什么（`intent`）、风险（`risk`）、
+  用户授权程度（`authorization`）—— 两个枚举的取值域与 Codex 的 `GuardianRiskLevel` /
+  `GuardianUserAuthorization` **逐字对齐**；证据分层（只有 user 消息与项目约定能确立授权，工具输出、
+  文件内容、assistant 自述一律是不可信证据）、信息缺失/非法值就**保守判高**。
+  两个出口：`routeHint` 把关键词表漏判的建模需求救回画布层；`forceConfirm` 让
+  「高风险 / 授权 unknown|low / 低置信」的轮次**忽略免打扰规则**仍要用户点确认。
+  三条不变量：**只收紧不放宽** / **无信号 ≠ 低风险**（失败、超时、`never` 时逐字节不变）/
+  判定全是纯函数。判据 `test:intent`（8 组 100 条断言，含本机 HTTP 端点端到端）。
+- **审批门禁（`tools/approval.cjs` + `tools/context.cjs`）**：命中 `.codenode/approvals.json` 免打扰规则后
+  仍可能被收紧回「问用户」（事件 `approval_risk_gate` 带 ruleId 归因；门禁自身抛异常则留痕并维持旧行为）。
+  源码级断言 `gated` 不出现在任何放行分支 —— 单向收紧。
+- **提示词路由（`agent.resolvePromptLayers`）**：新增 `intentHint` 分支，只在「画布为空且提问不含画布词」
+  这条**本来要省层**的分支上把画布规则救回来；`mode=never` / 画布非空 / 关键词命中的判定一概不变。
+- **配置**：`agent.intent_recognition = auto（默认，只在画布为空时分类一次）| always | never`，
+  以及 `agent.intent_model` / `intent_timeout_ms`(8000) / `intent_max_tokens`(256) /
+  `intent_max_calls_per_run`(5，0=不限)。分类请求约 1.9k 字符、输出上限 256 tokens，
+  走主通道（并发队列 + 请求预算 + 成本账本，`kind='intent'` 可单独查）。
+- 未做（理由见落地文档 §8）：分类不可取消（run 停止时最长仍等一次 8s 超时）、动作级采样
+  （仍由 shellGuard/令牌审批承担）、真实模型取证（本机无 `api_key`，只有本机 HTTP 端点链路）、
+  前端展示（run 事件/审计/成本数据已有，UI 未加块）。
+
+### 新增（控制面补齐·第二batch：MCP HTTP / web_search / worktree 隔离 / 计划卡；2026-09-21）
+
+延续同一天的上一批，把对照文档 §5 里剩下的四项做掉（落地记录见 `docs/agent-control-plane-2026-09-21.md` §8–§11）。
+核心套件 **88 → 92**（+mcp-http / web-search / worktree / subagent-worktree），显示环境 **5 → 6**（+plan-ui）。
+
+- **MCP streamable HTTP transport（`electron/tools/mcpHttpTransport.cjs`）**：POST JSON-RPC；应答按
+  content-type 分流（JSON / `text/event-stream` 按 **id** 取帧）；`mcp-session-id` 会话头；
+  `sandbox.network=deny` 时拒绝并说明怎么放开（拒绝时一个请求都不发）。`publicHttp` 新增通用
+  `request()`（method/headers/body + `allowPrivateHosts`，不自动跟随重定向）。判据 `test:mcp-http`。
+- **`web_search`（`electron/tools/impl/webSearchTool.cjs`）**：可配置后端（searxng / custom），
+  **不配就不注册**（零上下文成本）；空结果如实说「没有结果」，绝不编造；`api_key` → Bearer 头。
+  判据 `test:web-search`。
+- **git 工作树隔离**：`electron/worktree.cjs` + `worktree` 工具（list/create/remove）；只在
+  `.codenode/worktrees/` 下动手（受管目录之外 `NOT_MANAGED`）、上限 5、有未提交改动默认拒删（`DIRTY`）；
+  子代理 `delegate_task(isolation:'worktree')` 真的切 `projectRoot` 到独立检出，结果写明「改动不在主工作树里」，
+  **建不出来就中止任务**（绝不静默降级）。判据 `test:worktree` / `test:subagent-worktree`。
+- **计划卡（对话区 UI）**：主进程计划一变就发 `kind:'plan'` 增量（与进度注入解耦，`progressEvery=0` 也发）；
+  前端 `PlanCard` 渲染状态色阶/进度条/完成态，没有计划时不留空壳。判据 `test:plan-ui`（显示环境）
+  + `test:agent-plan` 的 E 段。
+
+变异校验本批 **6/6** 条有判别力（`out/mutation-spec-control-plane2.json`）。
+仍未做：`PreToolUse` 钩子、Windows 内核级隔离、MCP 服务端推送（理由见落地文档 §12）。
+
+### 新增（控制面补齐：钩子 / 用户级记忆 / 非交互入口 / 审批规则 / 技能渐进披露 / 看图；2026-09-21）
+
+对照 `docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 的 #3 / #4 / #6 / #7，
+落地记录见 `docs/agent-control-plane-2026-09-21.md`。**仍未做**：MCP HTTP transport、web_search、
+worktree 隔离、计划卡（对话区 UI）—— 逐条理由在该文档末节。
+
+- **钩子（`electron/hooks.cjs`）**：`hooks.post_tool_use`（匹配工具执行完跑用户命令，输出作为机器注入的
+  user 消息回灌）/ `hooks.session_start` / `hooks.session_stop`；与 `execute_shell` 同一套安全判据
+  （越界写拒绝、断网时联网命令拒绝、走 sandbox.guardedSpawn）、超时/输出上限/每 run 次数上限；
+  未配置 = 一次 spawn 都不发生。判据 `test:hooks`。
+- **用户级（跨项目）记忆（`electron/userMemory.cjs`）**：`$CODENODE_HOME/user-memory.json`，
+  `remember`/`recall` 新增 `scope=project|user|all`，按提问打分注入 system prompt 的独立段落。
+  判据 `test:user-memory`。
+- **非交互入口（`bin/codenode-agent.cjs`）**：对照 `codex exec` / `claude -p`；退出码 0/1/2/3、
+  缺凭据 fail-closed、`--allow-writes`/`--yes` 分级、`--json` 事件流；`package.json` 增 bin 映射。
+  判据 `test:headless`（真 HTTP + 真 SSE + 真工具调用）。
+- **持久化审批规则（`electron/approvalRules.cjs`）**：`.codenode/approvals.json`（受保护路径，写工具写不进）、
+  命中即免打扰但仍签发一次性令牌并留 `approval_rule_hit`；界面弹窗新增「本项目始终允许」；
+  只记忆注册表级审批（命令类不记忆）。判据 `test:approval-rules`。
+- **技能渐进披露（`read_skill`）**：项目 skills 从「整段常驻 prompt」改为「只注入索引 + 按需读正文」
+  （上限 8000 字符、超限截断标注）。判据 `test:skill-index`。
+- **看图（`view_image`）**：模型可读项目内图片（png/jpeg/webp/gif、≤4MB、路径在项目根内），
+  主循环把图作为一条多模态 user 消息附在工具结果之后；附不上时如实回执。判据 `test:view-image`。
+
+- **MCP 会话复用 + `tools/list` 缓存（`electron/tools/mcpClient.cjs`）**：每个 (项目, 扩展) 一条常驻 stdio 会话，
+  握手一次、清单问一次，调用复用通道；空闲 120s 自动关闭、server 崩溃下次重拉、run 结束 `closeAll()`；
+  仍走 `guardedMcpSpawn`、仍有 1MiB 响应上限、握手失败文案不变。判据 `test:mcp-session`。
+  **仍未做**：HTTP/SSE transport（只支持 stdio）。
+
+核心套件 **81 → 87**；变异校验本轮 5 + 11 + 3 = **19/19** 条有判别力（`out/mutation-spec-control-plane.json`、
+`out/mutation-spec-hooks.json`）。
+
+### 新增（安全边界收口 + 任务清单 update_plan；2026-09-21）
+
+对照 `docs/harness-parity-vs-codex-claude-code-2026-09-21.md` §5 的 #1 / #2，落地记录见
+`docs/agent-boundary-and-plan-2026-09-21.md`：
+
+- **出厂断网（对齐 Codex 的 workspace-write）**：`sandbox.network` 出厂值由 `inherit` 改为 `deny`
+  （`electron/agent.cjs` 的 `parseSandboxConfig` 与 `electron/sandbox.cjs` 的 `resolvePolicy` 两处同源）。
+  出厂口径下疑似联网的命令**直接拒绝**（`PERMISSION_DENIED`，不弹确认、不试连），拒绝文案给出放行键
+  `sandbox.network=inherit`；显式 `inherit` 时联网命令走 HIGH 审批而不是静默放行。
+- **「写目标判不出来」不再静默放行**：`guard.unresolvedWrites`（写目标是变量/通配，如 `> $OUT`、
+  `writeFileSync(p)`）此前只在 `sandbox.mode=strict` 下被拒，默认 `best-effort` 静默执行 —— 等于
+  「把路径放进变量」即可绕过路径边界（Windows 后端没有内核级文件系统隔离）。现在**任何模式**都要求用户确认，
+  确认文案写明「无法静态判定」，拒绝时返回 `APPROVAL_DENIED`；`strict` 仍是硬拒。
+- **联网判定与白名单/高危判据共用归一化**：`shellGuard.detectNetwork` 此前只用 `tokens[0]` 原文匹配，
+  `C:/tools/nuget.exe restore` 不被判为联网（`nuget restore` 却会）——同一件事两种判定。现在剥目录/扩展名后再匹配。
+- **任务清单 `update_plan`（对照 Codex 的 update_plan / Claude Code 的 TodoWrite）**：新模块
+  `electron/plan.cjs`（校验/渲染/落盘）+ `electron/tools/impl/updatePlanTool.cjs`。计划落 run 事件
+  `plan_updated` 与 `.codenode/runs/<runId>.plan.json`，并**搭进度提示那条注入消息回灌**（同一时刻只留一条、
+  原地替换；计划一变就在下一轮回灌，不必等满 `agent.progress_every`）。契约：不改工作区（`mutatesWorkspace:false`，
+  只读上下文可用）、不进缓存白名单、不弹确认；同一时刻最多一项 `in_progress`（超出按 `ARG_SEMANTIC` 拒）。
+- **判据**：新增 `test:shell-boundary`（38 条断言：出厂口径 / 断网硬拒 / inherit 走审批 / 未解析写必须确认 /
+  strict 硬拒 / 归一化一致性 + 3 条负向防误伤）与 `test:agent-plan`（49 条断言：纯函数 / 契约 / 落盘 + 事件 /
+  端到端回灌与不堆叠 / 负向零痕迹）。核心套件 **79 → 81**；变异校验 8/8 条有判别力
+  （`out/mutation-spec-boundary-plan.json`）。
+
+### 新增（四类结构性问题一起做掉：真机回归挂 PR / 运行中控制手段 / 每轮固定开销分层 / 用例同形门禁；2026-09-20）
+
+对照 `docs/agent-incremental-review-2026-09-19.md` §4（落地记录见该文档 §4.5）：
+
+- **真机回归挂 PR（§4.1）**：6 个此前在真机模式被跳过的任务里，4 个改为真机可跑
+  （`long-context-compression` / `crash-recovery-run-events` / `budget-token-cap` / `iteration-cap-stop`，
+  各自声明真机专用 `modelBudget` 与 `modelCfgOverride`），另外 2 个保留脚本化模型并**逐条写明**
+  `modelSkipReason`；runner 新增 `--subset=`；`production-gate.yml` 的 credentials 暴露 `has_key`，
+  新增 `model-eval-pr` job（`mode == 'gate' && has_key == 'true'` → `npm run test:eval:model:pr`
+  = `--mode=model --subset=pr --require-model`）。判据 `test:real-model-pr`（含无 Key fail-closed，
+  以及用**独立进程** mock 服务器跑真 HTTP + 真 SSE + 真预算判定的模型管线）。
+- **Run 级文件回滚（§4.2）**：写操作第一次触碰路径前抓前像（内容寻址 blob，≤256KB，过大/不可读如实
+  标注不可回滚）；`electron/runRollback.cjs` 的 `planRollback`（只读）+ `applyRollback`
+  （越界拒绝 / blob 哈希校验 / 写后读回校验 / 有跳过或拒绝就不报 ok）；IPC + 工作台面板入口。
+  判据 `test:run-rollback`（含真跑主循环写盘 → 回滚 → 逐字节还原的端到端）。
+- **子代理任务视图跨 run 留存（§4.2）**：`.codenode/runs/<run>.subagents.json`（按 taskId 覆盖更新、
+  上限 50、坏文件如实 `ok:false`）+ IPC `agent:subagents` + 面板。判据 `test:subagent-view`
+  （核心断言是「新实例读得到」—— 此前只有进程内 Map）。
+- **运行中插话（§4.2）**：`electron/steerQueue.cjs` + 主循环在压缩/硬裁剪之后、超窗预检之前每轮 drain
+  一次，作为 `【用户插话】…` 的 user 消息进请求体；run 结束后 push 明确拒绝（`run-ended`）；
+  IPC `agent:steer` + 对话体入口。判据 `test:agent-steering`（恰好注入一次 + 不插话零痕迹）。
+- **每轮固定开销分层（§4.3）**：画布建模规则抽成**按需注入的层**
+  （`agent.prompt_canvas_rules = auto|always|never`，auto 下「不确定就注入」）；实测 system 提示词
+  4,601 → 3,172 字符。判据 `test:prompt-layers`（判定表 + 字节级等价 + loader 出口读回 + **开销上界**）。
+- **「用例输入与生产同形」门禁（§4.4）**：`test:fixture-shape` 从真实请求体抓生产 tool 消息字段集，
+  要求主循环 push、续跑重建、用例 fixture 三者逐字段对齐 —— 当场抓出并修掉
+  `runCheckpoint.saveMessages` / `buildResumeMessages` **丢 `name`**（续跑后硬裁剪占位符退化）。
+- **真机取证（2026-09-20，首次用真 Key 跑通）**：
+  - 全量真机（9 个 `realModel: true` 任务）：**8/9 通过，必需失败 0**，跳过 2（各自带理由），19 次工具调用、34.2s；
+  - PR 子集（`--subset=pr`）：**3/3 通过，连续 3 次**（5.9s / 6.1s / 7.9s，工具调用 5、模型步数 7 稳定）；
+  - 真机抓出两处**夹具口径照脚本化模型调**的问题：`long-context-compression` 的 `compression.maxCalls: 1`
+    只够压一次（真机分批读 → 第 2 份大结果原样留在上下文，实测 7,250 / 9,099 字符 > 4,000 上限）、
+    以及 `steps-at-most: 4` 比真机少一步（5≤4 红）。处理：真机下放宽**压缩配额**（成本旋钮，4,000 字符的
+    实质不变式不放宽）+ 新增 `modelCheckOverrides`（只允许放宽白名单内的 `steps-at-most`，只许放宽不许更严、
+    幅度硬上限 2 倍、离线完全不受影响、白名单在**运行时**也生效、死配置判红）；
+  - 该任务真机 5 次实测判据抖动（模型读法在 1~6 次之间变化）→ **移出 PR 子集**，并把
+    「子集判据不得依赖模型措辞（压缩比 / 上下文长度 / 引用状态）」写成子集入选标准门禁；
+  - `iteration-cap-stop` 真机模型直接回答、不循环（steps=1 tools=0）→ 保持 `required:false`、不进 PR 子集，
+    硬上限覆盖以离线脚本化模型为准确性命中，事实如实记录；
+  - 判据可读性：`context-bounded` / `compressed-ratio` 的失败信息现在带**证据**（最长消息的角色 + 片段、
+    每份压缩的 from→to(ratio)）—— 否则「9099 字符」看不出是 harness 没压还是模型啰嗦。
+- core 套件 73 → **79**；新增 6 份变异规格共 **30 条**（fixture-shape 4 / prompt-layers 4 / run-rollback 5 /
+  agent-steering 4 / subagent-view 5 / real-model-pr 8），全部有判别力、0 跳过。
+
 ### 修复（harness 短板收尾：请求形状可关 / 交互输入不进缓存 / 进度检查层；2026-09-19）
 
 对照 `AGENT_TOOL_ARCH_REVIEW_2026-09-15` 与探针审计的短板表，逐条核对后修掉仍成立的三条：

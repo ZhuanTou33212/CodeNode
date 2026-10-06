@@ -143,6 +143,7 @@ function defaultManifest(doc) {
     createdAt: (doc && doc.createdAt) || now,
     modifiedAt: now,
     generator: GENERATOR,
+    ...(doc && doc.template ? { template: doc.template } : {}),
   };
 }
 

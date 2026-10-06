@@ -238,6 +238,7 @@ function collectData(dirs, marker) {
   }
 
   // 工程文件解码校验（真实的 .cnode 解码器）
+  /** @type {{path: string, exists: boolean, decodeOk: boolean|null, markerHit: boolean, warnings?: string[], error?: string}} */
   let projectFileCheck = { path: projectFile, exists: exists(projectFile), decodeOk: null, markerHit: false };
   if (projectFileCheck.exists) {
     try {
@@ -317,6 +318,10 @@ function summarizeConfig(projectRoot) {
     apiKeySet: !!cfg.apiKey,
     maxTokens: cfg.maxTokens,
     reasoningEffort: cfg.reasoningEffort,
+    // S13：接的是哪一档协议（openai / anthropic / gemini + 端点风格），排障第一眼要看这个
+    protocol: cfg.protocol,
+    endpoint: cfg.endpoint,
+    auth: cfg.auth,
     toolsEnabled: !!(cfg.tools && cfg.tools.toolsEnabled),
     ragEnabled: !!(cfg.rag && cfg.rag.enabled),
     limits: cfg.limits || null,
@@ -368,7 +373,7 @@ function runSelfTest(options = {}) {
     appId: pkg.build ? pkg.build.appId || null : null,
     commit: gitCommit(REPO_ROOT),
     startedAt,
-    finishedAt: null,
+    finishedAt: /** @type {string|null} */ (null),
     platform: process.platform,
     arch: process.arch,
     electron: process.versions.electron || null,
@@ -379,9 +384,9 @@ function runSelfTest(options = {}) {
     marker,
     markerProvided: !!(options.marker || flagValue(argv, MARKER_FLAG) || process.env.CODENODE_SELFTEST_MARKER),
     expectVersion: expectVersion || null,
-    seed: null,
-    data: null,
-    config: null,
+    seed: /** @type {any} */ (null),
+    data: /** @type {any} */ (null),
+    config: /** @type {any} */ (null),
     checks: {},
     warnings,
   };
@@ -408,11 +413,13 @@ function runSelfTest(options = {}) {
       && result.data.markerHits.projectFile;
     checks.versionMatch = expectVersion ? pkg.version === expectVersion : true;
 
-    if (!checks.modelsConfigReadable) warnings.push('未找到 models.json（首次运行时应用会自动初始化，或本次为纯 verify 模式）');
+    if (result.data.modelsConfig.error) warnings.push('模型配置不可读：' + result.data.modelsConfig.error);
+    else if (!checks.modelsConfigReadable) warnings.push('未找到 models.json（首次运行时应用会自动初始化，或本次为纯 verify 模式）');
     if (result.markerProvided && !checks.markerIntact) warnings.push('种子标记在部分数据中丢失，升级/回滚可能损坏用户数据');
     if (expectVersion && !checks.versionMatch) warnings.push('程序版本与期望不一致：实际 ' + pkg.version + '，期望 ' + expectVersion);
 
     result.ok = checks.projectRootExists
+      && !result.data.modelsConfig.error
       && checks.versionMatch
       && (result.markerProvided ? checks.markerIntact : true);
   } catch (error) {

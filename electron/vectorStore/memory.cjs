@@ -9,8 +9,7 @@
  *   scoreCandidates(q, cand, emb) 查询向量 vs 候选块向量的余弦
  *   stats() / close()
  *
- * 行为与重构前 LocalRagIndex 内联实现完全一致：local 提供方按块记忆化，
- * API 提供方（openai/ollama）一次批量请求，避免逐块往返。
+ * 块向量按 id 记忆化；远端嵌入按有界批次请求，文件变更时清除旧向量。
  */
 'use strict';
 
@@ -23,6 +22,8 @@ class MemoryVectorStore {
     // 无 ANN：只对 BM25 预筛出的候选打分，全库扫描在内存后端没有收益
     this.prefiltered = true;
     this.vectors = new Map();
+    this.maxVectors = 2048;
+    this.embedBatchSize = 32;
     this.cachedHits = 0;
     this.computed = 0;
   }
@@ -52,17 +53,26 @@ class MemoryVectorStore {
     if (!chunk || !embedder) return null;
     const memo = this.vectors.get(chunk.id);
     if (memo) {
+      this.vectors.delete(chunk.id);
+      this.vectors.set(chunk.id, memo);
       this.cachedHits += 1;
       return memo;
     }
     const [computed] = await embedder.embed([chunk.path + '\n' + chunk.content]);
     if (!computed) return null;
-    this.vectors.set(chunk.id, computed);
+    this.remember(chunk.id, computed);
     this.computed += 1;
     return computed;
   }
 
-  async scoreCandidates(query, candidates, embedder) {
+  remember(id, vector) {
+    this.vectors.delete(id);
+    this.vectors.set(id, vector);
+    while (this.vectors.size > this.maxVectors) this.vectors.delete(this.vectors.keys().next().value);
+  }
+
+  async scoreCandidates(query, candidates, embedder, options) {
+    void options;
     const out = new Map();
     if (!embedder || !Array.isArray(candidates) || !candidates.length) return out;
     if (embedder.isLocal()) {
@@ -74,11 +84,32 @@ class MemoryVectorStore {
       }
       return out;
     }
-    const vectors = await embedder.embed([query, ...candidates.map((chunk) => chunk.path + '\n' + chunk.content)]);
-    const queryVec = vectors[0];
-    for (let i = 0; i < candidates.length; i += 1) {
-      const vec = vectors[i + 1];
-      if (queryVec && vec) out.set(candidates[i].id, Math.max(0, cosine(queryVec, vec)));
+    const [queryVec] = await embedder.embed([query]);
+    if (!queryVec) return out;
+    for (let start = 0; start < candidates.length; start += this.embedBatchSize) {
+      const batch = candidates.slice(start, start + this.embedBatchSize);
+      const cached = new Map(batch.filter((chunk) => this.vectors.has(chunk.id))
+        .map((chunk) => [chunk.id, this.vectors.get(chunk.id)]));
+      const missing = batch.filter((chunk) => !cached.has(chunk.id));
+      if (missing.length) {
+        const vectors = await embedder.embed(missing.map((chunk) => chunk.path + '\n' + chunk.content));
+        if (!Array.isArray(vectors) || vectors.length !== missing.length) {
+          throw new Error('内存向量后端：嵌入返回数量与请求不一致');
+        }
+        for (let i = 0; i < missing.length; i++) {
+          if (!Array.isArray(vectors[i]) || !vectors[i].length) continue;
+          this.remember(missing[i].id, vectors[i]);
+          this.computed += 1;
+        }
+      }
+      for (const chunk of batch) {
+        const vec = cached.get(chunk.id) || this.vectors.get(chunk.id);
+        if (!vec) continue;
+        if (cached.has(chunk.id)) this.cachedHits += 1;
+        this.vectors.delete(chunk.id);
+        this.vectors.set(chunk.id, vec);
+        out.set(chunk.id, Math.max(0, cosine(queryVec, vec)));
+      }
     }
     return out;
   }
@@ -91,6 +122,7 @@ class MemoryVectorStore {
       vectors: this.vectors.size,
       memoHits: this.cachedHits,
       computed: this.computed,
+      maxVectors: this.maxVectors,
     };
   }
 

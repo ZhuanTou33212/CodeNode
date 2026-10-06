@@ -193,7 +193,27 @@ function extractVectorDim(result) {
 
 /** Milvus 表达式里的字符串字面量转义（filter 用）。 */
 function stringLiteral(value) {
-  return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  return JSON.stringify(String(value));
+}
+
+/** 将限定文件拆成有界过滤表达式，避免一个超长 IN 列表拖慢或拒绝查询。 */
+function fileFilterBatches(files) {
+  if (!Array.isArray(files)) return [null];
+  const batches = [];
+  let literals = [];
+  let length = 0;
+  for (const file of new Set(files.map(String))) {
+    const literal = stringLiteral(file);
+    if (literals.length && (literals.length >= 100 || length + literal.length + 2 > 8000)) {
+      batches.push('file in [' + literals.join(', ') + ']');
+      literals = [];
+      length = 0;
+    }
+    literals.push(literal);
+    length += literal.length + 2;
+  }
+  if (literals.length) batches.push('file in [' + literals.join(', ') + ']');
+  return batches;
 }
 
 /** describeIndex 的描述里 index_type/metric_type 放在 params: KeyValuePair[]（也兼容扁平字段）。 */
@@ -439,20 +459,23 @@ class MilvusVectorStore {
     const client = this.ensureClient();
     const ready = await this.ensureCollection();
     let removed = 0;
-    if (deleted.length) {
-      for (const item of deleted) {
+    // 变更文件及失败后重试的文件由调用方列入 deleted；首次写入的新文件无需逐文件删除。
+    const filesToReplace = new Set(deleted.map((item) => item.relative));
+    if (filesToReplace.size) {
+      for (const relative of filesToReplace) {
         const result = assertSuccess(
           await client.delete({
             collection_name: this.collection,
-            filter: 'file == ' + stringLiteral(item.relative),
+            filter: 'file == ' + stringLiteral(relative),
           }),
           'delete'
         );
         const cnt = extractCount(result);
-        removed += cnt || (Array.isArray(item.chunkIds) ? item.chunkIds.length : 0);
+        const prior = deleted.find((item) => item.relative === relative);
+        removed += cnt || (prior && Array.isArray(prior.chunkIds) ? prior.chunkIds.length : 0);
         this.counters.deleted += 1;
       }
-      await this.flush();
+      if (deleted.length || removed > 0) await this.flush();
     }
     let inserted = 0;
     if (upserted.length) {
@@ -475,7 +498,7 @@ class MilvusVectorStore {
   }
 
   /** 检索参数（不传 search_params：显式传会让 SDK 不再注入 topk）。 */
-  buildSearchArgs(queryVec) {
+  buildSearchArgs(queryVec, filter) {
     const args = {
       collection_name: this.collection,
       data: [queryVec],
@@ -487,13 +510,14 @@ class MilvusVectorStore {
       // HNSW 检索参数 ef（候选面宽）：经简单形态的 params 下发，SDK 会 JSON 化后塞进 search_params
       params: usesSearchEf(this.indexType) ? { ef: this.searchEf } : {},
     };
+    if (filter) args.filter = filter;
     // Strong 让「刚写入的向量 / 刚按文件删除的旧块」立即可见（默认 Bounded 时删除有数秒延迟）
     if (this.consistencyLevel) args.consistency_level = this.consistencyLevel;
     return args;
   }
 
   /** 全库 ANN：candidates 参数在 Milvus 后端被忽略（这正是接入向量库的意义）。 */
-  async scoreCandidates(query, candidates, embedder) {
+  async scoreCandidates(query, candidates, embedder, options) {
     const out = new Map();
     if (!embedder) return out;
     await this.ensureCollection();
@@ -503,20 +527,22 @@ class MilvusVectorStore {
     // 1) 主键 id 不会自动出现在命中里，必须显式列入 output_fields（否则只剩 score + 请求字段）；
     // 2) 一旦显式传 search_params，SDK 会原样透传（utils/Search.js 的 buildSearchParams 不再注入 topk），
     //    服务端会以 "topk is required" 报错；这里走 SDK 的简单形态由 SDK 组装 search_params。
-    let result;
-    try {
-      result = assertSuccess(await this.client.search(this.buildSearchArgs(queryVec)), 'search');
-    } catch (error) {
-      const message = (error && error.message) || String(error);
-      // 服务端不接受该一致性级别（如部分云托管只支持 Bounded）：退回服务端默认并记录一次
-      if (!this.consistencyLevel) throw error;
-      this.consistencyFallback = message;
-      this.consistencyLevel = '';
-      result = assertSuccess(await this.client.search(this.buildSearchArgs(queryVec)), 'search');
-    }
-    this.counters.searches += 1;
-    for (const hit of normalizeSearchHits(result)) {
-      out.set(hit.id, Math.max(0, hit.score));
+    for (const filter of fileFilterBatches(options && options.files)) {
+      let result;
+      try {
+        result = assertSuccess(await this.client.search(this.buildSearchArgs(queryVec, filter)), 'search');
+      } catch (error) {
+        const message = (error && error.message) || String(error);
+        // 服务端不接受该一致性级别（如部分云托管只支持 Bounded）：退回服务端默认并记录一次
+        if (!this.consistencyLevel) throw error;
+        this.consistencyFallback = message;
+        this.consistencyLevel = '';
+        result = assertSuccess(await this.client.search(this.buildSearchArgs(queryVec, filter)), 'search');
+      }
+      this.counters.searches += 1;
+      for (const hit of normalizeSearchHits(result)) {
+        out.set(hit.id, Math.max(out.get(hit.id) || 0, Math.max(0, hit.score)));
+      }
     }
     return out;
   }

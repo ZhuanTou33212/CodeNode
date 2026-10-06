@@ -52,6 +52,8 @@ sandbox.setDefaultPolicy(policy);
  * 造一个「够大」的目录树。取消 / 进度类判据都依赖「任务真的持续了一段时间」：
  * 小 fixture（几个文件）上任务可能在 abort 之前就跑完，判据退化成「谁快」的时序竞争
  * —— macOS 上实测因此红过一次（Windows 本地反而稳定通过）。所以这里统一用大目录。
+ * 但**大目录只是必要条件，不充分**：快机器上 600 个文件的扫描仍可能快过 `setTimeout(20)`，
+ * 于是 B / H7 现在改成「收到第一次进度心跳就 abort」的确定性触发（见各自注释）。
  */
 const BIG_DIRS = 12;
 const BIG_FILES_PER_DIR = 50;
@@ -102,8 +104,15 @@ const PAYLOADS = {
   {
     const big = makeBigTree();
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 20);
-    const outcome = await fsRunner.runFsTask('scanProject', { root: big }, { signal: controller.signal });
+    // 确定性取消：**收到第一次进度心跳就 abort**，不再赌「20ms 内任务跑不完」。
+    // 旧写法 `setTimeout(20)` 在快机器上会输给扫描本身：2026-09-22 macOS runner 实测 progress 已经
+    // 到完整数量 600、B2 因此红（Windows 本地稳定通过）。心跳间隔是 fsCore 的 PROGRESS_EVERY=200，
+    // 而 BIG_TOTAL=600，所以第一次心跳必然早于跑完。abort 在 message 处理器里**同步**触发 finish()，
+    // settled 会挡掉随后到达的 done 消息 —— 于是「取消时进度小于总数」成为确定成立的事实。
+    const outcome = await fsRunner.runFsTask('scanProject', { root: big }, {
+      signal: controller.signal,
+      onProgress: () => { if (!controller.signal.aborted) controller.abort(); },
+    });
     check('B1 取消后 outcome.cancelled=true（不重放已取消的任务）',
       outcome.cancelled === true && outcome.ok === false, JSON.stringify({ ok: outcome.ok, cancelled: outcome.cancelled }));
     check('B2 取消时如实回报进度（partial 是数字，且小于完整数量）',
@@ -261,8 +270,11 @@ const PAYLOADS = {
     const bigForCancel = makeBigTree();
     try {
       const controller = new AbortController();
-      setTimeout(() => controller.abort(), 20);
-      const cancelledOutcome = await fsRunner.runFsTask('detectProjectInfo', { root: bigForCancel }, { signal: controller.signal });
+      // 同 B 段：第一次进度心跳即取消，避免「谁快」的时序竞争
+      const cancelledOutcome = await fsRunner.runFsTask('detectProjectInfo', { root: bigForCancel }, {
+        signal: controller.signal,
+        onProgress: () => { if (!controller.signal.aborted) controller.abort(); },
+      });
       check('H7 detectProjectInfo 能被 terminate 取消（不是只能等它跑完）',
         cancelledOutcome.cancelled === true,
         JSON.stringify({ cancelled: cancelledOutcome.cancelled, progress: cancelledOutcome.progress }));

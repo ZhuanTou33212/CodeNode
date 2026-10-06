@@ -12,6 +12,7 @@ class RequestQueue {
     if (this.waiting.length >= this.maxWaiting) { this.totalRejected++; return Promise.reject(new Error('Model request queue full')); }
     const queuedAt = Date.now();
     return new Promise((resolve, reject) => {
+      /** @type {{resolve: Function, reject: Function, signal: AbortSignal|undefined, abort: (() => void)|null, queuedAt: number}} */
       const item = { resolve, reject, signal, abort: null, queuedAt };
       item.abort = () => {
         this.waiting = this.waiting.filter(entry => entry !== item);

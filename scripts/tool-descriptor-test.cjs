@@ -34,7 +34,12 @@ fs.writeFileSync(path.join(root, 'a.txt'), 'CONTENT-A\n');
 const sentinel = 'SENTINEL-DO-NOT-OVERWRITE\n';
 fs.writeFileSync(path.join(root, 'workflow.cnode'), sentinel);
 
-const policyOff = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: os.tmpdir() });
+/**
+ * 两个策略：`policyOff` = 隔离关闭**且网络未切断**（D3 的语义是「网络没被切时不一刀切」，
+ * 所以必须显式给 network: 'inherit' —— 2026-09-21 起出厂口径是 deny，"不写 network" 不再等于不切网）；
+ * `policyNoNet` = 显式切断网络的 best-effort。
+ */
+const policyOff = sandbox.resolvePolicy({ mode: 'off', network: 'inherit' }, { projectRoot: root, userDataDir: os.tmpdir() });
 const policyNoNet = sandbox.resolvePolicy({ mode: 'best-effort', network: 'deny' }, { projectRoot: root, userDataDir: os.tmpdir() });
 sandbox.setDefaultPolicy(policyOff);
 

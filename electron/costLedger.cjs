@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const runStore = require('./runStore.cjs');
 
 const MAX_IN_MEMORY = 5000;
@@ -88,6 +89,8 @@ function costOf(model, usage, prices) {
   const price = prices && prices[model];
   if (!price) return null;
   const { prompt, completion, cached, miss } = tokenParts(usage);
+  // A total with an incomplete input/output split is not an exact bill.
+  if (!usage || Number(usage.total_tokens) > prompt + completion) return null;
   if (Number.isFinite(price.cachedIn)) {
     const missTokens = Number.isFinite(miss) ? Math.min(miss, prompt) : prompt;
     return (missTokens / 1e6) * price.in + (cached / 1e6) * price.cachedIn + (completion / 1e6) * price.out;
@@ -109,7 +112,9 @@ function emptyCounters() {
 function addCounters(target, entry, cost) {
   target.requests += 1;
   if (entry.ok === false) target.errors += 1;
-  if (Number(entry.attempt) > 1) target.retries += Number(entry.attempt) - 1;
+  if (Number(entry.attempt) > 1) {
+    target.retries += entry.meta && entry.meta.perAttempt === true ? 1 : Number(entry.attempt) - 1;
+  }
   target.promptTokens += entry.tokens.prompt;
   target.completionTokens += entry.tokens.completion;
   target.promptCachedTokens += Number(entry.tokens.cached) || 0;
@@ -150,6 +155,7 @@ class CostLedger {
     const tokens = tokenParts(usage);
     const estimated = entry.estimated === true || !usage || tokens.total === 0;
     const record = {
+      recordId: randomUUID(),
       ts: new Date().toISOString(),
       runId: entry.runId ? runStore.normalizeRunId(entry.runId) : this.runId,
       kind,
@@ -159,10 +165,19 @@ class CostLedger {
       ok: entry.ok !== false,
       attempt: Number(entry.attempt) || 1,
       estimated,
+      billingUnknown: entry.billingUnknown === true,
       latencyMs: Number(entry.latencyMs) || 0,
       meta: entry.meta || null,
+      costUsd: /** @type {number|null} */ (null),
+      ...require('./traceTree.cjs').contextFields(entry),
+      turnId: entry.turnId ?? null,
+      toolCallId: entry.toolCallId ?? null,
+      attemptId: entry.attemptId ?? null,
+      actor: entry.actor || entry.meta?.actor || null,
     };
-    record.costUsd = costOf(model, usage, this.prices);
+    // Failed streams may have consumed tokens without a final provider usage frame.
+    // Show the estimate, but never present a guessed charge as a known USD amount.
+    record.costUsd = record.billingUnknown ? null : costOf(model, usage, this.prices);
     this.entries.push(record);
     if (this.entries.length > MAX_IN_MEMORY) this.entries.splice(0, this.entries.length - MAX_IN_MEMORY);
     addCounters(this.totals, record, record.costUsd);
@@ -177,11 +192,26 @@ class CostLedger {
         runStore.appendJsonl(this.file, { type: 'cost', ...record }, this.maxBytes);
         // S8：成本事件也进统一流（按 run 回放时能看到这轮花了多少、缓存命中多少）
         require('./eventBus.cjs').bridge(this.projectRoot, 'cost', {
+          recordId: record.recordId,
+          ts: record.ts,
           runId: record.runId || null,
           call: record.kind || null,
           model: record.model || null,
           costUsd: record.costUsd,
           tokens: record.usage || null,
+          usage: record.usage || null,
+          traceId: record.traceId,
+          spanId: record.spanId,
+          parentSpanId: record.parentSpanId,
+          turnId: record.turnId,
+          toolCallId: record.toolCallId,
+          attemptId: record.attemptId,
+          actor: record.actor,
+          ok: record.ok,
+          attempt: record.attempt,
+          latencyMs: record.latencyMs,
+          estimated: record.estimated,
+          billingUnknown: record.billingUnknown,
         });
       } catch {}
     }
@@ -194,13 +224,48 @@ class CostLedger {
   }
 
   /** 当日（本地时区）聚合：内存账本 + 文件中的历史行（只读，不写）。 */
+  /**
+   * 全部记录（内存 + 文件，按 `ts|kind|model|total` 去重）——**只读**，与 `today()` 同源的读法。
+   * 用途：辅助调用面板（intent / compression 的请求数、输入、输出、净节省）。
+   * @returns {Array<any>}
+   */
+  records() {
+    /** @type {Array<any>} */
+    const out = [];
+    const seen = new Set();
+    const push = (entry) => {
+      if (!entry) return;
+      const key = entry.recordId || entry.ts + '|' + entry.kind + '|' + entry.model + '|' + ((entry.tokens || {}).total);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(entry);
+    };
+    for (const entry of this.entries) push(entry);
+    if (this.file && fs.existsSync(this.file)) {
+      try {
+        for (const line of fs.readFileSync(this.file, 'utf8').split(/\r?\n/)) {
+          if (!line.trim()) continue;
+          let entry;
+          try {
+            entry = JSON.parse(line);
+          } catch {
+            continue; // 容忍损坏行
+          }
+          if (entry.type !== 'cost') continue;
+          push(entry);
+        }
+      } catch {}
+    }
+    return out;
+  }
+
   today(now = new Date()) {
     const day = now.toISOString().slice(0, 10);
     const counters = emptyCounters();
     const seen = new Set();
     const fromMemory = (entry) => {
       if (!String(entry.ts || '').startsWith(day)) return;
-      seen.add(entry.ts + '|' + entry.kind + '|' + entry.model + '|' + entry.tokens.total);
+      seen.add(entry.recordId || entry.ts + '|' + entry.kind + '|' + entry.model + '|' + entry.tokens.total);
       addCounters(counters, entry, entry.costUsd);
     };
     for (const entry of this.entries) fromMemory(entry);
@@ -216,7 +281,7 @@ class CostLedger {
             continue; // 容忍损坏行
           }
           if (entry.type !== 'cost' || !String(entry.ts || '').startsWith(day)) continue;
-          const key = entry.ts + '|' + entry.kind + '|' + entry.model + '|' + (entry.tokens || {}).total;
+          const key = entry.recordId || entry.ts + '|' + entry.kind + '|' + entry.model + '|' + (entry.tokens || {}).total;
           if (seen.has(key)) continue;
           seen.add(key);
           fromMemory(entry);

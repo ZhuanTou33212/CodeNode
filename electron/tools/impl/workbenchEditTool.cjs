@@ -362,7 +362,7 @@ function buildSummary(args) {
 function register(registry) {
   registry.register(
     'workbench_edit',
-    '统一的工作台节点编辑工具：创建、编辑、连线全部用这一个工具完成，不需要再用 create_nodes / workbench_connect。' +
+    '统一的工作台节点编辑工具：创建、编辑、连线全部用这一个工具完成。' +
       '强烈建议用批量参数 operations=[{action, ...}, {action, ...}, ...] 一次提交全部节点变更：' +
       'action 支持 create(新建，name/type/count/prompt/objectName/connect串联)、rename(nodeId,name)、set_prompt(nodeId,value)、' +
       'set_status(nodeId,value)、set_category/set_goal/move/delete(nodeId)、duplicate、connect(sourceId,targetId 或 connections 批量)、' +
@@ -419,6 +419,8 @@ function register(registry) {
     async (context, args) => {
       const { created, affected, errors } = buildSummary(args);
       const ops = Array.isArray(args.operations) && args.operations.length ? args.operations : null;
+      const reviewLib = require('../canvasChangeReview.cjs');
+      const before = reviewLib.graphSnapshot(context.model());
       let applied = false;
       try {
         applied = await context.mutateWorkbench((model) => {
@@ -435,6 +437,7 @@ function register(registry) {
         return AgentToolResult.error('workbench_edit 执行失败：' + ((e && e.message) || e));
       }
       if (!applied && !errors.length) return AgentToolResult.error('工作台不可用（无变更应用）');
+      const review = reviewLib.canvasChangeReview(before, reviewLib.graphSnapshot(context.model()));
       const parts = [];
       if (created.length) parts.push('新建 ' + created.length + ' 个节点: ' + created.join(', '));
       if (affected.length) parts.push('操作 ' + affected.length + ' 项: ' + affected.join(', '));
@@ -446,15 +449,16 @@ function register(registry) {
       const stored = storeAffectedScalars(context, created, affected);
       if (stored > 0) summary += '；节点属性已入本地标量库（' + stored + ' 条）';
       if (errors.length) {
-        return AgentToolResult.ok('部分操作失败：' + errors.join('；') + '。' + summary, { created, affected, errors, applied });
+        return AgentToolResult.ok('部分操作失败：' + errors.join('；') + '。' + summary, { created, affected, errors, applied, review });
       }
-      return AgentToolResult.ok(summary, { created, affected, applied });
+      return AgentToolResult.ok(summary, { created, affected, applied, review });
     }
   );
 
   // S7：workbench_edit 是画布的主要写入口 —— 声明为需要用户批准（令牌由 ApprovalService 签发，
   // 模型在参数里自填 confirmed 之类字段会被注册表剥离，不可能自己批准自己）。
   registry.declareContract('workbench_edit', { requiresConfirmation: 'WRITE' });
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["workbench_edit"]);
 }
 
 /** 把 created/affected 中的真实节点 id 对应的完整属性写入本地标量。 */

@@ -15,6 +15,7 @@ interface ProjectManifestDto {
   name?: string;
   createdAt?: string;
   modifiedAt?: string;
+  template?: { kind: 'workflow'; tools: string[]; models: string[]; paths: string[]; sourceProject?: string };
 }
 
 interface ProjectPayloadDto {
@@ -23,6 +24,9 @@ interface ProjectPayloadDto {
   manifest?: ProjectManifestDto;
   canvases?: {
     sessions?: unknown[];
+    messages?: unknown[];
+    memoryConversationId?: string;
+    memoryTaskEpoch?: number;
   };
   checkpoints?: unknown[];
 }
@@ -33,6 +37,9 @@ interface ProjectLoadDto {
   manifest?: ProjectManifestDto;
   canvases?: {
     sessions?: unknown[];
+    messages?: unknown[];
+    memoryConversationId?: string;
+    memoryTaskEpoch?: number;
   };
   checkpoints?: unknown[];
   warnings?: string[];
@@ -55,6 +62,7 @@ interface ProjectExtensionDto {
   description?: string;
   enabled?: boolean;
   source?: string;
+  contract?: { explicit: boolean; outputSchema: boolean; readOnly: boolean; timeoutMs: number | null };
 }
 
 interface AgentToolSpecDto {
@@ -89,21 +97,54 @@ interface ModelSpecDto {
   apiBase?: string;
   apiKey?: string;
   apiKeySet?: boolean;
+  apiKeyPreview?: string;
+  apiKeyError?: boolean;
   contextWindow: number;
   priceInput: number;
   priceInputHit: number;
   priceOutput: number;
   supportsEffort: boolean;
+  effortLevels?: string[];
+  defaultEffort?: string;
   /** 是否支持图片输入（多模态） */
   vision?: boolean;
   enabled?: boolean;
 }
 
+interface WorkflowStateDto {
+  revision: number;
+  graphDigest: string;
+  completed: string[];
+  skipped: string[];
+  selectedInputs: Record<string, { id: string; output: string }[]>;
+  outputs: Record<string, string>;
+  attempts: Record<string, number>;
+  reviews: Record<string, string>;
+  inputs: Record<string, string>;
+  pending: Array<{ id: string; nodeId: string; label: string; active: boolean }>;
+  hasHistory: boolean;
+  complete: boolean;
+  order: string[];
+}
+
+interface WorkflowGraphDto {
+  nodes: Array<{ id: string; type: string; data: Record<string, unknown> }>;
+  edges: Array<{ source: string; target: string; sourceHandle?: string; targetHandle?: string; data?: unknown }>;
+}
+
 interface CodenodeApi {
+  workflowState: (root: string, workflowId: string, request: {
+    action: 'read' | 'prepare' | 'settle' | 'restart'; graph: WorkflowGraphDto;
+    expectedRevision?: number; nodeId?: string; reviewedAttemptIds?: string[];
+    attemptId?: string; ok?: boolean; output?: string;
+  }) => Promise<{ ok: boolean; error?: string; needsReview?: boolean; attemptId?: string; state?: WorkflowStateDto }>;
+  workflowExecute: (root: string, workflowId: string, request: {
+    graph: WorkflowGraphDto; nodeId: string; expectedRevision: number; legacyRecovery?: boolean;
+  }) => Promise<{ ok: boolean; executionOk?: boolean; output?: string; error?: string; needsReview?: boolean; state?: WorkflowStateDto }>;
   saveGraph: (payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   openGraph: () => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   chooseProject: () => Promise<{ ok: boolean; root?: string }>;
-  createProject: () => Promise<{ ok: boolean; filePath?: string; root?: string }>;
+  createProject: () => Promise<{ ok: boolean; filePath?: string; root?: string; error?: string }>;
   listProject: (root: string) => Promise<{ ok: boolean; files?: ProjectFileDto[]; error?: string }>;
   readProjectFile: (
     root: string,
@@ -146,10 +187,15 @@ interface CodenodeApi {
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
     ragEnabled: boolean;
+    rag?: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean; bm25K1: number; bm25B: number; vectorWeight: number };
     models?: ModelSpecDto[];
     activeModelId?: string | null;
   }>;
-  modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null }>;
+  ragCheck: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
+  ragSave: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
+  modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
+  modelsDiscover: (provider: string, apiKey: string, options?: { apiBase?: string; modelId?: string }) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; apiKeyPreview?: string; error?: string }>;
+  modelsConnect: (ticket: string, selectedId: string) => Promise<{ ok: boolean; error?: string }>;
   modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsActive: (id: string) => Promise<{ ok: boolean; activeId?: string | null; error?: string }>;
@@ -164,15 +210,28 @@ interface CodenodeApi {
     status: string;
     /** 终态细分：LIMIT_REACHED（跑到上限）与 FAILED 都写 status='error'，靠它区分 */
     state?: string | null;
+    outcome?: { state: string; kind: string; reason: string | null; limitKind: string | null } | null;
+    limitKind?: string | null;
+    stopReason?: string | null;
+    stateHistoryValid?: boolean | null;
+    stateHistoryIssues?: { index: number; type: string; [key: string]: unknown }[];
     startedAt: string | null;
     finishedAt: string | null;
     eventCount: number;
   }>>;
+  agentFeedback: (root: string, payload: { verdict: 'accept' | 'reject' | 'retry' | 'report'; content: string; input?: string; correction?: string; sessionId?: string; runId?: string; role?: string; tools?: unknown[] }) => Promise<{ ok: boolean; duplicate?: boolean; error?: string }>;
+  agentFeedbackExport: (root: string, options?: { includeReviewed?: boolean }) => Promise<{ ok: boolean; count?: number; dataset?: unknown[]; error?: string }>;
+  agentFeedbackReview: (root: string, id: string, expectedOutput: string, reviewer?: string) => Promise<{ ok: boolean; error?: string }>;
   agentResumePlan: (root: string | null, runId: string) => Promise<{
     ok: boolean;
     mode?: 'complete' | 'auto' | 'review' | 'unknown';
     requiresReview?: boolean;
     runId?: string;
+    state?: string | null;
+    stateHistoryValid?: boolean | null;
+    stateHistoryIssues?: { index: number; type: string; [key: string]: unknown }[];
+    limitKind?: string | null;
+    stopReason?: string | null;
     prompt?: string;
     model?: string | null;
     nodeId?: string | null;
@@ -183,6 +242,13 @@ interface CodenodeApi {
     completedSteps?: { tool: string; idemKey: string | null; at: string | null }[];
     skippedByLedger?: { tool: string; idemKey: string | null; reason: string }[];
     unknownEffects?: { tool: string; effect: string }[];
+    checkpointCount?: number;
+  messageCheckpointCount?: number;
+  }>;
+  agentReadPlan: (root: string | null, sessionId: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    plan: { sessionId?: string; runId?: string; updatedAt?: string; items: { id?: string; step: string; acceptanceCriteria?: string; status: string; evidenceCallIds?: string[]; reason?: string; dependsOn?: string[]; ownerTaskId?: string }[] } | null;
   }>;
   agentMetrics: (root: string | null) => Promise<{
     ok: boolean;
@@ -206,6 +272,68 @@ interface CodenodeApi {
     };
     runs?: unknown[];
   }>;
+  /** §4.2：Run 级文件回滚 —— 只读计划（逐项 restore/delete/skip + 原因 + 冲突标记）。 */
+  rollbackPlan: (
+    root: string | null,
+    runId: string,
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    runId: string;
+    items: {
+      path: string;
+      tools: string[];
+      action: 'restore' | 'delete' | 'skip';
+      restorable: boolean;
+      reason?: string;
+      conflict: boolean;
+      bytes?: number | null;
+    }[];
+    summary: { restore: number; delete: number; skip: number; conflict: number };
+  }>;
+  /** §4.2：执行回滚（force=true 才会覆盖「本 Run 之后被外部改过」的文件）。 */
+  rollbackApply: (
+    root: string | null,
+    runId: string,
+    options?: { force?: boolean },
+  ) => Promise<{
+    ok: boolean;
+    runId: string;
+    applied: { path: string; action: string; verified?: boolean }[];
+    refused: { path: string; reason: string }[];
+    skipped: { path: string; reason: string }[];
+    summary: { applied: number; refused: number; skipped: number; conflicts: number };
+    error?: string;
+  }>;
+  /** §4.2：子代理任务视图（跨 run 可查；重启后仍在）。 */
+  subagentViews: (
+    root: string | null,
+    options?: { maxRuns?: number; maxTasksPerRun?: number },
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    runs: {
+      runId: string;
+      updatedAt: string | null;
+      ok: boolean;
+      error: string | null;
+      tasks: {
+        taskId: string;
+        role: string | null;
+        objective: string;
+        status: string | null;
+        summary: string;
+        error: string | null;
+        startedAt: string | null;
+        finishedAt: string | null;
+      }[];
+    }[];
+  }>;
+  /** §4.2：运行中插话（steering）—— 成功才会进请求体；已结束的 run 会被明确拒绝。 */
+  steerAgent: (
+    requestId: string,
+    text: string,
+  ) => Promise<{ accepted: boolean; reason?: string; pending?: number; error?: string }>;
   /** S8：按 run 回放统一事件流（时间线 + 摘要）。 */
   replayEvents: (
     root: string | null,
@@ -246,10 +374,16 @@ interface CodenodeApi {
     error?: string;
     replacementRunId?: string;
   }>;
+  agentTimeTravel: (root: string, sourceRunId: string, branchRunId: string, checkpointIndex?: number) => Promise<{
+    ok: boolean; runId?: string; parentRunId?: string; checkpointIndex?: number; requiresReview?: boolean; messageCount?: number; error?: string;
+  }>;
   agentChat: (payload: {
     projectRoot: string | null;
     resumeRunId?: string;
     resumeForce?: boolean;
+    sessionId?: string;
+    memoryConversationId?: string;
+    memoryTaskEpoch?: number;
     prompt: string;
     history?: { role: string; content: string }[];
     /** 图片附件（多模态）：仅当所选模型 vision=true 时允许 */
@@ -264,6 +398,11 @@ interface CodenodeApi {
     projectFile?: string;
     /** /compact（照 Codex 的手动压缩命令）：无视窗口阈值，立刻做一次上下文压缩 */
     forceCompact?: boolean;
+    /**
+     * #7：本条请求自己的中止信号。并发下「停止」必须能精确到某一条请求，
+     * 而不是靠一个会被覆盖的全局 requestId。
+     */
+    signal?: AbortSignal;
   }) => Promise<{
     ok: boolean;
     aborted?: boolean;
@@ -280,8 +419,11 @@ interface CodenodeApi {
       invalid: string[];
     };
     error?: string;
+    state?: string | null;
+    outcome?: { state: string; kind: string; reason: string | null; limitKind: string | null };
     /** 交付形态：'length_truncated' = 回答触到长度上限被截断（不是完整答案） */
     stopReason?: string | null;
+    limitKind?: string;
     /** 流式中断后整轮重发的次数（网络/代理中途掉线时 > 0） */
     streamRestarts?: number;
     document?: { root?: unknown };
@@ -289,6 +431,29 @@ interface CodenodeApi {
     alerts?: AlertDto[];
     resumedFrom?: string;
     needsReview?: boolean;
+    /**
+     * #21：`needsReview` 时后端**已经**把续跑计划回传了（`electron/ipc/agent.cjs:218-220`
+     * 返回 `{ok:false, needsReview:true, plan}`）。修复前类型里没有这个字段，前端连读都读不到，
+     * 于是 `reason` / `warning` / `unknownEffects` / `pendingSteps` 被整条丢弃 ——
+     * 要求用户「人工复核」却不告诉他复核什么。
+     */
+    plan?: {
+      ok?: boolean;
+      runId?: string;
+      mode?: 'complete' | 'auto' | 'review' | 'unknown' | string;
+      reason?: string | null;
+      warning?: string | null;
+      error?: string | null;
+      requiresReview?: boolean;
+      prompt?: string;
+      /** 结果未知的外部副作用（工具名 + effect），续跑时系统不会自动重放 */
+      unknownEffects?: { tool?: string; effect?: string }[];
+      /** 仍待执行的步骤 */
+      pendingSteps?: { tool?: string; effect?: string; idemKey?: string | null }[];
+      completedSteps?: { tool?: string; idemKey?: string | null; at?: string | null }[];
+      /** 幂等账本判定「已提交、续跑时跳过」的写操作 */
+      skippedByLedger?: { tool?: string; idemKey?: string | null; reason?: string }[];
+    } | null;
     /** 达到迭代/工具调用上限时的结构化收尾（第 2 项）：已完成/失败/涉及文件/是否可续跑 */
     wrapUp?: {
       stopReason?: string;

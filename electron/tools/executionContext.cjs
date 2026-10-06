@@ -28,11 +28,15 @@
  */
 'use strict';
 
+const { GraphModel } = require('./GraphModel.cjs');
+// 套娃调用所需的底层引用留在模块私有表里，不暴露给工具。
+const executionContextBases = new WeakMap();
+
 /** 所有能力都可用的方法（跨切面） */
 const COMMON_METHODS = Object.freeze([
-  'projectRoot', 'model', 'runId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
+  'projectRoot', 'model', 'runId', 'sourceMessageId', 'taskId', 'role', 'readOnly', 'signal', 'cancelled', 'fsWorkerEnabled',
   'confirm', 'notifyState', 'setStateNotifier', 'conversationHistory', 'ragConfig',
-  'checkpointMessages', 'beginSideEffect', 'commitSideEffect', 'failSideEffect',
+  'checkpointMessages', 'beginSideEffect', 'commitSideEffect', 'failSideEffect', 'skillMaxChars', 'webSearchConfig',
 ]);
 
 /**
@@ -56,6 +60,18 @@ const GATED_METHODS = Object.freeze({
   sandbox: { caps: ['shell.execute'], fallback: null },
   askUser: { caps: ['ui.interact'], fallback: '' },
   fork: { caps: ['subagent.delegate'], fallback: null },
+  /**
+   * 动作级意图复核（A2）：registry 的**门 1.5** 靠它给副作用动作再判一次「有没有授权」。
+   * 只授给「能改动工作区 / 执行命令 / 保存工程」的动作；未授予时 fallback null = 不复核
+   * （只读动作本来就不需要复核，见门 1.5 的 mutatesWorkspace 条件）。
+   */
+  /**
+   * P0-3：把 `ui.interact` 也纳入（界面动作是**外部副作用**，与 `intent.EXTERNAL_CAPABILITIES` 同口径）。
+   * 它自带强制确认 → 取舍判据会得出「已经必问 → 不问」，所以**不会**多花调用；
+   * 但若用户给它配了免打扰规则（本来会放行），分类收紧就能真的把它拉回「问一次」——
+   * 那正是这套判据唯一想覆盖的场景，不能因为 caps 漏了而静默失效。
+   */
+  intentReview: { caps: ['workspace.write', 'project.save', 'shell.execute', 'ui.interact'], fallback: null },
 });
 
 /** 旧方法名与「新面对象」重名的三个：做成可调用对象（旧调用 + `.方法`） */
@@ -98,13 +114,37 @@ function safeCall(fn, fallback) {
  * 组装一次工具调用的执行上下文。
  * @param {any} source 底层 AgentToolContext（或另一个 ExecutionContext —— 会先解包，支持套娃调用）
  * @param {any} descriptor 该工具的契约
- * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string }} [callInfo]
+ * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string, traceContext?: any }} [callInfo]
  */
 function createExecutionContext(source, descriptor, callInfo) {
-  const base = (source && source.__context) || source || {};
+  const base = (source && executionContextBases.get(source)) || source || {};
   const info = callInfo || {};
   const toolName = (descriptor && descriptor.name) || '';
   const capability = (descriptor && descriptor.requiredCapability) || 'workspace.read';
+  const readOnlyTool = !!(descriptor && descriptor.readOnly === true && descriptor.mutatesWorkspace !== true);
+  let modelSnapshot;
+  let historySnapshot;
+  const modelForTool = () => {
+    if (!readOnlyTool) return safeCall(() => base.model(), null);
+    if (modelSnapshot !== undefined) return modelSnapshot;
+    const model = safeCall(() => base.model(), null);
+    try {
+      modelSnapshot = model && model.doc ? new GraphModel(JSON.parse(JSON.stringify(model.doc))) : null;
+    } catch {
+      modelSnapshot = null;
+    }
+    return modelSnapshot;
+  };
+  const historyForTool = () => {
+    if (!readOnlyTool) return safeCall(() => base.conversationHistory(), []);
+    if (historySnapshot !== undefined) return historySnapshot;
+    try {
+      historySnapshot = JSON.parse(JSON.stringify(safeCall(() => base.conversationHistory(), [])));
+    } catch {
+      historySnapshot = [];
+    }
+    return historySnapshot;
+  };
 
   // 能力蕴含：写蕴含读、save 蕴含写、shell 蕴含写……（读是能力下限，不构成提权）
   const granted = new Set();
@@ -133,15 +173,25 @@ function createExecutionContext(source, descriptor, callInfo) {
   const allow = (...caps) => caps.some((cap) => granted.has(cap));
 
   const runId = safeCall(() => base.runId(), '') || '';
+  const sourceMessageId = safeCall(() => base.sourceMessageId(), '') || '';
+  const taskId = safeCall(() => base.taskId(), '') || '';
   const turnId = info.turnId == null ? null : String(info.turnId);
   const toolCallId = info.toolCallId == null ? null : String(info.toolCallId);
   const attemptId = info.attemptId == null ? (toolCallId ? toolCallId + '#1' : null) : String(info.attemptId);
+  const networkDenied = safeCall(() => {
+    const policy = typeof base.sandbox === 'function' ? base.sandbox() : null;
+    return !!(policy && policy.network === 'deny');
+  }, false);
 
   const ctx = {};
+  const traceContext = info.traceContext || safeCall(() => base.traceContext(), null);
+  ctx.traceContext = () => traceContext;
 
   // ---- 面 1：标识与运行信息（每个动作都能带回 runId/turnId/toolCallId/attemptId） ----
   ctx.exec = Object.freeze({
     runId,
+    sourceMessageId,
+    taskId,
     turnId,
     toolCallId,
     attemptId,
@@ -150,15 +200,16 @@ function createExecutionContext(source, descriptor, callInfo) {
     readOnly: safeCall(() => base.readOnly(), false) === true,
     capability,
     capabilities: [...granted].sort(),
+    networkDenied,
     describe: () => ({ runId, turnId, toolCallId, attemptId, tool: toolName, capability }),
   });
 
   // ---- 面 2：项目 ----
   ctx.project = {
     root: () => safeCall(() => base.projectRoot(), '.'),
-    model: () => safeCall(() => base.model(), null),
+    model: modelForTool,
     ragConfig: () => safeCall(() => base.ragConfig(), {}),
-    conversationHistory: () => safeCall(() => base.conversationHistory(), []),
+    conversationHistory: historyForTool,
     scalars: () => (allow('workspace.read', 'workspace.write') ? safeCall(() => base.scalars(), null) : deny('scalars') || null),
     queryScalars: (query) => (allow('workspace.read', 'workspace.write') ? safeCall(() => base.queryScalars(query), []) : deny('queryScalars') || []),
     storeScalars: (records) => (allow('workspace.read', 'workspace.write') ? safeCall(() => base.storeScalars(records), 0) : deny('storeScalars') || 0),
@@ -173,8 +224,8 @@ function createExecutionContext(source, descriptor, callInfo) {
 
   // ---- 面 3：审批（所有工具都能请求确认；提问属于 ui.interact 能力） ----
   ctx.approval = {
-    confirm: (level, what, detail) => base.confirm(level, what, detail),
-    askUser: (question, options) => (allow('ui.interact') ? base.askUser(question, options) : Promise.resolve(deny('askUser') || '')),
+    confirm: (level, what, detail) => base.confirm(level, what, detail, { toolCallId, attemptId }),
+    askUser: (question, options) => (allow('ui.interact') ? base.askUser(question, options, { toolCallId, attemptId }) : Promise.resolve(deny('askUser') || '')),
     // S7：令牌化审批 —— 令牌由 ApprovalService 服务端签发（绑定 capability/scope/toolCallId/有效期，
     // 单次有效）；工具参数里的自填审批字段一律不被采信（注册表在校验前剥离）。
     request: (req) => (typeof base.approval === 'function' ? base.approval().request(req) : Promise.resolve(null)),
@@ -182,6 +233,16 @@ function createExecutionContext(source, descriptor, callInfo) {
     available: () => (typeof base.approval === 'function' ? base.approval().available() : false),
     revoke: (id) => (typeof base.approval === 'function' ? base.approval().revoke(id) : false),
     service: () => (typeof base.approval === 'function' ? base.approval() : null),
+    /**
+     * P0-3：**纯查询**预览（不弹窗、不签发令牌、无副作用）—— 动作级复核靠它判断
+     * 「不带意图识别时这次审批会放行还是会问用户」，从而决定值不值得花一次模型调用。
+     * 拿不到服务（无审批通道）时按「会问用户」返回：宁可少花调用，不假装会放行。
+     */
+    preview: (req) => {
+      const svc = typeof base.approval === 'function' ? base.approval() : null;
+      if (svc && typeof svc.preview === 'function') return svc.preview(req);
+      return { available: false, ruleAllows: false, wouldAsk: true, rule: null, scope: null };
+    },
   };
 
   // ---- 面 4/6/5：审计 / 检查点 / 界面（与旧方法同名 → 可调用对象，两套同时可用） ----
@@ -194,7 +255,7 @@ function createExecutionContext(source, descriptor, callInfo) {
   const checkpointHybrid = (type, payload) => safeCall(() => base.checkpoint(type, payload), null);
   checkpointHybrid.toolIntent = (payload) => safeCall(() => base.checkpoint('tool_intent', payload), null);
   checkpointHybrid.toolCommit = (payload) => safeCall(() => base.checkpoint('tool_commit', payload), null);
-  checkpointHybrid.messages = (messages, reason) => safeCall(() => base.checkpointMessages(messages, reason), null);
+  checkpointHybrid.messages = (messages, reason, controlState) => safeCall(() => base.checkpointMessages(messages, reason, controlState), null);
   ctx.checkpoint = checkpointHybrid;
 
   const uiHybrid = (action, args) => (allow('ui.interact') ? base.ui(action, args) : Promise.resolve(deny('ui') || false));
@@ -217,7 +278,7 @@ function createExecutionContext(source, descriptor, callInfo) {
   // ---- 面 8：追踪 ----
   ctx.trace = Object.freeze({
     runId,
-    taskId: safeCall(() => base.taskId(), '') || '',
+    taskId,
     role: safeCall(() => base.role(), 'supervisor'),
     note: (event, data) => safeCall(() => base.audit(JSON.stringify({
       kind: 'trace', event, data: data == null ? null : data, runId, turnId, toolCallId, attemptId, tool: toolName,
@@ -227,19 +288,42 @@ function createExecutionContext(source, descriptor, callInfo) {
   // ---- 双轨并存：旧方法名按能力转发（deprecated，迁移中的工具仍可用） ----
   for (const method of COMMON_METHODS) {
     if (HYBRID_METHODS.includes(method)) continue;
+    if (method === 'model') {
+      ctx.model = modelForTool;
+      continue;
+    }
+    if (method === 'conversationHistory') {
+      ctx.conversationHistory = historyForTool;
+      continue;
+    }
     if (typeof base[method] !== 'function') continue;
     ctx[method] = (...args) => base[method](...args);
+  }
+  // update_plan needs the successful tool-call IDs to ground completed steps.
+  // Keep this history out of every other tool's capability surface.
+  if (toolName === 'update_plan') {
+    if (typeof base.toolEvidence === 'function') ctx.toolEvidence = () => base.toolEvidence();
+    if (typeof base.planSessionId === 'function') ctx.planSessionId = () => safeCall(() => base.planSessionId(), '');
+    if (typeof base.planOwnerExists === 'function') ctx.planOwnerExists = (taskId) => safeCall(() => base.planOwnerExists(taskId), false) === true;
+  }
+  // Only retrieval needs access to the request budget for embeddings/reranking.
+  if (toolName === 'retrieve_context' && typeof base.modelRuntime === 'function') {
+    ctx.modelRuntime = () => ({ ...base.modelRuntime(), traceContext,
+      traceProjectRoot: safeCall(() => base.projectRoot(), null) });
   }
   for (const [method, rule] of Object.entries(GATED_METHODS)) {
     if (HYBRID_METHODS.includes(method)) continue;
     if (typeof base[method] !== 'function') continue;
+    if (method === 'fork') {
+      ctx.fork = (overrides) => allow(...rule.caps)
+        ? base.fork({ ...(overrides || {}), traceContext }) : (deny(method), rule.fallback);
+      continue;
+    }
     ctx[method] = (...args) => (allow(...rule.caps) ? base[method](...args) : (deny(method), rule.fallback));
   }
 
-  // 内部指针：registry 对「已经是 ExecutionContext 的上下文」再次包装时会解包，
-  // 保证套娃调用（例如 delegate_task 内部再 execute workbench_edit）始终作用在同一个底层上下文
-  ctx.__context = base;
-  ctx.__descriptor = descriptor || null;
+  // 再次包装时可解包，但工具对象上没有绕开能力检查的底层指针。
+  executionContextBases.set(ctx, base);
   return ctx;
 }
 

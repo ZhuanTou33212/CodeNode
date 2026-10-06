@@ -10,7 +10,7 @@
  *     `projectScan.cjs` 都改成从这里 re-export（对外 API 不变，调用方零改动）。
  *
  * ⚠️ 本文件必须保持**自包含**：只 require 内置模块（fs / path / zlib）或**同样被 asarUnpack 的兄弟文件**
- * （目前只有 `impl/pdfText.cjs`）。worker 相关文件在打包时被
+ * （目前有 `impl/pdfText.cjs` 与 `impl/documentText.cjs`）。worker 相关文件在打包时被
  * `asarUnpack` 到真实文件系统，相对 require 只能解析 unpacked 目录里的兄弟文件 —— 多引一个
  * asar 内的模块就会在**打包版**里 `MODULE_NOT_FOUND`，而开发模式与 CI 都不会报错。
  */
@@ -18,8 +18,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // 同目录下的兄弟模块（同样在 build.asarUnpack 里）；worker 自包含约束见文件头。
 const { extractPdfText } = require('./impl/pdfText.cjs');
+const { extractDocumentText } = require('./impl/documentText.cjs');
 
 /** 扫描文件数硬上限（防止超大目录把结果撑爆） */
 const MAX_SCAN_FILES = 20000;
@@ -39,7 +41,7 @@ const BINARY_EXTS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp', 'tga', 'dds', 'psd', 'ico', 'icns',
   'jar', 'class', 'war', 'zip', 'gz', '7z', 'rar', 'exe', 'dll', 'so', 'dylib', 'a', 'o', 'obj', 'lib',
   'mp3', 'wav', 'ogg', 'flac', 'm4a', 'mp4', 'avi', 'mkv', 'mov', 'webm', 'ttf', 'otf', 'woff', 'woff2', 'eot',
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'db', 'sqlite', 'bin', 'dat',
+  'pdf', 'doc', 'docx', 'docm', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'pptm', 'db', 'sqlite', 'bin', 'dat',
 ]);
 
 /**
@@ -218,7 +220,7 @@ function walkEachFile(root, dir, fileRegex, onFile, shouldStop) {
  * @param {string} dir
  * @param {string} rel
  * @param {{ files: Array, stopped: boolean }} out
- * @param {() => boolean|null} shouldStop
+ * @param {(() => boolean)|null} shouldStop
  * @param {((count: number) => void)|null} onProgress
  */
 function walk(root, dir, rel, out, shouldStop, onProgress) {
@@ -389,6 +391,7 @@ function searchFilesTask(payload) {
   const onProgress = typeof p.onProgress === 'function' ? p.onProgress : null;
   /** @type {string[]} */
   const matches = [];
+  const sourceVersions = Object.create(null);
   let scanned = 0;
   let stopped = false;
   let cancelled = false;
@@ -410,10 +413,12 @@ function searchFilesTask(payload) {
       if (onProgress && scanned % PROGRESS_EVERY === 0) onProgress(scanned);
       if (size > maxFileBytes) return;
       let lines;
+      let sourceHash;
       try {
         const buf = fs.readFileSync(abs);
         if (buf.includes(0)) return;
         lines = buf.toString('utf-8').split('\n');
+        sourceHash = 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
       } catch {
         return;
       }
@@ -421,6 +426,9 @@ function searchFilesTask(payload) {
         if (matches.length >= maxCollect) return;
         if (regex.test(lines[i])) {
           matches.push(relative + ':' + (i + 1) + ': ' + lines[i].trim());
+          if (!sourceVersions[relative]) sourceVersions[relative] = { sha256: sourceHash, ranges: {} };
+          sourceVersions[relative].ranges[i + 1] = 'sha256:' + crypto.createHash('sha256')
+            .update(lines[i].replace(/\r$/, ''), 'utf8').digest('hex');
         }
       }
     },
@@ -437,7 +445,7 @@ function searchFilesTask(payload) {
       return false;
     },
   );
-  return { matches, stopped, cancelled, scanned };
+  return { matches, sourceVersions, stopped, cancelled, scanned };
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +474,7 @@ function readTextFileSafe(filePath, maxBytes) {
   if (buf.includes(0)) return { ok: false, error: '二进制文件不能用 read_file 读取' };
   const text = buf.toString('utf-8');
   if (text.includes('\uFFFD')) return { ok: false, error: '非 UTF-8 文本文件，无法直接读取' };
-  return { ok: true, text };
+  return { ok: true, text, sha256: 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex') };
 }
 
 /**
@@ -481,7 +489,7 @@ function summarizeFile(root, meta) {
     if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
     const read = readTextFileSafe(full);
     if (!read.ok) return null;
-    const lines = read.text.split('\n');
+    const lines = /** @type {string} */ (read.text).split('\n');
     const imports = [];
     const classes = [];
     const functions = [];
@@ -672,14 +680,36 @@ function readPdfTextTask(payload) {
   }
   const parsed = extractPdfText(buf);
   if (!parsed) return { ok: false, cancelled: false, errorKind: 'unreadable' };
-  return { ok: true, cancelled: false, text: parsed.text, printable: parsed.printable };
+  return { ok: true, cancelled: false, text: parsed.text, printable: parsed.printable,
+    sha256: 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex') };
+}
+
+/** 任务 7：在 worker 中读取并解析现代 Office 文档的文字。 */
+function readOfficeTextTask(payload) {
+  const p = payload || {};
+  const file = String(p.path || '');
+  const maxBytes = Number(p.maxBytes) > 0 ? Number(p.maxBytes) : 20 * 1024 * 1024;
+  let buf;
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size > maxBytes) {
+      return { ok: false, cancelled: false, errorKind: 'too-large', limitMb: Math.round(maxBytes / 1048576) };
+    }
+    buf = fs.readFileSync(file);
+  } catch (e) {
+    return { ok: false, cancelled: false, errorKind: 'read-failed', error: '读取失败：' + ((e && e.message) || e) };
+  }
+  const parsed = extractDocumentText(buf, file);
+  if (!parsed) return { ok: false, cancelled: false, errorKind: 'unreadable' };
+  return { ok: true, cancelled: false, text: parsed.text, format: parsed.format, truncated: parsed.truncated,
+    sha256: 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex') };
 }
 
 // 任务结果契约：每个任务的返回值都必须带 `cancelled`（布尔）。
 // runner 的同步/降级分支靠它把「半份结果」提升成 outcome.cancelled —— 缺字段会让调用方
 // 把不完整结果当完整结果交付（本轮就因新任务漏了它被 tsc 拦下）。
 /** worker 支持的任务名（runner 用它做白名单校验） */
-const FS_TASKS = Object.freeze(['scanProject', 'findFiles', 'searchFiles', 'detectProjectInfo', 'analyzeProject', 'readPdfText']);
+const FS_TASKS = Object.freeze(['scanProject', 'findFiles', 'searchFiles', 'detectProjectInfo', 'analyzeProject', 'readPdfText', 'readOfficeText']);
 
 /**
  * 同步执行一个任务（降级路径：worker 不可用时由主线程直接跑，会阻塞事件循环）。
@@ -693,6 +723,7 @@ function runTaskSync(task, payload) {
   if (task === 'detectProjectInfo') return detectProjectInfoTask(payload);
   if (task === 'analyzeProject') return analyzeProjectTask(payload);
   if (task === 'readPdfText') return readPdfTextTask(payload);
+  if (task === 'readOfficeText') return readOfficeTextTask(payload);
   throw new Error('未知文件任务：' + task);
 }
 
@@ -718,6 +749,7 @@ module.exports = {
   detectProjectInfoTask,
   analyzeProjectTask,
   readPdfTextTask,
+  readOfficeTextTask,
   readTextFileSafe,
   summarizeFile,
   buildProjectInfo,

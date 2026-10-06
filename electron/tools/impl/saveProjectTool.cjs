@@ -41,6 +41,7 @@ function register(registry) {
       return AgentToolResult.ok('已保存当前工程到 ' + filePath, { filePath });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["save_project"]);
 }
 
 module.exports = { register };

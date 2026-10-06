@@ -3,6 +3,7 @@
  */
 'use strict';
 
+const approvalRules = require('../../approvalRules.cjs');
 const path = require('path');
 const fs = require('fs');
 const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
@@ -11,12 +12,22 @@ const { isBinaryFileName, shouldSkipDir } = require('../toolFiles.cjs');
 const fsCore = require('../fsCore.cjs');
 const { isSensitivePath, detectLanguage, globToRegExp, readTextFileSafe } = fsCore;
 
+/** 确认框里的内容预览上限（#10）：够认出内容，又不至于把对话框撑爆 */
+const PREVIEW_MAX_CHARS = 1200;
+const PREVIEW_MAX_LINES = 20;
+
 
 /** 解析项目内相对路径；越界返回 null。 */
 function resolveInRoot(root, relative) {
   const resolvedRoot = path.resolve(root);
   const full = path.resolve(resolvedRoot, relative);
   if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
+  /**
+   * 受保护路径（`.codenode/approvals.json` 这类**授权面**文件）：写工具一律拒绝。
+   * 否则提示注入可以让模型自己给自己写白名单 —— 那等于把「人批准」这道门拆掉（2026-09-21）。
+   * 判定放在这一个函数里，所有走 resolveInRoot 的写工具自动继承。
+   */
+  if (approvalRules.isProtectedWriteTarget(resolvedRoot, full)) return null;
   try {
     const realRoot = fs.realpathSync(resolvedRoot);
     let existing = full;
@@ -68,7 +79,7 @@ function resolveFileFuzzy(root, relative) {
   const MAX_WALK = 20000;
   const queue = [''];
   while (queue.length && walked < MAX_WALK) {
-    const relDir = queue.shift();
+    const relDir = queue.shift() || '';
     const absDir = path.join(resolvedRoot, relDir);
     let entries;
     try {
@@ -163,6 +174,29 @@ function sha256OfFile(absPath) {
 }
 
 /**
+ * 确认对话框里的内容摘要（#10）。
+ *
+ * 用户对「要不要写」唯一的判断依据就是确认框里这几行字；只给字节数（旧行为）等于把「确认」
+ * 退化成无条件放行 —— 提示注入只要让模型调 write_file，内容就再也不会被人看到。
+ * 小内容给全文预览；大内容给「字符数 / 行数 / 内容哈希 + 前几行」，既不撑爆对话框，
+ * 又保证用户能认出「这写的是不是我要的东西」。
+ */
+function summarizeContentForConfirm(content) {
+  const text = String(content == null ? '' : content);
+  const lines = text.split('\n');
+  const preview = lines.slice(0, PREVIEW_MAX_LINES).join('\n');
+  if (text.length <= PREVIEW_MAX_CHARS && lines.length <= PREVIEW_MAX_LINES) {
+    return '内容预览：\n' + text;
+  }
+  return (
+    '内容概览：' + text.length + ' 字符 / ' + lines.length + ' 行，sha256=' + sha256OfText(text) + '\n' +
+    '前 ' + Math.min(lines.length, PREVIEW_MAX_LINES) + ' 行预览：\n' +
+    (preview.length > PREVIEW_MAX_CHARS ? preview.slice(0, PREVIEW_MAX_CHARS) + '…' : preview) +
+    '\n…（其余内容未在确认框中展开）'
+  );
+}
+
+/**
  * 乐观并发校验（P3 的另一半）：「我要基于**这一版**内容去写」。
  * @param {string} absPath
  * @param {any} expected `'absent'`（要求文件不存在）或 `sha256:…`（可省前缀）
@@ -184,6 +218,7 @@ function checkExpectedHash(absPath, expected) {
 module.exports = {
   sha256OfText,
   sha256OfFile,
+  summarizeContentForConfirm,
   checkExpectedHash,
   resolveInRoot,
   resolveFileFuzzy,

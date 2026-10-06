@@ -17,8 +17,10 @@
  */
 'use strict';
 
+const { randomUUID } = require('crypto');
 // S7：审批服务（令牌化）—— 令牌只活在内存里，模型无法自填
 const approvalLib = require('./approval.cjs');
+const ruleLib = require('../approvalRules.cjs');
 
 const ConfirmationLevel = { LOW: 'LOW', WRITE: 'WRITE', HIGH: 'HIGH' };
 
@@ -31,6 +33,10 @@ class AgentToolContext {
     // S7：审批服务（懒创建）。显式注入时优先用注入实例（便于同一 run 内共享令牌表）
     this.approvalServiceValue = o.approvalService || null;
     this.approvalTtlMsValue = o.approvalTtlMs || null;
+    /** read_skill 的正文上限（0/未给 = 用工具内默认值）；放在上下文里以便配置与测试注入 */
+    this.skillMaxCharsValue = Number(o.skillMaxChars) > 0 ? Math.floor(Number(o.skillMaxChars)) : 0;
+    /** web_search 的后端配置（未启用时工具根本不注册，这里是「配了才用得上」的那份配置） */
+    this.webSearchConfigValue = o.webSearchConfig || null;
     this.auditLogger = o.audit || null;
     this.workbenchMutator = o.mutateWorkbench || null;
     this.saveAction = o.saveProject || null;
@@ -41,10 +47,16 @@ class AgentToolContext {
     this.conversationSupplier = o.conversationHistory || null;
     this.fileChangeNotifier = o.notifyFileChange || null;
     this.ragConfigValue = o.ragConfig || {};
+    this.modelRuntimeValue = o.modelRuntime || null;
     this.scalarStoreValue = o.scalarStore || null;
     this.undoAction = o.undo || null;
     this.redoAction = o.redo || null;
     this.runIdValue = o.runId || '';
+    this.traceContextValue = o.traceContext || null;
+    this.sourceMessageIdValue = o.sourceMessageId || '';
+    this.planSessionIdValue = o.planSessionId || '';
+    this.planOwnerExistsValue = typeof o.planOwnerExists === 'function' ? o.planOwnerExists : null;
+    this.toolEvidenceValue = [];
     this.taskIdValue = o.taskId || '';
     this.roleValue = o.role || 'supervisor';
     this.readOnlyValue = o.readOnly === true;
@@ -59,6 +71,18 @@ class AgentToolContext {
     this.sideEffectGuardValue = o.sideEffectGuard || null;
     // 断点检查点写入器（runCheckpoint.cjs）；未注入时为无操作
     this.checkpointSink = o.checkpoint || null;
+    /**
+     * 意图识别策略（electron/intent.cjs 的 createIntentPolicy 结果）；未注入时为 null。
+     * **只用于收紧**：它能让审批在命中免打扰规则时仍然弹窗，绝不可能让任何东西被放行。
+     * null 与「没有这个功能」等价（逐字节不变）。
+     */
+    this.intentPolicyValue = o.intentPolicy || null;
+    /**
+     * 动作级意图复核（A2）：注入一个 `async ({tool, detail}) => policy|null` 的实现。
+     * 轮级判定看不到「助手接下来真要做什么」，所以副作用动作在**执行前**会再判一次。
+     * 与轮级同语义 —— **只收紧**：返回 null / 抛错 / `tighten !== true` 都不改变原判定。
+     */
+    this.intentReviewer = typeof o.intentReview === 'function' ? o.intentReview : null;
     // 状态上报钩子（由 runAgentChat 注入）：让「等待用户」这类过程状态能被状态机看到
     this.stateNotifier = null;
   }
@@ -72,14 +96,60 @@ class AgentToolContext {
   }
 
   runId() { return this.runIdValue; }
+  traceContext() { return this.traceContextValue; }
+  sourceMessageId() { return this.sourceMessageIdValue; }
+  planSessionId() { return this.planSessionIdValue; }
+  planOwnerExists(taskId) {
+    try { return !!(this.planOwnerExistsValue && this.planOwnerExistsValue(String(taskId || ''))); } catch { return false; }
+  }
+  /** 只暴露本次 run 中已成功的工具调用编号，供计划步骤引用实际执行证据。 */
+  setToolEvidence(records) {
+    this.toolEvidenceValue = (Array.isArray(records) ? records : [])
+      .filter((record) => record && record.ok === true && record.callId && record.name !== 'update_plan')
+      .map((record) => ({ callId: String(record.callId), tool: String(record.name || 'tool') }));
+  }
+  toolEvidence() { return this.toolEvidenceValue.slice(); }
   taskId() { return this.taskIdValue; }
   role() { return this.roleValue; }
   readOnly() { return this.readOnlyValue; }
+
+  /** read_skill 的正文上限（0 = 用默认值） */
+  skillMaxChars() { return this.skillMaxCharsValue; }
+
+  /** web_search 后端配置（null = 未配置） */
+  webSearchConfig() { return this.webSearchConfigValue; }
   signal() { return this.signalValue; }
   cancelled() { return !!(this.signalValue && this.signalValue.aborted); }
 
   /** 文件遍历类工具是否走 worker 线程（tools.fs_worker，默认 true） */
   fsWorkerEnabled() { return this.fsWorkerValue !== false; }
+
+  /**
+   * 意图识别策略（electron/intent.cjs）；未注入时返回 null。
+   * 消费侧（审批）只读它的 `forceConfirm()` —— 语义是「收紧」，不是「放行」。
+   */
+  intentPolicy() {
+    return this.intentPolicyValue;
+  }
+
+  /**
+   * 动作级意图复核（A2）：请注入的实现对**即将执行的动作**再判一次
+   * （输入含 `<planned_action>` 与用户的插话）。
+   *
+   * 返回 `policy|null`，调用方**只认 `tighten === true`**（只收紧）。
+   * 未接线 / 抛错 / 返回 null 都等价于「不改变原判定」—— 复核不能成为执行的故障点。
+   *
+   * @param {{tool?: string, detail?: string}} action
+   * @returns {Promise<any|null>}
+   */
+  async intentReview(action) {
+    if (!this.intentReviewer) return null;
+    try {
+      return await this.intentReviewer(action);
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * S7：审批服务 —— 服务端签发/校验令牌（绑定 capability / scope / toolCallId / 有效期，单次有效）。
@@ -88,11 +158,34 @@ class AgentToolContext {
   approval() {
     if (!this.approvalServiceValue) {
       this.approvalServiceValue = approvalLib.createApprovalService({
-        confirm: this.confirmHandler,
+        confirm: this.confirmHandler
+          ? (level, what, detail, request) => this.confirm(level, what, detail, { ...request, forcePrompt: true })
+          : null,
         ttlMs: this.approvalTtlMsValue,
         runId: this.runIdValue,
+        // 持久化审批规则：从项目里读一次（`.codenode/approvals.json`），命中就不打扰用户。
+        // 读坏文件=没有规则（偏保守：只会多问一次），不会静默放行。
+        projectRoot: this.projectRootValue,
+        rules: ruleLib.readRules(this.projectRootValue).rules,
         taskId: this.taskIdValue,
         role: this.roleValue,
+        /**
+         * 意图识别的风险门禁（**只收紧**）：命中「高风险 / 授权 unknown / 低置信」时，
+         * 免打扰规则被忽略，这次审批仍然要用户点确认。未接线（null）→ 与旧行为逐字节一致。
+         */
+        riskGate: this.intentPolicyValue && typeof this.intentPolicyValue.forceConfirm === 'function'
+          ? () => {
+              try {
+                return this.intentPolicyValue.forceConfirm() === true;
+              } catch {
+                // 门禁自身出错 → 不收紧（等价于没有信号），但留痕，避免「悄悄降级」
+                try {
+                  this.audit(JSON.stringify({ kind: 'intent_risk_gate_error' }));
+                } catch {}
+                return false;
+              }
+            }
+          : null,
         trace: (event) => {
           this.audit(JSON.stringify(event));
           // S8：审批事件也进统一事件流（回放时能看到谁在什么时候批了什么）
@@ -103,20 +196,38 @@ class AgentToolContext {
     return this.approvalServiceValue;
   }
 
-  async confirm(level, what, detail) {
+  async confirm(level, what, detail, request = {}) {
     if (this.cancelled()) return false;
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
-    if (level === ConfirmationLevel.LOW) return true;
+    if (level === ConfirmationLevel.LOW && request.forcePrompt !== true) return true;
     if (!this.confirmHandler) return false;
+    const waitId = 'wait-' + randomUUID();
+    const toolCallId = request.toolCallId || null;
+    const started = this.checkpoint('wait_start', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null,
+      what: String(what || '').slice(0, 160), level: String(level || ConfirmationLevel.WRITE),
+      capability: request.capability || null, scope: request.scope || null,
+      detailDigest: require('../sideEffects.cjs').digest(String(detail || '')) });
+    if (this.checkpointSink && !started) {
+      this.audit(JSON.stringify({ kind: 'approval_wait_persist_failed', runId: this.runIdValue, waitId, toolCallId }));
+      return false;
+    }
     // 真正在等用户：上报 WAITING_USER（等待结束后回到 WAITING_TOOL），
     // 状态机据此区分「卡在等用户」与「正在执行」，UI/续跑判定不再只能看到 running
     this.notifyState('WAITING_USER', 'confirm:' + String(what || '').slice(0, 80));
+    let outcome = 'denied';
     try {
-      const approved = await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '');
-      return !this.cancelled() && approved === true;
+      const approved = await this.confirmHandler(level || ConfirmationLevel.WRITE, what || '', detail || '', request);
+      outcome = this.cancelled() ? 'cancelled' : approved === true ? 'approved' : 'denied';
+      return outcome === 'approved';
     } catch {
+      outcome = 'error';
       return false;
     } finally {
+      if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'approval', toolCallId, taskId: this.taskIdValue || null, outcome,
+        detailDigest: require('../sideEffects.cjs').digest(String(detail || '')) })) {
+        this.audit(JSON.stringify({ kind: 'approval_wait_settle_persist_failed', runId: this.runIdValue, waitId }));
+        throw new Error('审批结算无法持久化，拒绝继续执行');
+      }
       this.notifyState('WAITING_TOOL', 'confirm_settled');
     }
   }
@@ -176,14 +287,24 @@ class AgentToolContext {
     return this.saveErrorValue || null;
   }
 
-  async askUser(question, options) {
+  async askUser(question, options, request = {}) {
     if (!this.questionHandler) return '';
+    const waitId = 'wait-' + randomUUID();
+    const toolCallId = request.toolCallId || null;
+    const started = this.checkpoint('wait_start', { waitId, kind: 'question', toolCallId, taskId: this.taskIdValue || null });
+    if (this.checkpointSink && !started) throw new Error('用户提问无法持久化，未发出请求');
     this.notifyState('WAITING_USER', 'ask_user');
+    let outcome = 'answered';
     try {
       return await this.questionHandler(question, options || []);
     } catch {
+      outcome = 'error';
       return '';
     } finally {
+      if (this.cancelled()) outcome = 'cancelled';
+      if (this.checkpointSink && !this.checkpoint('wait_settle', { waitId, kind: 'question', toolCallId, taskId: this.taskIdValue || null, outcome })) {
+        throw new Error('用户答复结算无法持久化，需复核');
+      }
       this.notifyState('WAITING_TOOL', 'ask_user_settled');
     }
   }
@@ -218,7 +339,9 @@ class AgentToolContext {
     return this.ragConfigValue || {};
   }
 
-  /** 写入执行检查点（runCheckpoint.cjs）：'tool_intent' | 'tool_commit' | 'messages' */
+  modelRuntime() { return this.modelRuntimeValue ? { ...this.modelRuntimeValue, signal: this.signalValue } : null; }
+
+  /** 写入执行检查点（runCheckpoint.cjs）：工具意图/结果、对话快照及用户等待起止记录。 */
   checkpoint(type, payload) {
     if (!this.checkpointSink) return null;
     try {
@@ -229,8 +352,8 @@ class AgentToolContext {
   }
 
   /** 保存对话快照用于断点续跑（每轮工具循环结束时调用） */
-  checkpointMessages(messages, reason) {
-    return this.checkpoint('messages', { messages, reason: reason || 'round_end' });
+  checkpointMessages(messages, reason, controlState) {
+    return this.checkpoint('messages', { messages, reason: reason || 'round_end', controlState: controlState || null });
   }
 
   /** 执行隔离策略（sandbox.cjs 解析结果）；工具启动子进程时应交给 sandbox.guardedSpawn。
@@ -252,27 +375,20 @@ class AgentToolContext {
    * 返回 { skip:true } 表示该副作用在中断前已经提交过（续跑时不得重复执行）。
    * S9：带上行为者（runId/taskId/role），让「谁提交的、谁又想重复」在账本里可归因。
    */
-  async beginSideEffect(toolName, args) {
+  async beginSideEffect(toolName, args, options) {
     if (!this.sideEffectGuardValue || typeof this.sideEffectGuardValue.begin !== 'function') return { skip: false, token: null };
-    try {
-      return await this.sideEffectGuardValue.begin(toolName, args, { taskId: this.taskIdValue, role: this.roleValue });
-    } catch {
-      return { skip: false, token: null };
-    }
+    // A failed guard is not permission to execute without a durable intent.
+    return await this.sideEffectGuardValue.begin(toolName, args, { taskId: this.taskIdValue, role: this.roleValue }, options);
   }
 
   async commitSideEffect(token, info) {
     if (!token || !this.sideEffectGuardValue || typeof this.sideEffectGuardValue.commit !== 'function') return;
-    try {
-      await this.sideEffectGuardValue.commit(token, info);
-    } catch {}
+    return await this.sideEffectGuardValue.commit(token, info);
   }
 
   async failSideEffect(token, error) {
     if (!token || !this.sideEffectGuardValue || typeof this.sideEffectGuardValue.fail !== 'function') return;
-    try {
-      await this.sideEffectGuardValue.fail(token, error);
-    } catch {}
+    return await this.sideEffectGuardValue.fail(token, error);
   }
 
   /** 本地标量存储；未启用时返回 null。 */
@@ -340,10 +456,13 @@ class AgentToolContext {
       conversationHistory: this.conversationSupplier,
       notifyFileChange: this.fileChangeNotifier,
       ragConfig: this.ragConfigValue,
+      modelRuntime: o.modelRuntime || this.modelRuntimeValue,
       scalarStore: this.scalarStoreValue,
       undo: this.undoAction,
       redo: this.redoAction,
       runId: o.runId || this.runIdValue,
+      traceContext: o.traceContext || this.traceContextValue,
+      sourceMessageId: o.sourceMessageId || this.sourceMessageIdValue,
       taskId: o.taskId || this.taskIdValue,
       role: o.role || this.roleValue,
       readOnly: o.readOnly === true,
@@ -351,6 +470,18 @@ class AgentToolContext {
       sandbox: this.sandboxPolicyValue,
       sideEffectGuard: this.sideEffectGuardValue,
       checkpoint: this.checkpointSink,
+      // fork（子代理等）必须继承这两项：否则子代理读不了技能正文、也搜不了网（能力在子代理里静默消失）
+      skillMaxChars: this.skillMaxCharsValue,
+      webSearchConfig: this.webSearchConfigValue,
+      /**
+       * 意图收紧也要继承（A4）：子代理的写类动作与审批**不能因为「换了个上下文」就绕过收紧**。
+       * 语义上这更严格也更正确 —— 子代理动作的授权来源是**用户对主任务的授权**（用户说过的话），
+       * 而不是主代理给子代理的任务描述（那是 assistant 生成的东西，属**不可信证据**）。
+       * 代价：子代理复核共享主 run 的动作预算（总量仍有上限），预算耗尽时子代理同样按「没有信号」回落
+       * （不收紧、也不放宽）。注意这里是**按值**继承 —— 主 run 之后的重判不会回灌到已 fork 的子上下文。
+       */
+      intentPolicy: this.intentPolicyValue,
+      intentReview: this.intentReviewer,
     });
   }
 }

@@ -108,6 +108,12 @@ async function main() {
   const sr = await registry.execute('retrieve_context', { query: 'node:' + createdId, mode: 'scalar' }, ctx2);
   assert.strictEqual(sr.ok, true);
   assert.ok(sr.data.sources.some((s) => s.citation === 'scalar:node:' + createdId), '标量模式应返回 scalar:<key> 来源');
+  assert.strictEqual(sr.data.quality.level, 'high', '精确 key 命中可标记为高');
+  const weakScalar = await registry.execute('retrieve_context', {
+    query: '登录模块 ' + Array.from({ length: 20 }, (_, i) => 'qqqzz' + i).join(' '), mode: 'scalar',
+  }, ctx2);
+  assert.ok(weakScalar.data.sources.length > 0, '弱文本匹配仍可返回候选');
+  assert.strictEqual(weakScalar.data.quality.level, 'low', '弱文本匹配不得标记为高可信');
 
   // ---- 5b. 标量语义搜索（无需精确 key）+ auto 自动路由 ----
   const searchHits = getScalarStore(root).search({ query: '登录模块的 prompt', max: 5 });
@@ -179,8 +185,13 @@ async function main() {
   const raw = 'line1\n'.repeat(400) + 'KEY_DETAIL=' + 'x'.repeat(600);
   const failedCfg = { apiBase: 'http://127.0.0.1:9', apiKey: '', model: 'test', maxTokens: 256, reasoningEffort: '', compression: { budgetChars: 300 } };
   const compressed = await compressToolContent(failedCfg, 'read_file', raw);
-  assert.ok(compressed.includes('子代理压缩失败'), '压缩失败应降级为截断');
-  assert.ok(compressed.length <= 400, '降级输出不应超过预算过多');
+  assert.ok(compressed.includes('子代理压缩失败'), '压缩失败应降级');
+  // #11：降级**保留原文**，只加一行「未压缩」标注 —— 此前这里是 `length <= 400`，
+  // 锁的正是「12 万字符截成 1500（丢 98.7%）却让模型以为拿到了完整结果」那个坏行为。
+  // 新契约（与 compression-batch-test 的 F/F2 段同一口径）：正文不得被缩短，只允许加标注。
+  assert.ok(compressed.includes('【未压缩】'), '降级必须显式标注「未压缩」');
+  assert.ok(compressed.length >= raw.length, '压缩失败时正文不得被缩短（丢信息）');
+  assert.ok(compressed.length <= raw.length + 200, '只允许加一行标注，不得引入其他膨胀');
 
   console.log(
     'SCALAR VECTOR TEST: PASS',

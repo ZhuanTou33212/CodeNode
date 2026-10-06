@@ -43,7 +43,7 @@ export default function ProjectGate() {
       try {
         await action();
         // 成功时 root 会被设置，App 会立刻切到工作台；能走到这里说明是取消或失败
-        if (!useProjectStore.getState().root) setStatus(label + '已取消');
+        if (!useProjectStore.getState().root) setStatus(useProjectStore.getState().error ? '' : label + '已取消');
         else setStatus('');
       } catch (e) {
         setStatus(label + '失败：' + String(e));

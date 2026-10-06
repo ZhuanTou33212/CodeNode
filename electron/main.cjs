@@ -81,6 +81,7 @@ const runStore = require('./runStore.cjs');
 const sandbox = require('./sandbox.cjs');
 // IPC 按域拆出的模块（各自导出 register(ctx)，依赖显式传入；auditLog 也随工程域搬走了）
 const { auditLog } = require('./ipc/project.cjs');
+const agentIpc = require('./ipc/agent.cjs');
 
 // ---------------------------------------------------------------------------
 // IPC 接线区：各域实现在 electron/ipc/*.cjs，依赖显式传入（这里只有 app 相关的 userData 目录）
@@ -88,8 +89,9 @@ const { auditLog } = require('./ipc/project.cjs');
 const ipcContext = { ipcMain, userDataDir: () => app.getPath('userData') };
 require('./ipc/models.cjs').register({ ...ipcContext, agent });
 require('./ipc/metrics.cjs').register({ ...ipcContext, agent, sandbox, runStore });
-require('./ipc/project.cjs').register({ ...ipcContext, dialog, getFocusedWindow: () => BrowserWindow.getFocusedWindow(), sandbox });
-require('./ipc/agent.cjs').register(ipcContext);
+agentIpc.register(ipcContext);
+require('./ipc/project.cjs').register({ ...ipcContext, dialog, getFocusedWindow: () => BrowserWindow.getFocusedWindow(), sandbox,
+  runWorkflowChat: agentIpc.runWorkflowChat });
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -118,6 +120,7 @@ function isInternalUrl(url) {
 
 // 渲染层不使用任何浏览器权限（src/ 内无 getUserMedia / Notification / clipboard / fullscreen 调用），
 // 因此默认全量拒绝；将来确有需要，必须在这里显式放行并说明用途。
+/** @type {Set<string>} 渲染层不使用的权限一律不在集合里（默认全量拒绝） */
 const ALLOWED_PERMISSIONS = new Set([]);
 
 function createWindow() {
@@ -128,7 +131,7 @@ function createWindow() {
     // 允许窗口缩到 720，交给渲染进程的响应式规则（<=860 侧栏转浮层）处理。
     minWidth: 720,
     minHeight: 560,
-    title: 'CodeNode Next',
+    title: 'CodeNode',
     backgroundColor: '#14161a',
     icon: resolveAppIcon(),
     autoHideMenuBar: true,
@@ -497,6 +500,9 @@ function createWindow() {
 // 该分支同步执行、在所有既有逻辑之前完成，`app.exit()` 立即结束进程，
 // 因此不会触发下面的 app.whenReady() 窗口创建，对既有行为零改动。
 if (process.argv.includes('--codenode-selftest')) {
+  // safeStorage needs Electron readiness. Do not create a normal window in
+  // this branch, and wait before encrypting/decrypting self-test model data.
+  app.whenReady().then(() => {
   const selfTest = require('./selfTest.cjs');
   let code = 1;
   try {
@@ -505,14 +511,19 @@ if (process.argv.includes('--codenode-selftest')) {
   } catch (error) {
     code = selfTest.emitResult({ ok: false, kind: 'codenode-selftest', error: String((error && error.stack) || error) }, process.argv);
   }
-  app.exit(code);
-}
+  // Normal shutdown lets Chromium flush the newly created encryption key.
+  // app.exit() can leave seeded models unreadable in the next process.
+  process.exitCode = code;
+  app.quit();
+  }).catch((error) => { console.error(error); app.exit(1); });
+} else {
 app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

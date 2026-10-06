@@ -6,21 +6,57 @@ import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
 import { saveProject } from '../lib/projectActions';
 import { useChatStore } from '../store/chatStore';
+import { useSending } from '../lib/useSending';
+import { fireAndReport, reportError } from '../lib/reportError';
+import { summarizeResumePlan } from '../lib/resumePlan';
 import RunReplayPanel from './RunReplayPanel';
+import { prepareTemplate, missingTemplateDeps, parseTemplateDeps, type TemplateDeps } from '../lib/workflowTemplate';
+import { workflowGraph, workflowSignature, workflowReviewIds } from '../lib/workflowRunState';
+import type { Graph } from '../types';
 import type { Node } from '@xyflow/react';
 
-type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions';
-type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string };
-type AgentRun = { runId: string | null; status: string; state?: string | null; startedAt: string | null; eventCount: number };
+type DockTab = 'editor' | 'diff' | 'terminal' | 'runs' | 'checkpoints' | 'extensions' | 'rag';
+type RunItem = { id: string; label: string; type: string; status: 'pending' | 'running' | 'done' | 'failed' | 'blocked'; output?: string; input?: string; attempts?: number; failure?: string };
+type AgentRun = { runId: string | null; status: string; state?: string | null; limitKind?: string | null; stateHistoryValid?: boolean | null; startedAt: string | null; eventCount: number };
+const LIMIT_KIND_LABELS: Record<string, string> = {
+  iterations: '模型迭代次数',
+  tool_calls: '工具调用次数',
+  context_window: '上下文窗口',
+  output_tokens: '输出 token 数',
+};
+/** §4.2 回滚计划（与 electron/runRollback.cjs 的 planRollback 返回形状一致） */
+type RollbackPlan = {
+  ok: boolean;
+  error?: string;
+  runId: string;
+  items: { path: string; tools: string[]; action: 'restore' | 'delete' | 'skip'; restorable: boolean; reason?: string; conflict: boolean; bytes?: number | null }[];
+  summary: { restore: number; delete: number; skip: number; conflict: number };
+};
+type RollbackReport = {
+  ok: boolean;
+  runId: string;
+  applied: { path: string; action: string; verified?: boolean }[];
+  refused: { path: string; reason: string }[];
+  skipped: { path: string; reason: string }[];
+  summary: { applied: number; refused: number; skipped: number; conflicts: number };
+  error?: string;
+};
+/** §4.2 子代理任务视图（落盘可查，跨 run） */
+type SubagentRunView = {
+  runId: string;
+  updatedAt: string | null;
+  tasks: { taskId: string; role: string | null; objective: string; status: string | null; summary: string; error: string | null; finishedAt: string | null }[];
+};
 /**
  * 哪些 Run 值得出现在「可续跑」列表里（第 2 项缺陷）：
  *   - `interrupted`：进程/连接中断，本来就在列；
  *   - `state === 'LIMIT_REACHED'`：**跑到上限停下**（status 仍是 error，靠 state 区分）——
  *     这些 Run 有检查点、续跑计划通常也是 auto，却被 `status === 'interrupted'` 的过滤挡在门外，
  *     用户只能看到一句「任务未完成」，连续跑按钮都找不到。
+ *   - `state === 'FAILED'`：允许查看恢复计划；失败原因与副作用需人工复核。
  */
 function isResumableRun(run: AgentRun) {
-  return run.status === 'interrupted' || run.state === 'LIMIT_REACHED';
+  return run.status === 'interrupted' || run.state === 'LIMIT_REACHED' || run.state === 'FAILED';
 }
 type ResumePlan = {
   runId?: string;
@@ -35,6 +71,9 @@ type ResumePlan = {
   completedSteps?: { tool: string; idemKey: string | null; at: string | null }[];
   skippedByLedger?: { tool: string; idemKey: string | null; reason: string }[];
   unknownEffects?: { tool: string; effect: string }[];
+  pendingWaits?: { waitId: string; kind: string; toolCallId: string | null; taskId: string | null; what?: string | null; level?: string | null }[];
+  checkpointCount?: number;
+  messageCheckpointCount?: number;
 };
 
 type MetricsView = {
@@ -44,12 +83,10 @@ type MetricsView = {
 };
 
 const TABS: { id: DockTab; label: string }[] = [
-  { id: 'editor', label: '代码编辑器' },
   { id: 'diff', label: 'Diff' },
   { id: 'terminal', label: '终端' },
   { id: 'runs', label: '工作流运行' },
   { id: 'checkpoints', label: '检查点' },
-  { id: 'extensions', label: '扩展' },
 ];
 
 function lineDiff(before: string, after: string) {
@@ -136,7 +173,7 @@ function topoNodes(nodes: Node[], edges: { source: string; target: string }[]) {
   return order;
 }
 
-function EditorPanel() {
+export function EditorPanel() {
   const selected = useProjectStore((s) => s.selected);
   const draft = useProjectStore((s) => s.draft);
   const searchMatches = useProjectStore((s) => s.searchMatches);
@@ -157,6 +194,22 @@ function EditorPanel() {
   const [showCompletions, setShowCompletions] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const editorTarget = useUiStore((s) => s.editorTarget);
+
+  useEffect(() => {
+    if (!selected || !editorTarget || selected.relPath !== editorTarget.path) return;
+    const line = Math.max(1, Math.min(editorTarget.line, draft.split('\n').length));
+    const offset = draft.split('\n').slice(0, line - 1).reduce((sum, part) => sum + part.length + 1, 0);
+    requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      editor.setSelectionRange(offset, offset);
+      editor.scrollTop = Math.max(0, (line - 4) * 18.6);
+      if (highlightRef.current) highlightRef.current.scrollTop = editor.scrollTop;
+      useUiStore.getState().setEditorTarget(null);
+    });
+  }, [selected?.relPath, editorTarget, draft]);
 
   // 幂等追加：不能在依赖里再读 tabs，否则 StrictMode 双次执行 / 陈旧闭包会重复插入同一路径
   useEffect(() => {
@@ -180,6 +233,7 @@ function EditorPanel() {
     [selected, draft]
   );
 
+  if (selected?.relPath.toLowerCase().endsWith('.cnode')) return <div className="dock-empty">工程文件通过工作台修改。</div>;
   if (!selected) return <div className="dock-empty">从左侧项目树点击文件，开始编辑。支持多文件标签、保存、撤销和 Diff 对比。</div>;
   const lines = draft.split(/\r?\n/).length;
   const language = selected.relPath.split('.').pop()?.toUpperCase() || 'TEXT';
@@ -230,9 +284,10 @@ function EditorPanel() {
 function DiffPanel() {
   const selected = useProjectStore((s) => s.selected);
   const draft = useProjectStore((s) => s.draft);
-  const rows = useMemo(() => selected ? lineDiff(selected.content, draft) : [], [selected, draft]);
+  const rows = useMemo(() => selected && !/\.cnode$/i.test(selected.relPath) ? lineDiff(selected.content, draft) : [], [selected, draft]);
   const changed = rows.filter((r) => r.kind !== 'same').length;
-  if (!selected) return <div className="dock-empty">先从项目树打开一个文件，再查看修改对比。</div>;
+  if (selected && /\.cnode$/i.test(selected.relPath)) return <div className="dock-empty">工程文件通过工作台查看变更。</div>;
+  if (!selected) return <div className="dock-empty">先打开一个文本文件，再查看修改对比。</div>;
   return (
     <div className="dock-diff">
       <div className="dock-file-head"><span className="dock-file-path">{selected.relPath}</span><span className="dock-file-meta">{changed ? `${changed} 处变更` : '没有未保存变更'}</span></div>
@@ -290,26 +345,63 @@ function RunsPanel() {
   const createCheckpoint = useCheckpointStore((s) => s.create);
   const [items, setItems] = useState<RunItem[]>([]);
   const [running, setRunning] = useState(false);
+  const workflowRunning = useRef(false);
   const cancel = useRef(false);
-  const runStateKey = `codenode.runstate.${root || 'no-project'}.${useSessionStore((s) => s.activeId) || 'canvas'}`;
+  const workflowId = useSessionStore((s) => s.activeId) || 'canvas';
+  const runStateKey = `codenode.runstate.${root || 'no-project'}.${workflowId}`;
+  const executionSignature = workflowSignature(workflowGraph(nodes, edges));
   const [resumeAvailable, setResumeAvailable] = useState(false);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [resumePlan, setResumePlan] = useState<ResumePlan | null>(null);
+  // Time Travel selection is kept in the recovery panel so the chosen
+  // checkpoint is visible and reviewable before a branch is created.
+  const [timeTravelCheckpoint, setTimeTravelCheckpoint] = useState<string>('');
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  // §4.2：Run 级文件回滚
+  const [rollbackRuns, setRollbackRuns] = useState<AgentRun[]>([]);
+  const [rollbackPlan, setRollbackPlan] = useState<RollbackPlan | null>(null);
+  const [rollbackResult, setRollbackResult] = useState<RollbackReport | null>(null);
+  const [rollbackForce, setRollbackForce] = useState(false);
+  const [rollbackBusy, setRollbackBusy] = useState(false);
+  // §4.2：子代理任务视图（跨 run，落盘可查）
+  const [subagentRuns, setSubagentRuns] = useState<SubagentRunView[]>([]);
   const [metrics, setMetrics] = useState<{ cost?: MetricsView; sandbox?: { description: string; backend: string; degraded: string[] }; alerts?: AlertDto[] } | null>(null);
+  const [templatePreview, setTemplatePreview] = useState<{ filePath: string; graph: Graph; deps: TemplateDeps; missing: string[] } | null>(null);
   const sendChat = useChatStore((s) => s.send);
+  const stopAll = useChatStore((s) => s.stopAll);
+  // #7：续跑按钮必须和输入框共用同一个忙碌守卫 —— 修复前它绕过 `busy` 直接 `sendChat`，
+  // 于是第二个请求会覆盖 `requestId`（旧请求再也停不掉、两条流写进同一气泡）。
+  const sending = useSending();
+  const busy = sending || recoveryBusy;
+  const report = (message: string) => useUiStore.getState().setToast(message);
+  const view = resumePlan ? summarizeResumePlan(resumePlan, resumePlan.prompt) : null;
 
   useEffect(() => {
-    setItems(nodes.map((n) => ({ id: n.id, label: String((n.data as Record<string, unknown>)?.label || n.id), type: n.type || 'task', status: String((n.data as Record<string, unknown>)?.status || 'pending') as RunItem['status'] })));
-    try { setResumeAvailable(!!localStorage.getItem(runStateKey)); } catch {}
-  }, [nodes.length, runStateKey]);
+    let alive = true;
+    if (workflowRunning.current) return () => { alive = false; };
+    setItems(nodes.map((n) => ({ id: n.id, label: String(n.data?.label || n.id), type: n.type || 'task', status: 'pending' })));
+    setResumeAvailable(false);
+    if (root && nodes.length && window.codenode?.workflowState) {
+      void window.codenode.workflowState(root, workflowId, { action: 'read', graph: workflowGraph(nodes, edges) }).then((result) => {
+        if (!alive || workflowRunning.current || !result.ok || !result.state) return;
+        const state = result.state;
+        setResumeAvailable(state.hasHistory && !state.complete);
+        setItems(nodes.map((n) => ({ id: n.id, label: String(n.data?.label || n.id), type: n.type || 'task',
+          status: state.completed.includes(n.id) ? 'done' : 'pending', output: state.outputs[n.id], attempts: state.attempts[n.id] || 0 })));
+      }).catch(() => {});
+    }
+    return () => { alive = false; };
+  }, [executionSignature, root, workflowId]);
 
   useEffect(() => {
     let alive = true;
     if (!root || !window.codenode?.agentRuns) { setAgentRuns([]); return () => { alive = false; }; }
     void window.codenode.agentRuns(root).then((runs) => {
-      if (alive) setAgentRuns(runs.filter(isResumableRun));
-    }).catch(() => { if (alive) setAgentRuns([]); });
+      if (!alive) return;
+      setAgentRuns(runs.filter(isResumableRun));
+      // 回滚列表要的是「跑过、可能改过文件」的 Run（已完成/失败/中断都算），取最近 10 个
+      setRollbackRuns(runs.slice(0, 10));
+    }).catch(() => { if (alive) { setAgentRuns([]); setRollbackRuns([]); } });
     return () => { alive = false; };
   }, [root]);
 
@@ -337,128 +429,406 @@ function RunsPanel() {
     };
   }, [root]);
 
+  // §4.2：子代理任务视图（落盘可查，跨 run）—— 请求结束后仍能看到「派了谁、结论是什么」
+  const loadSubagentViews = () => {
+    if (!root || !window.codenode?.subagentViews) {
+      setSubagentRuns([]);
+      return;
+    }
+    void window.codenode
+      .subagentViews(root, { maxRuns: 3, maxTasksPerRun: 8 })
+      .then((res) => setSubagentRuns(res?.ok ? res.runs : []))
+      .catch(() => setSubagentRuns([]));
+  };
+  useEffect(loadSubagentViews, [root]);
+
+  // §4.2：Run 级文件回滚 —— 先只读计划（用户看过再动手），执行后把结果如实展示
+  const inspectRollback = async (runId: string) => {
+    if (!root || !window.codenode?.rollbackPlan) return;
+    setRollbackBusy(true);
+    setRollbackResult(null);
+    try {
+      const plan = await window.codenode.rollbackPlan(root, runId);
+      setRollbackPlan(plan);
+      setRollbackForce(false);
+      if (!plan.ok) report('读取回滚计划失败：' + String(plan.error || '未知原因'));
+    } catch (error) {
+      reportError('读取回滚计划失败', error, report);
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
+
+  const runRollback = async () => {
+    if (!root || !rollbackPlan?.runId || !window.codenode?.rollbackApply) return;
+    setRollbackBusy(true);
+    try {
+      const result = await window.codenode.rollbackApply(root, rollbackPlan.runId, { force: rollbackForce });
+      setRollbackResult(result);
+      // 冲突项被拒时如实说清「为什么没撤」——不能只说「完成」
+      const refused = result.refused?.length || 0;
+      const applied = result.applied?.length || 0;
+      report(
+        result.ok
+          ? '已撤销 ' + applied + ' 个文件的改动'
+          : '回滚完成但有 ' + refused + ' 项被拒（' + (result.refused?.[0]?.reason || '见面板') + '），另有 ' + (result.skipped?.length || 0) + ' 项无法回滚'
+      );
+      if (result.applied?.length) void inspectRollback(rollbackPlan.runId);
+    } catch (error) {
+      reportError('执行回滚失败', error, report);
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
+
   const inspectResume = async (runId: string) => {
     if (!root || !window.codenode?.agentResumePlan) return;
     setRecoveryBusy(true);
-    try { setResumePlan(await window.codenode.agentResumePlan(root, runId)); }
+    try {
+      const plan = await window.codenode.agentResumePlan(root, runId);
+      setResumePlan(plan);
+      setTimeTravelCheckpoint(String(Math.max(0, Number(plan.messageCheckpointCount || 0) - 1)));
+    }
+    catch (e) { reportError('查看恢复计划失败', e, report); }
     finally { setRecoveryBusy(false); }
   };
 
   /** 自动断点续跑：走完整检查点/幂等账本链路（跳过已提交的写操作），不需要用户重述任务 */
-  const autoResume = async () => {
-    if (!resumePlan?.ok || !resumePlan.runId) return;
+  const autoResume = () => {
+    if (busy || !resumePlan?.ok || !resumePlan.runId) return;
     setRecoveryBusy(true);
-    try {
-      await sendChat('（自动断点续跑）' + (resumePlan.prompt || ''), { resumeRunId: resumePlan.runId });
-      setResumePlan(null);
-      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
-    } finally {
-      setRecoveryBusy(false);
-    }
+    // #25(a)：`void asyncFn()` 会把 IPC reject 吞进 devtools —— 统一走 fireAndReport，
+    // 失败一定变成用户可见的提示（含「点了没反应」的那一类）。
+    void fireAndReport(
+      async () => {
+        // #21：后端 needsReview 时回传的 plan 留在这里显示，别把「复核什么」丢掉
+        const res = await sendChat('（自动断点续跑）' + (resumePlan.prompt || ''), { resumeRunId: resumePlan.runId });
+        if (res.reply) setResumePlan(null);
+        if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
+      },
+      '自动续跑失败',
+      report
+    ).finally(() => setRecoveryBusy(false));
   };
 
-  const retryResume = async () => {
-    if (!resumePlan?.ok || !resumePlan.prompt) return;
+  const retryResume = () => {
+    if (busy || !resumePlan?.ok || !resumePlan.prompt) return;
     setRecoveryBusy(true);
-    try {
-      const replacementRunId = 'retry-' + Date.now().toString(36);
-      const marked = root && window.codenode?.agentResumeStart
-        ? await window.codenode.agentResumeStart(root, resumePlan.runId || '', replacementRunId)
-        : { ok: false, error: '恢复接口不可用' };
-      if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
-      await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
-      setResumePlan(null);
-      if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
-    } finally { setRecoveryBusy(false); }
+    void fireAndReport(
+      async () => {
+        const replacementRunId = 'retry-' + Date.now().toString(36);
+        const marked = root && window.codenode?.agentResumeStart
+          ? await window.codenode.agentResumeStart(root, resumePlan.runId || '', replacementRunId)
+          : { ok: false, error: '恢复接口不可用' };
+        if (!marked.ok) throw new Error(marked.error || '无法标记旧 Run');
+        await sendChat('这是一次人工确认后的 Agent 任务重试。请重新检查当前项目状态，不要假设上一次未完成的副作用已经发生。\n\n' + resumePlan.prompt);
+        setResumePlan(null);
+        if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
+      },
+      '按当前状态重试失败',
+      report
+    ).finally(() => setRecoveryBusy(false));
+  };
+
+  /** 了解风险后强制续跑（#21 的出口①）：带 resumeForce，主进程不再拦 needsReview */
+  const forceResume = () => {
+    if (busy || !resumePlan || !resumePlan.runId) return;
+    setRecoveryBusy(true);
+    void fireAndReport(
+      async () => {
+        useUiStore.getState().setResumePlanNotice(null);
+        await sendChat(view ? view.forceResumePrompt : '（已阅风险，强制续跑）', { resumeRunId: resumePlan.runId, resumeForce: true });
+        setResumePlan(null);
+        if (root && window.codenode?.agentRuns) setAgentRuns((await window.codenode.agentRuns(root)).filter(isResumableRun));
+      },
+      '强制续跑失败',
+      report
+    ).finally(() => setRecoveryBusy(false));
+  };
+
+  const createTimeTravel = () => {
+    const api = window.codenode;
+    if (busy || !root || !resumePlan?.runId || !api?.agentTimeTravel) return;
+    const sourceRunId = resumePlan.runId;
+    setRecoveryBusy(true);
+    void fireAndReport(async () => {
+      const max = Math.max(0, Number(resumePlan.messageCheckpointCount || 0) - 1);
+      const parsed = Number(timeTravelCheckpoint);
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) throw new Error('请选择有效的消息检查点');
+      const index = parsed;
+      const branchId = 'time-travel-' + Date.now().toString(36);
+      const result = await api.agentTimeTravel(root, sourceRunId, branchId, index);
+      if (!result.ok) throw new Error(result.error || '无法创建 Time Travel 分支');
+      report('已创建 Time Travel 分支：' + branchId + '；源 Run 和外部副作用保持不变，继续前需要人工复核');
+    }, '创建 Time Travel 分支失败', report).finally(() => setRecoveryBusy(false));
+  };
+
+  /** 立即停掉所有在跑的 Agent 请求（#7：「全部停止」出口） */
+  const stopEverything = () => {
+    const ids = stopAll();
+    if (!ids.length) report('当前没有正在运行的 Agent 请求');
+  };
+
+  const exportTemplate = async () => {
+    if (!window.codenode || !nodes.length) return;
+    const portable = prepareTemplate(useGraphStore.getState().getDocument(), root);
+    const result = await window.codenode.saveGraph({
+      graph: { revision: 1, nodes: portable.graph.nodes, edges: portable.graph.edges },
+      manifest: { name: 'CodeNode 工作流模板', template: portable.deps },
+    });
+    if (result.ok) report('已导出模板：' + result.filePath);
+    else if (result.error) report('导出模板失败：' + result.error);
+  };
+
+  const inspectTemplate = async () => {
+    if (!root || !window.codenode) return;
+    const api = window.codenode;
+    const opened = await api.openGraph();
+    if (!opened.ok || !opened.data || !opened.filePath) {
+      if (opened.error) report('读取模板失败：' + opened.error);
+      return;
+    }
+    const deps = parseTemplateDeps(opened.data.manifest?.template);
+    if (!deps || !Array.isArray(opened.data.graph?.nodes) || !Array.isArray(opened.data.graph?.edges)) { report('所选 .cnode 不是有效的工作流模板'); return; }
+    const [toolsResult, cfg] = await Promise.all([api.agentTools(root), api.agentConfig(root)]);
+    const availableModels = [cfg.model, ...(cfg.models || []).flatMap((model) => [model.id, model.label, model.model])];
+    const missing = missingTemplateDeps(deps, {
+      tools: (toolsResult.tools || []).map((tool) => tool.name),
+      models: availableModels,
+      tree: useProjectStore.getState().tree,
+    });
+    setTemplatePreview({ filePath: opened.filePath, graph: opened.data.graph as Graph, deps, missing });
+  };
+
+  const importTemplate = () => {
+    if (!templatePreview) return;
+    createCheckpoint('导入模板前');
+    useGraphStore.getState().loadDocument(templatePreview.graph);
+    useGraphStore.getState().runFlow();
+    try { localStorage.removeItem(runStateKey); } catch {}
+    setResumeAvailable(false);
+    setTemplatePreview(null);
+    void saveProject();
+    report('模板已导入当前画布；请补齐标记的依赖后运行');
   };
 
   const start = async () => {
-    if (running || !nodes.length) return;
+    if (workflowRunning.current || !nodes.length) return;
     cancel.current = false;
-    createCheckpoint('运行前自动检查点');
-    const order = topoNodes(nodes, edges);
-    let saved: { completed?: string[]; outputs?: Record<string, string> } = {};
-    try { saved = JSON.parse(localStorage.getItem(runStateKey) || '{}'); } catch {}
-    const completed = new Set(saved.completed || []);
-    setRunning(true);
-    setItems(order.map((node) => ({ id: node.id, label: String((node.data as Record<string, unknown>)?.label || node.id), type: node.type || 'task', status: completed.has(node.id) ? 'done' : 'pending', output: saved.outputs?.[node.id] })));
-    for (const node of order) {
-      if (cancel.current) break;
-      if (completed.has(node.id)) continue;
-      const label = String((node.data as Record<string, unknown>)?.label || node.id);
-      updateNodeData(node.id, { status: 'running' });
-      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: 'running' } : x));
-      const command = commandFromNode(node);
-      const prompt = String((node.data as Record<string, unknown>)?.prompt || '').trim();
-      let output = command ? `运行：${command}` : '';
-      let failed = false;
-      if (['start', 'end', 'file', 'object', 'scope'].includes(node.type || '')) {
-        output = '结构节点已通过';
-      } else if (command && root && window.codenode?.runProjectCommand) {
-        const res = await window.codenode.runProjectCommand(root, command, 180);
-        output += `\n${res.output || ''}`;
-        failed = !res.ok;
-      } else if (!command && prompt && root && window.codenode?.agentChat && ['task', 'stage', 'tool'].includes(node.type || '')) {
-        const requestId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const res = await window.codenode.agentChat({
-          projectRoot: root,
-          prompt: `执行工作流节点「${label}」：\n${prompt}\n完成后只返回本节点的执行结果与验证信息。`,
-          history: [],
-          canvasSummary: JSON.stringify(nodes.map((item) => ({ id: item.id, type: item.type, label: (item.data as Record<string, unknown>)?.label, status: (item.data as Record<string, unknown>)?.status }))),
-          nodeId: node.id,
-          requestId,
-          document: { root: useGraphStore.getState().getDocument() },
-          projectFile: useProjectStore.getState().projectFile || undefined,
-        });
-        output = `Agent：${res.reply || res.error || '无返回内容'}`;
-        failed = !res.ok;
-      } else if (!command && prompt) {
-        output = '需要项目根目录和 Agent 配置才能执行此节点';
-        failed = true;
-      } else {
-        output = '无执行内容：该节点需要填写 Prompt 或以 run:/$/命令开头';
-        failed = true;
-      }
-      updateNodeData(node.id, { status: failed ? 'failed' : 'done' });
-      setItems((list) => list.map((x) => x.id === node.id ? { ...x, status: failed ? 'failed' : 'done', output } : x));
-      if (!failed) completed.add(node.id);
-      try { localStorage.setItem(runStateKey, JSON.stringify({ completed: [...completed], outputs: { ...(saved.outputs || {}), [node.id]: output }, updatedAt: Date.now() })); } catch {}
-      if (failed) break;
+    const orphan = nodes.find((node) => node.data?.requiresInput && !edges.some((edge) => edge.target === node.id));
+    if (orphan) {
+      updateNodeData(orphan.id, { status: 'blocked' });
+      setItems((list) => list.map((item) => item.id === orphan.id ? { ...item, status: 'blocked', failure: '需要上游输出，但没有连入节点' } : item));
+      return;
     }
-    runFlow();
-    createCheckpoint('运行后检查点');
-    void saveProject();
-    if (!cancel.current && order.every((node) => completed.has(node.id))) {
-      try { localStorage.removeItem(runStateKey); } catch {}
-      setResumeAvailable(false);
-    } else setResumeAvailable(true);
-    setRunning(false);
+    const api = window.codenode;
+    if (!root || !api?.workflowState) { report('工作流恢复存储不可用，无法开始执行'); return; }
+    const graph = workflowGraph(nodes, edges);
+    const originalSignature = workflowSignature(graph);
+    const stillCurrent = () => root === useProjectStore.getState().root && workflowId === (useSessionStore.getState().activeId || 'canvas')
+      && originalSignature === workflowSignature(workflowGraph(useGraphStore.getState().nodes, useGraphStore.getState().edges));
+    const assertCurrent = () => { if (!stillCurrent()) throw new Error('项目或工作流执行合同已变化，请重新检查后运行'); };
+    workflowRunning.current = true;
+    setRunning(true);
+    createCheckpoint('运行前自动检查点');
+    try {
+      let result = await api.workflowState(root, workflowId, { action: 'read', graph });
+      if (!result.ok || !result.state) throw new Error(result.error || '读取工作流恢复记录失败');
+      if (result.state.complete) {
+        result = await api.workflowState(root, workflowId, { action: 'restart', graph, expectedRevision: result.state.revision });
+        if (!result.ok || !result.state) throw new Error(result.error || '无法开始新的工作流运行');
+      }
+      let state = result.state;
+      let legacy = false;
+      try { legacy = !!localStorage.getItem(runStateKey); } catch {}
+      if (legacy && !window.confirm('检测到旧版工作流执行记录，无法确认之前操作的完整结果。请核对当前文件和画布后，确认重新运行。')) return;
+      const order = state.order.map((id) => nodes.find((node) => node.id === id)!);
+      setItems(order.map((node) => ({ id: node.id, label: String(node.data?.label || node.id), type: node.type || 'task', status: state.completed.includes(node.id) ? 'done' : 'pending', output: state.outputs[node.id], attempts: state.attempts[node.id] || 0 })));
+      for (const node of order) {
+        if (cancel.current) break;
+        assertCurrent();
+        if (state.completed.includes(node.id)) continue;
+        const contract = node.data as Record<string, unknown>;
+        const label = String(contract.label || node.id);
+        const upstream = (state.selectedInputs[node.id] || []).map((item) => ({ ...item, label: String(nodes.find((candidate) => candidate.id === item.id)?.data?.label || item.id) }));
+        const input = upstream.map((item) => `${item.label} (${item.id}): ${item.output || '尚无输出'}`).join('\n');
+        const missing = upstream.filter((item) => !state.completed.includes(item.id) || !item.output);
+        const block = (failure: string) => {
+          updateNodeData(node.id, { status: 'blocked' });
+          setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: 'blocked', input, failure } : item));
+        };
+        if (contract.requiresInput && missing.length) { block('缺少上游输出：' + missing.map((item) => item.label).join('、')); break; }
+        if (state.pending.some((item) => item.active)) { block('工作流节点仍在执行，不能重复运行'); break; }
+        assertCurrent();
+        updateNodeData(node.id, { status: 'running' });
+        setItems(list => list.map(item => item.id === node.id ? { ...item, status: 'running' } : item));
+        const executed = await api.workflowExecute(root, workflowId, {
+          graph, nodeId: node.id, expectedRevision: state.revision, legacyRecovery: legacy,
+        }).catch(error => { updateNodeData(node.id, { status: 'failed' }); throw error; });
+        if (!executed.ok || !executed.state) { block(executed.error || '主进程工作流执行失败'); break; }
+        state = executed.state;
+        if (legacy) { try { localStorage.removeItem(runStateKey); } catch {} legacy = false; }
+        let output = '';
+        const failed = executed.executionOk !== true;
+        output = String(executed.output || '');
+        assertCurrent();
+        updateNodeData(node.id, { status: failed ? 'failed' : 'done' });
+        setItems((list) => list.map((item) => item.id === node.id ? { ...item, status: failed ? 'failed' : 'done', output, failure: failed ? output : undefined } : item));
+        if (failed) break;
+      }
+      setResumeAvailable(state.hasHistory && !state.complete);
+      if (stillCurrent()) { runFlow(); createCheckpoint('运行后检查点'); void saveProject(); }
+    } catch (error) { reportError('工作流已停止', error, report); }
+    finally {
+      workflowRunning.current = false;
+      setRunning(false);
+      if (!stillCurrent()) {
+        setItems(useGraphStore.getState().nodes.map((node) => ({ id: node.id, label: String(node.data?.label || node.id), type: node.type || 'task', status: 'pending' })));
+      }
+    }
   };
 
   return (
     <div className="dock-runs">
-      <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button><button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
+      <div className="dock-run-toolbar"><div><strong>连续执行</strong><span className="dock-file-meta">按连线拓扑顺序运行；失败或停止后可继续未完成节点</span></div><div><button onClick={() => { cancel.current = true; }} disabled={!running}>停止</button>
+      {/* #7：「全部停止」出口 —— 并发下必须能一次停干净所有在跑的请求（含被覆盖的那条控制权） */}
+      <button className="dock-danger" onClick={stopEverything} disabled={!sending}>全部停止 Agent</button>
+      <button onClick={() => void inspectTemplate()} disabled={running || !root}>导入模板</button>
+      <button onClick={() => void exportTemplate()} disabled={running || !nodes.length}>导出模板</button>
+      <button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
+      {templatePreview && <div className="dock-recovery-plan" role="dialog" aria-label="模板依赖检查">
+        <strong>导入检查：{templatePreview.filePath}</strong>
+        <div className="dock-recovery-meta">{templatePreview.graph.nodes.length} 个节点 · 来源项目 {templatePreview.deps.sourceProject || '未知'} · 声明工具 {templatePreview.deps.tools.length} / 模型 {templatePreview.deps.models.length} / 路径 {templatePreview.deps.paths.length}</div>
+        {templatePreview.missing.length ? <div className="task-trace-warning">需要补齐：{templatePreview.missing.join('；')}</div> : <div className="dock-recovery-meta">已声明的依赖均可用；未声明在 Prompt 中的依赖仍需运行前核对。</div>}
+        <div className="dock-recovery-actions"><button className="dock-primary" onClick={importTemplate}>替换当前画布并导入</button><button onClick={() => setTemplatePreview(null)}>取消</button></div>
+      </div>}
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
-        <strong>可续跑的 Agent 运行（中断 / 达到步数上限）</strong>
+        <strong>可恢复的 Agent 运行（中断 / 达到上限 / 失败）</strong>
         {agentRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
-          <span>{run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
+          <span>
+            {run.runId} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}
+            {run.limitKind ? ' · 上限：' + (LIMIT_KIND_LABELS[run.limitKind] || run.limitKind) : ''}
+            {run.stateHistoryValid === false ? ' · 状态历史异常，需复核' : ''}
+          </span>
           <button onClick={() => run.runId && void inspectResume(run.runId)} disabled={recoveryBusy}>查看恢复计划</button>
         </div>)}
-        {resumePlan && <div className="dock-recovery-plan">
+        {resumePlan && view && <div className="dock-recovery-plan">
           <div className="dock-recovery-meta">
-            恢复级别：<strong>{resumePlan.mode || 'unknown'}</strong>
-            {resumePlan.reason ? ' · ' + resumePlan.reason : ''}
+            恢复级别：<strong>{view.modeLabel}</strong>
+            {' · ' + view.reason}
             {resumePlan.completedSteps?.length ? ' · 已完成 ' + resumePlan.completedSteps.length + ' 步' : ''}
-            {resumePlan.skippedByLedger?.length ? ' · 幂等跳过 ' + resumePlan.skippedByLedger.length + ' 步' : ''}
+            {view.skippedCount ? ' · 幂等跳过 ' + view.skippedCount + ' 步' : ''}
           </div>
-          <pre>{resumePlan.warning || resumePlan.error || '无恢复计划'}</pre>
+          {view.warning ? <div className="dock-recovery-warning" role="alert">{view.warning}</div> : null}
+          {/* #21：后端明确要求人工复核时，必须把**复核什么**摆出来，
+              并给出两个出口（了解风险强制续跑 / 按当前状态重试）。 */}
+          {view.requiresReview ? (
+            <div className="dock-recovery-review" role="alertdialog" aria-label="续跑需要人工复核">
+              <div>需要人工复核，系统不会自动重放下面这些步骤：</div>
+              {view.unknownTools.length ? (
+                <div>
+                  结果不可知的工具：
+                  <strong data-testid="dock-resume-unknown-tools">{view.unknownTools.join('、')}</strong>
+                </div>
+              ) : null}
+              {view.pendingLabels.length ? <div>待办 {view.pendingLabels.length} 步：{view.pendingLabels.slice(0, 8).join('、')}</div> : null}
+              {resumePlan.pendingWaits?.length ? <div>待处理审批：{resumePlan.pendingWaits.map((item) => item.what || item.toolCallId || item.waitId).slice(0, 6).join('、')}（旧令牌不会恢复，确认后会重新签发一次性令牌）</div> : null}
+              <div className="dock-recovery-actions">
+                <label className="dock-time-travel-picker">
+                  <span>分支检查点</span>
+                  <select
+                    value={timeTravelCheckpoint}
+                    onChange={(event) => setTimeTravelCheckpoint(event.target.value)}
+                    disabled={busy || recoveryBusy || !resumePlan.messageCheckpointCount}
+                    aria-label="选择 Time Travel 消息检查点"
+                  >
+                    {Array.from({ length: Number(resumePlan.messageCheckpointCount || 0) }, (_, index) => {
+                      const latest = Number(resumePlan.messageCheckpointCount || 0) - 1;
+                      return <option key={index} value={String(index)}>#{index}{index === latest ? '（最新）' : ''}</option>;
+                    })}
+                  </select>
+                </label>
+                <button onClick={createTimeTravel} disabled={busy || recoveryBusy || !window.codenode?.agentTimeTravel || !resumePlan.messageCheckpointCount}>创建 Time Travel 分支</button>
+                <button className="dock-danger" onClick={forceResume} disabled={busy} title={view.forceResumePrompt}>了解风险，强制续跑</button>
+                {resumePlan.pendingWaits?.length ? <button onClick={retryResume} disabled={busy} title="旧审批令牌不会恢复；创建新 Run 后，工具再次请求时会重新签发一次性审批令牌">重新发起审批</button> : null}
+                <button onClick={retryResume} disabled={busy} title={view.retryPrompt}>按当前状态重试</button>
+              </div>
+            </div>
+          ) : null}
+          <pre>{view.warning || view.reason || resumePlan.error || '无恢复计划'}</pre>
           {resumePlan.ok && resumePlan.mode === 'auto' && (
-            <button className="dock-primary" onClick={() => void autoResume()} disabled={recoveryBusy}>自动续跑（跳过已提交的写操作）</button>
+            <button className="dock-primary" onClick={autoResume} disabled={busy}>自动续跑（跳过已提交的写操作）</button>
           )}
-          {resumePlan.ok && resumePlan.mode !== 'auto' && (
-            <button className="dock-primary" onClick={() => void retryResume()} disabled={recoveryBusy}>按当前状态重试（人工确认）</button>
+          {resumePlan.ok && resumePlan.mode !== 'auto' && !view.requiresReview && (
+            <button className="dock-primary" onClick={retryResume} disabled={busy}>按当前状态重试（人工确认）</button>
           )}
+        </div>}
+      </div>}
+      {/* §4.2：子代理任务视图 —— 落盘可查，跨 run（此前只有进程内 Map，刷新即失忆） */}
+      {subagentRuns.length > 0 && <div className="dock-agent-recovery" data-testid="dock-subagents">
+        <strong>子代理任务（跨运行留存，最近 3 个运行）</strong>
+        {subagentRuns.map((run) => <div key={run.runId} className="dock-subagent-run">
+          <div className="dock-recovery-meta">
+            {run.runId} · {run.updatedAt ? new Date(run.updatedAt).toLocaleString() : '未知时间'} · {run.tasks.length} 个任务
+          </div>
+          {run.tasks.map((task) => (
+            <div className="dock-rollback-item" key={task.taskId} data-action={task.status === 'done' ? 'restore' : 'skip'}>
+              <span className="dock-rollback-path" title={task.objective}>{task.objective || task.taskId}</span>
+              <span className="dock-rollback-act">{task.role || '未知角色'} · {task.status || '未知'}</span>
+              {task.error ? <span className="dock-rollback-why" title={task.error}>未完成</span> : null}
+            </div>
+          ))}
+        </div>)}
+        <div className="dock-recovery-actions">
+          <button onClick={() => loadSubagentViews()} data-testid="dock-subagents-refresh">刷新</button>
+        </div>
+      </div>}
+      {/* §4.2：Run 级文件回滚 —— 让「跑偏了」有出口，而不是逐个文件手动还原 */}
+      {rollbackRuns.length > 0 && <div className="dock-agent-recovery" data-testid="dock-rollback">
+        <strong>撤销本次 Run 的文件改动（回到该 Run 开始之前）</strong>
+        {rollbackRuns.map((run) => <div className="dock-recovery-row" key={run.runId || 'unknown'}>
+          <span>{run.runId} · {run.status} · {run.startedAt ? new Date(run.startedAt).toLocaleString() : '未知时间'}</span>
+          <button onClick={() => run.runId && void inspectRollback(run.runId)} disabled={rollbackBusy || !run.runId}>查看可撤销的文件</button>
+        </div>)}
+        {rollbackPlan?.ok && <div className="dock-recovery-plan" data-testid="dock-rollback-plan">
+          <div className="dock-recovery-meta">
+            将还原 <strong>{rollbackPlan.summary.restore}</strong> 个文件
+            {' · 删除 '}<strong>{rollbackPlan.summary.delete}</strong>
+            {rollbackPlan.summary.skip ? ' · 无法回滚 ' + rollbackPlan.summary.skip + ' 项（见面板说明）' : ''}
+            {rollbackPlan.summary.conflict ? ' · 有 ' + rollbackPlan.summary.conflict + ' 项在本 Run 之后被外部改过' : ''}
+          </div>
+          {rollbackPlan.items.length === 0
+            ? <div className="dock-recovery-meta">这个 Run 没有改动任何文件（或没有记录到前像）。</div>
+            : <div className="dock-rollback-items">
+              {rollbackPlan.items.slice(0, 12).map((item) => (
+                <div className="dock-rollback-item" key={item.path} data-action={item.action}>
+                  <span className="dock-rollback-path">{item.path}</span>
+                  <span className="dock-rollback-act">{item.action === 'restore' ? '还原' : item.action === 'delete' ? '删除' : '跳过'}</span>
+                  {item.action === 'skip' ? <span className="dock-rollback-why">{item.reason}</span> : null}
+                  {item.conflict ? <span className="dock-rollback-why">本 Run 之后被改过</span> : null}
+                </div>
+              ))}
+              {rollbackPlan.items.length > 12 ? <div className="dock-recovery-meta">…还有 {rollbackPlan.items.length - 12} 项</div> : null}
+            </div>}
+          {rollbackPlan.summary.conflict ? (
+            <label className="dock-rollback-force">
+              <input type="checkbox" checked={rollbackForce} onChange={(event) => setRollbackForce(event.target.checked)} />
+              我确认要覆盖「本 Run 之后被外部改过」的文件
+            </label>
+          ) : null}
+          <div className="dock-recovery-actions">
+            <button className="dock-danger" onClick={() => void runRollback()} disabled={rollbackBusy || (rollbackPlan.summary.restore + rollbackPlan.summary.delete === 0)} data-testid="dock-rollback-apply">
+              回滚这些文件
+            </button>
+            <button onClick={() => { setRollbackPlan(null); setRollbackResult(null); }} disabled={rollbackBusy}>收起</button>
+          </div>
+          {rollbackResult ? (
+            <div className="dock-recovery-meta" data-testid="dock-rollback-result">
+              结果：已处理 {rollbackResult.applied.length} · 被拒 {rollbackResult.refused.length} · 跳过 {rollbackResult.skipped.length}
+              {rollbackResult.refused.length ? '（' + rollbackResult.refused.map((item) => item.path + '：' + item.reason).slice(0, 3).join('；') + '）' : ''}
+            </div>
+          ) : null}
         </div>}
       </div>}
       {metrics && <div className="dock-metrics">
@@ -468,7 +838,7 @@ function RunsPanel() {
         <span>隔离 {metrics.sandbox?.backend || 'none'}{metrics.sandbox?.degraded?.length ? '（降级：' + metrics.sandbox.degraded.join('/') + '）' : ''}</span>
         {metrics.alerts?.length ? <span className="dock-metrics-alert">{metrics.alerts[metrics.alerts.length - 1].message}</span> : null}
       </div>}
-      <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span></div>{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
+      <div className="dock-run-list">{items.map((item) => <div className={`dock-run-item ${item.status}`} key={item.id}><span className="dock-run-dot" /><div className="dock-run-main"><div><strong>{item.label}</strong><span className="dock-run-type">{item.type}</span><span className="dock-run-status">{item.status}</span>{item.attempts ? <span className="dock-run-type">尝试 {item.attempts} 次</span> : null}</div>{item.input && <details><summary>消费的上游结果</summary><pre>{item.input}</pre></details>}{item.failure && <div className="task-trace-warning">{item.failure}</div>}{item.output && <pre>{item.output}</pre>}</div></div>)}</div>
       <RunReplayPanel />
     </div>
   );
@@ -482,7 +852,7 @@ function CheckpointsPanel() {
   return <div className="dock-checkpoints"><div className="dock-run-toolbar"><div><strong>可恢复检查点</strong><span className="dock-file-meta">自动保留最近 30 个，浏览器重启后仍可恢复</span></div><button className="dock-primary" onClick={() => create('手动检查点')}>立即创建</button></div>{items.length === 0 ? <div className="dock-empty">还没有检查点。运行工作流前后会自动创建。</div> : <div className="dock-checkpoint-list">{items.map((item) => <div className="dock-checkpoint" key={item.id}><div><strong>{item.label}</strong><span>{new Date(item.createdAt).toLocaleString()} · {item.doc.root.nodes.length} 节点</span></div><div><button onClick={() => { if (restore(item.id)) useUiStore.getState().setToast('已恢复检查点：' + item.label); }}>恢复</button><button className="dock-danger" onClick={() => remove(item.id)}>删除</button></div></div>)}</div>}</div>;
 }
 
-function ExtensionsPanel() {
+export function ExtensionsPanel() {
   const root = useProjectStore((s) => s.root);
   const [items, setItems] = useState<ProjectExtensionDto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -494,7 +864,7 @@ function ExtensionsPanel() {
     return () => { alive = false; };
   }, [root]);
   const groups = ['内置工具', 'MCP', '插件', 'Skills', 'Hooks', '项目扩展'];
-  return <div className="dock-extensions"><div className="dock-run-toolbar"><div><strong>扩展与工具</strong><span className="dock-file-meta">工具按注册表统一管理；项目可通过 .codenode/extensions.json 声明扩展</span></div><span className="dock-extension-count">{loading ? '加载中…' : `${items.length} 个已发现`}</span></div><div className="dock-extension-cards">{groups.slice(1).map((group) => <div className="dock-extension-card" key={group}><span className="dock-extension-icon">{group[0]}</span><div><strong>{group}</strong><p>可通过项目扩展清单接入</p></div><span className="dock-extension-state">可用</span></div>)}</div><div className="dock-tool-list">{items.map((item) => <div className="dock-tool-row" key={`${item.source}-${item.name}`}><span className="dock-tool-state" /><div><strong>{item.name}</strong><span>{item.kind} · {item.source}</span><p>{item.description || '无描述'}</p></div></div>)}</div></div>;
+  return <div className="dock-extensions"><div className="dock-run-toolbar"><div><strong>扩展与工具</strong><span className="dock-file-meta">工具按注册表统一管理；项目可通过 .codenode/extensions.json 声明扩展</span></div><span className="dock-extension-count">{loading ? '加载中…' : `${items.length} 个已发现`}</span></div><div className="dock-extension-cards">{groups.slice(1).map((group) => <div className="dock-extension-card" key={group}><span className="dock-extension-icon">{group[0]}</span><div><strong>{group}</strong><p>可通过项目扩展清单接入</p></div><span className="dock-extension-state">可用</span></div>)}</div><div className="dock-tool-list">{items.map((item) => <div className="dock-tool-row" key={`${item.source}-${item.name}`}><span className="dock-tool-state" /><div><strong>{item.name}</strong><span>{item.kind} · {item.source}</span><p>{item.description || '无描述'}</p>{item.contract ? <small>{item.contract.outputSchema ? '输出契约' : '未声明输出契约'} · {item.contract.readOnly ? '只读' : '可写'}{item.contract.timeoutMs != null ? ` · ${item.contract.timeoutMs}ms` : ''}</small> : null}</div></div>)}</div></div>;
 }
 
 export default function WorkbenchDock() {
@@ -503,5 +873,5 @@ export default function WorkbenchDock() {
   const close = useUiStore((s) => s.closeDock);
   const setTab = useUiStore((s) => s.setDockTab);
   if (!open) return null;
-  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'editor' && <EditorPanel />}{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}{tab === 'extensions' && <ExtensionsPanel />}</div></section>;
+  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}</div></section>;
 }

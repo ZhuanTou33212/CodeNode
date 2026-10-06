@@ -94,9 +94,9 @@ const TreeRowMemo = memo(TreeRow);
 
 /**
  * 标签页 2：项目树（原左侧「项目管理」栏的上半部分）。
- * 点击文件 → 切到「预览」标签显示内容，并同步载入编辑器的草稿。
+ * 点击文件直接载入内容，并同步载入编辑器草稿。
  */
-export default function ProjectPanel({ onOpen }: { onOpen: (relPath: string) => void }) {
+export default function ProjectPanel({ onOpen, embedded = false }: { onOpen: (relPath: string) => void; embedded?: boolean }) {
   const root = useProjectStore((s) => s.root);
   const projectFile = useProjectStore((s) => s.projectFile);
   const tree = useProjectStore((s) => s.tree);
@@ -117,8 +117,8 @@ export default function ProjectPanel({ onOpen }: { onOpen: (relPath: string) => 
 
   const handleOpen = useCallback(
     (relPath: string) => {
-      void openFile(relPath);
-      onOpen(relPath);
+      if (useProjectStore.getState().selected?.relPath === relPath && useProjectStore.getState().dirty) { onOpen(relPath); return; }
+      void openFile(relPath).then(() => { if (useProjectStore.getState().selected?.relPath === relPath) onOpen(relPath); }).catch(() => useUiStore.getState().setToast('文件读取失败'));
     },
     [openFile, onOpen],
   );
@@ -127,21 +127,21 @@ export default function ProjectPanel({ onOpen }: { onOpen: (relPath: string) => 
     <div className="sp-pane sp-pane-tree">
       <div className="sp-subhead">
         <div className="sp-path" title={root || ''}>
-          <span className="sp-path-name">{fileName || rootName || '未打开项目'}</span>
+          <span className="sp-path-name">{(embedded ? rootName || fileName : fileName || rootName) || '未打开项目'}</span>
           {root && <span className="sp-path-meta">{fileCount} 文件</span>}
         </div>
         <div className="pm-actions">
-          <button onClick={() => void openProject()} title="选择项目目录">
+          {!embedded && <button onClick={() => void openProject()} title="选择项目目录">
             {root ? '切换' : '打开'}
-          </button>
+          </button>}
           {root && (
             <button onClick={() => void refresh()} title="刷新文件树" disabled={loading}>
               刷新
             </button>
           )}
-          <button onClick={() => setSideOpen(false)} title="收起侧栏 (Ctrl+B)">
+          {!embedded && <button onClick={() => setSideOpen(false)} title="收起侧栏 (Ctrl+B)">
             »
-          </button>
+          </button>}
         </div>
       </div>
 

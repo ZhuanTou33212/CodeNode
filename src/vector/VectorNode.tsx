@@ -8,7 +8,7 @@
  * - 保持 Blender 风格：标题栏拖拽、左 target / 右 source 端口、选中描边与主色。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties, type MutableRefObject } from 'react';
-import { Handle, NodeResizer, Position, useStore, type NodeProps } from '@xyflow/react';
+import { Handle, NodeResizer, Position, useStore, useReactFlow, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import type { VectorData } from '../types';
 import {
@@ -204,6 +204,7 @@ function VectorNode({ id, data, selected }: NodeProps) {
   const store = useMemo(() => getVectorStore(id), [id]);
   const updateNodeData = useGraphStore((s) => s.updateNodeData);
   const stageScale = useStore((s) => s.transform[2]) || 1;
+  const { fitView } = useReactFlow();
   const fitRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -258,7 +259,13 @@ function VectorNode({ id, data, selected }: NodeProps) {
       <Handle type="target" position={Position.Left} className="wf-handle" />
 
       <VectorStoreContext.Provider value={store}>
-        <VectorNodeHead id={id} data={d} store={store} accent={accent} onPersist={updateNodeData} fitRef={fitRef} />
+        <VectorNodeHead id={id} data={d} store={store} accent={accent} onPersist={updateNodeData} fitRef={fitRef} onExpand={() => {
+          const canvas = document.querySelector('.canvas-wrap')?.getBoundingClientRect();
+          if (!canvas) return;
+          useGraphStore.getState().commit();
+          updateNodeData(id, { width: Math.max(560, Math.round(canvas.width - 80)), height: Math.max(380, Math.round(canvas.height - 80)) });
+          requestAnimationFrame(() => requestAnimationFrame(() => { void fitView({ nodes: [{ id }], padding: 0.06, maxZoom: 1, duration: 150 }); }));
+        }} />
         <VectorNodeBody store={store} stageScale={stageScale} data={d} fitRef={fitRef} />
         <VectorNodeFoot store={store} accent={accent} />
       </VectorStoreContext.Provider>
@@ -277,6 +284,7 @@ function VectorNodeHead({
   accent,
   onPersist,
   fitRef,
+  onExpand,
 }: {
   id: string;
   data: VectorNodeData;
@@ -284,6 +292,7 @@ function VectorNodeHead({
   accent: string;
   onPersist: (id: string, patch: Record<string, unknown>) => void;
   fitRef: MutableRefObject<() => void>;
+  onExpand: () => void;
 }) {
   const mode = useVector((s) => s.mode);
   const status = data.status || 'pending';
@@ -327,6 +336,7 @@ function VectorNodeHead({
       {mode === 'logic' ? <i className="wf-vector-badge">集合逻辑</i> : null}
 
       <div className="wf-vector-actions nodrag">
+        <button type="button" className="wf-vector-icon" title="放大节点并适应窗口" aria-label="放大节点并适应窗口" onClick={onExpand}>↗</button>
         <button type="button" className="wf-vector-icon" title="撤销 (Ctrl+Z)" disabled={!canUndo} onClick={() => store.getState().undo()}>
           ↶
         </button>

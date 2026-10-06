@@ -2,12 +2,48 @@ import { create } from 'zustand';
 import { useGraphStore } from './graphStore';
 import { useProjectStore } from './projectStore';
 import { useUiStore } from './uiStore';
+import { applyStreamDelta, warnUnknownDelta } from '../lib/sessionDelta';
 import type { RagGrounding, SessionCanvas, SessionDoc, SessionMsg, ToolRecord } from '../types';
 
 const uid = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
 
 function emptyDoc(): SessionDoc {
   return { root: { nodes: [], edges: [] } };
+}
+
+/** 计划卡里的一步（与主进程 electron/plan.cjs 的 PLAN_STATUSES 同口径） */
+export interface PlanItem {
+  id: string;
+  step: string;
+  acceptanceCriteria: string;
+  status: 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
+  evidenceCallIds?: string[];
+  reason?: string;
+  dependsOn?: string[];
+  ownerTaskId?: string;
+}
+
+export interface PlanSnapshot {
+  items: PlanItem[];
+  updatedAt: string | null;
+  runId: string | null;
+}
+
+/**
+ * 意图识别的一轮判定（主进程 electron/intent.cjs；两个维度照 Codex guardian 分类器）。
+ *
+ * 界面只显示主进程给的判定，不本地推算；`source` 要一起留着 —— 用户得能区分
+ * 「模型真判了」与「这次没有信号（没跑 / 超时 / 关闭）」，后者不该显示成任何结论。
+ */
+export interface IntentVerdict {
+  intent: string;
+  risk: string;
+  authorization: string;
+  confidence: number;
+  source: string;
+  tighten: boolean;
+  /** 判定依据摘要（主进程给的，界面只做 tooltip，不解析） */
+  reason?: string;
 }
 
 export interface ProgressState {
@@ -20,6 +56,10 @@ interface SessionState {
   sessions: Record<string, SessionCanvas>;
   order: string[];
   activeId: string | null;
+  /** 对话级稳定标识；画布 activeId 自动变化时，记忆覆盖仍使用这一标识。 */
+  memoryConversationId: string;
+  /** 用户手动开启新任务时递增；Agent 自动新画布不改变任务代。 */
+  memoryTaskEpoch: number;
   streaming: boolean;
   messages: SessionMsg[];
   progress: ProgressState | null;
@@ -31,11 +71,15 @@ interface SessionState {
   beginWorkSession: (prompt: string) => void;
   /** 用户手动新建空白画布 */
   newCanvas: () => void;
+  newConversation: () => void;
+  draftRevision: number;
+  newConversationPending: boolean;
   /** 直接在当前画布上阅读并制作（不新建画布） */
   startOnCurrent: (prompt: string) => void;
   switchSession: (id: string) => void;
+  setArchived: (id: string, archived: boolean) => void;
   syncActiveGraph: () => void;
-  restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null) => void;
+  restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null, memoryConversationId?: string, memoryTaskEpoch?: number) => void;
 
   getDocument: () => SessionDoc;
   pushUser: (content: string, attachments?: SessionMsg['attachments']) => void;
@@ -46,6 +90,14 @@ interface SessionState {
     toolCalls?: unknown;
     saved?: { filePath?: string };
     error?: string;
+    /** kind==='intent'：意图识别的轮级判定（主进程 electron/intent.cjs 的 createIntentPolicy 结果） */
+    intent?: string;
+    risk?: string;
+    authorization?: string;
+    confidence?: number;
+    source?: string;
+    routeHint?: string | null;
+    tighten?: boolean;
     /** kind==='compacted'：压缩结果与给模型的信封 */
     ok?: boolean;
     envelope?: string;
@@ -55,6 +107,7 @@ interface SessionState {
     tokensAfter?: number;
     keptUserTurns?: number;
     reason?: string;
+    message?: string;
     /** kind==='context_overflow'：preflight | recovering；以及估算 token / 窗口 */
     phase?: string;
     tokens?: number;
@@ -67,6 +120,12 @@ interface SessionState {
     digest?: string;
     counts?: Record<string, number>;
     providerMessage?: string;
+    /** kind==='plan'：任务清单（update_plan）的最新一份 */
+    items?: { id?: string; step?: string; acceptanceCriteria?: string; status?: string; evidenceCallIds?: string[]; reason?: string; dependsOn?: string[]; ownerTaskId?: string }[];
+    updatedAt?: string;
+    planVersion?: string;
+    runId?: string | null;
+    sessionId?: string | null;
   }) => void;
   /**
    * 上下文压缩（照 Codex CLI）：把当前对话折叠成一张交接摘要卡 —— 旧消息标记 `compacted`
@@ -82,6 +141,24 @@ interface SessionState {
 
   setProgressIndex: (i: number) => void;
   clearProgress: () => void;
+  beginPlanRun: (sessionId: string | null) => void;
+  setPlanForSession: (sessionId: string, snapshot: PlanSnapshot | null) => void;
+  /**
+   * 任务清单（`update_plan` 的计划卡）：由主进程的 `kind:'plan'` 增量更新。
+   * 只认主进程给的「最新一份」，不做本地推算（本地推算会与模型看到的计划漂移）。
+   */
+  plan: PlanItem[] | null;
+  planUpdatedAt: string | null;
+  planRunId: string | null;
+  activePlanSessionId: string | null;
+  plansBySessionId: Record<string, PlanSnapshot>;
+  /**
+   * 意图识别的最近一次判定（`kind:'intent'` 增量）：run 级状态，写独立字段。
+   * `null` = 这次 run 没有判定（功能关闭 / 未触发 / 分类失败），界面据此**不显示任何结论**。
+   */
+  intentVerdict: IntentVerdict | null;
+  intentUpdatedAt: string | null;
+  intentRunId: string | null;
   reset: () => void;
 }
 
@@ -102,13 +179,29 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+function validMemoryConversationId(value: string | undefined): boolean {
+  return /^[\w.-]{1,120}$/.test(value || '') && !['__proto__', 'constructor', 'prototype'].includes(value || '');
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
+  draftRevision: 0,
+  newConversationPending: false,
   sessions: {},
   order: [],
   activeId: null,
+  memoryConversationId: '',
+  memoryTaskEpoch: 0,
   streaming: false,
   messages: [],
   progress: null,
+  plan: null,
+  planUpdatedAt: null,
+  planRunId: null,
+  activePlanSessionId: null,
+  plansBySessionId: {},
+  intentVerdict: null,
+  intentUpdatedAt: null,
+  intentRunId: null,
 
   current: () => {
     const s = get();
@@ -126,13 +219,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       createdAt: Date.now(),
       nodeCount: 0,
     };
-    const messages: SessionMsg[] = greeting
-      ? [{ role: 'assistant', content: greeting, status: 'done' }]
-      : [];
+    const messages: SessionMsg[] = [];
     set({
       sessions: { [id]: first },
       order: [id],
       activeId: id,
+      memoryConversationId: uid('memory'),
+      memoryTaskEpoch: 0,
+      activePlanSessionId: id,
+      plan: null,
+      planUpdatedAt: null,
+      planRunId: null,
       streaming: false,
       messages,
       progress: null,
@@ -141,6 +238,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   beginWorkSession: (prompt) => {
+    get().syncActiveGraph();
     const s = get();
     let sessions = { ...s.sessions };
     const order = [...s.order];
@@ -149,7 +247,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (active) sessions[active.id] = { ...active, status: 'completed' };
     }
     const id = uid('canvas');
-    const label = '画布' + (order.length + 1);
+    const usedLabels = new Set(Object.values(sessions).filter(canvas => !canvas.archived).map(canvas => canvas.label));
+    let number = 1;
+    while (usedLabels.has('画布' + number)) number++;
+    const label = '画布' + number;
     const blank: SessionCanvas = {
       id,
       label,
@@ -162,7 +263,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     sessions = { ...sessions, [id]: blank };
     order.push(id);
     loadGraph(blank.doc);
-    set({ sessions, order, activeId: id, streaming: false, progress: null });
+    set({ newConversationPending: false, sessions, order, activeId: id, memoryConversationId: s.memoryConversationId || uid('memory'), activePlanSessionId: id, streaming: false, progress: null, plan: null, planUpdatedAt: null, planRunId: null });
+  },
+
+  setArchived: (id, archived) => {
+    const s = get();
+    if (!s.sessions[id] || s.streaming || !!s.sessions[id].archived === archived) return;
+    get().syncActiveGraph();
+    set(state => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id], archived } } }));
+    if (archived && id === s.activeId) {
+      const next = s.order.find(other => other !== id && !get().sessions[other]?.archived);
+      if (next) get().switchSession(next);
+      else {
+        loadGraph(emptyDoc());
+        set({ activeId: null, activePlanSessionId: null, progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null });
+      }
+    } else if (!archived && !s.activeId) get().switchSession(id);
   },
 
   switchSession: (id) => {
@@ -172,7 +288,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     get().syncActiveGraph();
     const target = s.sessions[id];
     loadGraph(target.doc);
-    set({ activeId: id, progress: null });
+    const savedPlan = s.plansBySessionId[id] || null;
+    set({
+      activeId: id,
+      newConversationPending: false,
+      messages: target.messages || s.messages,
+      memoryConversationId: target.memoryConversationId || s.memoryConversationId,
+      activePlanSessionId: id,
+      progress: null,
+      plan: savedPlan ? savedPlan.items : null,
+      planUpdatedAt: savedPlan ? savedPlan.updatedAt : null,
+      planRunId: savedPlan ? savedPlan.runId : null,
+    });
   },
 
   syncActiveGraph: () => {
@@ -180,11 +307,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!active) return;
     const doc = snapshotGraph();
     set((s) => ({
-      sessions: { ...s.sessions, [active.id]: { ...active, doc, nodeCount: countNodes(doc) } },
+      sessions: { ...s.sessions, [active.id]: { ...active, doc, nodeCount: countNodes(doc), messages: clone(s.messages), memoryConversationId: s.memoryConversationId } },
     }));
   },
 
-  restoreSessions: (list, messages, activeId) => {
+  restoreSessions: (list, messages, activeId, memoryConversationId, memoryTaskEpoch) => {
+    const stableMemoryId = validMemoryConversationId(memoryConversationId)
+      ? String(memoryConversationId) : uid('memory');
+    const taskEpoch = Number.isInteger(memoryTaskEpoch) && Number(memoryTaskEpoch) >= 0
+      ? Number(memoryTaskEpoch) : 0;
     const sessions: Record<string, SessionCanvas> = {};
     const order: string[] = [];
     for (const s of list) {
@@ -192,9 +323,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions[s.id] = s;
       order.push(s.id);
     }
-    let id = activeId && sessions[activeId] ? activeId : null;
+    let id = activeId && sessions[activeId] && !sessions[activeId].archived ? activeId : null;
     if (!id) {
-      const active = order.map((x) => sessions[x]).find((x) => x.status === 'active');
+      const active = order.map((x) => sessions[x]).find((x) => x.status === 'active' && !x.archived);
       id = active ? active.id : null;
     }
     if (!id) {
@@ -203,48 +334,43 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       let bestCount = -1;
       for (const oid of order) {
         const s = sessions[oid];
+        if (s?.archived) continue;
         const c = s ? s.nodeCount : 0;
         if (c > bestCount) {
           bestCount = c;
           best = oid;
         }
       }
-      id = best || order[order.length - 1] || null;
+      id = best || null;
     }
     if (!id) {
-      set({ sessions, order, activeId: null, streaming: false, messages: messages || [], progress: null });
+      set({ sessions, order, activeId: null, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: null, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: messages || [], progress: null });
+      loadGraph(emptyDoc());
       return;
     }
     loadGraph(sessions[id].doc);
-    set({ sessions, order, activeId: id, streaming: false, messages: messages || [], progress: null });
+    set({ sessions, order, activeId: id, memoryConversationId: stableMemoryId, memoryTaskEpoch: taskEpoch, activePlanSessionId: id, plansBySessionId: {}, plan: null, planUpdatedAt: null, planRunId: null, streaming: false, messages: sessions[id].messages || messages || [], progress: null });
   },
 
   getDocument: () => snapshotGraph(),
 
+  newConversation: () => {
+    if (get().streaming) return;
+    get().syncActiveGraph();
+    loadGraph(emptyDoc());
+    set(state => ({ activeId: null, activePlanSessionId: null, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, memoryConversationId: uid('memory'), memoryTaskEpoch: state.memoryTaskEpoch + 1, draftRevision: state.draftRevision + 1, newConversationPending: true }));
+  },
+
   newCanvas: () => {
+    set((s) => ({ memoryTaskEpoch: s.memoryTaskEpoch + 1 }));
     get().beginWorkSession('');
   },
 
   startOnCurrent: (prompt) => {
     let active = get().current();
     if (!active) {
-      if (get().order.length === 0) {
-        // 尚无任何画布：创建画布1
-        const id = uid('canvas');
-        const first: SessionCanvas = {
-          id,
-          label: '画布1',
-          prompt: prompt || '',
-          doc: emptyDoc(),
-          status: 'active',
-          createdAt: Date.now(),
-          nodeCount: 0,
-        };
-        set({ sessions: { [id]: first }, order: [id], activeId: id, streaming: false, progress: null });
-        loadGraph(emptyDoc());
-        return;
-      }
-      get().switchSession(get().order[0]);
+      const existing = get().newConversationPending ? null : get().order.find(id => !get().sessions[id]?.archived);
+      if (existing) get().switchSession(existing); else get().newCanvas();
       active = get().current();
     }
     if (!active) return;
@@ -274,6 +400,57 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    if (d.kind === 'plan_warning') {
+      useUiStore.getState().setToast(String(d.message || '任务计划持久化未完整，请核对运行记录'));
+      return;
+    }
+    /**
+     * 计划卡：写**独立字段**而不是塞进某条消息 —— 计划是 run 级状态，
+     * 塞进气泡会在压缩/续跑时跟着消息一起被折叠或错位。
+     * 未知状态按 pending 处理（界面上不出现空白步骤）。
+     */
+    if (d.kind === 'plan') {
+      const sessionId = String(d.sessionId || s.activePlanSessionId || s.activeId || '');
+      if (!sessionId) return;
+      const items = (Array.isArray(d.items) ? d.items : []).slice(0, 20).map((i, index) => ({
+        id: String((i && i.id) || 'step-' + (index + 1)).slice(0, 80),
+        step: String((i && i.step) || '').slice(0, 300),
+        acceptanceCriteria: String((i && i.acceptanceCriteria) || '').slice(0, 300),
+        status: (['pending', 'in_progress', 'blocked', 'completed', 'cancelled'].includes(String((i && i.status) || ''))
+          ? String(i && i.status)
+          : 'pending') as PlanItem['status'],
+        evidenceCallIds: i && Array.isArray(i.evidenceCallIds) ? i.evidenceCallIds.map(String).slice(0, 8) : [],
+        reason: i && i.reason ? String(i.reason).slice(0, 300) : undefined,
+        dependsOn: i && Array.isArray(i.dependsOn) ? i.dependsOn.map(String).slice(0, 20) : [],
+        ownerTaskId: i && i.ownerTaskId ? String(i.ownerTaskId).slice(0, 120) : undefined,
+      }));
+      const snapshot = { items, updatedAt: d.updatedAt ? String(d.updatedAt) : null, runId: d.runId ? String(d.runId) : null };
+      const plansBySessionId = { ...s.plansBySessionId, [sessionId]: snapshot };
+      if (s.activePlanSessionId !== sessionId) set({ plansBySessionId });
+      else set({ plan: items, planUpdatedAt: snapshot.updatedAt, planRunId: snapshot.runId, plansBySessionId });
+      return;
+    }
+    /**
+     * 意图识别：与计划卡同款处理 —— 写独立字段（run 级状态），不塞进气泡。
+     * 只认主进程给的判定，`source` 一起留着：界面要能区分「模型真判了」（model/partial/invalid）
+     * 与「这次没有信号」（unavailable —— 没跑 / 超时 / 关闭），后者不显示任何结论。
+     */
+    if (d.kind === 'intent') {
+      set({
+        intentVerdict: {
+          intent: String(d.intent || 'unknown'),
+          risk: String(d.risk || 'unknown'),
+          authorization: String(d.authorization || 'unknown'),
+          confidence: Number.isFinite(Number(d.confidence)) ? Number(d.confidence) : 0,
+          source: String(d.source || 'unavailable'),
+          tighten: d.tighten === true,
+          reason: d.reason ? String(d.reason).slice(0, 200) : '',
+        },
+        intentUpdatedAt: new Date().toISOString(),
+        intentRunId: d.runId ? String(d.runId) : null,
+      });
+      return;
+    }
     // 上下文压缩（照 Codex）：把已有消息折叠掉、换成一张交接摘要卡。必须在「最后一条是 assistant」
     // 的守卫之前处理 —— 压缩发生在模型轮次之间，那时气泡状态不该影响它。
     if (d.kind === 'compacted' && d.ok !== false) {
@@ -327,33 +504,62 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const msgs = s.messages.map((m) => ({ ...m }));
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== 'assistant') return;
-    if (d.kind === 'reasoning' && d.text) last.reasoning = (last.reasoning || '') + d.text;
-    else if (d.kind === 'content' && d.text) last.content += d.text;
-    else if (d.kind === 'content_reset') {
+    // 「已保存」是副作用提示，不改气泡内容；未知 kind 兜底时不吞掉它
+    if (d.kind === 'saved') {
+      if (d.saved && d.saved.filePath) {
+        useProjectStore.getState().setProjectFile(d.saved.filePath);
+        useUiStore.getState().setToast('Agent 已保存：' + d.saved.filePath);
+      }
+      return;
+    }
+    // 气泡的 kind → 状态判断收在 `src/lib/sessionDelta.ts` 的纯函数里：那里认识 truncated / stopped，
+    // 也对**未知 kind 显式兜底告警**（修复前这两类增量在这里没有任何分支，被静默丢弃；
+    // 而且下次后端再加 kind 还会同样静默漂移）。
+    const outcome = applyStreamDelta(last, d);
+    if (!outcome.recognized) {
+      warnUnknownDelta(d.kind);
+      return;
+    }
+    if (!outcome.changed) return;
+    if (outcome.appendText) {
+      if (d.kind === 'reasoning') last.reasoning = (last.reasoning || '') + outcome.appendText;
+      else last.content = (last.content || '') + outcome.appendText;
+    }
+    if (outcome.resetContent) {
       // 流中途断线 → 主进程整轮重发：已流出的半截内容作废，否则重发的完整回答
       // 会接在半截后面，用户看到两遍开头。
       last.content = '';
       last.reasoning = '';
       last.tools = [];
-    } else if (d.kind === 'tool' && d.toolCalls) {
-      const list = (d.toolCalls as { id?: string; name?: string; args?: unknown }[]).map((t) => ({
+    }
+    if (outcome.toolCalls) {
+      const list = (outcome.toolCalls as { id?: string; name?: string; args?: unknown }[]).map((t) => ({
         id: t.id,
         name: t.name || 'tool',
         args: t.args,
       }));
       last.tools = mergeTools(last.tools || [], list);
-    } else if (d.kind === 'tool_result' && d.toolCalls) {
-      const list = (d.toolCalls as ToolRecord[]).map((t) => ({
+    }
+    if (outcome.toolResult) {
+      const list = (outcome.toolResult as ToolRecord[]).map((t) => ({
         name: t.name,
         args: t.args,
         result: t.result,
         ok: t.ok,
         data: t.data,
+        callId: t.callId,
+        actor: t.actor,
       }));
       last.tools = mergeTools(last.tools || [], list);
-    } else if (d.kind === 'saved' && d.saved && d.saved.filePath) {
-      useProjectStore.getState().setProjectFile(d.saved.filePath);
-      useUiStore.getState().setToast('Agent 已保存：' + d.saved.filePath);
+    }
+    if (outcome.status) {
+      // truncated：「正在续写」不再是看不见的状态；stopped：点停止后气泡立刻变「已停止」，
+      // 不再等 finally（那个窗口里界面看起来像没反应）。同时把 streaming 收掉，
+      // 避免「已停止」的气泡旁边还挂着「思考中…」。
+      last.status = outcome.status;
+      if (outcome.status !== 'done') set({ messages: msgs, streaming: false });
+      else set({ messages: msgs });
+      return;
     }
     set({ messages: msgs });
   },
@@ -362,12 +568,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const s = get();
     const msgs = s.messages.map((m) => ({ ...m }));
     const last = msgs[msgs.length - 1];
+    const previousUser = [...msgs].reverse().find((message) => message.role === 'user');
     if (last && last.role === 'assistant') {
       last.content = reply || last.content;
       if (reasoning) last.reasoning = reasoning;
       if (tools && tools.length) last.tools = tools;
       last.status = 'done';
       if (grounding) last.grounding = grounding;
+      if (previousUser) last.feedbackInput = String(previousUser.content || '').slice(0, 12000);
     }
     // 当前画布标记完成并记录摘要
     let sessions = { ...s.sessions };
@@ -416,6 +624,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (last && last.role === 'assistant') {
       last.status = 'stopped';
     }
+    // 停止 → 流式立刻结束。修复前 `streaming` 与单值 `sending` 不同步，存在
+    // 「UI 已显示空闲、旧请求尚未收尾」的窗口；现在 `sending` 是派生的 inflight 计数，窗口消失。
     set({ messages: msgs, streaming: false });
   },
 
@@ -472,7 +682,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearProgress: () => set({ progress: null }),
 
-  reset: () => set({ sessions: {}, order: [], activeId: null, streaming: false, messages: [], progress: null }),
+  beginPlanRun: (sessionId) => {
+    const id = sessionId || null;
+    const state = get();
+    if (id) {
+      const plansBySessionId = { ...state.plansBySessionId };
+      delete plansBySessionId[id];
+      set({ activePlanSessionId: id, plansBySessionId, plan: null, planUpdatedAt: null, planRunId: null });
+      return;
+    }
+    set({ activePlanSessionId: null, plan: null, planUpdatedAt: null, planRunId: null });
+  },
+
+  setPlanForSession: (sessionId, snapshot) => {
+    const state = get();
+    const plansBySessionId = { ...state.plansBySessionId };
+    if (snapshot) plansBySessionId[sessionId] = snapshot;
+    else delete plansBySessionId[sessionId];
+    if (state.activePlanSessionId !== sessionId) {
+      set({ plansBySessionId });
+      return;
+    }
+    set({
+      plansBySessionId,
+      plan: snapshot ? snapshot.items : null,
+      planUpdatedAt: snapshot ? snapshot.updatedAt : null,
+      planRunId: snapshot ? snapshot.runId : null,
+    });
+  },
+
+  reset: () => set({ sessions: {}, order: [], activeId: null, memoryConversationId: '', memoryTaskEpoch: 0, activePlanSessionId: null, plansBySessionId: {}, streaming: false, messages: [], progress: null, plan: null, planUpdatedAt: null, intentVerdict: null, intentUpdatedAt: null, intentRunId: null }),
 }));
 
 /** 合并工具记录：流式增量按 id 去重（同一调用多次 chunk 只算一条）；最终结果按 name+args 回填到未定结果条目，保留每次真实调度 */

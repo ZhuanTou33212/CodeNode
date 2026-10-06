@@ -72,6 +72,7 @@ function register(registry) {
       });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["list_directory"]);
 }
 
 module.exports = { register };

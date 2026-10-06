@@ -7,6 +7,8 @@
  */
 
 const modelStore = require('../modelStore.cjs');
+const providerModels = require('../providerModels.cjs');
+const { randomUUID } = require('crypto');
 
 /**
  * @param {{
@@ -25,8 +27,32 @@ function register(ctx) {
   };
 
   ipcMain.handle('models:list', async () => {
-    const store = loadStore();
-    return { models: modelStore.toPublicModels(store.models), activeId: store.activeId };
+    const store = modelStore.readUsableModels(userDataDir(), agent.loadConfig(null));
+    return { models: modelStore.toPublicModels(store.models), activeId: store.activeId, modelAliases: store.modelAliases };
+  });
+
+  const pending = new Map();
+  ipcMain.handle('models:discover', async (event, provider, apiKey, options) => {
+    try {
+      for (const [id, entry] of pending) if (entry.expires < Date.now() || entry.sender === event.sender.id) pending.delete(id);
+      if (pending.size >= 16) return { ok: false, error: '连接请求过多，请稍后重试' };
+      const models = await providerModels.discover(provider, apiKey, undefined, options || {});
+      const ticket = randomUUID();
+      pending.set(ticket, { sender: event.sender.id, models, apiKey: apiKey.trim(), expires: Date.now() + 600000 });
+      const timer = setTimeout(() => pending.delete(ticket), 600000); timer.unref();
+      event.sender.once('destroyed', () => { clearTimeout(timer); pending.delete(ticket); });
+      return { ok: true, ticket, models, apiKeyPreview: modelStore.maskApiKey(apiKey.trim()) };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle('models:connect', async (event, ticket, selectedId) => {
+    const entry = pending.get(ticket);
+    if (!entry || entry.sender !== event.sender.id || entry.expires < Date.now()) return { ok: false, error: '连接已过期，请重新获取模型' };
+    if (!entry.models.some((model) => model.id === selectedId)) return { ok: false, error: '请选择列表中的模型' };
+    try {
+      modelStore.saveConnection(userDataDir(), entry.models, entry.apiKey, selectedId);
+      pending.delete(ticket);
+      return { ok: true };
+    } catch { return { ok: false, error: '无法安全保存 Key，原配置已保留' }; }
   });
 
   ipcMain.handle('models:save', async (_event, model) => {
@@ -34,7 +60,8 @@ function register(ctx) {
     const userData = userDataDir();
     const store = loadStore();
     const existing = store.models.find((item) => item && item.id === model.id);
-    const incoming = { ...model };
+    // 协议字段（OpenAI 兼容 / Claude / Gemini / Azure）只做取值归一，界面上不暴露
+    const incoming = modelStore.normalizeModelInput({ ...model });
     // UI 不会回传已保存的密钥；空值表示保留主进程中的旧密钥。
     if (!String(incoming.apiKey || '').trim() && existing && existing.apiKey) incoming.apiKey = existing.apiKey;
     delete incoming.apiKeySet;
@@ -54,11 +81,8 @@ function register(ctx) {
   });
 
   ipcMain.handle('models:active', async (_event, id) => {
-    const userData = userDataDir();
-    const store = loadStore();
-    if (!store.models.some((m) => m.id === id)) return { ok: false, error: '模型不存在' };
-    modelStore.writeModels(userData, store.models, id);
-    return { ok: true, activeId: id };
+    try { modelStore.activateModel(userDataDir(), id); return { ok: true, activeId: id }; }
+    catch { return { ok: false, error: '该模型 Key 不可用，请重新连接供应商' }; }
   });
 }
 

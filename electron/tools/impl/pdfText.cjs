@@ -79,7 +79,7 @@ function parseCMaps(streamTexts) {
         if (hex.length >= 3) {
           const dst = hexToUnicode(hex[2].slice(1, -1));
           if (dst && dst.length === 1) {
-            const base = dst.codePointAt(0);
+            const base = dst.codePointAt(0) || 0;
             for (let c = lo; c <= hi && c <= lo + 0x1000; c++) {
               map.set(c, String.fromCodePoint(base + (c - lo)));
             }

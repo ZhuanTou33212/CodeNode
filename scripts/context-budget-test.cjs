@@ -196,6 +196,31 @@ function pairingValid(messages) {
   check('B3b 单条被裁的工具结果留了占位符（模型知道可以重取）',
     limited.messages.some((message) => message.role === 'tool' && contextBudget.isTrimmed(message.content)),
     '占位符条数=' + limited.messages.filter((m) => m.role === 'tool' && contextBudget.isTrimmed(m.content)).length);
+  // 回归 #22：占位符必须写清「原本是哪次调用的结果」。
+  // 真实循环产出的 tool 消息此前**不带 name**，于是占位符只能渲染成「此处原本是 **工具** 的结果」——
+  // 而「请用相同参数重新调用该工具」这句里最有用的恰恰就是工具名。
+  // 注意这里断言的是**生产同形**的消息（来自真实循环），不是本文件手搓的 fixture：
+  // 旧的 A4 用例只测了 placeholderFor 纯函数，而 fixture 自带 name，所以生产缺 name 也一直是绿的。
+  const trimmedToolNames = limited.messages
+    .filter((message) => message.role === 'tool' && contextBudget.isTrimmed(message.content))
+    .map((message) => message.name)
+    .filter(Boolean);
+  check(
+    'B3c 生产同形的 tool 消息带 name（占位符才能写出真实工具名）',
+    trimmedToolNames.length > 0,
+    '被裁工具的消息 name=[' + trimmedToolNames.join(',') + ']'
+  );
+  check(
+    'B3d 占位符正文里出现的是真实工具名，而不是笼统的「工具」',
+    limited.messages
+      .filter((message) => message.role === 'tool' && contextBudget.isTrimmed(message.content))
+      .every((message) => !message.name || String(message.content).includes(String(message.name))),
+    JSON.stringify(
+      limited.messages
+        .filter((m) => m.role === 'tool' && contextBudget.isTrimmed(m.content))
+        .map((m) => String(m.content).slice(contextBudget.TRIM_MARKER.length).slice(0, 24))
+    )
+  );
 
   const tiny = await runLoop({ context: { enabled: true, maxInputChars: 2000, keepRecentMessages: 4, minResultChars: 2000 } });
   check('B1b 预算小到压不进（连硬保护的最后一条都放不下）时如实报 overBudget=true，不谎报已达预算',

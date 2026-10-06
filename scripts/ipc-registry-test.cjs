@@ -15,18 +15,21 @@ const os = require('os');
 const path = require('path');
 
 const EXPECTED = {
-  'models.cjs': ['models:list', 'models:save', 'models:delete', 'models:active'],
+  'models.cjs': ['models:list', 'models:save', 'models:delete', 'models:active', 'models:discover', 'models:connect'],
   'metrics.cjs': ['agent:metrics'],
   'project.cjs': [
     'graph:save', 'graph:open',
     'project:choose', 'project:create', 'project:list', 'project:read', 'project:write', 'project:search',
-    'project:run', 'project:run:start', 'project:run:stop', 'project:run:input',
+    'project:run', 'project:run:start', 'project:run:stop', 'project:run:input', 'project:workflow-state', 'project:workflow-execute',
     'project:save', 'project:load', 'extensions:list',
   ],
   'agent.cjs': [
-    'agent:config', 'agent:greeting', 'agent:tools', 'agent:runs',
+    'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:resume-plan', 'agent:resume-start', 'agent:chat', 'agent:stop',
     'agent:events',
+    'agent:plan-read',
+    'agent:rollback-plan', 'agent:rollback-apply', 'agent:steer',
+    'agent:subagents', 'agent:feedback', 'agent:feedback-export', 'agent:feedback-review', 'agent:time-travel',
   ],
 };
 

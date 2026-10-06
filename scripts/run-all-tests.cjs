@@ -32,6 +32,15 @@ const CORE = [
   'test:agent-boundary',
   'test:bridge',
   'test:request-budget',
+  'test:cost-budget',
+  'test:tool-output-contract',
+  'test:builtin-output-contract',
+  'test:trace-tree',
+  'test:feedback-store',
+  'test:feedback-dataset',
+  'test:time-travel',
+  'test:model-routing',
+  'test:workflow-state',
   'test:run-store',
   'test:atomic-file',
   'test:dep-declaration',
@@ -51,6 +60,8 @@ const CORE = [
   'test:read-file-limits',
   'test:limit-wrapup',
   'test:memory-recall',
+  'test:memory-conflict',
+  'test:session-memory-override',
   'test:agent-iterations',
   'test:tool-contract',
   'test:grounding-gate',
@@ -70,14 +81,21 @@ const CORE = [
   'test:truncation-safety',
   'test:agent-state',
   'test:tool-descriptor',
+  // 项目扩展/MCP 清单显式 descriptor（输出契约、只读性、超时）必须进入核心门禁，
+  // 不能只靠开发者手动运行专项脚本。
+  'test:extension-contract',
+  'test:pii',
+  'test:provider-models',
   'test:context-capability',
   'test:side-effect-idem',
   'test:save-project',
+  'test:project-create',
   'test:shell-timeout',
   'test:sandbox-stdin',
   'test:security',
   'test:ipc',
   'test:rag',
+  'test:rag-document',
   'test:shell-output',
   'test:bg',
   'test:production-gate',
@@ -86,10 +104,85 @@ const CORE = [
   'test:resume',
   'test:cost',
   'test:eval',
+  // 前端增量修复（#7 并发竞态 / #21 plan 与 delta 分支 / #25 错误可见性与 a11y）：
+  // 纯 node + react-dom/server 渲染，不需要窗口，所以留在核心组
+  'test:frontend-incremental',
+  // 流内异常必须被消费（#12）：自带 fetch stub，离线确定性
+  'test:stream-anomaly',
+  // 工具审批/边界加固（#8 确认判据归一化 / #10 确认信息面 / #19 shell 输出上限 / #20 前台进程树：
+  // 纯 Node 断言 + 静态门禁，离线确定性）
+  'test:shell-hardening',
+  'test:confirm-payload',
+  // 存储加固（#14 日志与恢复只读首尾 / #16 memory 损坏拒绝写 / #15 脱敏 / #13 合并落盘）：
+  // 纯 Node 断言；scale 会写约 45MB 临时文件、2-4s
+  'test:run-store-scale',
+  'test:storage-hardening',
+  // 阶段 A（token 效率审计 P0-1/P0-2 + A1/A3/A4）：工具面按任务裁剪 + 结果单份投影 + 记忆预算。
+  // 纯 Node 断言 + 脚本化模型请求体取证，离线确定性（数字口径 = compaction.estimateTokens）
+  'test:token-overhead',
+  'test:tool-projection',
+  // P1-1：稳定内容前置 + 规则按面分层（前缀稳定性 / 规则零改字 / 变异判别力）。纯 Node，离线确定性
+  'test:prompt-prefix',
+  // P2-2 / P1-3 / P2-1 / P1-4（2026-09-22 第三批）：归因、压缩收益、输出分档、压缩尾部
+  'test:cost-attribution',
+  'test:compression-roi',
+  'test:output-budget',
+  'test:compaction-tail',
+  // 阶段 B / P0-3：确定性路由 + 分类门 + 动作级准入（含「跳过 guardian 不影响静态层」的安全不变量）
+  'test:intent-cost-gate',
+  // P1-2：记忆/画布/技能/RAG 的统一 token 预算（含「不触发时逐字节不变」的负向判据）
+  'test:dynamic-context',
+  // 用例输入与生产同形（增量审查 §4.4）：从真实请求体抓生产 tool 消息字段集，
+  // 与续跑重建路径 + 用例 fixture 逐字段对齐（纯 node，离线确定性）
+  'test:fixture-shape',
+  // 真机回归挂 PR（增量审查 §4.1）：任务声明完整性 + --subset=pr 体检 + CI 接线 +
+  // 无 Key fail-closed + 用独立进程 mock 服务器跑一遍真 HTTP 真机管线（离线确定性）
+  'test:real-model-pr',
+  // 多厂商协议兼容（S13）：四家协议真跑 HTTP（OpenAI 兼容逐字节不变 / Claude 原生 / Gemini 原生 /
+  // Azure 企业端点）+ 端到端 Claude 原生工具循环 + 协议接错的判别力对照 + 「界面只有一个 key 入口」
+  // 的负向断言（协议按地址自动判定，不许误判也不许改动默认档）
+  'test:model-protocol',
+  // 每轮固定开销分层（增量审查 §4.3）：画布规则按需注入 + 开销上界门禁
+  'test:prompt-layers',
+  // 意图识别（照 Codex guardian 分类器）：解析与保守回落 / 只收紧不放宽 / 无信号两可 / 提示词路由 / 审批门禁 / 接线
+  'test:intent',
+  'test:intent-action',
+  // Run 级文件回滚（增量审查 §4.2）：前像抓取 / 只读计划 / 执行与校验 / 越界与冲突的拒绝对待
+  'test:run-rollback',
+  // 运行中插话（§4.2）：队列语义 / 恰好插入一次 / 不插话零痕迹 / 接线
+  'test:agent-steering',
+  // 子代理任务视图跨 run 留存（§4.2）：落盘 / 跨实例可读 / 覆盖与上限 / 坏文件如实报告
+  'test:subagent-view',
+  // 任务清单（对照 Codex 的 update_plan）：schema/校验 / 落盘 + run 事件 / 即时回灌 / 只留一条 / 负向零痕迹
+  'test:agent-plan',
+  // Windows 无内核隔离这条边界的收口：出厂断网 + 「写目标判不出来」不再静默放行（含负向防误伤）
+  'test:shell-boundary',
+  // 钩子（对照 Claude Code 的 hooks）：PostToolUse 回灌 / SessionStart-Stop / 越界写与断网拒绝 / 未配置零痕迹
+  'test:hooks',
+  // 非交互入口（对照 codex exec / claude -p）：参数与凭据 fail-closed / 真 HTTP 一轮 / 写操作确认两向 / run 落盘
+  'test:headless',
+  // 用户级（跨项目）记忆：落盘/去重/上限/按提问打分/scope 读写
+  'test:user-memory',
+  // 持久化审批规则（对照 Claude Code 的 allow 规则）：命中免打扰 + 留痕 / 受保护路径写不进 / 界面接线
+  'test:approval-rules',
+  // 技能渐进披露（§4 固定开销）：prompt 只放索引 / read_skill 按需读正文 / 上限截断
+  'test:skill-index',
+  // 看图（对照 Codex 的 view_image）：格式与上限校验 / 多模态消息真的进了下一次请求 / 零痕迹
+  'test:view-image',
+  // MCP 会话复用 + tools/list 缓存（§5 #5）：spawn 次数 / 握手次数 / 清单只问一次 / 崩溃重拉 / 空闲回收
+  'test:mcp-session',
+  // MCP streamable HTTP transport（§5 #5 剩余项）：JSON/SSE 应答 / 会话头 / 出网策略 / 错误语义
+  'test:mcp-http',
+  // 联网搜索（§5 #7）：可配置后端 + 出厂关闭 / 不编造空结果 / 出网策略 / 条数上界
+  'test:web-search',
+  // 工作树隔离（§5 #7）：真 git 仓库上验「主工作树逐字节不受影响」+ 受管目录边界 + 删除语义
+  'test:worktree',
+  // 子代理工作树隔离：projectRoot 真切成工作树 / 建不出来就中止（不静默降级）/ 结果与审计诚实
+  'test:subagent-worktree',
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:vector', 'test:event-replay-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -119,6 +212,10 @@ if (flag('--list')) {
 
 const isWindows = process.platform === 'win32';
 const cwd = path.join(__dirname, '..');
+// A broken child test must fail the gate, never hold CI/Desktop verification
+// forever.  Individual suites have their own shorter budgets where needed;
+// this is only the outer process-lifecycle guard.
+const TEST_PROCESS_TIMEOUT_MS = 180000;
 
 function runScript(name) {
   const started = Date.now();
@@ -131,14 +228,16 @@ function runScript(name) {
   // Windows 上直接 spawn npm.cmd 会 EINVAL，必须走 shell；POSIX 上必须用参数数组（把整条命令
   // 当字符串交给 execve 会 ENOENT → status=null，CI 上表现为"25 项全部 0.00s 失败"）。
   const result = isWindows
-    ? spawnSync('npm.cmd run --silent ' + name, { cwd, stdio: 'inherit', shell: true })
-    : spawnSync('npm', ['run', '--silent', name], { cwd, stdio: 'inherit' });
+    ? spawnSync('npm.cmd run --silent ' + name, { cwd, stdio: 'inherit', shell: true, timeout: TEST_PROCESS_TIMEOUT_MS })
+    : spawnSync('npm', ['run', '--silent', name], { cwd, stdio: 'inherit', timeout: TEST_PROCESS_TIMEOUT_MS });
   const ms = Date.now() - started;
   const ok = result.status === 0;
   // spawn 本身失败（ENOENT/EINVAL）时 status 为 null、error 有值：必须显式带出来，
   // 否则只剩 `exit=null`，看不出是脚本失败还是根本没跑起来。
   const spawnError = result.error ? String(result.error.message || result.error) : null;
-  return { name, ok, ms, status: result.status, signal: result.signal, error: spawnError };
+  const spawnErrorObject = /** @type {any} */ (result.error);
+  const timedOut = Boolean(spawnErrorObject && (String(spawnErrorObject.code || '') === 'ETIMEDOUT' || /timed out/i.test(String(spawnErrorObject.message || ''))));
+  return { name, ok: ok && !timedOut, ms, status: result.status, signal: result.signal, timedOut, error: spawnError };
 }
 
 console.log('CodeNode 测试套件：组=' + (only.length ? '自定义' : group) + '，共 ' + scripts.length + ' 项');
@@ -161,7 +260,7 @@ console.log('测试汇总');
 console.log('='.repeat(72));
 for (const r of results) {
   const mark = r.ok ? 'PASS' : 'FAIL';
-  console.log('  ' + mark + '  ' + r.name.padEnd(26) + (r.ms / 1000).toFixed(2).padStart(7) + 's' + (r.ok ? '' : '  (exit=' + r.status + (r.error ? ', spawn 失败: ' + r.error : '') + ')'));
+  console.log('  ' + mark + '  ' + r.name.padEnd(26) + (r.ms / 1000).toFixed(2).padStart(7) + 's' + (r.ok ? '' : '  (' + (r.timedOut ? '超时' : 'exit=' + r.status) + (r.error ? ', spawn 失败: ' + r.error : '') + ')'));
 }
 if (skipped.length) console.log('  跳过: ' + skipped.join(', '));
 

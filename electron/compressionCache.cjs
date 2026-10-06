@@ -22,9 +22,59 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { atomicWriteFile } = require('./atomicFile.cjs');
+const { redact } = require('./redaction.cjs');
 
 const DEFAULT_MAX_ENTRIES = 200;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * #13：落盘合并窗口（ms）。`set()` 只打脏标记 + 记字节数；攒到一个窗口（或显式 flush /
+ * 进程退出）才写一次盘。旧实现每 `set` 一条就把整个缓存（最多 200 条 / 2MB）JSON.stringify
+ * + fsync + rename 重写一次 —— 一轮里压缩几十份结果就是几十次全量重写，全在同步路径上。
+ */
+const DEFAULT_FLUSH_DELAY_MS = 250;
+
+/**
+ * #15：与 runStore 同一脱敏口径。缓存的值是「工具结果的模型摘要」，工具结果里可能带密钥，
+ * 落盘前必须过一遍 `redact`。只改正文里的密钥样式文本，条目结构 / 字节统计口径不变。
+ */
+function safeValue(value) {
+  return typeof value === 'string' ? redact(value) : value;
+}
+
+/** 进程内「攒着还没落盘」的实例（#13）：退出 / 显式 flush 时统一保证落盘。 */
+const dirtyInstances = new Set();
+let exitHookInstalled = false;
+
+function installExitHook() {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  // 缓存本身可重建（丢了最坏是重新压一次），但「已经压过的摘要」不该因为退出就丢：
+  // 退出前把脏实例写掉。写失败只能吞掉 —— 进程正在退出，没有补救通道。
+  process.on('exit', () => {
+    try { flushPendingCaches(); } catch { /* ignore */ }
+  });
+}
+
+/** 把某个文件的其它脏实例先落盘（保证「新实例读到的就是最新内容」）。 */
+function flushInstancesFor(file, exclude) {
+  if (!file) return 0;
+  const target = path.resolve(file);
+  let writes = 0;
+  for (const cache of [...dirtyInstances]) {
+    if (cache === exclude) continue;
+    if (cache.file && path.resolve(cache.file) === target && cache.flush()) writes += 1;
+  }
+  return writes;
+}
+
+/** 把所有脏实例落盘（进程退出 / 测试 / 显式调用）。返回实际写盘次数。 */
+function flushPendingCaches() {
+  let writes = 0;
+  for (const cache of [...dirtyInstances]) {
+    if (cache.flush()) writes += 1;
+  }
+  return writes;
+}
 
 /**
  * 内容级缓存键：工具名 + 目标预算 + 原文。
@@ -43,7 +93,8 @@ function compressionKey(toolName, budgetChars, text) {
 
 class CompressionCache {
   /**
-   * @param {{projectRoot?: string|null, maxEntries?: number, maxBytes?: number, file?: string|null}} [options]
+   * @param {{projectRoot?: string|null, maxEntries?: number, maxBytes?: number, file?: string|null,
+   *          flushDelayMs?: number}} [options]
    */
   constructor(options = {}) {
     this.projectRoot = options.projectRoot || null;
@@ -61,17 +112,30 @@ class CompressionCache {
     this.misses = 0;
     this.bytes = 0;
     this.loadError = null;
+    /** #13：脏标记 + 合并落盘计数（writes = 真实写盘次数，供测试/运维核对） */
+    this.dirty = false;
+    this.writes = 0;
+    this.timer = null;
+    this.flushDelayMs = Number.isFinite(Number(options.flushDelayMs))
+      ? Math.max(0, Number(options.flushDelayMs))
+      : DEFAULT_FLUSH_DELAY_MS;
+    this.lastPersistError = null;
     this._load();
   }
 
   _load() {
+    // 同一文件可能有别的实例攒着没落盘（例如压缩缓存是进程内单例，但测试/多处会 new）：
+    // 读之前先把它们刷掉，保证「新实例能看到最新内容」。
+    flushInstancesFor(this.file, this);
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       for (const item of parsed.entries || []) {
         if (!item || typeof item.value !== 'string' || !item.key) continue;
-        this.entries.set(item.key, item);
-        this.bytes += Buffer.byteLength(item.value, 'utf8');
+        // #15：旧文件可能是明文写下的，读回时同样过一遍脱敏（防御性）
+        const value = safeValue(item.value);
+        this.entries.set(item.key, { ...item, value });
+        this.bytes += Buffer.byteLength(value, 'utf8');
       }
     } catch {
       // 缓存损坏：忽略即可（最坏是重新压一次），但把原因留下供排查，不静默
@@ -79,13 +143,48 @@ class CompressionCache {
     }
   }
 
-  _persist() {
-    if (!this.file) return;
+  /** #13：打脏标记并安排一次延迟落盘（同一窗口内的多次 set 合并成一次写盘）。 */
+  _markDirty() {
+    if (!this.file) return; // 无落盘目标：内存缓存即可
+    this.dirty = true;
+    dirtyInstances.add(this);
+    installExitHook();
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flush();
+    }, this.flushDelayMs);
+    if (this.timer && typeof this.timer.unref === 'function') this.timer.unref();
+  }
+
+  /**
+   * #13：显式落盘 —— 脏才写，一次写完整个缓存（合并窗口内的所有 set）。
+   * @returns {boolean} 是否真的写了盘
+   */
+  flush() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (!this.dirty) {
+      dirtyInstances.delete(this);
+      return false;
+    }
+    this.dirty = false;
+    dirtyInstances.delete(this);
+    if (!this.file) return false;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       atomicWriteFile(this.file, JSON.stringify({ updatedAt: new Date().toISOString(), entries: [...this.entries.values()] }));
-    } catch {
-      // 落盘失败不影响本次返回：内存缓存仍然有效
+      this.writes += 1;
+      this.lastPersistError = null;
+      return true;
+    } catch (error) {
+      // 落盘失败不影响本次返回：内存缓存仍然有效；保持脏，下次 set / flush / 退出时再试
+      this.lastPersistError = String((error && error.message) || error);
+      this.dirty = true;
+      dirtyInstances.add(this);
+      return false;
     }
   }
 
@@ -119,9 +218,9 @@ class CompressionCache {
       this.bytes -= Buffer.byteLength(existing.value, 'utf8');
       this.entries.delete(key);
     }
-    const item = { key, tool: String(toolName || ''), value, ts: new Date().toISOString() };
+    const item = { key, tool: String(toolName || ''), value: safeValue(value), ts: new Date().toISOString() };
     this.entries.set(key, item);
-    this.bytes += Buffer.byteLength(value, 'utf8');
+    this.bytes += Buffer.byteLength(item.value, 'utf8');
     while (this.entries.size > this.maxEntries || this.bytes > this.maxBytes) {
       const oldestKey = this.entries.keys().next();
       if (oldestKey.done) break;
@@ -129,7 +228,7 @@ class CompressionCache {
       this.entries.delete(oldestKey.value);
       if (oldest) this.bytes -= Buffer.byteLength(oldest.value, 'utf8');
     }
-    this._persist();
+    this._markDirty(); // #13：只打脏标记，合并到一次落盘（不再每条全量重写 + fsync）
     return item;
   }
 
@@ -144,13 +243,17 @@ class CompressionCache {
       hitRate: total ? Number((this.hits / total).toFixed(4)) : 0,
       file: this.file,
       loadError: this.loadError,
+      // #13：脏标记与真实写盘次数 —— 「合并落盘」是可核对的，不是口头承诺
+      dirty: this.dirty,
+      writes: this.writes,
+      lastPersistError: this.lastPersistError,
     };
   }
 
   clear() {
     this.entries.clear();
     this.bytes = 0;
-    this._persist();
+    this._markDirty();
   }
 }
 
@@ -172,8 +275,19 @@ function getCompressionCache(projectRoot, options) {
   return cache;
 }
 
-/** 测试用：清空进程内实例。 */
+/**
+ * 测试用：清空进程内实例。**丢弃待落盘缓冲**（不写盘）—— 用例会在断言后删临时目录，
+ * 若保留脏实例，退出兜底会往已删除的目录里重新 mkdir + 写文件。
+ */
 function resetCompressionCaches() {
+  for (const cache of [...dirtyInstances]) {
+    if (cache.timer) {
+      clearTimeout(cache.timer);
+      cache.timer = null;
+    }
+    cache.dirty = false;
+  }
+  dirtyInstances.clear();
   instances.clear();
 }
 
@@ -181,7 +295,9 @@ module.exports = {
   CompressionCache,
   getCompressionCache,
   resetCompressionCaches,
+  flushPendingCaches,
   compressionKey,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_BYTES,
+  DEFAULT_FLUSH_DELAY_MS,
 };

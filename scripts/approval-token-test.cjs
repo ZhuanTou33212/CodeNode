@@ -22,6 +22,7 @@ const toolkit = require('../electron/tools/toolkit.cjs');
 const approvalLib = require('../electron/tools/approval.cjs');
 const { AgentToolResult } = require('../electron/tools/result.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
+const runCheckpoint = require('../electron/runCheckpoint.cjs');
 const { installScriptedModel } = require('./lib/scripted-model.cjs');
 
 const ok = (label) => console.log('  ✓ ' + label);
@@ -85,11 +86,50 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: os.tmpdir() });
   sandbox.setDefaultPolicy(policy);
 
+  // 令牌化审批也必须进入 WAITING_USER，并在弹窗前登记关联的工具调用。
+  const approvalStates = [];
+  let prompts = 0;
+  const waitingContext = new AgentToolContext({
+    projectRoot: root,
+    runId: 'run-approval-wait',
+    confirm: async () => { prompts += 1; return true; },
+    checkpoint: (type, payload) => runCheckpoint.recordWait(root, 'run-approval-wait', { ...payload, type }),
+  });
+  waitingContext.setStateNotifier((state) => approvalStates.push(state));
+  const waitingToken = await waitingContext.approval().request({
+    capability: 'workspace.write', level: 'LOW', what: 'guarded_write', toolCallId: 'approval-call-1', scope: ['workspace.write:a.txt'],
+  });
+  const waitingRecords = runCheckpoint.readCheckpoints(root, 'run-approval-wait');
+  const waitStart = waitingRecords.find((item) => item.type === 'wait_start');
+  assert.ok(waitingToken && waitingToken.id);
+  assert.strictEqual(prompts, 1, '审批服务要求问用户时不能被 LOW 快捷放行');
+  assert.deepStrictEqual(approvalStates, ['WAITING_USER', 'WAITING_TOOL']);
+  assert.strictEqual(waitStart.toolCallId, 'approval-call-1');
+  assert.deepStrictEqual(runCheckpoint.pendingWaitsOf(waitingRecords), []);
+  ok('令牌审批的等待状态与工具调用关联持久化，答复后结算');
+
+  let unsafePrompts = 0;
+  const unavailableCheckpoint = new AgentToolContext({
+    projectRoot: root,
+    runId: 'run-approval-no-checkpoint',
+    confirm: async () => { unsafePrompts += 1; return true; },
+    checkpoint: () => null,
+  });
+  assert.strictEqual(await unavailableCheckpoint.approval().request({ what: 'guarded_write', level: 'WRITE' }), null);
+  assert.strictEqual(unsafePrompts, 0, '审批等待无法持久化时不得先弹窗并继续写入');
+  ok('审批等待检查点写入失败时拒绝执行');
+  let writeCount = 0;
+  const settleFailure = new AgentToolContext({
+    projectRoot: root, runId: 'run-settle-failed', confirm: async () => true,
+    checkpoint: () => ++writeCount === 1 ? {} : null,
+  });
+  assert.strictEqual(await settleFailure.approval().request({ what: 'guarded_write', level: 'WRITE' }), null,
+    '用户已同意但结算记录丢失时也不能签发可执行令牌');
+  ok('用户同意后结算写入失败仍阻止副作用');
+
   // ---- G. 声明层：确认类写工具都声明了确认且真的强制 ----
   const declRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false });
-  // 注意：create_nodes 已不在 BUILTINS 里（画布写入口统一到 workbench_edit），所以按**实际注册**的工具断言；
-  // 它的模块里同样加了 declareContract，将来若重新注册就自带审批。
-  const declared = ['save_project', 'workbench_edit', 'create_nodes', 'ui_control'].filter((name) => declRegistry.descriptorOf(name));
+  const declared = ['save_project', 'workbench_edit', 'ui_control'].filter((name) => declRegistry.descriptorOf(name));
   assert.ok(declared.length >= 3, '至少三个确认类写工具在注册表里（实际 ' + declared.join(',') + '）');
   for (const name of declared) {
     const descriptor = declRegistry.descriptorOf(name);
@@ -234,6 +274,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     });
     const { registry } = makeRegistry(confirmHandler);
     const stub = installScriptedModel(script, { loopLast: false });
+    const deltas = [];
     try {
       const result = await agent.runAgentChat({
         cfg: {
@@ -251,9 +292,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         messages: [{ role: 'system', content: '测试用 system' }, { role: 'user', content: '请完成测试任务' }],
         tools: { registry, context },
         signal: controller.signal,
-        onDelta: () => {},
+        onDelta: (delta) => deltas.push(delta),
       });
-      return { result, seen: stub.seen };
+      return { result, seen: stub.seen, deltas };
     } finally {
       stub.restore();
     }
@@ -265,6 +306,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   ];
   const approved = await runTurn(script, async () => true);
   assert.strictEqual(sawArgs && sawArgs.target, 'e.txt', '批准路径必须真的执行工具');
+  const states = approved.deltas.filter((delta) => delta.kind === 'state').map((delta) => delta.state);
+  assert.ok(states.includes('WAITING_USER') && states.indexOf('WAITING_TOOL', states.indexOf('WAITING_USER')) > states.indexOf('WAITING_USER'));
   const deniedTurn = await runTurn(script, async () => false);
   const toolMessage = deniedTurn.seen[1].messages.find((m) => m.role === 'tool');
   assert.ok(/未批准|跳过/.test(String(toolMessage.content)), '拒绝路径必须把「未批准」如实回灌');

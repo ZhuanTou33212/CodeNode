@@ -204,7 +204,7 @@ class ScalarStore {
    */
   query({ key, prefix, max } = {}) {
     this.load();
-    const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : 50;
+    const limit = Number.isFinite(max) && Number(max) > 0 ? Math.floor(Number(max)) : 50;
     const out = [];
     if (key != null && String(key).trim() !== '') {
       const exact = String(key).trim();
@@ -305,7 +305,7 @@ class ScalarStore {
   search({ query, max, minScore, kinds } = {}) {
     this.load();
     const q = String(query || '').trim();
-    const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : 20;
+    const limit = Number.isFinite(max) && Number(max) > 0 ? Math.floor(Number(max)) : 20;
     if (!q) return [];
     const terms = searchTerms(q);
     const qLower = q.toLowerCase();
@@ -326,7 +326,7 @@ class ScalarStore {
       });
     }
     out.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
-    const filtered = Number.isFinite(minScore) ? out.filter((item) => item.score >= minScore) : out;
+    const filtered = Number.isFinite(minScore) ? out.filter((item) => item.score >= Number(minScore)) : out;
     return filtered.slice(0, limit);
   }
 

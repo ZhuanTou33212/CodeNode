@@ -1,0 +1,88 @@
+[
+  {
+    "pattern": "^deepseek-(?:flash|v4(?:\\.1)?-(?:flash|pro))",
+    "levels": [
+      "low",
+      "high",
+      "max"
+    ],
+    "default": "high"
+  },
+  {
+    "pattern": "^gpt-6(?:\\.1)?-(?:astra|sol|luna)",
+    "levels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "default": "medium"
+  },
+  {
+    "pattern": "^claude-(?:opus-4-[78]|opus-5|sonnet-5|fable-5|mythos-5)",
+    "levels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "default": "high"
+  },
+  {
+    "pattern": "^claude-(?:opus|sonnet)-4-6",
+    "levels": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ],
+    "default": "high"
+  },
+  {
+    "pattern": "^claude-opus-4-5",
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "default": "high"
+  },
+  {
+    "pattern": "^gemini-3-pro",
+    "levels": [
+      "low",
+      "high"
+    ],
+    "default": "high"
+  },
+  {
+    "pattern": "^gemini-3\\.1-pro",
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "default": "high"
+  },
+  {
+    "pattern": "^gemini-3\\.[78]-flash",
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "default": "medium"
+  },
+  {
+    "pattern": "^gemini-3(?:\\.[56])?-flash",
+    "levels": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
+    "default": "high"
+  }
+]

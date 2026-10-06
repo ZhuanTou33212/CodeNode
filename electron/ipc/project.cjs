@@ -50,7 +50,7 @@ async function walkProject(root) {
   const queue = [''];
   const MAX = 20000;
   while (queue.length && files.length < MAX) {
-    const relDir = queue.shift();
+    const relDir = queue.shift() || '';
     const absDir = path.join(root, relDir);
     let items;
     try {
@@ -125,10 +125,11 @@ function auditLog(projectRoot, entry) {
  *   dialog: import('electron').Dialog,
  *   getFocusedWindow: () => import('electron').BrowserWindow | null,
  *   sandbox: any,
+ *   runWorkflowChat: (event: any, payload: any) => Promise<any>,
  * }} ctx
  */
 function register(ctx) {
-  const { ipcMain, dialog, getFocusedWindow, sandbox } = ctx;
+  const { ipcMain, dialog, getFocusedWindow, sandbox, runWorkflowChat } = ctx;
 
   /** 与 Agent 工具共用同一套执行隔离策略（同一把锁，不留后门） */
   function spawnProjectProcess(tokens, base, cwd) {
@@ -151,7 +152,7 @@ function register(ctx) {
 
   function runProjectCommand(root, command, timeoutSeconds = 120) {
     const tokens = splitProjectCommand(command);
-    const base = (tokens[0] || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    const base = ((tokens[0] || '').replace(/\\/g, '/').split('/').pop() || '').toLowerCase();
     if (!tokens.length) return Promise.resolve({ ok: false, error: '命令为空' });
     if (!PROJECT_COMMANDS.has(base)) return Promise.resolve({ ok: false, error: `命令不在白名单：${tokens[0]}` });
     const cwd = path.resolve(root || '.');
@@ -179,7 +180,7 @@ function register(ctx) {
 
   function startProjectStream(event, root, command, timeoutSeconds = 180) {
     const tokens = splitProjectCommand(command);
-    const base = (tokens[0] || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+    const base = ((tokens[0] || '').replace(/\\/g, '/').split('/').pop() || '').toLowerCase();
     if (!tokens.length) return { ok: false, error: '命令为空' };
     if (!PROJECT_COMMANDS.has(base)) return { ok: false, error: `命令不在白名单：${tokens[0]}` };
     const sessionId = 'term-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
@@ -187,6 +188,7 @@ function register(ctx) {
     let child;
     try { child = spawnProjectProcess(tokens, base, cwd); }
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    /** @type {{sessionId: string, child: any, timer: any, done: boolean}} */
     const job = { sessionId, child, timer: null, done: false };
     projectProcesses.set(sessionId, job);
     const send = (payload) => { try { if (!event.sender.isDestroyed()) event.sender.send('project:run:event', { sessionId, ...payload }); } catch {} };
@@ -207,41 +209,49 @@ function register(ctx) {
   }
 
   ipcMain.handle('graph:save', async (_event, payload) => {
-    const { canceled, filePath } = await dialog.showSaveDialog(getFocusedWindow(), {
+    const { canceled, filePath } = await dialog.showSaveDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '另存为 CodeNode 工程',
       defaultPath: 'workflow.cnode',
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
     });
     if (canceled || !filePath) return { ok: false };
-    fs.writeFileSync(filePath, cnode.encodeCnode(payload));
-    return { ok: true, filePath };
+    try {
+      fs.writeFileSync(filePath, cnode.encodeCnode(payload));
+      return { ok: true, filePath };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle('graph:open', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(getFocusedWindow(), {
+    const { canceled, filePaths } = await dialog.showOpenDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '打开 CodeNode 工程',
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
       properties: ['openFile'],
     });
     if (canceled || !filePaths[0]) return { ok: false };
-    const data = fs.readFileSync(filePaths[0]);
-    const dec = cnode.decodeCnode(data);
-    if (!dec.ok) return { ok: false, filePath: filePaths[0], error: dec.error };
-    return {
-      ok: true,
-      filePath: filePaths[0],
-      data: {
-        graph: dec.graph,
-        workspace: dec.workspace,
-        manifest: dec.manifest,
-        canvases: dec.canvases || null,
-        warnings: dec.warnings,
-      },
-    };
+    try {
+      const data = fs.readFileSync(filePaths[0]);
+      const dec = cnode.decodeCnode(data);
+      if (!dec.ok) return { ok: false, filePath: filePaths[0], error: dec.error };
+      return {
+        ok: true,
+        filePath: filePaths[0],
+        data: {
+          graph: dec.graph,
+          workspace: dec.workspace,
+          manifest: dec.manifest,
+          canvases: dec.canvases || null,
+          warnings: dec.warnings,
+        },
+      };
+    } catch (e) {
+      return { ok: false, filePath: filePaths[0], error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle('project:choose', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(getFocusedWindow(), {
+    const { canceled, filePaths } = await dialog.showOpenDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '选择项目目录',
       properties: ['openDirectory'],
     });
@@ -250,19 +260,25 @@ function register(ctx) {
   });
 
   ipcMain.handle('project:create', async () => {
-    const { canceled, filePath } = await dialog.showSaveDialog(getFocusedWindow(), {
+    const { canceled, filePath } = await dialog.showSaveDialog(/** @type {any} */ (getFocusedWindow()), {
       title: '新建 CodeNode 项目',
       defaultPath: '未命名项目.cnode',
       filters: [{ name: 'CodeNode 工程文件', extensions: ['cnode'] }],
     });
     if (canceled || !filePath) return { ok: false };
-    const buf = cnode.encodeCnode({
-      graph: { revision: 1, nodes: [], edges: [] },
-      workspace: { viewport: { x: 0, y: 0, zoom: 1 } },
-    });
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, buf);
-    return { ok: true, filePath, root: path.dirname(filePath) };
+    try {
+      const buf = cnode.encodeCnode({
+        graph: { revision: 1, nodes: [], edges: [] },
+        workspace: { viewport: { x: 0, y: 0, zoom: 1 } },
+      });
+      const root = path.dirname(filePath);
+      // An existing Windows drive root can reject mkdir even with recursive: true.
+      if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(filePath, buf);
+      return { ok: true, filePath, root };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   ipcMain.handle('project:list', async (_event, root) => {
@@ -309,6 +325,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('project:write', async (_event, root, relPath, content, backup = true, expectedMtimeMs) => {
+    if (/\.cnode$/i.test(String(relPath || ''))) return {ok:false,error:'工程文件通过工作台修改，不能以文本保存'};
     try {
       const full = safeProjectPath(root, relPath);
       if (!full || !String(relPath || '').trim()) return { ok: false, error: '路径越界或为空' };
@@ -360,6 +377,54 @@ function register(ctx) {
     return runProjectCommand(root || '.', command, timeoutSeconds);
   });
 
+  ipcMain.handle('project:workflow-state', (_event, root, workflowId, request) => {
+    return require('../workflowState.cjs').dispatch(root, workflowId, request);
+  });
+
+  ipcMain.handle('project:workflow-execute', async (event, root, workflowId, request) => {
+    const focused = getFocusedWindow();
+    if (!focused || event.sender !== focused.webContents || (event.senderFrame && event.senderFrame !== focused.webContents.mainFrame)) {
+      return { ok: false, error: '工作流执行请求必须来自当前主窗口主 frame' };
+    }
+    const graph = request && request.graph;
+    const host = {
+      ownerAlive: () => !event.sender.isDestroyed() && (!event.senderFrame || !event.senderFrame.isDestroyed()),
+      confirm: async (info) => {
+        if (!host.ownerAlive()) return false;
+        const result = await dialog.showMessageBox(focused, {
+          type: 'warning', title: '确认工作流节点执行',
+          message: String(info.label || '工作流节点'),
+          detail: (info.review ? '之前执行结果可能未知，需要先核对副作用。\n' : '') + '可能写入：' + String(info.writeScope || '未声明'),
+          buttons: ['取消', '确认执行'], defaultId: 0, cancelId: 0,
+        });
+        return result.response === 1 && host.ownerAlive();
+      },
+      run: async (node, fullGraph, state) => {
+        const data = node.data || {};
+        const prompt = String(data.prompt || '').trim();
+        const explicit = prompt.match(/^(?:run:|\$)\s*(.+)$/i);
+        const command = explicit && explicit[1] ? explicit[1].trim() : /^(npm|npx|node|git|python3?|py|java|javac|mvn|mvnw|gradle|go|cargo|cmd|powershell|pwsh)\b/i.test(prompt) ? prompt : '';
+        if (['start', 'end', 'file', 'object', 'scope'].includes(node.type || '')) return { ok: true, output: '结构节点已通过' };
+        if (command) {
+          const response = await runProjectCommand(root, command, 180);
+          return { ok: !!response.ok, output: '运行：' + command + '\n' + String(response.output || response.error || '') };
+        }
+        if (!prompt || !['task', 'stage', 'tool'].includes(node.type || '')) return { ok: false, output: '无执行内容：该节点需要填写 Prompt 或命令' };
+        if (typeof runWorkflowChat !== 'function') return { ok: false, output: 'Agent 工作流执行器未接线' };
+        const input = state.selectedInputs[node.id] || [];
+        const response = await runWorkflowChat(event, {
+          projectRoot: root,
+          prompt: `执行工作流节点「${String(data.label || node.id)}」：\n${prompt}\n上游结果：\n${input.map((item) => item.id + ': ' + item.output).join('\n') || '无'}\n输出名称：${String(data.outputName || data.label || node.id)}\n完成条件：${String(data.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(data.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
+          history: [], canvasSummary: JSON.stringify(fullGraph.nodes.map((item) => ({ id: item.id, type: item.type, label: item.data?.label, status: item.data?.status }))),
+          nodeId: node.id, requestId: 'workflow-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+          document: { root: fullGraph },
+        });
+        return { ok: !!response.ok && response.aborted !== true, output: 'Agent：' + String(response.reply || response.error || '无返回内容') };
+      },
+    };
+    return require('../workflowState.cjs').execute(root, workflowId, request, host);
+  });
+
   ipcMain.handle('project:run:start', async (event, root, command, timeoutSeconds) => {
     return startProjectStream(event, root || '.', command, timeoutSeconds);
   });
@@ -378,13 +443,23 @@ function register(ctx) {
   });
 
   ipcMain.handle('extensions:list', async (_event, root) => {
-    const builtins = toolkit.buildDefaultRegistryWithConfig({}).listTools().map((tool) => ({
+    const builtinRegistry = toolkit.buildDefaultRegistryWithConfig({});
+    const builtins = builtinRegistry.listTools().map((tool) => {
+      const descriptor = builtinRegistry.descriptorOf(tool.name);
+      return {
       name: tool.name,
       kind: '内置工具',
       description: tool.description,
       enabled: true,
       source: 'CodeNode Toolkit',
-    }));
+      contract: descriptor ? {
+        explicit: descriptor.source === 'explicit',
+        outputSchema: descriptor.outputSchema != null,
+        readOnly: descriptor.readOnly === true,
+        timeoutMs: descriptor.timeoutMs == null ? null : descriptor.timeoutMs,
+      } : undefined,
+      };
+    });
     const files = [
       root && path.join(root, '.codenode', 'extensions.json'),
       root && path.join(root, 'config', 'extensions.json'),
@@ -401,6 +476,12 @@ function register(ctx) {
             description: String(item.description || ''),
             enabled: item.enabled !== false,
             source: file,
+            contract: {
+              explicit: true,
+              outputSchema: !!(item.outputSchema),
+              readOnly: item.readOnly === true,
+              timeoutMs: Number.isFinite(Number(item.timeoutMs)) ? Number(item.timeoutMs) : null,
+            },
           });
         }
         break;
@@ -414,7 +495,7 @@ function register(ctx) {
       if (!target) return { ok: false, error: '未指定保存位置' };
       const isFile = String(target).toLowerCase().endsWith('.cnode');
       const filePath = isFile ? path.resolve(target) : path.join(path.resolve(target), 'workflow.cnode');
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, cnode.encodeCnode(payload));
       return { ok: true, filePath };
     } catch (e) {

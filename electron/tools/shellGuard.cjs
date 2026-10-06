@@ -262,7 +262,14 @@ function detectNetwork(command) {
   // powershell -Command "git push ..." 这种：把内层命令也当一段看
   const inner = seq.indexOf('-command');
   if (inner >= 0) seq = seq.slice(inner + 1);
-  const base = (seq[0] || '').replace(/\.(exe|cmd|bat)$/, '');
+  /**
+   * 程序名归一化：**去掉目录与扩展名**（`C:/tools/nuget.exe` → `nuget`）。
+   * 与 executeShellTool 的 normalizeProgram / 高危判据同一口径 —— 否则「换个写法」就能同时绕过
+   * 断网策略与高危确认：实测 `nuget restore` 被判联网而 `C:/tools/nuget.exe restore` 不算联网
+   * （同一件事两种判定），在出厂 deny 下前者被拒、后者却只弹一次确认（2026-09-21 实测）。
+   */
+  const rawBase = (seq[0] || '').replace(/^["']|["']$/g, '').replace(/\.(exe|cmd|bat|ps1)$/, '');
+  const base = rawBase.slice(rawBase.lastIndexOf('/') + 1);
   if (NETWORK_COMMANDS.has(base)) hits.push('联网命令 ' + base);
   const subs = NETWORK_SUBCOMMANDS[base];
   if (subs) {

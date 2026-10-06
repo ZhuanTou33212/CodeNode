@@ -19,11 +19,13 @@
  */
 'use strict';
 
+const { normalizeOutputSchema } = require('./outputSchema.cjs');
+
 /** 只读工具：可安全重复执行、结果可缓存、可在只读上下文里执行 */
 const READ_ONLY_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
   'find_files', 'search_files', 'list_directory', 'code_review', 'ask_user',
-  'retrieve_context',
+  'retrieve_context', 'read_skill', 'view_image',
   // 语义上只读，但**故意不进缓存白名单**：画布/标量是权威读源，变更后必须立刻读到最新状态
   'get_workbench_model', 'query_scalars', 'poll_job', 'recall', 'get_subagent_task',
   // 取消子任务（第 6 项）：只 abort 一个子代理，不改工作区；与 get_subagent_task 同类
@@ -45,16 +47,16 @@ const READ_ONLY_TOOLS = new Set([
 const CACHEABLE_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
   'find_files', 'search_files', 'list_directory', 'code_review',
+  // 技能正文也是「同一 run 内不会变」的只读内容 → 同参重复读走缓存（不刷新别的缓存）
+  'read_skill',
+  'view_image',
 ]);
 
 /** 会改变画布模型 / 文件 / 工程状态的工具（语义清单，供文档与并行冲突判定引用） */
 const MUTATION_TOOLS = new Set([
   'workbench_edit', 'bulk_edit', 'write_file', 'edit_file',
   'write_analysis_md', 'save_project', 'ui_control', 'remember',
-  // 遗留未接入（第 4 项）：create_nodes / workbench_connect 的实现文件在，但没注册进
-  // toolkit.BUILTINS，模型看不到它们（断言见 scripts/tool-contract-closure-test.cjs 的 NOT_WIRED）。
-  // 这里保留名字只为「万一有新路径注册它们」时语义仍然正确，不代表它们是可用工具。
-  'create_nodes', 'workbench_connect', 'delegate_task', 'delegate_tasks',
+  'delegate_task', 'delegate_tasks', 'review_subagent_result',
 ]);
 
 /**
@@ -86,6 +88,8 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   get_workbench_model: 'workspace.read',
   query_scalars: 'workspace.read',
   retrieve_context: 'workspace.read',
+  read_skill: 'workspace.read',
+  view_image: 'workspace.read',
   // scan_project 默认只读，但带 applyToWorkbench 参数时会写画布 → 能力上按写处理（fail-closed）
   scan_project: 'workspace.write',
   recall: 'workspace.read',
@@ -96,17 +100,19 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   edit_file: 'workspace.write',
   bulk_edit: 'workspace.write',
   write_analysis_md: 'workspace.write',
-  create_nodes: 'workspace.write',
   workbench_edit: 'workspace.write',
-  workbench_connect: 'workspace.write',
   remember: 'workspace.write',
   save_project: 'project.save',
   execute_shell: 'shell.execute',
   fetch_url: 'network.request',
+  web_search: 'network.request',
+  dify_call: 'network.request',
+  worktree: 'workspace.write',
   ui_control: 'ui.interact',
   ask_user: 'ui.interact',
   delegate_task: 'subagent.delegate',
   delegate_tasks: 'subagent.delegate',
+  review_subagent_result: 'subagent.delegate',
 });
 
 /** 自管超时的工具（内部已有秒级超时 / 合法长任务）：timeoutMs = 0 表示注册表不加超时 */
@@ -119,6 +125,8 @@ const SELF_TIMED_TOOLS = Object.freeze({
   scan_project: 0,
   analyze_project: 0,
   fetch_url: 0,
+  web_search: 0,
+  dify_call: 0,
   bulk_edit: 0,
 });
 
@@ -165,7 +173,9 @@ function normalizeDescriptor(input) {
     version: String(d.version || '1'),
     description: String(d.description || ''),
     inputSchema: d.inputSchema == null ? null : d.inputSchema,
-    outputSchema: d.outputSchema == null ? null : d.outputSchema,
+    // Success/partial payload contract: validates AgentToolResult.data. null/'none'
+    // preserve legacy tools; unsupported assertions fail before the tool can run.
+    outputSchema: normalizeOutputSchema(d.outputSchema),
     readOnly,
     // 未声明时：只读工具视为幂等（重放安全），写工具视为不幂等
     idempotent: d.idempotent === undefined ? readOnly : d.idempotent === true,

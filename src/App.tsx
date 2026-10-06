@@ -4,17 +4,21 @@ import Toolbar from './components/Toolbar';
 import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
-import InspectorBadge from './components/InspectorBadge';
+import ProjectNavigation from './components/ProjectNavigation';
+import ConversationPanel from './components/ConversationPanel';
+import FileWorkspace from './components/FileWorkspace';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
 import { useUiStore } from './store/uiStore';
+import { useSessionStore } from './store/sessionStore';
 import { useProjectStore } from './store/projectStore';
 import { newProject, openProject, saveProject, restoreLastProject } from './lib/projectActions';
 import { installToolListener } from './lib/toolUi';
 import ToolDialog from './components/ToolDialog';
 import ModelManager from './components/ModelManager';
 import WorkbenchDock from './components/WorkbenchDock';
+import GlobalSettings from './components/GlobalSettings';
 import { getActiveVectorNode } from './vector/vectorStore';
 
 function isTypingTarget(): boolean {
@@ -60,6 +64,10 @@ export default function App() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const sideOpen = useUiStore((s) => s.sideOpen);
+  const sideTab = useUiStore(s => s.sideTab);
+  const conversationOpen = useUiStore(s => s.conversationOpen);
+  const theme = useUiStore((s) => s.theme);
+  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; }, [theme]);
   const dockOpen = useUiStore((s) => s.dockOpen);
   const booted = useUiStore((s) => s.booted);
   const projectRoot = useProjectStore((s) => s.root);
@@ -80,9 +88,15 @@ export default function App() {
   // 窄窗口优先保留画布与 Prompt：侧栏改为浮层，过窄时默认收起。
   useEffect(() => {
     let wasNarrow = window.innerWidth <= 860;
+    let navigationCompact = window.innerWidth <= 600;
+    if (navigationCompact) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
     if (wasNarrow && useUiStore.getState().sideOpen) useUiStore.getState().setSideOpen(false);
     const onResize = () => {
       const isNarrow = window.innerWidth <= 860;
+      const nextNavigationCompact = window.innerWidth <= 600;
+      if (nextNavigationCompact && !navigationCompact && useUiStore.getState().navigationOpen) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
+      if (!nextNavigationCompact && navigationCompact && useUiStore.getState().navigationAutoHidden) useUiStore.setState({ navigationOpen: true, navigationAutoHidden: false });
+      navigationCompact = nextNavigationCompact;
       if (isNarrow && !wasNarrow && useUiStore.getState().sideOpen) {
         useUiStore.getState().setSideOpen(false);
       }
@@ -93,7 +107,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!projectRoot) return;
+    const workspace = document.querySelector('.workspace-main');
+    if (!workspace) return;
+    let wasCompact: boolean | null = null;
+    const adapt = () => {
+      const compact = workspace.getBoundingClientRect().width <= 660;
+      if (compact === wasCompact) return;
+      wasCompact = compact;
+      const ui = useUiStore.getState();
+      if (compact && ui.conversationOpen && !useSessionStore.getState().streaming && !ui.modelManagerOpen && !document.activeElement?.closest('.conversation-right, .hermes-picker-layer')) {
+        useUiStore.setState({ conversationOpen: false, conversationAutoHidden: true });
+      } else if (!compact && ui.conversationAutoHidden) {
+        useUiStore.setState({ conversationOpen: true, conversationAutoHidden: false });
+      }
+    };
+    const observer = new ResizeObserver(adapt); observer.observe(workspace); adapt();
+    return () => observer.disconnect();
+  }, [projectRoot]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (useUiStore.getState().settingsOpen || useUiStore.getState().modelManagerOpen) return;
       const mod = e.ctrlKey || e.metaKey;
 
       // 启动门禁页（还没有工程）：只保留与「取得工程」有关的快捷键。
@@ -134,8 +169,11 @@ export default function App() {
 
       // 全局保存/打开/新建：即使在输入框中也生效
       if (mod && e.key.toLowerCase() === 's') {
+        if (document.activeElement?.closest('.dock-code-editor')) return;
         e.preventDefault();
-        void saveProject();
+        const state = useProjectStore.getState();
+        if (['project','preview'].includes(useUiStore.getState().sideTab) && state.selected && !/\.cnode$/i.test(state.selected.relPath)) { if (state.dirty) void state.saveSelected(); }
+        else void saveProject();
         return;
       }
       if (mod && e.key.toLowerCase() === 'n') {
@@ -149,17 +187,24 @@ export default function App() {
         return;
       }
 
+      if (mod && e.key.toLowerCase() === 'p') {
+        e.preventDefault(); useUiStore.getState().setSideTab('project');
+        window.setTimeout(() => document.querySelector<HTMLInputElement>('.files-workspace .pm-search input')?.focus(),0);
+        return;
+      }
+
       if (isTypingTarget()) return;
 
       // Ctrl+B：开合右侧侧栏（对齐 VS Code 的习惯）
       if (mod && e.key.toLowerCase() === 'b') {
         e.preventDefault();
-        useUiStore.getState().toggleSide();
+        useUiStore.getState().toggleNavigation();
         return;
       }
 
       if (e.code === 'KeyA' && e.shiftKey && !mod) {
         e.preventDefault();
+        useUiStore.getState().setSideTab('node');
         const m = useUiStore.getState().lastMouse;
         useUiStore.getState().openAddMenu(m.x, m.y);
         return;
@@ -224,16 +269,28 @@ export default function App() {
   if (!projectRoot) return <ProjectGate />;
 
   return (
-    <div className="app">
+    <div className={`app ui-clean glass-theme theme-${theme}`}>
       <Toolbar />
       <div className={`app-body side-left${dockOpen ? ' has-dock' : ''}`}>
-        {sideOpen ? <SidePanel /> : <InspectorBadge />}
-        <Canvas />
+        <ProjectNavigation />
+        <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
+          <nav className="workspace-tabs" aria-label="工作区视图">
+            {([['agent', '工作台'], ['project', '文件']] as const).map(([tab, label]) => <button key={tab} className={sideTab === tab || (tab === 'agent' && sideTab === 'node') || (tab === 'project' && sideTab === 'preview') ? 'is-active' : ''} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node') || (tab === 'project' && sideTab === 'preview')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
+            <button className="conversation-toggle" aria-label="显示或隐藏对话栏" aria-pressed={conversationOpen} title="对话栏" onClick={() => useUiStore.getState().toggleConversation()}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg></button>
+          </nav>
+          <div className="workspace-content">
+            {(sideTab === 'project' || sideTab === 'preview') && <FileWorkspace />}
+            {sideTab === 'node' && sideOpen && <SidePanel />}
+            <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>
+            <ConversationPanel />
+          </div>
+        </main>
         <AddMenu />
         <WorkbenchDock />
       </div>
       <StatusBar />
       <ToolDialog />
+      <GlobalSettings />
       <ModelManager />
     </div>
   );

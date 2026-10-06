@@ -98,6 +98,25 @@ function newLedger() {
     JSON.stringify(view.committed.map((i) => i.tool)));
   check('review：已完成的前台 shell 落在 unknown（不可从本地状态判断是否生效）',
     view.unknown.some((item) => item.tool === 'execute_shell'), JSON.stringify(view.unknown.map((i) => i.tool)));
+
+  // 回归 #1：上面这条断言之所以一直绿，是因为第 81 行在 commit 之后**又调了一次 begin**，
+  // 把 phase 从 committed 重置回 pending —— 那不是生产形态。生产里 shell 成功返回后，
+  // 账本留下的是 phase==='committed' 的 unknown；旧实现会把它归进 committed（被当作「已提交的写」），
+  // planResume 于是判 skippable，而执行期 begin() 只对 write 去重 → 命令被真的重跑一遍。
+  const production = new SideEffectLedger({
+    projectRoot: root,
+    scopeRunId: 'prod-shape',
+    file: path.join(root, '.codenode', 'runs', 'prod-shape.side-effects.json'),
+  });
+  const prodShell = production.begin('execute_shell', { command: 'npm publish' });
+  production.commit(prodShell, { ok: true, result: 'published' });
+  const prodView = production.review();
+  check(
+    '生产形态（begin→commit 后不再 begin）：已成功提交的 shell 必须落在 unknown 而非 committed',
+    prodView.unknown.some((item) => item.tool === 'execute_shell' && item.phase === 'committed') &&
+      !prodView.committed.some((item) => item.tool === 'execute_shell'),
+    JSON.stringify({ committed: prodView.committed.map((i) => i.tool), unknown: prodView.unknown.map((i) => i.tool) })
+  );
   check('review：提交失败的写操作落在 pending（未提交 → 续跑需人工复核）',
     view.pending.some((item) => item.tool === 'write_file'), JSON.stringify(view.pending.map((i) => i.tool)));
 
@@ -108,6 +127,85 @@ function newLedger() {
   const broken = new SideEffectLedger({ projectRoot: root, scopeRunId: 'broken', file: bad });
   check('账本损坏：不伪造去重（从空账本开始并记录 loadError）',
     broken.size() === 0 && !!broken.loadError, String(broken.loadError || ''));
+
+  // ---- (5) 回归 #4：虚假成功 —— 「已提交」不等于「现在的世界还是那样」 ----
+  // save_project 的参数是空的（幂等键恒同），画布改过以后第二次调用会被去重跳过，
+  // 却返回 ok:true → 用户看到「已保存」，而磁盘上还是旧版本。
+  const saveLedger = new SideEffectLedger({
+    projectRoot: root,
+    scopeRunId: 'r-save',
+    file: path.join(root, '.codenode', 'runs', 'r-save.side-effects.json'),
+  });
+  const save1 = saveLedger.begin('save_project', {}, {}, { idempotent: true });
+  saveLedger.commit(save1, { ok: true });
+  const save2 = saveLedger.begin('save_project', {}, {}, { idempotent: true });
+  check(
+    '[#4] 空参数的幂等写（save_project）第二次不得被跳过（否则报「已保存」但没写）',
+    save2.skip === false,
+    JSON.stringify({ skip: save2.skip })
+  );
+
+  // 带 path 的写：目标状态与提交后一致 → **仍然去重**（修 #4 不能把续跑去重一起废掉）
+  const writeLedger = new SideEffectLedger({
+    projectRoot: root,
+    scopeRunId: 'r-write',
+    file: path.join(root, '.codenode', 'runs', 'r-write.side-effects.json'),
+  });
+  const target4 = path.join(root, 'idem4-a.txt');
+  const write1 = writeLedger.begin('write_file', { path: 'idem4-a.txt', content: 'X' }, {}, { idempotent: true });
+  fs.writeFileSync(target4, 'X'); // 模拟工具真的写了
+  writeLedger.commit(write1, { ok: true });
+  const write2 = writeLedger.begin('write_file', { path: 'idem4-a.txt', content: 'X' }, {}, { idempotent: true });
+  check('[#4] 目标状态与提交后一致 → 仍然幂等跳过', write2.skip === true, JSON.stringify({ skip: write2.skip }));
+
+  // 目标被外部改过（用 size 变化，避免 mtime 精度导致的抖动）→ 不得跳过
+  fs.writeFileSync(target4, 'YYYY');
+  const write3 = writeLedger.begin('write_file', { path: 'idem4-a.txt', content: 'X' }, {}, { idempotent: true });
+  check(
+    '[#4] 目标在提交后被改过 → 不得跳过（否则覆盖外部改动还报成功）',
+    write3.skip === false,
+    JSON.stringify({ skip: write3.skip })
+  );
+
+  // 向后兼容：旧账本里没有 postStateDigest 时，行为必须与旧版一致（仍然去重）
+  const legacyFile = path.join(root, '.codenode', 'runs', 'r-legacy.side-effects.json');
+  const legacy = new SideEffectLedger({ projectRoot: root, scopeRunId: 'r-legacy', file: legacyFile });
+  const legacy1 = legacy.begin('write_file', { path: 'idem4-a.txt', content: 'X' });
+  legacy.commit(legacy1, { ok: true });
+  const legacyRaw = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
+  legacyRaw.records.forEach((record) => {
+    delete record.postStateDigest;
+  });
+  fs.writeFileSync(legacyFile, JSON.stringify(legacyRaw));
+  const legacy2 = new SideEffectLedger({ projectRoot: root, scopeRunId: 'r-legacy', file: legacyFile });
+  const legacySkip = legacy2.begin('write_file', { path: 'idem4-a.txt', content: 'X' }).skip;
+  check('[#4] 旧账本（无 postStateDigest）行为不变：仍然去重（向后兼容）', legacySkip === true, JSON.stringify({ skip: legacySkip }));
+
+  // ---- (6) 回归 #13：只读工具不得触发账本全量落盘（O(n²) 主进程阻塞） ----
+  // begin/commit 对**每个**工具调用都会整本 JSON 化 + fsync + rename；只读工具既不产生副作用、
+  // 也不参与续跑去重，却照样付这个代价 → 单 Run 写出字节数约 O(n²)，全在同步路径上。
+  const ioFile = path.join(root, '.codenode', 'runs', 'r-io.side-effects.json');
+  const ioLedger = new SideEffectLedger({ projectRoot: root, scopeRunId: 'r-io', file: ioFile });
+  const readTok = ioLedger.begin('read_file', { path: 'a.txt' });
+  ioLedger.commit(readTok, { ok: true, result: 'x' });
+  check('[#13] 只读工具（read）不落盘：账本文件不应被创建', !fs.existsSync(ioFile), 'exists=' + fs.existsSync(ioFile));
+  check(
+    '[#13] 只读记录仍留在内存里供 review() 使用（只是不付 fsync）',
+    ioLedger.review().committed.some((item) => item.tool === 'read_file'),
+    JSON.stringify(ioLedger.review().committed.map((i) => i.tool))
+  );
+  const writeTok = ioLedger.begin('write_file', { path: 'io.txt', content: '1' });
+  ioLedger.commit(writeTok, { ok: true, result: 'x' });
+  check('[#13] 写操作照旧同步落盘（崩溃恢复要用的那条路径不能省）', fs.existsSync(ioFile), 'exists=' + fs.existsSync(ioFile));
+
+  // ---- (7) 回归 #15：账本里的错误原文必须脱敏 ----
+  const secretFile = path.join(root, '.codenode', 'runs', 'r-secret.side-effects.json');
+  const secretLedger = new SideEffectLedger({ projectRoot: root, scopeRunId: 'r-secret', file: secretFile });
+  const secretTok = secretLedger.begin('write_file', { path: 'sec.txt', content: '1' });
+  secretLedger.fail(secretTok, new Error('upload failed: Authorization: Bearer sk-abcdefghijklmnop123456'));
+  const secretRaw = fs.readFileSync(secretFile, 'utf8');
+  check('[#15] 账本落盘的错误原文不得含明文凭据', !secretRaw.includes('sk-abcdefghijklmnop123456'), secretRaw.slice(0, 160));
+  check('[#15] 脱敏后仍保留可归因的错误信息', /upload failed/.test(secretRaw), secretRaw.slice(0, 160));
 
   console.log(failures === 0 ? 'SIDE EFFECT IDEMPOTENCY TEST: PASS' : 'SIDE EFFECT IDEMPOTENCY TEST: FAIL (' + failures + ')');
   process.exitCode = failures === 0 ? 0 : 1;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://codenode.local/schema/project-1.0.json",
-  "title": "CodeNode Next Project Format 1.0",
+  "title": "CodeNode Project Format 1.0",
   "description": "Schema for .cnode 1.0 project files（重构版：Agent 工作流语义，无代码槽）",
   "type": "object",
   "required": ["mimetype", "manifest.json", "graph.json", "workspace.json", "integrity.json"],
@@ -20,6 +20,16 @@
         "name": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "modifiedAt": { "type": "string", "format": "date-time" },
+        "template": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "workflow" },
+            "tools": { "type": "array", "items": { "type": "string" } },
+            "models": { "type": "array", "items": { "type": "string" } },
+            "paths": { "type": "array", "items": { "type": "string" } },
+            "sourceProject": { "type": "string" }
+          }
+        },
         "generator": {
           "type": "object",
           "properties": {

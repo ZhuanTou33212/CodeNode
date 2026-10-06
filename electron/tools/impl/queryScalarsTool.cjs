@@ -112,6 +112,7 @@ function register(registry) {
       });
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["query_scalars"]);
 }
 
 module.exports = { register };

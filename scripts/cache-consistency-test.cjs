@@ -28,17 +28,20 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     // 请求按顺序编排：1 读画布 → 2 建节点 → 3 再读画布 → 4 结束
     if (requestCount === 1) {
-      res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] } }] }));
+      res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] }, finish_reason: 'tool_calls' }] }));
+      res.write(DONE);
     } else if (requestCount === 2) {
-      res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_2', type: 'function', function: { name: 'workbench_edit', arguments: '{"operations":[{"action":"create","name":"new_task","type":"task","prompt":"write api"}]}' } }] } }] }));
+      res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_2', type: 'function', function: { name: 'workbench_edit', arguments: '{"operations":[{"action":"create","name":"new_task","type":"task","prompt":"write api"}]}' } }] }, finish_reason: 'tool_calls' }] }));
+      res.write(DONE);
     } else if (requestCount === 3) {
-      res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_3', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] } }] }));
+      res.write(sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_3', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] }, finish_reason: 'tool_calls' }] }));
+      res.write(DONE);
     } else if (requestCount === 5) {
-      // 回归场景：服务端关闭流时没有附带最后一个换行符。
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_5', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] } }] })}`);
+      // 回归场景：最后一帧没有换行，但仍包含合法的结束原因。
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_5', type: 'function', function: { name: 'get_workbench_model', arguments: '{"view":"full"}' } }] }, finish_reason: 'tool_calls' }] })}`);
     } else {
       if (requestCount === 6) {
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '尾帧无换行' } }] })}`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '尾帧无换行' }, finish_reason: 'stop' }] })}`);
       } else {
         res.write(sse({ choices: [{ delta: { content: '完成' } }] }));
         res.write(DONE);

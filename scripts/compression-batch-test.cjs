@@ -100,8 +100,24 @@ const ok = (label) => console.log('  ✓ ' + label);
   };
   const out4 = await agent.compressToolBatch(noCacheCfg, twoItems, null, { projectRoot: tmp2, chat: boom });
   assert.ok(out4.every((r) => r.text.includes('子代理压缩失败') && r.degraded === true));
-  assert.ok(out4.every((r) => r.text.length <= 200), '降级输出不应超过预算太多');
-  ok('F 压缩失败降级为截断（不丢信息、不中断主循环）');
+  // 回归 #11：降级必须是**保留原文**，而不是把正文截成 budget（这里 200）字符却仍标「已压缩」。
+  // 真实预算下最坏情形是 12 万字符 → 1500 字符（丢 98.7%），而模型只看到一句「压缩失败，已截断」，
+  // 于是它在一份**看起来正常**的结果上做出错误判断（代码读了一半、JSON 被砍断）。
+  assert.ok(out4.every((r) => r.text.includes('【未压缩】')), '降级必须显式标注「未压缩」');
+  assert.ok(
+    out4.every((r, i) => r.text.includes(twoItems[i].content)),
+    '降级必须保留完整原文（不得截断）'
+  );
+  ok('F 压缩失败降级为「保留原文 + 显式标注未压缩」（不丢信息、不中断主循环）');
+
+  // ---- F2. 压缩调用**成功但返回空摘要** → 同样必须保留原文 ----
+  // 这是另一条降级分支（`if (!out)`），与 F 的 catch 分支是两处独立代码，必须各自有判据。
+  compressionCache.resetCompressionCaches();
+  const emptyChat = async () => ({ content: '', usage: { prompt_tokens: 1, completion_tokens: 0, total_tokens: 1 } });
+  const out4b = await agent.compressToolBatch(noCacheCfg, twoItems, null, { projectRoot: tmp2, chat: emptyChat });
+  assert.ok(out4b.every((r) => r.text.includes('【未压缩】')), '空摘要也必须显式标注「未压缩」');
+  assert.ok(out4b.every((r, i) => r.text.includes(twoItems[i].content)), '空摘要时原文必须完整保留');
+  ok('F2 压缩返回空摘要 → 保留原文 + 标注未压缩');
 
   // ---- G. 单份走单条路径 ----
   compressionCache.resetCompressionCaches();

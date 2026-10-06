@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
+import { useProjectStore } from '../../store/projectStore';
+import { projectNameOf } from '../../lib/recentProjects';
+import { useGraphStore } from '../../store/graphStore';
+import { saveProject } from '../../lib/projectActions';
 import { useChatStore } from '../../store/chatStore';
 import { useSessionStore } from '../../store/sessionStore';
 import { useUiStore } from '../../store/uiStore';
 import { useUsageStore, type ReasoningEffort } from '../../store/usageStore';
+import { useSending } from '../../lib/useSending';
+import { formatResumePlanNotice, summarizeResumePlan } from '../../lib/resumePlan';
+import { reportError } from '../../lib/reportError';
 import type { AgentAttachment } from '../../types';
 import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
+import { PlanCard } from '../PlanCard';
+import { IntentBadge } from '../IntentBadge';
+import ResumePlanNotice from './ResumePlanNotice';
 import HoverPopover from './HoverPopover';
+import ModelPicker from './ModelPicker';
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -119,9 +130,26 @@ function UsageMeter() {
  */
 function PromptComposer() {
   const [text, setText] = useState('');
+  const selectedNode = useGraphStore(s => s.nodes.find(n => n.id === s.selectedId && ['task','stage','tool'].includes(n.type || '')));
+  const inputText = selectedNode ? String(selectedNode.data.prompt || '') : text;
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const pendingDraft = useSessionStore(s => s.newConversationPending);
+  const projectRoot = useProjectStore(s => s.root);
+  const draftRevision = useSessionStore(s => s.draftRevision);
+  useEffect(() => { setText(''); setAttachments([]); if (draftRevision) window.setTimeout(() => taRef.current?.focus(), 0); }, [draftRevision]);
+  const [modelSearch, setModelSearch] = useState('');
+  useEffect(() => {
+    const closePicker = (event: Event) => {
+      document.querySelectorAll<HTMLDetailsElement>('.pp-model-picker[open]').forEach(picker => {
+        if (event instanceof KeyboardEvent ? event.key === 'Escape' : !picker.contains(event.target as Node)) picker.open = false;
+      });
+    };
+    document.addEventListener('pointerdown', closePicker); document.addEventListener('keydown', closePicker);
+    return () => { document.removeEventListener('pointerdown', closePicker); document.removeEventListener('keydown', closePicker); };
+  }, []);
   const [dragOver, setDragOver] = useState(false);
-  const sending = useChatStore((s) => s.sending);
+  // #7：`sending` 是派生值（inflight.size() > 0），不再是可被并发覆盖的单值全局标志
+  const sending = useSending();
   const streaming = useSessionStore((s) => s.streaming);
   const models = useUsageStore((s) => s.models);
   const modelId = useUsageStore((s) => s.modelId);
@@ -131,10 +159,33 @@ function PromptComposer() {
   const loadModels = useUsageStore((s) => s.loadModels);
   const busy = sending || streaming;
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const composing = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // §4.2：运行中插话（steering）—— 长任务跑偏时不用整停，这句话会在下一轮进请求体
+  const [steerText, setSteerText] = useState('');
+  const [steering, setSteering] = useState(false);
+  const steer = async () => {
+    const value = steerText.trim();
+    if (!value) return;
+    setSteering(true);
+    try {
+      const result = await useChatStore.getState().steer(value);
+      if (result?.accepted) {
+        setSteerText('');
+        useUiStore.getState().setToast('已插话：下一轮生效');
+      } else {
+        // 没插上就直说（不静默）——运行可能刚好结束
+        useUiStore.getState().setToast(String(result?.error || '插话未生效'));
+      }
+    } catch (error) {
+      reportError('插话失败', error, (message) => useUiStore.getState().setToast(message));
+    } finally {
+      setSteering(false);
+    }
+  };
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
-  const canVision = model?.vision === true;
+  const canVision = !selectedNode && model?.vision === true;
 
   useEffect(() => {
     void loadModels();
@@ -169,6 +220,8 @@ function PromptComposer() {
   };
 
   const send = async () => {
+    if (composing.current) return;
+    if (selectedNode && !busy) { await saveProject(); return; }
     const prompt = text.trim();
     if ((!prompt && !attachments.length) || busy) return;
     const toSend = attachments;
@@ -185,6 +238,8 @@ function PromptComposer() {
   };
 
   return (
+    <>
+      {pendingDraft && !selectedNode && <div className="composer-project-context">新对话 · {projectNameOf(projectRoot || '当前项目')}</div>}
     <div
       className={`pp-composer${dragOver ? ' is-dragover' : ''}`}
       onDragOver={(e) => {
@@ -204,7 +259,8 @@ function PromptComposer() {
         void addFiles(files);
       }}
     >
-      {attachments.length > 0 && (
+      {selectedNode && <div className="node-prompt-context"><span>阶段 · {String(selectedNode.data.label || selectedNode.id)}</span><button aria-label="返回对话" onClick={() => useGraphStore.getState().setSelectedIds([])}>×</button></div>}
+      {!selectedNode && attachments.length > 0 && (
         <div className="pp-attach-list">
           {attachments.map((a, i) => (
             <div className="pp-attach" key={i} title={`${a.name || '图片'}（${fmtBytes(a.bytes || 0)}）`}>
@@ -224,15 +280,19 @@ function PromptComposer() {
       <textarea
         ref={taRef}
         className="pp-input"
-        value={text}
+        value={inputText}
         rows={1}
+        disabled={busy}
+        onCompositionStart={() => { composing.current = true; }}
+        onCompositionEnd={() => { composing.current = false; }}
+        onFocus={() => { if (selectedNode) useGraphStore.getState().commit(); }}
         placeholder={
-          canVision
-            ? '输入 prompt…（Enter 发送，Shift+Enter 换行；可粘贴 / 拖入图片）'
-            : '输入 prompt…（Enter 发送，Shift+Enter 换行）'
+          selectedNode ? '输入此阶段的任务…' : canVision
+            ? '描述任务，或粘贴图片…'
+            : '描述你想完成的任务…'
         }
         onChange={(e) => {
-          setText(e.target.value);
+          if (selectedNode) useGraphStore.getState().updateNodeData(selectedNode.id, { prompt: e.target.value }); else setText(e.target.value);
           const el = taRef.current;
           if (el) {
             el.style.height = 'auto';
@@ -246,6 +306,7 @@ function PromptComposer() {
           void addFiles(files);
         }}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || composing.current || e.nativeEvent.keyCode === 229) return;
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             void send();
@@ -255,39 +316,7 @@ function PromptComposer() {
 
       {/* 控件行：模型 / 推理强度 / 发送（紧凑一行，保证输入框常驻面板底部） */}
       <div className="pp-controls">
-        <select
-          className="pb-select pp-model"
-          value={model ? model.id : ''}
-          title={model ? `当前模型：${model.label}` : '选择模型'}
-          onChange={(e) => {
-            if (e.target.value === '__manage') {
-              useUiStore.getState().openModelManager();
-              return;
-            }
-            if (e.target.value) setModel(e.target.value);
-          }}
-        >
-          {models.length === 0 && <option value="">未配置模型</option>}
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-          <option value="__manage">管理模型…</option>
-        </select>
-
-        {model && model.supportsEffort && (
-          <select
-            className="pb-select pp-effort"
-            value={effort}
-            title="推理强度"
-            onChange={(e) => setEffort(e.target.value as ReasoningEffort)}
-          >
-            <option value="low">推理低</option>
-            <option value="medium">推理中</option>
-            <option value="high">推理高</option>
-          </select>
-        )}
+        <ModelPicker busy={busy} />
 
         <input
           ref={fileRef}
@@ -303,6 +332,7 @@ function PromptComposer() {
         />
         <button
           className={`pp-attach-btn${canVision ? '' : ' is-off'}`}
+          disabled={!!selectedNode}
           title={
             canVision
               ? '添加图片（也可直接粘贴 / 拖入）'
@@ -316,34 +346,55 @@ function PromptComposer() {
             fileRef.current?.click();
           }}
         >
-          🖼
+          ＋
         </button>
 
         {busy ? (
-          <button className="pp-send pp-stop" onClick={() => useChatStore.getState().stop()} title="停止思考">
-            停止
-          </button>
+          <>
+          <button className="pp-send pp-stop" onClick={() => useChatStore.getState().stop()} aria-label="停止生成" title="停止生成">■</button>
+          <div className="pp-steer" title="运行中插话：这句话会在下一轮送进模型，不中断当前运行">
+            <input
+              className="pp-steer-input"
+              value={steerText}
+              placeholder="插话纠偏…（如：别改 utils，只改 api 层）"
+              onChange={(e) => setSteerText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void steer();
+                }
+              }}
+              disabled={steering}
+              data-testid="pp-steer-input"
+            />
+            <button className="pp-steer-send" onClick={() => void steer()} disabled={steering || !steerText.trim()} data-testid="pp-steer-send">
+              插话
+            </button>
+
+          </div>
+          </>
         ) : (
           <button
             className="pp-send"
             onClick={() => void send()}
-            disabled={(!text.trim() && !attachments.length) || busy}
-            title="发送 (Enter)"
+            disabled={(!selectedNode && !text.trim() && !attachments.length) || busy}
+            title={selectedNode ? '保存阶段 Prompt (Enter)' : '发送 (Enter)'}
           >
-            发送
+            {selectedNode ? '保存' : '↑'}
           </button>
         )}
       </div>
     </div>
+    </>
   );
 }
 
-/** 标签页 0：Agent 对话（原画布左上角悬浮会话面板，现并入侧栏标签） */
+/** 主工作区对话：记录滚动，输入框固定在底部。 */
 export default function AgentPanel() {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
   const active = useSessionStore((s) => (s.activeId ? s.sessions[s.activeId] : null));
-  const sessionCount = useSessionStore((s) => s.order.length);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   // 新消息 / 流式增量时保持贴底
@@ -361,34 +412,40 @@ export default function AgentPanel() {
             {active ? active.label : '未选择会话'}
           </span>
           <span className={`chat-win-status ${streaming ? 'st-running' : 'st-done'}`}>
-            {streaming ? '思考中…' : active && active.status === 'active' ? '进行中' : '就绪'}
+            {streaming ? '思考中…' : '就绪'}
           </span>
-          <button
-            className="ap-new"
-            title={`新建空白会话画布（当前 ${sessionCount} 个）`}
-            onClick={() => useSessionStore.getState().newCanvas()}
-          >
-            ＋ 新会话
-          </button>
         </div>
         <div className="ap-head-meta">
-          <span className="ap-hint">对话常驻此面板；输入框固定在底部</span>
           <UsageMeter />
         </div>
       </div>
 
-      <div className="ap-body" ref={bodyRef}>
-        {messages.length === 0 && (
-          <div className="cs-chat-empty">
-            （暂无对话）
-            <div className="sp-empty-hint">在下方输入 prompt 开始；Agent 的工作流步骤会出现在画布上。</div>
-          </div>
-        )}
-        {messages.map((m, i) => (
+      {/* 计划卡：任务清单来自主进程的 kind:'plan' 增量（update_plan 工具）。
+          没有计划时它自己返回 null —— 不占位、不留空壳。 */}
+      {streaming && <div className="agent-run-status" role="status">正在回复…</div>}
+      <PlanCard />
+
+      {/* 意图识别标：每轮由主进程的 kind:'intent' 增量更新（高风险/授权不明时审批会收紧）。
+          没有信号（未启用/超时/失败）时它自己返回 null —— 不占位、不假装有结论。 */}
+      <IntentBadge />
+
+      {/* #25(b)：流式正文 / 「思考中」 / 已停止 / 失败原因都发生在这里，必须是 live region，
+          否则键盘/读屏用户完全得不到「正在生成 / 已中断」的播报。 */}
+      <div
+        className="ap-body"
+        ref={bodyRef}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label="Agent 对话记录"
+      >
+
+        {messages.filter(m => !(m.role === 'assistant' && /^(你好[，,]?\s*我能为你做什么[？?]?|你好[，,]?\s*我能为你做些什么[？?]?)$/.test(m.content.trim()))).map((m, i) => (
           <MessageViewMemo key={i} msg={m} />
         ))}
       </div>
 
+      <ResumePlanNotice />
       <PromptComposer />
     </div>
   );

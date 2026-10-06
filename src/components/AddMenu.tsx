@@ -1,3 +1,4 @@
+import { useSessionStore } from '../store/sessionStore';
 import { useEffect } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useUiStore } from '../store/uiStore';
@@ -21,6 +22,7 @@ export default function AddMenu() {
   if (!menu) return null;
 
   const handlePick = (type: string, template: (typeof NODE_TEMPLATES)[string]) => {
+    if (!useSessionStore.getState().current()) useSessionStore.getState().newCanvas();
     const position = screenToFlowPosition({ x: menu.x, y: menu.y });
     const id = `${type}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
     addNode({ id, type, position, data: { ...template.data } });

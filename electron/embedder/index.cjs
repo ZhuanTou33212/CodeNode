@@ -102,8 +102,11 @@ class Embedder {
     // 与主模型共享有界并发队列与请求预算（嵌入也是模型调用，不能绕开统一成本/并发控制）
     this.queue = o.queue || null;
     this.budget = o.budget || null;
+    this.prices = o.prices;
     this.onUsage = typeof o.onUsage === 'function' ? o.onUsage : null;
     this.signal = o.signal || null;
+    this.traceContext = o.traceContext || null;
+    this.traceProjectRoot = o.traceProjectRoot || null;
   }
 
   /** 估算 token 数（保守：按字符数 / 3 向上取整），用于嵌入请求的预算预留与记账 */
@@ -112,10 +115,13 @@ class Embedder {
     return Math.max(1, Math.ceil(chars / 3));
   }
 
-  _report(kind, model, usage, startedAt) {
+  _report(kind, model, usage, startedAt, details = {}) {
     if (!this.onUsage) return;
     try {
-      this.onUsage({ kind: kind || 'embedding', model, usage: usage || null, latencyMs: Date.now() - startedAt, runId: /** @type {any} */ (this).runId || null });
+      this.onUsage({ kind: kind || 'embedding', model, usage: usage || null,
+        ok: details.ok !== false,
+        estimated: !usage || usage.estimated === true, billingUnknown: !usage || usage.estimated === true,
+        latencyMs: Date.now() - startedAt, runId: /** @type {any} */ (this).runId || null });
     } catch {}
   }
 
@@ -135,15 +141,41 @@ class Embedder {
     if (!this.apiKey) throw new Error('openai 嵌入器缺少 rag.embed_key');
     const startedAt = Date.now();
     const release = this.queue ? await this.queue.acquire(this.signal) : null;
-    const settle = this.budget ? this.budget.reserve(this.estimateTokens(texts) + 256) : null;
+    let settle = null;
+    let sent = false;
+    let spanDone = false;
+    const span = this.traceProjectRoot ? require('../eventBus.cjs').startSpan(this.traceProjectRoot, {
+      spanKind: 'embedding', name: 'rag.embedding', parent: this.traceContext, actor: 'rag',
+      attributes: { provider: this.provider, model: this.model || 'text-embedding-3-small' },
+    }) : null;
     try {
-      return await this.embedOpenAiInner(texts, startedAt, settle);
+      if (this.signal) this.signal.throwIfAborted();
+      settle = this.reserveEmbedding(this.model || 'text-embedding-3-small', texts);
+      sent = true;
+      const result = await this.embedOpenAiInner(texts, startedAt, settle);
+      if (span) { span.end('ok', { model: this.model || 'text-embedding-3-small' }); spanDone = true; }
+      return result;
     } catch (error) {
       if (settle) settle(null);
+      if (sent) this._report('embedding', this.model || 'text-embedding-3-small', null, startedAt, { ok: false });
+      if (span) { span.end(this.signal?.aborted ? 'cancelled' : 'error', { error }); spanDone = true; }
       throw error;
     } finally {
       if (release) release();
+      if (span && !spanDone) span.end(this.signal?.aborted ? 'cancelled' : 'error');
     }
+  }
+
+  reserveEmbedding(model, texts) {
+    const upperInput = Buffer.byteLength(JSON.stringify(texts), 'utf8') + 256;
+    return this.budget ? (typeof this.budget.reserveRequest === 'function'
+      ? this.budget.reserveRequest(model, upperInput, 0, this.prices)
+      : this.budget.reserve(upperInput)) : null;
+  }
+
+  requestSignal() {
+    const timeout = AbortSignal.timeout(30000);
+    return this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
   }
 
   async embedOpenAiInner(texts, startedAt, settle) {
@@ -154,6 +186,7 @@ class Embedder {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
       body: JSON.stringify(body),
+      signal: this.requestSignal(),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -161,26 +194,38 @@ class Embedder {
     }
     /** @type {any} */
     const data = await res.json();
-    if (settle) settle(data.usage || null);
-    this._report('embedding', this.model || 'text-embedding-3-small', data.usage || null, startedAt);
-    return (data.data || [])
-      .slice()
-      .sort((a, b) => (a.index || 0) - (b.index || 0))
-      .map((item) => item.embedding || []);
+    const input = data.usage && (data.usage.prompt_tokens ?? data.usage.input_tokens ?? data.usage.total_tokens);
+    const total = data.usage && data.usage.total_tokens;
+    const validCount = (value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+    const validInput = validCount(input) && (total == null || validCount(total));
+    const usage = validInput ? { ...data.usage, prompt_tokens: Math.max(input, total || 0),
+      completion_tokens: 0, total_tokens: Math.max(input, total || 0) } : null;
+    const vectors = (data.data || []).slice().sort((a, b) => (a.index || 0) - (b.index || 0)).map((item) => item.embedding || []);
+    if (settle) settle(usage);
+    this._report('embedding', this.model || 'text-embedding-3-small', usage, startedAt);
+    return vectors;
   }
 
   async embedOllama(texts) {
     const out = [];
-    const startedAt = Date.now();
-    const release = this.queue ? await this.queue.acquire(this.signal) : null;
-    const settle = this.budget ? this.budget.reserve(this.estimateTokens(texts) + 256) : null;
-    let reported = 0;
-    try {
     for (const text of texts) {
+      const startedAt = Date.now();
+      const release = this.queue ? await this.queue.acquire(this.signal) : null;
+      let settle = null;
+      let completed = false;
+      let spanDone = false;
+      const span = this.traceProjectRoot ? require('../eventBus.cjs').startSpan(this.traceProjectRoot, {
+        spanKind: 'embedding', name: 'rag.embedding', parent: this.traceContext, actor: 'rag',
+        attributes: { provider: this.provider, model: this.model || 'nomic-embed-text' },
+      }) : null;
+      try {
+      if (this.signal) this.signal.throwIfAborted();
+      settle = this.reserveEmbedding(this.model || 'nomic-embed-text', [text]);
       const res = await fetch(this.base + '/api/embeddings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: this.model || 'nomic-embed-text', prompt: text }),
+        signal: this.requestSignal(),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
@@ -189,13 +234,17 @@ class Embedder {
       /** @type {any} */
       const data = await res.json();
       out.push(data.embedding || []);
-      reported += 1;
-    }
-    } finally {
+      completed = true;
+      if (span) { span.end('ok', { model: this.model || 'nomic-embed-text' }); spanDone = true; }
+      } finally {
       // ollama 不返回 usage：按估算结算并标记保守值（不假装免费、也不编造精确值）
-      if (settle) settle({ total_tokens: this.estimateTokens(texts) });
-      this._report('embedding', this.model || 'nomic-embed-text', { total_tokens: this.estimateTokens(texts), estimated: true }, startedAt);
+      if (settle) {
+        settle(null);
+        this._report('embedding', this.model || 'nomic-embed-text', { total_tokens: this.estimateTokens([text]), estimated: true }, startedAt, { ok: completed });
+      }
+      if (span && !spanDone) span.end(this.signal?.aborted ? 'cancelled' : 'error');
       if (release) release();
+      }
     }
     return out;
   }

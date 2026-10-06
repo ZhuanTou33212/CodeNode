@@ -1,5 +1,8 @@
 import { memo, useState } from 'react';
 import type { SessionMsg } from '../../types';
+import TaskTrace from './TaskTrace';
+import { useProjectStore } from '../../store/projectStore';
+import { useSessionStore } from '../../store/sessionStore';
 
 /** 单条会话消息（用户 / Agent），含推理与工具调用折叠区。原 ChatSidebar 内联实现，现供侧栏 Agent 标签复用。 */
 export function MessageView({ msg }: { msg: SessionMsg }) {
@@ -7,6 +10,16 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
   const [showTools, setShowTools] = useState(false);
   const tools = msg.tools || [];
   const grounding = msg.grounding;
+  const projectRoot = useProjectStore((state) => state.root);
+  const sessionId = useSessionStore((state) => state.activeId);
+  const [feedback, setFeedback] = useState<'accept' | 'reject' | null>(null);
+  const sendFeedback = async (verdict: 'accept' | 'reject') => {
+    if (!projectRoot || !msg.content || !window.codenode?.agentFeedback) return;
+    const result = await window.codenode.agentFeedback(projectRoot, {
+      verdict, content: msg.content, input: msg.feedbackInput || '', role: msg.role, sessionId: sessionId || undefined, tools: msg.tools || [],
+    });
+    if (result.ok) setFeedback(verdict);
+  };
 
   // 上下文压缩卡（照 Codex CLI）：不是对话轮次，而是「更早的对话已被这份交接摘要取代」的标记。
   // 正文（content）是发给模型的信封原文；给人看的是折叠区里的摘要。
@@ -59,19 +72,33 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
       <span className={`cs-msg-label ${msg.status === 'running' ? 'cs-running' : ''}`}>
         CodeNode{msg.status === 'running' ? ' · 思考中…' : ''}
       </span>
+      {/* #25(b)：关键状态不能只靠颜色/图标表达 —— 读屏与键盘用户需要文本层的
+          「已停止 / 已截断 / 失败」，这也让「点停止后界面像没反应」当场可见。 */}
+      {msg.status === 'stopped' ? <div className="cs-msg-state" role="status">已停止（本轮回答可能不完整）</div> : null}
+      {msg.status === 'truncated' ? <div className="cs-msg-state cs-msg-state-warn" role="status">已截断（触到模型长度上限，回复「继续」可接着写）</div> : null}
+      {msg.status === 'failed' ? <div className="cs-msg-state cs-msg-state-error" role="status">本轮失败（详见下方错误说明）</div> : null}
       <div className="cs-msg-text">{msg.content || (msg.status === 'running' ? '…' : '')}</div>
+      {msg.content && msg.status !== 'running' ? (
+        <div className="cs-msg-feedback" aria-label="回答反馈">
+          <button type="button" className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>
+          <button type="button" className={feedback === 'reject' ? 'active' : ''} aria-pressed={feedback === 'reject'} onClick={() => void sendFeedback('reject')}>需改进</button>
+        </div>
+      ) : null}
       {grounding && grounding.status !== 'not_required' ? (
         <div
           className={`rag-grounding rag-grounding-${grounding.status}`}
-          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : undefined}
+          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : '仅核对引用位置是否在本轮读过的来源内，未验证结论是否得到支持'}
         >
           {grounding.status === 'valid'
-            ? `✓ 来源已校验（${grounding.used.length}/${grounding.allowed.length}）`
+            ? grounding.used.length
+              ? `✓ 引用位置可追溯（${grounding.used.length} 处）`
+              : '✓ 本轮无需文件引用'
             : grounding.status === 'missing'
               ? '△ 回答缺少来源引用'
               : `! 发现 ${grounding.invalid.length} 个无效引用`}
         </div>
       ) : null}
+      {tools.length ? <TaskTrace tools={tools} status={msg.status} /> : null}
       {msg.reasoning ? (
         <div className="chat-section">
           <button className="chat-section-toggle" onClick={() => setShowReasoning((v) => !v)}>

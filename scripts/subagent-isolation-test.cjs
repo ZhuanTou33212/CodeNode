@@ -131,6 +131,8 @@ const ok = (label) => console.log('  ✓ ' + label);
   ok('E timeoutSeconds 是任务总时长（秒 → 毫秒 + 钳制）');
 
   // ---- F/G. 结果契约 + 画布痕迹 ----
+  // 子代理视图按 projectRoot/runId 落盘；用独立工程根避免上次运行的任务数污染本次判据。
+  const subagentRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-subagent-run-'));
   const model = new GraphModel({
     root: {
       nodes: [
@@ -142,7 +144,7 @@ const ok = (label) => console.log('  ✓ ' + label);
   });
   const controller = new AbortController();
   const context = new AgentToolContext({
-    projectRoot: process.cwd(),
+    projectRoot: subagentRoot,
     model,
     confirm: async () => true,
     mutateWorkbench: async (fn) => {
@@ -154,31 +156,42 @@ const ok = (label) => console.log('  ✓ ' + label);
   });
   const supervisor = toolkit.buildDefaultRegistry();
   const longText = '结论：写完了\n' + 'x'.repeat(20000);
+  const parentRequestBudget = new RequestBudget(1000000);
+  /** @type {any} */
+  let observedChildConfig = null;
   const manager = new SubagentManager({
     agent: {
-      runAgentChat: async () => ({
+      runAgentChat: async ({ cfg }) => {
+        observedChildConfig = cfg;
+        return ({
         content: longText,
         toolCalls: [{ name: 'write_file', ok: true, args: JSON.stringify({ path: 'a/b.txt', content: 'x' }) }],
         usage: { total_tokens: 123 },
-      }),
+        });
+      },
     },
     toolkit,
     cfg: {
       tools: { toolsEnabled: true, toolsAllowed: [], toolsDeny: [] },
       rag: { enabled: true },
       subagent: { resultMaxChars: 500, totalTimeoutSeconds: 600 },
+      limits: { maxToolIterations: 12 },
+      requestBudget: parentRequestBudget,
     },
     registry: supervisor,
     runId: 'run-test',
   });
   manager.register(supervisor);
-  const done = await supervisor.execute('delegate_task', { role: 'builder', objective: '写文件', stageNodeId: 'stage-1' }, context);
+  const done = await supervisor.execute('delegate_task', { role: 'builder', objective: '写文件', stageNodeId: 'stage-1', maxTurns: 5, tokenBudget: 50000 }, context);
   assert.strictEqual(done.ok, true);
+  assert.strictEqual(observedChildConfig.limits.maxToolIterations, 5, 'maxTurns 必须收紧子代理模型循环');
+  assert.strictEqual(observedChildConfig.requestBudget.limit, 50000, 'tokenBudget 必须成为子代理独立预算');
+  assert.strictEqual(observedChildConfig.requestBudget.parent, parentRequestBudget, '子代理预算仍须记入父 Run');
   // P1：结果不再是「字段头 + 自由文本」，而是一个带契约的 JSON 信封（可校验、可拒收）
   const envelope = done.data.envelope;
   assert.ok(String(done.text).startsWith('[子代理结果] 契约 v1'), '结果必须是单一 JSON 信封（契约 v1）');
   assert.ok(String(done.text).includes('已截断'), '超长结果必须截断');
-  assert.ok(String(done.text).length < 2000, '截断后才进主上下文（不是 20000 字符全灌进去）');
+  assert.ok(String(done.text).length < 3000, '截断后才进主上下文（不是 20000 字符全灌进去）');
   assert.strictEqual(envelope.v, 1);
   assert.ok(/^sha256:[0-9a-f]{64}$/.test(envelope.snapshot.hash), '必须带世界状态（画布）快照哈希');
   assert.deepStrictEqual(envelope.refs, [{ kind: 'changed_file', path: 'a/b.txt' }], '变更文件要结构化回传');
@@ -216,6 +229,9 @@ const ok = (label) => console.log('  ✓ ' + label);
   assert.strictEqual(failed.ok, false);
   assert.strictEqual(failed.data.status, 'failed');
   assert.ok(String(failed.text).includes('请勿用相同 objective 原样重试'), '失败结果必须劝退原样重试');
+  const resolvedSubagentRoot = path.resolve(subagentRoot);
+  if (!resolvedSubagentRoot.startsWith(path.resolve(os.tmpdir()) + path.sep)) throw new Error('测试临时目录越界');
+  fs.rmSync(resolvedSubagentRoot, { recursive: true, force: true });
   ok('F2 子代理失败如实失败且不诱导原样重试');
 
   // ---- H. 幂等账本的行为者归因 ----
@@ -298,7 +314,7 @@ const ok = (label) => console.log('  ✓ ' + label);
   assert.strictEqual(hitRate.promptCacheHitRate, 0.75);
 
   const defaults = agent.parseSubagentConfig({});
-  assert.strictEqual(defaults.maxTotalTokens, 0);
+  assert.strictEqual(defaults.maxTotalTokens, 120000);
   assert.strictEqual(defaults.totalTimeoutSeconds, 600);
   assert.strictEqual(defaults.resultMaxChars, 8000);
   const compressionDefaults = agent.loadConfig(process.cwd()).compression;

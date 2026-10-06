@@ -14,7 +14,13 @@ async function main() {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/tools/bridge.cjs'), 'utf8'), {
     module, process: { env: {} }, setTimeout, clearTimeout,
-    require: name => { assert.strictEqual(name, 'electron'); return { ipcMain }; },
+    // bridge 的依赖：electron（ipcMain）+ 持久化审批规则模块（「本项目始终允许」落盘用）。
+    // 只放行这两个 —— 出现别的依赖说明 bridge 边界被扩大了，要显式更新这条断言。
+    require: name => {
+      if (name === 'electron') return { ipcMain };
+      if (name === '../approvalRules.cjs') return require('../electron/approvalRules.cjs');
+      assert.fail('bridge 依赖出现新增模块：' + name);
+    },
   });
   const events = [];
   const sender = { id: 1, isDestroyed: () => false, send: (channel, payload) => events.push({ channel, payload }) };

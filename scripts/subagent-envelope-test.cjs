@@ -19,6 +19,8 @@ const { GraphModel } = require('../electron/tools/GraphModel.cjs');
 const { AgentToolContext } = require('../electron/tools/context.cjs');
 const toolkit = require('../electron/tools/toolkit.cjs');
 const sandbox = require('../electron/sandbox.cjs');
+const agent = require('../electron/agent.cjs');
+const { installScriptedModel } = require('./lib/scripted-model.cjs');
 
 let failures = 0;
 function check(label, fn) {
@@ -200,6 +202,140 @@ const canvasModel = () => new GraphModel({ root: { nodes: [{ id: 'n1', type: 'ta
     });
     check('[端到端] 拒收的结果不带 verified/derived 这种可采信等级', () => {
       assert.strictEqual(rejected.data.envelope.trust, 'untrusted');
+    });
+  }
+
+  // ---- 7. #5（P1 信任放大）：被 max_tokens 截断的子代理不得标 done / 不得产出「契约合规」信封 ----
+  //
+  // 这里**不是**造假返回：用脚本化模型驱动真实的 `agent.runAgentChat` 工具循环，
+  // 让它真的走到 `finish_reason=length` 且补问用尽 —— 那条路径返回
+  // `{stopReason:'length_truncated'}` 且**不设 error**，正是子代理此前被标 done 的输入。
+  {
+    const audit = [];
+    const truncatedModel = canvasModel();
+    const cfgBase = {
+      apiBase: 'http://scripted.local/v1', apiKey: '', model: 'scripted', maxTokens: 2048, reasoningEffort: '',
+      reliability: { maxAttempts: 1, retryBaseMs: 1, retryMaxMs: 2, truncationNudges: 1 },
+      limits: { maxTotalTokens: 1000000, maxConcurrentRuns: 1 },
+      rag: { enabled: false },
+    };
+    const context = new AgentToolContext({
+      projectRoot: root,
+      model: truncatedModel,
+      confirm: async () => true,
+      audit: (line) => audit.push(line),
+      askUser: async () => '',
+      ragConfig: { enabled: false },
+      sandbox: sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: os.tmpdir() }),
+      signal: new AbortController().signal,
+      mutateWorkbench: async (fn) => {
+        fn(truncatedModel);
+        return true;
+      },
+    });
+    const registry = toolkit.buildDefaultRegistry();
+    const manager = new SubagentManager({
+      agent: { runAgentChat: agent.runAgentChat },
+      toolkit,
+      cfg: Object.assign({}, cfgBase, { tools: {} }),
+      registry,
+      runId: 'run-truncated',
+    });
+    manager.register(registry);
+    const halfReport = '半截报告：'.repeat(40);
+    const stub = installScriptedModel(
+      [
+        { content: halfReport, finishReason: 'length' },
+        { content: halfReport, finishReason: 'length' },
+      ],
+      { loopLast: false },
+    );
+    let truncated;
+    try {
+      truncated = await registry.execute('delegate_task', { role: 'explorer', objective: '输出一份长报告' }, context);
+    } finally {
+      stub.restore();
+    }
+
+    check('[#5] 被截断的子代理是失败的工具结果（不再标 done）', () => {
+      assert.strictEqual(truncated.ok, false, '半截结果不得作为成功调用交付：' + String(truncated.text).slice(0, 160));
+      assert.notStrictEqual(truncated.data.status, 'done', 'status=' + truncated.data.status);
+    });
+    check('[#5] 信封 kind=error 且 payload.stopReason/finishReason 如实带出', () => {
+      const envelope = truncated.data.envelope;
+      assert.strictEqual(envelope.kind, 'error', JSON.stringify(envelope.payload));
+      assert.strictEqual(envelope.payload.stopReason, 'length_truncated');
+      assert.strictEqual(envelope.payload.finishReason, 'length');
+      assert.strictEqual(envelope.trust, 'untrusted');
+    });
+    check('[#5] 信封本身契约合规（失败只因截断，不是缺字段）', () => {
+      const envelope = truncated.data.envelope;
+      assert.strictEqual(envelope.lossy.contractViolations, undefined, JSON.stringify(envelope.lossy));
+      assert.ok(String(envelope.payload.error).length > 0, '必须给出失败原因');
+      assert.ok(
+        /max_tokens/.test(String(envelope.payload.error)) && /截断/.test(String(envelope.payload.error)),
+        '失败原因要可执行（说清是被 max_tokens 截断）：' + String(envelope.payload.error),
+      );
+    });
+    check('[#5] 主上下文里没有「契约合规」的引导语（半截内容不得说成完整结论）', () => {
+      const text = String(truncated.text);
+      assert.ok(!text.includes('（信封即全部结论）'), '错误信封不得声称「信封即全部结论」');
+      assert.ok(!text.includes('契约违约'), '这里是截断，不是契约违约，别给出误导归因');
+      assert.ok(text.includes('这不是结论'), '必须明确写出「这不是结论」');
+      assert.ok(/length_truncated/.test(text), '必须把 stopReason 摆给主代理看');
+    });
+
+    // 批量路径（#5 同类未单列）：只要有任一子结果 ok===false，整批就**不能**是成功调用
+    const batchRegistry = toolkit.buildDefaultRegistry();
+    const batchManager = new SubagentManager({
+      agent: {
+        runAgentChat: async ({ messages }) => {
+          const objective = String(((messages || []).find((m) => m.role === 'user') || {}).content || '');
+          if (/截断/.test(objective)) {
+            return { content: '半截', toolCalls: [], usage: null, stopReason: 'length_truncated', finishReason: 'length' };
+          }
+          return { content: '完整结论：' + objective, toolCalls: [], usage: null, finishReason: 'stop' };
+        },
+      },
+      toolkit,
+      cfg: Object.assign({}, cfgBase, { tools: {}, subagent: {} }),
+      registry: batchRegistry,
+      runId: 'run-batch-truncated',
+    });
+    batchManager.register(batchRegistry);
+    const batchContext = new AgentToolContext({
+      projectRoot: root,
+      model: canvasModel(),
+      confirm: async () => true,
+      audit: () => {},
+      askUser: async () => '',
+      ragConfig: { enabled: false },
+      sandbox: sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: os.tmpdir() }),
+      signal: new AbortController().signal,
+      mutateWorkbench: async (fn) => {
+        fn(canvasModel());
+        return true;
+      },
+    });
+    const mixed = await batchRegistry.execute(
+      'delegate_tasks',
+      { tasks: [{ role: 'explorer', objective: '正常探查' }, { role: 'explorer', objective: '截断的探查' }] },
+      batchContext,
+    );
+    check('[#5] delegate_tasks 有任一子结果失败 → 整批返回 error（不再包装成成功调用）', () => {
+      assert.strictEqual(mixed.ok, false, '有失败子结果时批量调用不得报成功：' + String(mixed.text).slice(0, 160));
+      assert.strictEqual(mixed.data.failedCount, 1, JSON.stringify(mixed.data.failedCount));
+      assert.ok(String(mixed.text).includes('未成功'), String(mixed.text).slice(-200));
+      assert.ok(String(mixed.text).includes('这不是结论'), '失败子结果的信封要如实说明它不是结论');
+    });
+    const allDone = await batchRegistry.execute(
+      'delegate_tasks',
+      { tasks: [{ role: 'explorer', objective: '正常一' }, { role: 'explorer', objective: '正常二' }] },
+      batchContext,
+    );
+    check('[#5] 反向锁：全部子结果成功时批量仍是成功调用（不过度修复）', () => {
+      assert.strictEqual(allDone.ok, true, String(allDone.text).slice(0, 200));
+      assert.strictEqual(allDone.data.failedCount, 0);
     });
   }
 

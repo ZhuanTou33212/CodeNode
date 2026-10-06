@@ -98,6 +98,7 @@ for (const file of files) {
       totalRequires += 1;
       const spec = m[2];
       if (spec.startsWith('.') || spec.startsWith('/') || path.isAbsolute(spec)) continue; // 相对/绝对路径
+      if (spec.startsWith('node:')) continue; // node: 命名空间只指向 Node 内建模块，不需要 package.json 依赖
       if (builtins.has(spec)) continue; // Node 内置
       bareRequires += 1;
       const top = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];

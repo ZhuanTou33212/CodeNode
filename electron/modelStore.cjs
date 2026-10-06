@@ -1,3 +1,5 @@
+const { deduplicateModels } = require('./modelIdentity.cjs');
+const { capabilities } = require('./modelEffort.cjs');
 /**
  * CodeNode 模型接入配置存储（多个模型：名称 / 模型 ID / API 地址 / API Key / 上下文 / 价格）
  * 持久化在 userData/models.json；首次运行时用 agent.properties 生成默认项。
@@ -46,9 +48,14 @@ function decryptSecret(value) {
   return raw;
 }
 
+function maskApiKey(value) {
+  const key = String(value || '');
+  if (!key) return '';
+  return key.length > 12 ? key.slice(0, 8) + '*****' + key.slice(-4) : '*'.repeat(key.length);
+}
 function toPublicModel(model) {
   const { apiKey, ...rest } = model || {};
-  return { ...rest, apiKey: '', apiKeySet: !!apiKey };
+  return { ...rest, ...capabilities(model), apiKey: '', apiKeySet: !!apiKey, apiKeyPreview: maskApiKey(apiKey) };
 }
 
 function toPublicModels(models) {
@@ -142,8 +149,89 @@ function getModels(userDataDir, cfg) {
 
 /** 按 id 查找模型配置 */
 function findModel(userDataDir, cfg, id) {
-  const store = getModels(userDataDir, cfg);
-  return store.models.find((m) => m && m.id === id) || null;
+  const store = readUsableModels(userDataDir, cfg);
+  const model = store.models.find((m) => m && m.id === (store.modelAliases?.[id] || id)) || null;
+  if (model && model.apiKeyError) throw new Error('该模型的 Key 无法解密，请在管理模型中重新连接供应商');
+  return model;
 }
 
-module.exports = { getModels, findModel, readModels, writeModels, seedModels, toPublicModel, toPublicModels, encryptSecret, decryptSecret };
+function readRawModels(userDataDir) {
+  try {
+    const data = JSON.parse(fs.readFileSync(modelsFile(userDataDir), 'utf8'));
+    if (!data || !Array.isArray(data.models)) throw new Error('模型配置损坏，请先修复配置文件');
+    return data;
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function readUsableModels(userDataDir, cfg) {
+  const raw = readRawModels(userDataDir);
+  if (!raw) return getModels(userDataDir, cfg);
+  return deduplicateModels(raw.models.map((model) => {
+    try { return { ...model, apiKey: decryptSecret(model.apiKey) }; }
+    catch { return { ...model, apiKey: '', apiKeyError: true }; }
+  }), raw.activeId);
+}
+function saveConnection(userDataDir, models, apiKey, activeId) {
+  const raw = readRawModels(userDataDir) || { models: [] };
+  const encrypted = encryptSecret(apiKey);
+  const ids = new Set(models.map((model) => model.id));
+  const next = [...raw.models.filter((model) => !ids.has(model.id)), ...models.map((model) => ({ ...model, apiKey: encrypted }))];
+  fs.mkdirSync(userDataDir, { recursive: true });
+  const file = modelsFile(userDataDir); const temp = file + '.' + require('crypto').randomUUID() + '.tmp';
+  try { fs.writeFileSync(temp, JSON.stringify({ models: next, activeId }, null, 2), { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
+  finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+}
+function activateModel(userDataDir, id) {
+  const raw = readRawModels(userDataDir);
+  if (!raw || !raw.models.some((model) => model.id === id)) throw new Error('模型不存在');
+  const selected = raw.models.find((model) => model.id === id);
+  decryptSecret(selected.apiKey); // Only the selected Key needs to be readable.
+  const file = modelsFile(userDataDir); const temp = file + '.' + require('crypto').randomUUID() + '.tmp';
+  try { fs.writeFileSync(temp, JSON.stringify({ ...raw, activeId: id }, null, 2), { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
+  finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+}
+
+/**
+ * 归一化一条模型记录（S13）：协议 / 端点 / 认证 / 输出上限字段名只允许落到白名单取值上，
+ * 其余字段原样保留（用户手写的额外字段不该被吞掉）。
+ * 归一化的是「怎么发请求」，不是「模型能力」—— 能力仍由 supportsEffort / vision / contextWindow 决定。
+ */
+const MODEL_PROTOCOLS = new Set(['openai', 'anthropic', 'gemini']);
+const MODEL_ENDPOINTS = new Set(['standard', 'azure']);
+
+function normalizeModelInput(model) {
+  const out = { ...(model || {}) };
+  /**
+   * 别名归一（claude / messages → anthropic，google / googleai → gemini）。
+   * **未指定 / 认不出来一律留空** —— 留空表示「按 API 地址自动判定」，不能钉成 openai
+   * （钉死会让「把地址改成 Claude 或 Gemini」的模型突然 404）。
+   */
+  const rawProtocol = String(out.protocol || '').trim().toLowerCase();
+  const alias = { claude: 'anthropic', messages: 'anthropic', google: 'gemini', googleai: 'gemini', generativelanguage: 'gemini' };
+  const protocol = alias[rawProtocol] || rawProtocol;
+  out.protocol = MODEL_PROTOCOLS.has(protocol) ? protocol : '';
+  const endpoint = String(out.endpoint || '').trim().toLowerCase();
+  out.endpoint = MODEL_ENDPOINTS.has(endpoint) ? endpoint : (/openai\.azure\.com/i.test(String(out.apiBase || '')) ? 'azure' : '');
+  out.auth = String(out.auth || '').trim();
+  out.apiVersion = String(out.apiVersion || '').trim();
+  out.azureDeployment = String(out.azureDeployment || '').trim();
+  out.provider = String(out.provider || '').trim();
+  out.providerLabel = String(out.providerLabel || '').trim();
+  return out;
+}
+
+module.exports = {
+  readUsableModels,
+  saveConnection,
+  activateModel,
+  getModels,
+  findModel,
+  readModels,
+  writeModels,
+  seedModels,
+  toPublicModel,
+  maskApiKey,
+  toPublicModels,
+  normalizeModelInput,
+  encryptSecret,
+  decryptSecret,
+};

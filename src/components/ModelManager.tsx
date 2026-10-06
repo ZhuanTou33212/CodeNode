@@ -1,268 +1,88 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useUiStore } from '../store/uiStore';
 import { useUsageStore, type ModelSpec } from '../store/usageStore';
-
-function emptyModel(): ModelSpec {
-  return {
-    id: '',
-    label: '',
-    model: '',
-    apiBase: 'https://api.deepseek.com',
-    apiKey: '',
-    apiKeySet: false,
-    contextWindow: 1_000_000,
-    priceInput: 0.22,
-    priceInputHit: 0.007,
-    priceOutput: 0.66,
-    supportsEffort: true,
-    vision: false,
-    enabled: true,
-  };
-}
-
+const PROVIDERS = [['deepseek', 'DeepSeek'], ['openai', 'OpenAI'], ['anthropic', 'Anthropic'], ['gemini', 'Google Gemini'], ['qwen', '通义千问 / 百炼（国内）'], ['qwen_intl', '百炼（新加坡）'], ['kimi', 'Kimi / Moonshot'], ['glm', '智谱 GLM'], ['doubao', '豆包 / 火山方舟'], ['baidu', '百度文心 / 千帆'], ['siliconflow', '硅基流动'], ['openrouter', 'OpenRouter'], ['groq', 'Groq'], ['mistral', 'Mistral'], ['xai', 'xAI / Grok'], ['minimax', 'MiniMax（国内）'], ['minimax_intl', 'MiniMax（国际）'], ['together', 'Together AI'], ['custom', '其他兼容服务 / 本地模型']];
 export default function ModelManager() {
-  const open = useUiStore((s) => s.modelManagerOpen);
-  const close = useUiStore((s) => s.closeModelManager);
-  const loadModels = useUsageStore((s) => s.loadModels);
-  const [models, setModels] = useState<ModelSpec[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [form, setForm] = useState<ModelSpec>(emptyModel());
-  const [isNew, setIsNew] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const refresh = useCallback(async () => {
-    const api = window.codenode;
-    if (!api || !api.modelsList) return;
-    try {
-      const res = await api.modelsList();
-      const list = (res.models || []).filter((m) => m && m.id);
-      setModels(list);
-      setActiveId(res.activeId || null);
-      if (list.length) {
-        const current = selectedId && list.some((m) => m.id === selectedId) ? selectedId : res.activeId || list[0].id;
-        setSelectedId(current);
-        setForm({ ...(list.find((m) => m.id === current) || list[0]) });
-        setIsNew(false);
-      } else {
-        setSelectedId(null);
-        setForm(emptyModel());
-        setIsNew(true);
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '无法读取模型配置');
-    }
-  }, [selectedId]);
-
+  const open = useUiStore(s => s.modelManagerOpen), close = useUiStore(s => s.closeModelManager);
+  const [models, setModels] = useState<ModelSpec[]>([]), [choices, setChoices] = useState<ModelSpec[]>([]);
+  const [provider, setProvider] = useState('deepseek'), [key, setKey] = useState('');
+  const [apiBase, setApiBase] = useState(''), [modelId, setModelId] = useState('');
+  const [ticket, setTicket] = useState(''), [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [editingKey, setEditingKey] = useState(false), [preview, setPreview] = useState(''), [showChoices, setShowChoices] = useState(false);
+  const target = useUiStore(s => s.modelConnectionTarget);
+  const epoch = useRef(0);
+  const refresh = async () => {
+    const result = await window.codenode?.modelsList();
+    if (result) { setModels(result.models || []); }
+    await useUsageStore.getState().loadModels();
+  };
   useEffect(() => {
-    if (open) void refresh();
-  }, [open, refresh]);
-
+    const current = ++epoch.current;
+    const target = useUiStore.getState().modelConnectionTarget;
+    if (open) { setProvider(target?.provider || 'deepseek'); setApiBase(target?.provider === 'custom' ? target.apiBase || '' : ''); setModelId(''); }
+    setKey(''); setPreview(''); setEditingKey(false); setShowChoices(false); setTicket(''); setChoices([]); setError(''); setBusy(false);
+    if(open) void refresh().catch(() => { if(current === epoch.current) setError('无法读取模型配置，请检查配置文件'); });
+    return () => { epoch.current++; };
+  }, [open]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
-    };
-    if (open) window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, close]);
-
-  if (!open) return null;
-
-  const save = async () => {
-    if (!form.label.trim() || !form.model.trim()) return;
+    if(!open) return;
+    const onKey = (e: KeyboardEvent) => { if(e.key === 'Escape' && !busy) close(); };
+    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+  }, [open, busy, close]);
+  const connected = models.filter(model => !model.apiKeyError && (model.apiKeySet || model.auth === 'none') && (model.provider === provider || (!model.provider && provider === 'deepseek' && /api\.deepseek\.com/i.test(model.apiBase || ''))) && (provider !== 'custom' || model.apiBase === apiBase));
+  const saved = connected.find(model => model.id === useUsageStore.getState().modelId) || connected[0];
+  const savedPreview = target ? '' : saved?.apiKeyPreview || '';
+  const maskedTyped = key.length > 12 ? key.slice(0,8) + '*****' + key.slice(-4) : '*'.repeat(key.length);
+  const displayKey = editingKey ? key : key ? maskedTyped : preview || savedPreview;
+  const canSwitch = !!ticket || (!editingKey && !key && !target && connected.length > 0);
+  const visibleChoices = ticket ? choices : connected;
+  if(!open) return null;
+  const discover = async () => {
+    const current = ++epoch.current;
+    setBusy(true); setError(''); setTicket(''); setChoices([]);
+    try {
+      const result = await window.codenode?.modelsDiscover(provider, key, { apiBase, modelId });
+      if(current !== epoch.current) return;
+      if(!result?.ok || !result.ticket) throw new Error(result?.error || '获取模型失败');
+      setPreview(result.apiKeyPreview || maskedTyped); setEditingKey(false); setShowChoices(true); setTicket(result.ticket); setChoices(result.models || []); setSelected(result.models?.find(model => model.model === useUiStore.getState().modelConnectionTarget?.model)?.id || result.models?.[0]?.id || ''); setKey('');
+    } catch(e) { if(current === epoch.current) setError(e instanceof Error ? e.message : '获取模型失败'); }
+    finally { if(current === epoch.current) setBusy(false); }
+  };
+  const connect = async () => {
+    setBusy(true); setError('');
+    try {
+      const result = await window.codenode?.modelsConnect(ticket, selected);
+      if(!result?.ok) throw new Error(result?.error || '连接失败');
+      await refresh();
+      if (!await useUsageStore.getState().setModel(selected)) throw new Error('连接已保存，但模型未能激活，请重新选择');
+      useUiStore.setState({ modelConnectionTarget: null });
+      setTicket(''); setPreview(''); setShowChoices(true);
+    } catch(e) { setError(e instanceof Error ? e.message : '连接失败'); }
+    finally { setBusy(false); }
+  };
+  const act = async () => {
+    if (ticket) { await connect(); return; }
+    if (!canSwitch) { await discover(); return; }
+    if (!showChoices) { setSelected(saved?.id || ''); setShowChoices(true); return; }
     setBusy(true);
-    setError('');
-    const api = window.codenode;
-    try {
-      const payload: ModelSpec = {
-        ...form,
-        id: isNew ? form.id || form.model.trim() : form.id,
-        label: form.label.trim(),
-        model: form.model.trim(),
-        apiBase: form.apiBase?.trim() || 'https://api.deepseek.com',
-        apiKey: form.apiKey || '',
-        contextWindow: Number(form.contextWindow) || 1_000_000,
-        priceInput: Number(form.priceInput) || 0,
-        priceInputHit: Number(form.priceInputHit) || 0,
-        priceOutput: Number(form.priceOutput) || 0,
-      };
-      const res = api && api.modelsSave ? await api.modelsSave(payload) : null;
-      if (!res?.ok) throw new Error(res?.error || '保存失败');
-      if (res && res.ok) {
-        await refresh();
-        await loadModels();
-        if (res.activeId) setActiveId(res.activeId);
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '保存失败');
-    } finally {
-      setBusy(false);
-    }
+    if (!await useUsageStore.getState().setModel(selected || saved?.id || '')) setError('模型切换失败');
+    setBusy(false);
   };
+  return <div className="mm-mask" onClick={() => { if(!busy) close(); }}><div className="mm-dialog mm-connect-dialog" role="dialog" aria-modal="true" aria-label="管理模型" onClick={e => e.stopPropagation()}>
+    <div className="mm-head"><span className="mm-title">管理模型</span><button className="mm-close" aria-label="关闭" disabled={busy} onClick={close}>✕</button></div>
+    <div className="mm-connect-body">
 
-  const remove = async () => {
-    if (!selectedId) return;
-    setBusy(true);
-    const api = window.codenode;
-    try {
-      const res = api && api.modelsDelete ? await api.modelsDelete(selectedId) : null;
-      if (!res?.ok) throw new Error(res?.error || '删除失败');
-      if (res && res.ok) {
-        await refresh();
-        await loadModels();
-        if (res.activeId) setActiveId(res.activeId);
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '删除失败');
-    } finally {
-      setBusy(false);
-    }
-  };
+      {useUiStore.getState().modelConnectionTarget && <div className="mm-error" role="status">请填写 {useUiStore.getState().modelConnectionTarget?.label} 的 API Key</div>}
+      {models.some(m => m.apiKeyError) && <div className="mm-error" role="status">旧 Key 已失效，需重新连接。</div>}
+      <label className="mm-field"><span>供应商</span><select className="mm-input" aria-label="供应商" disabled={busy} value={provider} onChange={e => { epoch.current++; setProvider(e.target.value); setPreview(''); setEditingKey(false); setShowChoices(false); setKey(''); setTicket(''); setChoices([]); setError(''); setApiBase(''); setModelId(''); }}>{PROVIDERS.map(([id,label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+      {provider === 'custom' && <label className="mm-field"><span>API 地址</span><input className="mm-input" aria-label="API 地址" disabled={busy} value={apiBase} placeholder="例如 https://服务地址/v1 或 http://localhost:11434/v1" onChange={e => { setApiBase(e.target.value); setTicket(''); setChoices([]); }} /></label>}
+      <label className="mm-field"><span>API Key</span><div className="mm-key-row"><input className="mm-input" aria-label="API Key" type={editingKey || !displayKey ? 'password' : 'text'} autoComplete="off" disabled={busy} value={displayKey} placeholder={provider === 'custom' ? '本机服务可留空；远程服务需填写 Key' : '粘贴供应商的 API Key'} onFocus={() => { setEditingKey(true); if (!key) { setPreview(''); setTicket(''); setShowChoices(false); } }} onBlur={() => setEditingKey(false)} onChange={e => { setKey(e.target.value); setPreview(''); setTicket(''); setChoices([]); setShowChoices(false); }} onKeyDown={e => { if(e.key === 'Enter' && !busy && (canSwitch || key.trim() || provider === 'custom')) void act(); }} /><button className="mm-btn primary" disabled={busy || (!canSwitch && !key.trim() && provider !== 'custom')} onClick={() => void act()}>{busy ? '处理中…' : canSwitch ? '切换' : '连接'}</button></div></label>
+      <details className="mm-connect-note"><summary>高级</summary><label className="mm-field"><span>模型或部署 ID（选填）</span><input className="mm-input" aria-label="模型或部署 ID" disabled={busy} value={modelId} placeholder="使用供应商控制台显示的模型/部署 ID" onChange={e => { setModelId(e.target.value); setTicket(''); setChoices([]); }} /></label><p>手动添加不会验证调用权限，连接后以实际调用结果为准。</p></details>
 
-  const setActive = async () => {
-    if (!selectedId) return;
-    const api = window.codenode;
-    try {
-      const res = api && api.modelsActive ? await api.modelsActive(selectedId) : null;
-      if (!res?.ok) throw new Error('无法切换模型');
-      setActiveId(selectedId);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '无法切换模型');
-    }
-  };
-
-  const addNew = () => {
-    setSelectedId(null);
-    setForm(emptyModel());
-    setIsNew(true);
-  };
-
-  const set = (k: keyof ModelSpec, v: string | number | boolean) =>
-    setForm((f) => ({ ...f, [k]: v }));
-
-  const input = (k: keyof ModelSpec, placeholder: string, opts?: { num?: boolean; pw?: boolean }) => (
-    <input
-      className="mm-input"
-      type={opts?.pw ? 'password' : opts?.num ? 'number' : 'text'}
-      placeholder={placeholder}
-      value={String(form[k] ?? '')}
-      onChange={(e) => set(k, opts?.num ? Number(e.target.value) : e.target.value)}
-    />
-  );
-
-  return (
-    <div className="mm-mask" onClick={close}>
-      <div className="mm-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="mm-head">
-          <span className="mm-title">管理模型</span>
-          <button className="mm-close" onClick={close} title="关闭">
-            ✕
-          </button>
-        </div>
-
-        {error && <div role="alert" className="mm-error">{error}</div>}
-        <div className="mm-body">
-          <div className="mm-side">
-            <div className="mm-side-list">
-              {models.map((m) => (
-                <div
-                  key={m.id}
-                  className={'mm-item' + (m.id === selectedId ? ' active' : '')}
-                  onClick={() => {
-                    setSelectedId(m.id);
-                    setForm({ ...m });
-                    setIsNew(false);
-                  }}
-                >
-                  <span className="mm-item-label">
-                    {m.label}
-                    {m.id === activeId && <span className="mm-item-active">在用</span>}
-                  </span>
-                  <span className="mm-item-sub">{m.model}</span>
-                </div>
-              ))}
-              {models.length === 0 && <div className="mm-empty">暂无模型，点击下方「新增」添加</div>}
-            </div>
-            <button className="mm-add" onClick={addNew}>
-              + 新增模型
-            </button>
-          </div>
-
-          <div className="mm-form">
-            <div className="mm-field">
-              <label>显示名称</label>
-              {input('label', '例如：DeepSeek V4 Flash')}
-            </div>
-            <div className="mm-field">
-              <label>模型 ID</label>
-              {input('model', '例如：deepseek-v4-flash')}
-            </div>
-            <div className="mm-field">
-              <label>API 地址（URL）</label>
-              {input('apiBase', '例如：https://api.deepseek.com')}
-            </div>
-            <div className="mm-field">
-              <label>API Key</label>
-                {input('apiKey', form.apiKeySet ? '已保存，留空保持不变' : 'sk-…', { pw: true })}
-            </div>
-
-            <div className="mm-grid">
-              <div className="mm-field">
-                <label>上下文窗口（tokens）</label>
-                {input('contextWindow', '1000000', { num: true })}
-              </div>
-              <div className="mm-field">
-                <label>输入价 $/1M</label>
-                {input('priceInput', '0.22', { num: true })}
-              </div>
-              <div className="mm-field">
-                <label>缓存命中价 $/1M</label>
-                {input('priceInputHit', '0.007', { num: true })}
-              </div>
-              <div className="mm-field">
-                <label>输出价 $/1M</label>
-                {input('priceOutput', '0.66', { num: true })}
-              </div>
-            </div>
-
-            <div className="mm-checks">
-              <label className="mm-check">
-                <input type="checkbox" checked={!!form.supportsEffort} onChange={(e) => set('supportsEffort', e.target.checked)} />
-                支持推理强度
-              </label>
-              <label className="mm-check" title="开启后可在对话里粘贴 / 拖入 / 选择图片，模型会收到多模态内容">
-                <input type="checkbox" checked={!!form.vision} onChange={(e) => set('vision', e.target.checked)} />
-                视觉（图片输入）
-              </label>
-              <label className="mm-check">
-                <input type="checkbox" checked={form.enabled !== false} onChange={(e) => set('enabled', e.target.checked)} />
-                启用
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <div className="mm-foot">
-          {!isNew && (
-            <>
-              <button className="mm-btn danger" onClick={remove} disabled={busy}>
-                删除
-              </button>
-              <button className="mm-btn" onClick={setActive} disabled={busy || selectedId === activeId}>
-                设为当前模型
-              </button>
-            </>
-          )}
-          <div className="mm-foot-spacer" />
-          <button className="mm-btn" onClick={close}>
-            关闭
-          </button>
-          <button className="mm-btn primary" onClick={save} disabled={busy}>
-            {busy ? '保存中…' : '保存'}
-          </button>
-        </div>
-      </div>
+      {error && <div className="mm-error" role="alert">{error}</div>}
+      {showChoices && <><div className="mm-model-heading"><strong>选择模型</strong></div><div className="mm-choice-list" role="listbox" aria-label="模型列表">{visibleChoices.map(m => <button role="option" aria-selected={selected === m.id} className="mm-choice" key={m.id} disabled={busy} onClick={() => setSelected(m.id)}><span>{m.label}</span><span>{selected === m.id ? '✓' : ''}</span></button>)}</div></>}
     </div>
-  );
+    <div className="mm-foot"><div className="mm-foot-spacer" /><button className="mm-btn" disabled={busy} onClick={close}>完成</button></div>
+  </div></div>;
 }

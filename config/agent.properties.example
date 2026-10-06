@@ -1,4 +1,8 @@
 # CodeNode Agent 配置（本地，api_key 不入库不提交）
+# PII 处理：off（默认）| warn（只检测）| redact（输入和最终输出均脱敏）
+# agent.pii.mode=off
+# agent.pii.categories=email,phone   # 另可选 card,national_id_cn,ssn_us
+# agent.grounding.semantic_mode=off  # off（默认）| warn | enforce；仅来源带正文片段时生效
 api_base=https://api.deepseek.com
 api_key=
 model=deepseek-v4-flash
@@ -14,6 +18,25 @@ max_tokens=32768
 # 同理，stream_options.include_usage 默认随流式请求下发（DeepSeek 用它报用量）；不认这个字段的网关写 false：
 # agent.send_stream_options=false
 #
+# ── 模型接入协议（S13）──────────────────────────────────────────────────────
+# **一般情况下什么都不用配**：协议按 API 地址自动判定 ——
+#   api.anthropic.com                  → Claude 原生（/v1/messages + x-api-key）
+#   generativelanguage.googleapis.com  → Gemini 原生（contents + x-goog-api-key）
+#   *.openai.azure.com                 → Azure 端点（部署名路径 + api-key + api-version）
+#   其余（DeepSeek / Qwen / Kimi / GLM / 豆包 / OpenRouter / Groq / Ollama…）→ OpenAI 兼容 /chat/completions
+# 下面几项只在「地址判不出来、要强制指定」时才写（界面上不暴露，避免让用户选协议）：
+# api_protocol=openai            # openai | anthropic | gemini（写了就以此为准，不再按地址判定）
+# api_auth=                      # 留空 = 按协议自动：Bearer / x-api-key / x-goog-api-key / api-key
+# api_endpoint=                  # 留空 = 按地址自动（azure 端点会自带部署名路径与 api-version）
+# api_version=2024-10-21         # Azure OpenAI 的 api-version（不填用出厂值）
+# azure_deployment=              # Azure 的部署名（留空 = 用 model）
+# max_tokens_field=max_tokens    # max_tokens（默认）| max_completion_tokens（OpenAI o 系 / GPT-5 家族只认后者）
+# anthropic_version=2023-06-01   # Anthropic 版本头
+#
+# 模型自己的开关（在「模型管理」里，models.json 持久化）：
+#   「支持推理强度」不勾 = 该模型**不下发** reasoning_effort（对不认这个字段的网关必需）；
+#   「视觉（图片输入）」不勾 = 该模型不接受图片附件（会当场给出明确提示，而不是发过去让模型自己说看不懂）；
+#   价格的 0 = 不参与成本统计（人民币计价的厂商建议留 0，避免把 ¥ 记成 $）。
 # 进度检查层（对齐 Java 版「每 3 步注入任务清单」）：每 N 轮注入一条只讲事实的进度清单
 # （轮次 / 已用工具调用数 / 已改动文件 / 失败次数与最近错误码 / 用量），并要求下一步先交代
 # 「目标 / 已完成 / 下一步」—— 长任务里能显著减少空转与目标漂移。0 = 关闭。
@@ -28,22 +51,56 @@ max_tokens=32768
 # agent.turn_timeout_ms=600000          # 单轮模型请求的总时长上限（含重发），出厂 600s（旧行为写死 180s）
 # agent.stream_idle_timeout_ms=120000   # 停滞判定：连续这么久没有任何分片才认为卡死（有数据就重置）
 # agent.stream_max_attempts=2           # 流中途断线/停滞 → 丢弃半截、整轮重发的次数（0=旧行为：半截+报错）
+# agent.max_total_retries=12            # 单个 Run 内所有模型 HTTP 重试的共享上限（父 Agent / 子 Agent / 预处理共用；0=禁止重试）
+# agent.max_cost_usd=0                  # 单个 Run 的费用硬上限（美元）；0=关闭。开启后每个实际模型都须有 cost.price.<model> 单价。
+# 费用在请求前按输入和最大输出预留；子代理共享父额度。供应商未回 usage 时保留预留上界，不当成免费。
+# 此上限按配置单价约束本地请求，不代替供应商账单；输入估算、单价与供应商计费规则须保持一致。
+# cost.image_input_tokens.<model>=32768 # 含图片且费用硬上限开启时必填：实际模型每图输入 Token 上界，按供应商计费规则配置。
+# 未配置图像上界时硬预算模式拒发含图请求；不会把图片压缩字节或远程 URL 长度当作计费上界。
+# 显式模型路由：不配置即沿用当前模型；跨服务候选必须指定自己的 api_key_env。
+# agent.model_candidate.fast.model=your-fast-model
+# agent.model_candidate.backup.model=your-backup-model
+# agent.model_candidate.backup.api_base=https://your-approved-provider.example/v1
+# agent.model_candidate.backup.api_key_env=CODENODE_BACKUP_API_KEY
+# agent.model_route.code=fast           # 可映射 code/research/ops/canvas/orchestration/chat；无匹配沿用 main。
+# agent.model_route.subagent=fast       # 用途还包括 main/intent/compression/compaction。
+# agent.model_fallbacks=backup          # 显式允许的备用候选；故障切换仍共用请求次数、Token 和费用上限。
 # agent.truncation_nudges=4             # 回答触到 max_tokens 时最多补问几次（让它从断点接着写）
 # 单进程并发与单轮累计 token 上限
 # agent.max_concurrent_runs=2
 # agent.max_total_tokens=250000
+#
+# ── 意图识别 / 授权判定（照 Codex 的 guardian 分类器）───────────────────
+# 一次独立的小请求判定三件事：这一轮在做什么（intent）、风险（risk）、用户授权程度（authorization）。
+# 判定有两个出口：
+#   ① 提示词路由 —— 关键词表漏判的建模需求（画布还空着、话里没提「节点/连线」）由模型救回来，
+#      把画布建模规则注入回去；这只是**多注入**一层，不会把本来要注入的层拿掉。
+#   ② 审批门禁 —— 高风险 / 授权 unknown 或 low / 低置信时，命中 `.codenode/approvals.json`
+#      免打扰规则的审批**也要**再问一次（事件 approval_risk_gate 留痕，可归因）。
+# **只会收紧，不会放宽**：任何判定都不会让审批或操作变得更容易通过；
+# 分类失败/超时/关闭时行为与没有这个功能时逐字节一致（无信号 ≠ 低风险）。
+# agent.intent_recognition=auto     # auto（默认：只在画布为空时分类一次）| always（每轮）| never（关闭）
+# agent.intent_model=               # 分类用的模型（留空 = 与主模型相同）
+# agent.intent_timeout_ms=8000      # 单次分类超时（超时 = 没有信号，不阻断对话）
+# agent.intent_max_tokens=1024       # 分类输出上限。别往下调：供应商的思考链与正文共用这笔额度且关不掉，
+#                                    # 真机实测 256 会被思考吃光（正文为空 / JSON 被截断），1024 有余量
+# agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不限制）
+# 动作级复核（A2）：副作用动作在**执行前**再判一次「这个动作有没有授权、风险多大」。
+# risky（默认）= 只对会改动工作区/执行命令的动作；every = 每个工具动作都做；off = 关掉（一次调用都不发）。
+# 判定收紧时，**即使该工具本来不需要确认，也会问你一次**（只收紧，不放宽）。
+# agent.intent_action_review=risky
+# agent.intent_action_max_calls_per_run=5  # 动作级上限（与上面的轮级**独立**计数，互不吃掉）
 # 灵魂文档路径（相对工程根或绝对路径）
 soul_file=config/soul.md
 
 # ---------- Agent 工具配置 ----------
 # 总开关：false 关闭全部工具（仅纯对话）
 # tools.enabled=true
+# 工具面：auto 按任务选择；明确的单文件小改使用精简 edit 面，其余走常规面；off 暴露全部工具。
+# agent.tool_profile=auto
 # 白名单：非空时只允许列出的工具（逗号分隔）；留空=全部允许
-# 可用工具：get_workbench_model / create_nodes / workbench_edit / workbench_connect /
-#           scan_project / analyze_project / project_info / read_file / write_file / edit_file /
-#           find_files / search_files / list_directory / execute_shell / code_review / ask_user /
-#           fetch_url / save_project / bulk_edit / ui_control / write_analysis_md / retrieve_context
-# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,create_nodes,workbench_edit,workbench_connect,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md,retrieve_context
+# 实际暴露范围还会按角色、任务 profile 和功能配置筛选；画布节点创建/连线统一使用 workbench_edit。
+# tools.allowed=read_file,write_file,edit_file,find_files,search_files,list_directory,get_workbench_model,workbench_edit,ask_user,execute_shell,fetch_url,code_review,scan_project,analyze_project,project_info,save_project,bulk_edit,ui_control,write_analysis_md,retrieve_context,remember,recall,update_plan,read_skill,view_image,worktree
 # 黑名单：禁用某些工具（逗号分隔）
 # tools.deny=execute_shell,bulk_edit
 
@@ -52,22 +109,26 @@ soul_file=config/soul.md
 # rag.enabled=true
 # rag.max_files=5000
 # rag.max_file_bytes=524288
+# rag.max_document_mb=20       # PDF / DOCX / XLSX / PPTX 原文件上限（MB）；提取后的正文另有长度限制
 # rag.chunk_lines=72
 # rag.chunk_overlap=12
 # rag.top_k=6
 # rag.max_context_chars=12000
 # rag.max_queries=5
+# rag.graph_hops=1           # 跨文件问题默认最多沿定义/调用/引用/导入关系扩展 1 跳；0=关闭，最多 2
+# rag.bm25_k1=1.35           # 词频饱和，范围 0.1~3；建议结合项目检索评测调整
+# rag.bm25_b=0.72            # 文档长度归一化，范围 0~1
 # rag.min_coverage=0.20
 # 可选收录/排除 glob（逗号分隔）；敏感文件无论配置如何都不会收录
 # rag.include=src/**,docs/**,README*
 # rag.exclude=**/*.generated.*,fixtures/**
 
 # ---------- 向量层（可插拔嵌入器） ----------
-# provider：local（默认，纯本地确定性 n-gram 哈希向量，无网络）/
+# provider：none（默认，只用 BM25）/
+#           local（可选，纯本地确定性 n-gram 哈希向量，无网络）/
 #           openai（OpenAI 兼容 /embeddings，需 embed_base+embed_key+embed_model）/
 #           ollama（本地 Ollama，需 embed_base+embed_model）/
-#           none（关闭向量层，只用 BM25）
-# rag.embed_provider=local
+# rag.embed_provider=none
 # rag.embed_dim=4096            # local 向量维度
 # rag.embed_model=              # openai 用 text-embedding-3-small；ollama 用 nomic-embed-text
 # rag.embed_base=               # openai 默认 https://api.openai.com/v1；ollama 默认 http://localhost:11434
@@ -76,17 +137,27 @@ soul_file=config/soul.md
 # 生产档（百万级 / 每条 1024 维）：二选一
 #   openai：embed_provider=openai + embed_model=text-embedding-3-small + embed_dim=1024 + embed_dimensions=1024
 #   ollama：embed_provider=ollama + embed_model=bge-m3 + embed_dim=1024（bge-m3 原生 1024 维，中文友好）
-# rag.embed_top_k=40            # 向量层只对 BM25 预筛的 Top-K 做语义余弦，保证效率
-# rag.vector_weight=0.35        # 向量分融合权重（0~1）
+# rag.embed_top_k=40            # BM25 预筛候选上限；Milvus 后端下是 ANN topK
+# rag.memory_semantic_max_chunks=128  # 学习式嵌入 + memory：块数不超过此值时独立向量召回；超出则预筛。0=关闭
+# rag.vector_weight=0.35        # BM25 与向量倒数排名融合中的向量权重（0~1）
+# 可选重排：完整 POST URL，接受 {model,query,documents,top_n}，返回 results[{index,relevance_score}]
+# 只有显式配置 URL 才会向该服务发送候选代码片段；失败时保留原 RRF 顺序
+# rag.rerank_url=
+# rag.rerank_model=
+# rag.rerank_key=
+# rag.rerank_top_k=24
+# rag.rerank_timeout_ms=10000
+# rag.rerank_max_cost_usd=0.001          # 每次重排请求的费用上界；开启 Run 费用硬上限时必填，明确免费的本地重排填 0。
 # retrieve_context 支持 mode=auto/file/vector/hybrid/scalar（scalar 走本地标量精确查询）
 
 # ---------- 向量后端（chunk 向量存放与检索方式） ----------
-# memory（默认）：进程内记忆化 + 仅对 BM25 预筛 Top-K 打分；零外部服务、零网络。
+# memory（启用向量层后的默认后端）：进程内记忆化；哈希向量只重排 BM25 候选。配置学习式嵌入的小项目可独立向量召回。
+# sqlite：工程 .codenode 内的持久化 sqlite-vec 索引；无服务进程，需 Node/Electron 的 node:sqlite 与可选依赖 sqlite-vec。
 # milvus：外部 Milvus 服务，chunk 向量写入 collection，检索走全库 ANN（不再受 BM25 预筛限制）。
 #   注意：milvus 是本项目唯一会把 chunk 向量落到外部服务的形态，默认关闭；
 #   需先在项目根执行 `npm i @zilliz/milvus2-sdk-node`（SDK 刻意不进默认依赖，保持零依赖与体积）；
 #   服务端自建参考 milvus standalone（docker compose）或 Zilliz Cloud。
-# rag.vector_store=memory
+# rag.vector_store=memory         # memory | sqlite | milvus
 # rag.milvus_address=http://127.0.0.1:19530
 # rag.milvus_collection=          # 留空则按工程根自动命名 codenode_rag_<目录名>_<hash8>
 # rag.milvus_token=               # Zilliz Cloud / 带鉴权的服务端
@@ -109,6 +180,14 @@ soul_file=config/soul.md
 # 语义能力有限，接 Milvus 建议同时切 openai/ollama 真嵌入。写入失败/服务不可用会降级为
 # 纯 BM25 并在检索结果中标注「向量后端降级」，不会中断检索。
 
+# ---------- 可选 Dify 单向调用 ----------
+# 未配置时 dify_call 不注册，默认本地任务不依赖 Dify。
+# dify.enabled=false
+# dify.base=https://your-dify-host/v1
+# dify.api_key=
+# dify.kind=workflow               # workflow | chat；只调用已发布的应用
+# Dify 调用会把显式传入的 inputs/query 发到该服务；工具使用 network.request 权限和执行前确认。
+
 # ---------- 成本单价（用于成本账本 / 告警，不参与模型调用） ----------
 # cost.price.<model>=<输入美元/百万token>,<输出美元/百万token>[,<缓存命中输入美元/百万token>]
 # 第三段是**缓存命中**输入的单价：不写则按全量输入计价（旧行为，成本会被系统性高估），
@@ -128,6 +207,9 @@ soul_file=config/soul.md
 # agent.compression.budget_chars=1500      # 压缩摘要目标长度
 # agent.compression.max_calls=8            # 单轮最多压缩调用次数
 # agent.compression.exclude=               # 追加不压缩的工具（默认已有 retrieve_context,query_scalars,ask_user）
+# 工具结果会按当前 run 汇总为有界 Observation 视口，附在最后一条 tool 消息中。
+# agent.observation.enabled=true
+# agent.observation.budget_chars=2400
 # 压缩配额按**请求数**计（每请求最多 batch_max_items 条）：配额用尽后原文会进上下文，
 # 兜底交给下面的上下文预算（agent.context.*），两者互补 —— 压缩保质量、预算保上限。
 
@@ -186,6 +268,9 @@ soul_file=config/soul.md
 # 两个 Agent 同时写同一个文件/同一张画布会**静默互相覆盖**（谁最后写完谁赢，另一份工作凭空消失）。
 # 规则：同一个资源，同一时刻只允许一个写者。只在**写类**工具上生效（读不加锁），被占用时**不排队等待**，
 # 直接返回 RESOURCE_LOCKED（可重试，带「谁在持有、多久过期」），让 Agent 自己换顺序/换文件。
+# agent.subagent.max_concurrent_tasks=3          # 同一管理器的共享并发上限（1–8），单独委派与批次共用；写任务独占
+# agent.subagent.max_total_tokens=120000         # 每个子代理的默认独立 Token 上限；delegate_task 可用 tokenBudget 收紧，父 Run 总预算仍生效
+# agent.subagent.total_timeout_seconds=600       # 每个子任务的总时长上限；delegate_task 可用 maxTurns / timeoutSeconds 进一步收紧
 # 租约持有到**任务结束**（子代理完成/取消）或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖。
 # agent.subagent.leases=true                       # 总开关（默认开）
 # agent.subagent.lease_ttl_ms=120000               # 兜底时长（持有者崩溃时不永久占住资源）
@@ -204,3 +289,17 @@ soul_file=config/soul.md
 #   显式裁决（winnerTaskId 必须是该资源的候选来源，否则裁决被拒且冲突仍在）。
 #   待裁决冲突会以 delta/run 事件 `subagent_merge` 暴露，界面会提示（一致的批次不打扰用户）。
 # 工具支持 query + queries 多查询融合；低可信度结果会要求 Agent 继续检索
+# ---------- 执行隔离（sandbox）：Windows 无等价内核方案，边界落在工具层 ----------
+# sandbox.mode=off|best-effort|strict        # 默认 best-effort（尽量上隔离，上不了如实降级）
+# sandbox.network=deny|inherit               # **出厂 deny**（对齐 Codex 的 workspace-write：默认不给网络）
+#   deny    = 疑似联网的命令直接拒绝（PERMISSION_DENIED），不弹确认、不试连；
+#             Linux bwrap / macOS sandbox-exec 下还会真的断网（--unshare-net / deny network*）；
+#   inherit = 放行，但联网命令仍要走一次 HIGH 确认（高危判据与白名单共用归一化）。
+#   Agent 需要 `npm install` / `git push` 这类动作时把它设成 inherit。
+# sandbox.require_filesystem=1               # strict 模式下要求真实文件系统隔离（Windows 会因此拒绝执行）
+# sandbox.max_processes / sandbox.max_memory_mb / sandbox.cpu_seconds   # 0 = 不限制
+# sandbox.allow_write=<目录>[;<目录>]        # 额外可写目录（默认：项目根 + tmpdir）
+# 注意：Windows 后端（windows-job）**只隔离进程/资源，不隔离文件系统与网络** —— 越界写的防线是
+#   「工具层静态审计（shellGuard）+ 路径校验（writeRoots）+ 一或两次用户确认」。静态审计判不出的写目标
+#   （变量/通配，如 `> $OUT`）**不再静默放行**：默认模式要求确认，strict 模式直接拒绝。
+

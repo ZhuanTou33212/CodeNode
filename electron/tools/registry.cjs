@@ -14,16 +14,33 @@
  */
 'use strict';
 
+const crypto = require('crypto');
 const { AgentToolResult } = require('./result.cjs');
 // 跨 Agent 资源租约（多 Agent 信息完整性 P3 的「单一写者」）：资源键的推导也在那边
 const { resourceKeysFor } = require('./leases.cjs');
+// P0-3：动作级复核要不要问模型，先看这个动作的副作用类别（read/write/unknown）
+const sideEffectsLib = require('../sideEffects.cjs');
 const descriptorLib = require('./descriptor.cjs');
+const { validateOutput } = require('./outputSchema.cjs');
 
 /**
  * S7：模型自填的「审批字段」—— 审批只能由服务端（ApprovalService）签发令牌，参数里塞这些
  * 一律在校验前剥离（既不生效、也不制造参数错误），避免留下「模型自己批准自己」的后门。
  */
 const CONFIRMATION_SELF_FIELDS = Object.freeze(['confirmed', 'approved', 'approvalToken', 'approval_token', 'approvalId', 'approval_id', 'userApproved']);
+
+/**
+ * 数组参数的**默认长度上限**（schema 自己没声明 `maxItems` 时生效）。
+ *
+ * 为什么要有兜底：审计发现 13 个数组参数里只有 2 个声明天花板（`update_plan.steps`、
+ * `retrieve_context.queries`），同族的 `retrieve_context.keys` 反而没有 —— 于是
+ * 「模型幻觉出一个几万条的 operations / connections / list 数组」这条路径上没有任何一道闸：
+ * 参数校验放行，主进程再逐条执行。声明与消费不能只靠「每个工具作者自觉写上 maxItems」。
+ *
+ * 取 1,000：远宽于本仓任何合法批量（`bulk_edit` / `workbench_edit` 自己的批量常量是 200），
+ * 只拦「明显不可能是有意为之」的量级。**显式声明 `maxItems` 的参数仍以声明为准**。
+ */
+const DEFAULT_MAX_ARRAY_ITEMS = 1000;
 
 /** S7：审批 scope —— 能力 + 本次目标（路径/节点类参数优先），供令牌的覆盖校验使用 */
 function approvalScopeFor(descriptor, name, args) {
@@ -64,7 +81,9 @@ function validateInput(value, schema, path = '$') {
   }
   if (Array.isArray(value)) {
     if (schema.minItems != null && value.length < schema.minItems) return `${path} 至少需要 ${schema.minItems} 项`;
-    if (schema.maxItems != null && value.length > schema.maxItems) return `${path} 不能超过 ${schema.maxItems} 项`;
+    // 上限一律有闸：显式声明的用声明值，没声明的用兜底（见 DEFAULT_MAX_ARRAY_ITEMS 的注释）
+    const cap = schema.maxItems != null ? schema.maxItems : DEFAULT_MAX_ARRAY_ITEMS;
+    if (value.length > cap) return `${path} 不能超过 ${cap} 项`;
     if (schema.items) {
       for (let i = 0; i < value.length; i++) {
         const error = validateInput(value[i], schema.items, `${path}[${i}]`);
@@ -135,6 +154,134 @@ class AgentToolRegistry {
      * @type {boolean|undefined}
      */
     this.confirmWrites = options ? options.confirmWrites : undefined;
+    /**
+     * 工具面暴露（token 效率审计 P0-1 / 阶段 A）：`null` = 全部暴露（与旧行为**逐字节一致**）；
+     * 给定名单 = 只把这些 schema 下发给模型。**只影响「模型看不看得见」，不影响能不能执行** ——
+     * execute() 的四道门（角色/能力、网络、审批、租约）与角色白名单判据都不读这个字段。
+     * @type {string[]|null}
+     */
+    this.toolExposure = null;
+    /**
+     * 被裁掉的工具名（`null` = 没裁剪）。暴露面的**权威表示是「隐藏集」而不是「可见集」**：
+     * profile 管不到的东西（项目扩展 / MCP 工具 / 之后才注册的工具）天然不在隐藏集里 →
+     * **一律可见（fail-open）**。用可见集会反过来：晚注册的工具不在名单里就永远看不见了。
+     * @type {Set<string>|null}
+     */
+    this._hiddenTools = null;
+    /**
+     * model-visible specs 的 run 内缓存（P0-1 第 5 条）：此前同一轮里 compaction 估算、preflight
+     * 与正式请求会各构造一次完整 JSON（33 工具 ≈ 20k 字符/次 × 4 次），既浪费 CPU 又容易口径漂移。
+     * 键 = 暴露名单签名 + 注册表版本号；任何注册/契约/暴露变更都会清空并推进 `schemaRevision`。
+     * @type {Map<string, any>}
+     */
+    this._schemaCache = new Map();
+    /** 注册表内容版本号：缓存键的一部分，也把「这一版 schema」带进 run 事件/审计 */
+    this.schemaRevision = 0;
+    /** 缓存被清空的次数（只增）；用例用它证明「注册/注销/改契约真的让缓存失效」 */
+    this.schemaCacheMisses = 0;
+  }
+
+  /** 任何会让「下发给模型的 schema」变化的事都要走这里（注册/注销/改契约/改暴露） */
+  _invalidateSchemas() {
+    this.schemaRevision += 1;
+    if (this._schemaCache.size) {
+      this._schemaCache.clear();
+      this.schemaCacheMisses += 1;
+    }
+    return this.schemaRevision;
+  }
+
+  /**
+   * 设定暴露名单（P0-1）。传 `null` 恢复「全部暴露」。
+   *
+   * 归一化到**注册顺序**：顺序一变前缀哈希就变 → 每轮都 cache miss。所以名单只做过滤、不重排
+   * （与「run 内只增不减」配套，见 exposeNames）。名单里注册表没有的名字被静默丢弃 ——
+   * profile 名单是能力清单，配了 rag/web_search 开关时那些工具可能压根没注册。
+   * @param {string[]|null} names
+   */
+  setExposure(names) {
+    if (names == null) {
+      this.toolExposure = null;
+      this._hiddenTools = null;
+    } else {
+      const wanted = new Set(Array.isArray(names) ? names.map((n) => String(n)) : []);
+      this.toolExposure = [...this.tools.keys()].filter((n) => wanted.has(n));
+      this._hiddenTools = new Set([...this.tools.keys()].filter((n) => !wanted.has(n)));
+    }
+    this._invalidateSchemas();
+    return this.exposedNames();
+  }
+
+  /**
+   * **单调追加**暴露（`discover_tools` 用）：一个 run 内工具面只增不减。
+   * 为什么只增：减会让模型上一轮刚看到的工具突然消失，中途换面比多带一个 schema 更贵。
+   * @param {string[]} names
+   * @returns {string[]} 追加后的完整暴露名单（仍按注册顺序）
+   */
+  exposeNames(names) {
+    const add = Array.isArray(names) ? names : [];
+    if (!add.length) return this.exposedNames();
+    return this.setExposure([...this.exposedNames(), ...add]);
+  }
+
+  /** 当前有效暴露名单（注册顺序）；`null` 暴露 = 全部工具 */
+  exposedNames() {
+    const hidden = this._hiddenTools;
+    if (!hidden) return [...this.tools.keys()];
+    return [...this.tools.keys()].filter((n) => !hidden.has(n));
+  }
+
+  /**
+   * 这个工具此刻会不会下发给模型（`discover_tools` 与「提示词规则是否注入」共用同一判据）。
+   * 判定看**隐藏集**：不在隐藏集里就是可见 —— 于是「注册表里没有的名字」「profile 管不到的名字」
+   * 「晚一步注册进来的名字」都不会被误伤。
+   */
+  isExposed(name) {
+    const n = String(name || '');
+    if (!this.tools.has(n)) return false;
+    return !this._hiddenTools || !this._hiddenTools.has(n);
+  }
+
+  /**
+   * 指定名单（缺省 = 当前暴露面）的 schema 快照：tools 数组 + 序列化 JSON + 哈希 + 字符数。
+   *
+   * `hash` 是**稳定口径**：同一份暴露面在任何进程/任何轮次都得到同一个值 —— run 事件与成本账本
+   * 据此回答「这轮贵在哪个工具面上」，也是「前缀有没有被改坏」的判据（P1-1/P2-2 的基础设施）。
+   * @param {string[]} [names]
+   */
+  schemaInfo(names) {
+    // 缺省（当前暴露面）走**隐藏集口径**（fail-open：profile 管不到/晚注册的工具天然可见）；
+    // 显式给名单时按名单**精确过滤**（成本探针与审计要能单独量某一个面，不受 fail-open 影响）。
+    const wanted = names == null ? null : (Array.isArray(names) ? names.map((n) => String(n)) : []);
+    const list = wanted == null
+      ? this.exposedNames()
+      : [...this.tools.keys()].filter((n) => wanted.includes(n));
+    const key = list.join('\u0000') + '#' + this.schemaRevision;
+    const cached = this._schemaCache.get(key);
+    if (cached) return cached;
+    const tools = list.map((n) => {
+      const t = this.tools.get(n);
+      return {
+        type: 'function',
+        function: {
+          name: t.spec.name,
+          description: t.spec.description,
+          parameters: t.spec.inputSchema == null ? { type: 'object', properties: {} } : t.spec.inputSchema,
+        },
+      };
+    });
+    const json = JSON.stringify(tools);
+    const entry = Object.freeze({
+      tools: Object.freeze(tools),
+      json,
+      hash: crypto.createHash('sha256').update(json).digest('hex').slice(0, 16),
+      chars: json.length,
+      count: tools.length,
+      revision: this.schemaRevision,
+      names: Object.freeze(list),
+    });
+    this._schemaCache.set(key, entry);
+    return entry;
   }
 
   /** 旧接口：按名单合成保守契约（未声明只读 = 可写） */
@@ -145,6 +292,7 @@ class AgentToolRegistry {
       descriptor: descriptorLib.descriptorForLegacy(name, description, spec.inputSchema),
       executor,
     });
+    this._invalidateSchemas();
     return this;
   }
 
@@ -161,11 +309,13 @@ class AgentToolRegistry {
       descriptor,
       executor,
     });
+    this._invalidateSchemas();
     return this;
   }
 
   unregister(name) {
     this.tools.delete(name);
+    this._invalidateSchemas();
   }
 
   listTools() {
@@ -184,6 +334,7 @@ class AgentToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) return false;
     tool.descriptor = descriptorLib.normalizeDescriptor({ ...tool.descriptor, ...(patch || {}), explicit: true });
+    this._invalidateSchemas();
     return true;
   }
 
@@ -218,10 +369,33 @@ class AgentToolRegistry {
    * @param {string} name
    * @param {any} arguments_
    * @param {any} context 底层 AgentToolContext（或已被包装过的 ExecutionContext）
-   * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string }} [callInfo]
+   * @param {{ turnId?: string|number, toolCallId?: string, attemptId?: string, traceContext?: any }} [callInfo]
    *   调用标识：每个动作都能带回 runId/turnId/toolCallId/attemptId（审查第 5 项要求）
    */
   async execute(name, arguments_, context, callInfo) {
+    const parent = callInfo && callInfo.traceContext || (typeof context?.traceContext === 'function' ? context.traceContext() : null);
+    if (!parent) return this._executeChecked(name, arguments_, context, callInfo);
+    const root = typeof context?.projectRoot === 'function' ? context.projectRoot() : null;
+    const span = require('../eventBus.cjs').startSpan(root, {
+      spanKind: 'tool', name, runId: parent.runId, parent,
+      actor: typeof context.taskId === 'function' ? context.taskId() || 'main' : 'main',
+      turnId: callInfo?.turnId, toolCallId: callInfo?.toolCallId, attemptId: callInfo?.attemptId,
+    });
+    try {
+      const result = await this._executeChecked(name, arguments_, context, { ...callInfo, traceContext: span.context });
+      span.end(result?.ok === true ? 'ok' : result?.failure?.code === 'CANCELLED' ? 'cancelled' : 'error', {
+        attributes: { outcome: result?.kind || (result?.ok ? 'success' : 'failure'),
+          failureCode: result?.failure?.code || result?.data?.code || null,
+          sideEffectStatus: result?.data?.sideEffectStatus || null },
+      });
+      return result;
+    } catch (error) {
+      span.end(error?.name === 'AbortError' ? 'cancelled' : 'error', { error });
+      throw error;
+    }
+  }
+
+  async _executeChecked(name, arguments_, context, callInfo) {
     if (this.allowedTools && !this.allowedTools.has(name)) {
       // S5：显式失败码 —— 分类化提示才能告诉模型「这是权限问题，别原样重试」
       return AgentToolResult.failure('PERMISSION_DENIED', '当前子代理角色无权使用工具：' + name, { tool: name });
@@ -256,13 +430,72 @@ class AgentToolRegistry {
       });
     }
 
+    /**
+     * 门 1.5（A2 意图复核）：副作用动作在**执行前**再判一次「这个动作有没有授权、风险多大」。
+     *
+     * 为什么要有：轮级判定看不到「助手接下来真要做什么」—— 它只看得见用户说了什么、以及 assistant
+     * 自述过什么。真机取证证实了这个盲区：assistant 把越权动作**说**出来能被抓住，**没说出来的**不在输入里。
+     *
+     * **只收紧**：命中高风险 / 授权不明 / 低置信 → 即使这个工具本来不需要审批，也要走下面门 3 问用户。
+     * 未接线 / 复核抛错 / 判定不收紧 → 完全维持原判定（与没有这个功能逐字节一致）。
+     * 频率与预算由注入的实现控制（`agent.intent_action_review` 与 `..._max_calls_per_run`）。
+     */
+    let intentTighten = false;
+    if (
+      descriptor.mutatesWorkspace === true &&
+      descriptor.readOnly !== true &&
+      typeof execContext.intentReview === 'function'
+    ) {
+      /**
+       * P0-3：把「静态层会怎么走」一起交给复核方，让它能算出**分类到底能不能改变结果**：
+       *   - `effect`       —— 副作用类别（`unknown` = 外部/不可逆）；
+       *   - `staticRequires` —— 不带意图时这个工具是否本来就要审批；
+       *   - `wouldConfirm` —— **不带意图**时是否无论如何都会问到用户（要审批 + 没命中免打扰规则）。
+       *     已经必问的动作不再先花一次模型调用（审计原文：分类不会改变结果）。
+       *   - `ruleAllows`   —— 命中了免打扰规则（静态层会放行）→ 收紧才有意义。
+       * 判定本身是纯函数（`intent.shouldConsultGuardian`），这里只负责**如实提供事实**。
+       */
+      const staticRequires =
+        !!descriptor.requiresConfirmation &&
+        (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true);
+      let ruleAllows = null;
+      try {
+        const approvalForPreview = /** @type {any} */ (execContext.approval);
+        if (approvalForPreview && typeof approvalForPreview.preview === 'function') {
+          const preview = approvalForPreview.preview({
+            capability: descriptor.requiredCapability || null,
+            tool: name,
+            level: descriptor.requiresConfirmation || 'WRITE',
+          });
+          ruleAllows = preview.ruleAllows === true;
+        }
+      } catch {
+        ruleAllows = null;
+      }
+      const review = await execContext.intentReview({
+        tool: name,
+        detail: (() => {
+          try {
+            return JSON.stringify(args).slice(0, 400);
+          } catch {
+            return '';
+          }
+        })(),
+        effect: sideEffectsLib.classify(name),
+        capability: descriptor.requiredCapability || null,
+        readOnly: descriptor.readOnly === true,
+        mutatesWorkspace: descriptor.mutatesWorkspace === true,
+        staticRequires,
+        wouldConfirm: staticRequires && ruleAllows !== true,
+        ruleAllows,
+      });
+      intentTighten = !!(review && review.tighten === true);
+    }
+
     // 门 2：声明需要网络能力的工具，在隔离策略切断网络时直接拒绝（不让它去试一次才发现连不上）
     if (descriptor.requiredCapability === 'network.request') {
-      // 注意：策略要从**底层上下文**读，不能走工具的能力面 —— sandbox 属于 shell.execute 能力，
-      // 对 network.request 工具是被闸住的（读到的会是 null，网络门就静默失效了）
-      const base = (context && context.__context) || context;
-      const policy = base && typeof base.sandbox === 'function' ? base.sandbox() : null;
-      if (policy && policy.network === 'deny') {
+      // 策略结论在创建能力面时从底层计算；不向工具暴露底层上下文。
+      if (execContext.exec.networkDenied) {
         return AgentToolResult.error('当前执行隔离策略已切断网络（sandbox.network=deny），不能执行 ' + name, {
           code: 'PERMISSION_DENIED',
           tool: name,
@@ -300,9 +533,11 @@ class AgentToolRegistry {
     // 门 3（S7）：确认类工具必须拿到**服务端签发的令牌**才执行。令牌绑定
     // capability / scope / toolCallId，且有有效期、单次有效 —— 批准一次只够一次调用。
     // 旧 register() 合成的契约（requiresConfirmation=false）不触发，保持既有行为。
+    // 意图复核收紧（A2）优先：即使这个工具本身不需要确认，被判定为「授权不明 / 高风险」时也要问用户
     const requiresApproval =
-      !!descriptor.requiresConfirmation &&
-      (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true);
+      intentTighten === true ||
+      (!!descriptor.requiresConfirmation &&
+        (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true));
     if (requiresApproval) {
       const approval = /** @type {any} */ (execContext.approval);
       // 「没有审批通道」与「用户拒绝」必须分开报（前者是配置/接线问题，后者要劝退重试）
@@ -318,11 +553,18 @@ class AgentToolRegistry {
       }
       const scope = approvalScopeFor(descriptor, name, args);
       const toolCallId = (callInfo && callInfo.toolCallId) || null;
+      /**
+       * 归因：收紧导致的这次确认要**说清原因**（否则用户只会看到「又问了一次」，
+       * 不知道是意图复核判定的结果，也不知道该不该改口径）。
+       */
+      const intentNote = intentTighten
+        ? '（意图复核：本轮动作被判定为「风险高 / 授权不明 / 置信低」，所以即使有免打扰规则也会问你一次）'
+        : '';
       const token = await approval.request({
         capability: descriptor.requiredCapability || null,
         level: descriptor.requiresConfirmation,
         what: name,
-        detail: descriptor.description || '',
+        detail: (descriptor.description || '') + intentNote,
         scope,
         toolCallId,
         attemptId: (callInfo && callInfo.attemptId) || null,
@@ -345,13 +587,12 @@ class AgentToolRegistry {
     // 直接返回 RESOURCE_LOCKED（可重试）+ 谁在占用。租约持有到**任务结束**（子代理完成/取消/主 run 收尾）
     // 或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖，那正是我们要防的「静默互相覆盖」。
     if (descriptor.mutatesWorkspace && this.leases && this.leases.enabled) {
-      const base = (context && context.__context) || context;
-      const itsRoot = base && typeof base.projectRoot === 'function' ? base.projectRoot() : '';
+      const itsRoot = execContext.project.root();
       const keys = resourceKeysFor(name, args, { projectRoot: itsRoot || process.cwd() });
       if (keys.length) {
-        const holder = (base && typeof base.taskId === 'function' && base.taskId()) || 'supervisor';
-        const role = (base && typeof base.role === 'function' && base.role()) || '';
-        const claim = this.leases.acquire(keys, holder, { role });
+        const holder = execContext.exec.taskId || 'supervisor';
+        const role = execContext.exec.role || '';
+        const claim = /** @type {any} */ (this.leases).acquire(keys, holder, { role });
         if (!claim.ok) {
           const c = claim.conflict || {};
           const traceNote = /** @type {any} */ (execContext).trace;
@@ -371,10 +612,50 @@ class AgentToolRegistry {
     }
 
     try {
-      return await this._executeWithTimeout(tool, descriptor, name, args, execContext);
+      const outcome = await this._executeWithTimeout(tool, descriptor, name, args, execContext);
+      return this._validateOutput(outcome, descriptor, name, execContext);
     } catch (e) {
-      return AgentToolResult.error('工具 ' + name + ' 执行失败：' + ((e && e.message) || e));
+      const effectUnknown = descriptor.readOnly !== true || descriptor.mutatesWorkspace === true;
+      return AgentToolResult.failure(effectUnknown ? 'EFFECT_UNKNOWN' : 'SYSTEM_ERROR',
+        '工具 ' + name + ' 执行失败：' + ((e && e.message) || e) +
+          (effectUnknown ? '。副作用可能已生效，请先只读核对，禁止盲目重放。' : ''),
+        { tool: name, executed: true, sideEffectStatus: effectUnknown ? 'unknown' : 'none' },
+        { tool: name, retryable: false });
     }
+  }
+
+  /** Output schemas constrain successful data, never the error payload or text. */
+  _validateOutput(outcome, descriptor, name, context) {
+    if (descriptor.outputSchema == null) return outcome;
+    // A genuine failure retains its original category, payload, and retry guidance.
+    if (outcome && outcome.ok === false) return outcome;
+    let issue = null;
+    if (!outcome || typeof outcome !== 'object' || outcome.ok !== true || typeof outcome.text !== 'string') {
+      issue = { path: '$', keyword: 'envelope', message: '工具必须返回含 ok/text/data 的结果对象' };
+    } else if ((outcome.kind && !['success', 'partial'].includes(outcome.kind)) || outcome.failure || outcome.isError === true) {
+      issue = { path: '$.ok', keyword: 'envelope', message: '工具成功状态与失败标记冲突' };
+    } else {
+      try { issue = validateOutput(outcome.data, descriptor.outputSchema); }
+      catch { issue = { path: '$.data', keyword: 'validation', message: '工具输出无法完成 schema 校验' }; }
+    }
+    if (!issue) return outcome;
+    // Even an idempotent write may already have changed state. Invalid output is
+    // not evidence of rollback; retry requires an independent read of real state.
+    const effectUnknown = descriptor.readOnly !== true || descriptor.mutatesWorkspace === true;
+    const diagnostic = {
+      contractCode: 'INVALID_TOOL_OUTPUT', tool: name, executed: true,
+      sideEffectStatus: effectUnknown ? 'unknown' : 'none', retryable: false,
+      outputValidation: issue,
+    };
+    const trace = context && context.trace;
+    try {
+      if (trace && typeof trace.note === 'function') trace.note('tool_output_invalid', diagnostic);
+    } catch { /* Audit must never promote invalid output to success. */ }
+    const message = '工具 ' + name + ' 返回的数据不符合输出契约：' + issue.path + ' ' + issue.message + '。' +
+      (effectUnknown ? '工具已执行，副作用可能已生效；先只读核对真实状态，禁止盲目重放。' : '这是工具内部契约错误，不要原样重试。');
+    return AgentToolResult.failure(effectUnknown ? 'EFFECT_UNKNOWN' : 'SYSTEM_ERROR', message, diagnostic, {
+      tool: name, retryable: false, userActionRequired: effectUnknown, detail: issue,
+    });
   }
 
   /**
@@ -394,13 +675,21 @@ class AgentToolRegistry {
     try {
       const outcome = await Promise.race([Promise.resolve(tool.executor(context, args)), timeout]);
       if (outcome === TOOL_TIMEOUT) {
-        return AgentToolResult.error('工具 ' + name + ' 执行超时（' + limit + 'ms），已放弃等待。', {
-          code: 'TIMEOUT',
+        const effectUnknown = descriptor.readOnly !== true || descriptor.mutatesWorkspace === true;
+        const result = AgentToolResult.failure(effectUnknown ? 'EFFECT_UNKNOWN' : 'TIMEOUT',
+          '工具 ' + name + ' 执行超时（' + limit + 'ms），已放弃等待。' +
+            (effectUnknown ? '工具可能仍在执行，副作用尚未确认；禁止盲目重放。' : ''), {
           tool: name,
           timeoutMs: limit,
-          retryable: tool.descriptor.retryPolicy.maxAttempts > 1,
-          userActionRequired: false,
-        });
+          executed: true,
+          sideEffectStatus: effectUnknown ? 'unknown' : 'none',
+          retryable: !effectUnknown && tool.descriptor.retryPolicy.maxAttempts > 1,
+          userActionRequired: effectUnknown,
+        }, { tool: name, retryable: !effectUnknown && tool.descriptor.retryPolicy.maxAttempts > 1 });
+        // Keep the legacy timeout signal; failure/failureCode carry the stricter
+        // side-effect classification consumed by the agent and journal.
+        result.data.code = 'TIMEOUT';
+        return result;
       }
       return outcome;
     } finally {
@@ -408,23 +697,17 @@ class AgentToolRegistry {
     }
   }
 
-  /** 转换为 OpenAI chat.completions 的 tools 参数。 */
-  toOpenAiTools() {
-    const result = [];
-    for (const t of this.tools.values()) {
-      result.push({
-        type: 'function',
-        function: {
-          name: t.spec.name,
-          description: t.spec.description,
-          parameters: t.spec.inputSchema == null
-            ? { type: 'object', properties: {} }
-            : t.spec.inputSchema,
-        },
-      });
-    }
-    return result;
+  /**
+   * 转换为 OpenAI chat.completions 的 tools 参数。
+   *
+   * - 无参：当前暴露面（`toolExposure == null` 时 = 全部工具，与旧行为逐字节一致）；
+   * - 给定名单：那个名单的 schema（例如成本探针要单独量某个 profile）。
+   * 返回**缓存数组的浅拷贝**：调用方只读（JSON.stringify），别指望改它会影响注册表。
+   * @param {string[]} [names]
+   */
+  toOpenAiTools(names) {
+    return this.schemaInfo(names).tools.slice();
   }
 }
 
-module.exports = { AgentToolRegistry, validateInput, closeInputSchema };
+module.exports = { AgentToolRegistry, validateInput, closeInputSchema, DEFAULT_MAX_ARRAY_ITEMS };

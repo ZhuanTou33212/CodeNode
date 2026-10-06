@@ -433,6 +433,9 @@ export default function Canvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#2a2f3a" />
       </ReactFlow>
+      {!nodes.length && <div className="canvas-welcome">
+        <p>Shift + A 添加节点</p>
+      </div>}
       {cutLine.length > 1 ? (
         <svg
           className="wf-cut-line"

@@ -8,6 +8,7 @@
  */
 
 const { CostLedger } = require('../costLedger.cjs');
+const costAttributionLib = require('../costAttribution.cjs');
 const { AlertDispatcher } = require('../alerts.cjs');
 const { modelQueue } = require('../requestQueue.cjs');
 
@@ -43,6 +44,11 @@ function register(ctx) {
     return {
       ok: true,
       cost: snapshot,
+      /**
+       * 辅助调用面板（审计阶段 B 第 4 条）：意图识别与结果压缩的请求数 / 输入 / 输出 / 净节省。
+       * 口径见 `costAttribution.summarizeAuxiliary`（同 run 的压缩账取最后一次累计值，不逐轮相加）。
+       */
+      auxiliary: costAttributionLib.summarizeAuxiliary(ledger.records()),
       firedAlerts: fired,
       alertHistory: dispatcher.recent(20),
       queue: modelQueue.stats(),

@@ -89,6 +89,7 @@ function register(registry) {
       return AgentToolResult.ok(lines.join('\n'), data);
     }
   );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["get_workbench_model"]);
 }
 
 module.exports = { register };
