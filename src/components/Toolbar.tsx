@@ -37,10 +37,6 @@ export default function Toolbar() {
 
   return (
     <header className="toolbar">
-      <div className="app-brand">
-        CodeNode
-      </div>
-
       <button className="toolbar-save" title="保存项目 (Ctrl+S)" onClick={() => void saveProject()}>保存</button>
 
       <div className="toolbar-group">

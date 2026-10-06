@@ -131,7 +131,7 @@ function createWindow() {
     // 允许窗口缩到 720，交给渲染进程的响应式规则（<=860 侧栏转浮层）处理。
     minWidth: 720,
     minHeight: 560,
-    title: 'CodeNode Next',
+    title: 'CodeNode',
     backgroundColor: '#14161a',
     icon: resolveAppIcon(),
     autoHideMenuBar: true,

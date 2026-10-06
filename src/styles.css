@@ -4148,7 +4148,7 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 /* Independent project navigation and conversation column. */
 .glass-theme .project-navigation { width: 216px; flex: 0 0 216px; display: flex; flex-direction: column; min-height: 0; padding: 18px 12px 14px; background: var(--glass-surface); backdrop-filter: blur(24px) saturate(145%); border-right: 1px solid var(--glass-border); color: var(--glass-text); z-index: 22; }
 .project-nav-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; padding: 0 8px; }
-.project-nav-head strong { font-size: 14px; font-weight: 600; }
+.project-nav-head strong { font-size: 14px; font-weight: 700; }
 .glass-theme .project-navigation button { background: transparent; border: 0; color: var(--glass-text); text-align: left; font-size: 12px; border-radius: 8px; }
 .glass-theme .project-navigation button:hover { background: var(--glass-control); }
 .project-nav-head button { padding: 4px 6px; }
