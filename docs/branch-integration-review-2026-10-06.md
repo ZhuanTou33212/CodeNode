@@ -24,3 +24,7 @@ The legacy agentic RAG tip is from 2026-08-24 (v0.11); the integration base cont
 | src/styles.css | Keep current RAG and conversation styling; old floating-sidebar CSS belongs to the removed component. |
 
 The merge commit retains the legacy tip as a parent. Later retry-budget and dependency branches are reviewed separately. Validate retrieval, grounding, UI, build and package before publishing main or deleting branches.
+
+## Retry-budget branch conflict review
+
+Reviewed every conflict in CLI, config, agent, IPC, request budget and Dify test. Current conflict-side blocks retain shared retry limits plus later money reservations, actual-model pricing, image billing ceilings, routing and trace spans. Choosing the legacy blocks would remove those later controls. Kept the current blocks while retaining the branch's non-conflicting CI/JSDoc typing changes and ledger changes. The request-budget and retry regression suites are required before publishing.
