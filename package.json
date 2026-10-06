@@ -238,7 +238,7 @@
     }
   },
   "dependencies": {
-    "@xyflow/react": "^12.3.5",
+    "@xyflow/react": "^12.11.6",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^5.7.2",
@@ -251,7 +251,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^10.0.5",
     "cross-env": "^7.0.3",
-    "electron": "^44.0.0",
+    "electron": "^44.4.1",
     "electron-builder": "^24.13.3",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
