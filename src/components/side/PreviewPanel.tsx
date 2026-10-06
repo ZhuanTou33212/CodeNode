@@ -23,7 +23,6 @@ export default function PreviewPanel({ onBack, embedded = false }: { onBack: () 
   const selected = useProjectStore((s) => s.selected);
   const dirty = useProjectStore((s) => s.dirty);
   const setToast = useUiStore((s) => s.setToast);
-  const openDock = useUiStore((s) => s.openDock);
 
   const root = useProjectStore(s => s.root);
   const isProject = !!selected?.relPath.toLowerCase().endsWith('.cnode');
@@ -74,9 +73,6 @@ export default function PreviewPanel({ onBack, embedded = false }: { onBack: () 
         </div>
         {selected.relPath !== name && <div className="sp-path-sub">{selected.relPath}</div>}
         <div className="fp-actions">
-          {!isProject && <button onClick={() => openDock('editor')} title="在底部编辑器中打开">
-            编辑
-          </button>}
           <button onClick={() => void copyPath()} title="复制相对路径">
             复制路径
           </button>

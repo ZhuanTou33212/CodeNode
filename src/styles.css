@@ -4398,3 +4398,12 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .files-layout { display: flex; flex: 1; min-width: 0; min-height: 0; }
 
 .glass-theme .workspace-tabs button.is-active { background: var(--glass-selected); color: var(--glass-text); }
+
+/* Editing lives in the file workspace, not in a second bottom editor. */
+.files-document > .dock-editor { width: 100%; min-width: 0; min-height: 0; flex: 1; }
+.files-document .dock-editor-tabs { display: none; }
+.files-document .dock-file-head { flex-wrap: wrap; padding: 0 0 10px; gap: 8px; }
+.files-document .dock-file-path { max-width: 100%; overflow-wrap: anywhere; }
+.files-document .dock-code-wrap { min-height: 100px; }
+.files-document .dock-code-editor { color: var(--glass-text); }
+.files-document .dock-search { min-width: 120px; max-width: 100%; }

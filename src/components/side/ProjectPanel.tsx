@@ -117,6 +117,7 @@ export default function ProjectPanel({ onOpen, embedded = false }: { onOpen: (re
 
   const handleOpen = useCallback(
     (relPath: string) => {
+      if (useProjectStore.getState().selected?.relPath === relPath && useProjectStore.getState().dirty) { onOpen(relPath); return; }
       void openFile(relPath).then(() => { if (useProjectStore.getState().selected?.relPath === relPath) onOpen(relPath); }).catch(() => useUiStore.getState().setToast('文件读取失败'));
     },
     [openFile, onOpen],

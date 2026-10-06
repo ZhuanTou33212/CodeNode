@@ -60,9 +60,6 @@ export default function Toolbar() {
       </div>
 
       <div className="toolbar-group toolbar-primary-actions">
-        <button title="打开代码编辑器" onClick={() => openDock('editor')}>
-          编辑
-        </button>
         <button
           className="toolbar-run"
           title="按连线拓扑连续执行工作流"
@@ -74,7 +71,7 @@ export default function Toolbar() {
       </div>
       <details className="toolbar-group toolbar-dropdown"><summary>更多⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
         <button className="toolbar-overflow-small" onClick={() => void saveProject()}>保存</button>
-        <button className="toolbar-overflow-small" onClick={() => openDock('editor')}>编辑</button>
+        <button onClick={() => openDock('terminal')}>工具面板</button>
         <button className="toolbar-overflow-small" disabled={!nodeCount} onClick={() => openDock('runs')}>运行</button>
         <button
           title="复制节点 (Ctrl+D)"

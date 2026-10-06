@@ -173,6 +173,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   saveSelected: async () => {
     const { root, selected, draft } = get();
     if (!root || !selected || !window.codenode?.writeProjectFile) return false;
+    if (/\.cnode$/i.test(selected.relPath)) { set({error:'工程文件通过工作台修改，不能以文本保存'}); return false; }
     const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true, selected.mtimeMs);
     if (!res.ok) {
       set({ conflict: res.conflict ? { content: res.currentContent || '', mtimeMs: res.currentMtimeMs } : null, error: res.conflict ? '文件已被外部修改' : res.error || '保存文件失败' });
@@ -185,6 +186,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   forceSaveSelected: async () => {
     const { root, selected, draft } = get();
     if (!root || !selected || !window.codenode?.writeProjectFile) return false;
+    if (/\.cnode$/i.test(selected.relPath)) { set({error:'工程文件通过工作台修改，不能以文本保存'}); return false; }
     const res = await window.codenode.writeProjectFile(root, selected.relPath, draft, true);
     if (!res.ok) { set({ error: res.error || '强制保存失败' }); return false; }
     set({ selected: { ...selected, content: draft, truncated: false, mtimeMs: res.mtimeMs }, dirty: false, conflict: null, error: null });

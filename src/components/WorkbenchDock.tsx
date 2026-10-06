@@ -83,7 +83,6 @@ type MetricsView = {
 };
 
 const TABS: { id: DockTab; label: string }[] = [
-  { id: 'editor', label: '代码编辑器' },
   { id: 'diff', label: 'Diff' },
   { id: 'terminal', label: '终端' },
   { id: 'runs', label: '工作流运行' },
@@ -174,7 +173,7 @@ function topoNodes(nodes: Node[], edges: { source: string; target: string }[]) {
   return order;
 }
 
-function EditorPanel() {
+export function EditorPanel() {
   const selected = useProjectStore((s) => s.selected);
   const draft = useProjectStore((s) => s.draft);
   const searchMatches = useProjectStore((s) => s.searchMatches);
@@ -234,6 +233,7 @@ function EditorPanel() {
     [selected, draft]
   );
 
+  if (selected?.relPath.toLowerCase().endsWith('.cnode')) return <div className="dock-empty">工程文件通过工作台修改。</div>;
   if (!selected) return <div className="dock-empty">从左侧项目树点击文件，开始编辑。支持多文件标签、保存、撤销和 Diff 对比。</div>;
   const lines = draft.split(/\r?\n/).length;
   const language = selected.relPath.split('.').pop()?.toUpperCase() || 'TEXT';
@@ -284,9 +284,10 @@ function EditorPanel() {
 function DiffPanel() {
   const selected = useProjectStore((s) => s.selected);
   const draft = useProjectStore((s) => s.draft);
-  const rows = useMemo(() => selected ? lineDiff(selected.content, draft) : [], [selected, draft]);
+  const rows = useMemo(() => selected && !/\.cnode$/i.test(selected.relPath) ? lineDiff(selected.content, draft) : [], [selected, draft]);
   const changed = rows.filter((r) => r.kind !== 'same').length;
-  if (!selected) return <div className="dock-empty">先从项目树打开一个文件，再查看修改对比。</div>;
+  if (selected && /\.cnode$/i.test(selected.relPath)) return <div className="dock-empty">工程文件通过工作台查看变更。</div>;
+  if (!selected) return <div className="dock-empty">先打开一个文本文件，再查看修改对比。</div>;
   return (
     <div className="dock-diff">
       <div className="dock-file-head"><span className="dock-file-path">{selected.relPath}</span><span className="dock-file-meta">{changed ? `${changed} 处变更` : '没有未保存变更'}</span></div>
@@ -872,5 +873,5 @@ export default function WorkbenchDock() {
   const close = useUiStore((s) => s.closeDock);
   const setTab = useUiStore((s) => s.setDockTab);
   if (!open) return null;
-  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'editor' && <EditorPanel />}{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}</div></section>;
+  return <section className="workbench-dock"><div className="dock-tabs">{TABS.map((item) => <button key={item.id} className={item.id === tab ? 'active' : ''} onClick={() => setTab(item.id)}>{item.label}</button>)}<span className="dock-tab-spacer" /><button className="dock-close" title="关闭工作台" onClick={close}>×</button></div><div className="dock-content">{tab === 'diff' && <DiffPanel />}{tab === 'terminal' && <TerminalPanel />}{tab === 'runs' && <RunsPanel />}{tab === 'checkpoints' && <CheckpointsPanel />}</div></section>;
 }

@@ -169,8 +169,11 @@ export default function App() {
 
       // 全局保存/打开/新建：即使在输入框中也生效
       if (mod && e.key.toLowerCase() === 's') {
+        if (document.activeElement?.closest('.dock-code-editor')) return;
         e.preventDefault();
-        void saveProject();
+        const state = useProjectStore.getState();
+        if (['project','preview'].includes(useUiStore.getState().sideTab) && state.selected && !/\.cnode$/i.test(state.selected.relPath)) { if (state.dirty) void state.saveSelected(); }
+        else void saveProject();
         return;
       }
       if (mod && e.key.toLowerCase() === 'n') {

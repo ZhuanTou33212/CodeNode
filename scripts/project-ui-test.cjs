@@ -193,7 +193,7 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button=>button.textContent==='文件').click()`);
       await waitFor(async () => await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".files-explorer .pm-file")).some(row=>row.title==="readme.txt")'), '文件列表');
       await win.webContents.executeJavaScript(`document.querySelector('.files-explorer .pm-file[title="readme.txt"]').click()`);
-      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".files-document .fp-content")?.textContent==="文件内容直接打开"'), '点击文件直接显示内容');
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".files-document .dock-code-editor")?.value==="文件内容直接打开"'), '点击文件直接显示内容');
       assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().sideTab'), 'project');
       assert.equal(await win.webContents.executeJavaScript('document.querySelector(".workspace-tabs button.is-active").textContent'), '文件');
       win.showInactive(); await sleep(100);
@@ -201,8 +201,28 @@ app.whenReady().then(async () => {
       fs.writeFileSync(path.join(__dirname,'..','out','unified-file-view.png'),(await win.webContents.capturePage()).toPNG());
       win.hide();
 
+      await win.webContents.executeJavaScript(`(() => {const editor=document.querySelector('.files-document .dock-code-editor');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(editor,'修改后的文件内容');editor.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await sleep(80);
+      await win.webContents.executeJavaScript(`(() => {const editor=document.querySelector('.files-document .dock-code-editor');editor.focus();editor.dispatchEvent(new KeyboardEvent('keydown',{key:'s',ctrlKey:true,bubbles:true}));})()`);
+      await waitFor(async () => fs.readFileSync(path.join(root,'readme.txt'),'utf8')==='修改后的文件内容', '文件页直接保存');
+      for (const [width,height] of [[850,700],[520,600]]) {
+        win.setSize(width,height); await sleep(200);
+        const codeLayout = await win.webContents.executeJavaScript(`(() => {const area=document.querySelector('.files-document').getBoundingClientRect(),editor=document.querySelector('.dock-code-editor').getBoundingClientRect();return {height:editor.height,contained:editor.left>=area.left&&editor.right<=area.right+1&&editor.bottom<=area.bottom+1,overflow:document.documentElement.scrollWidth>innerWidth};})()`);
+        assert.ok(codeLayout.height>=60 && codeLayout.contained && !codeLayout.overflow, 'inline editor fits '+width+'x'+height+': '+JSON.stringify(codeLayout));
+      }
+      win.setSize(1300,850); await sleep(200);
+
       await win.webContents.executeJavaScript(`document.querySelector('.files-explorer .pm-file[title="created.cnode"]').click()`);
       await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".project-document-summary")?.textContent.includes("画布")'), '工程文件显示摘要');
+      assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".files-document .dock-code-editor")'), false);
+      const engineeringBytes = fs.readFileSync(projectFile);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeProject.getState().saveSelected()'),false);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeProject.getState().forceSaveSelected()'),false);
+      const nativeSave = await win.webContents.executeJavaScript('window.codenode.writeProjectFile('+JSON.stringify(root)+',"created.cnode","invalid text")');
+      assert.equal(nativeSave.ok,false);
+      assert.ok(fs.readFileSync(projectFile).equals(engineeringBytes),'project container must retain its exact bytes');
+      assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".toolbar button")).some(button=>button.textContent.trim()==="编辑")'),false);
+
       await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button=>button.textContent==='工作台').click()`);
       await sleep(80);
       const beforeProjectOrder = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)');
@@ -263,8 +283,8 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript('(() => { const store=window.__codenodeSession; store.getState().order.forEach(id=>store.getState().setArchived(id,false)); })()');
       await sleep(80);
       await win.webContents.executeJavaScript('window.__codenodeSession.getState().switchSession('+JSON.stringify(originalSession)+')');
-      const samePage = await win.webContents.executeJavaScript(`(() => { const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(), composer=document.querySelector('.pp-composer').getBoundingClientRect(), panel=document.querySelector('.conversation-right').getBoundingClientRect(); return {canvas:canvas.height,composer:composer.height,separated:canvas.right<=panel.left,visible:getComputedStyle(document.querySelector('.workspace-canvas')).visibility}; })()`);
-      assert.ok(samePage.canvas > 150 && samePage.composer > 80 && samePage.separated && samePage.visible === 'visible', 'canvas and composer must be usable together on the same page');
+      const samePage = await win.webContents.executeJavaScript(`(() => { const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(), composer=document.querySelector('.pp-composer').getBoundingClientRect(), panel=document.querySelector('.conversation-right').getBoundingClientRect(); return {canvas:canvas.height,composer:composer.height,separated:canvas.right<=panel.left,mode:getComputedStyle(document.querySelector('.conversation-right')).position,visible:getComputedStyle(document.querySelector('.workspace-canvas')).visibility}; })()`);
+      assert.ok(samePage.canvas > 150 && samePage.composer > 80 && (samePage.separated || samePage.mode === 'absolute') && samePage.visible === 'visible', 'canvas and composer must be usable together on the same page');
       await win.webContents.executeJavaScript('document.querySelector(".session-archive").click()');
       await waitFor(async () => cnode.decodeCnode(fs.readFileSync(projectFile)).canvases?.sessions.some(s=>s.id===originalSession && s.archived), '归档写入工程');
       assert.notEqual(await win.webContents.executeJavaScript('window.__codenodeSession.getState().activeId'), originalSession);
@@ -292,7 +312,7 @@ app.whenReady().then(async () => {
       win.hide();
       await win.webContents.executeJavaScript('document.querySelector(".settings-close").click()');
       assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".toolbar button")).some(b=>b.textContent.trim()==="终端")'), false);
-      await win.webContents.executeJavaScript('window.__codenodeUi.getState().openDock("editor")');
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().openDock("terminal")');
       await sleep(100);
       assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".dock-tabs button")).filter(b=>b.textContent==="终端").length'), 1);
       assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".dock-tabs button")).some(b=>["检索设置","扩展"].includes(b.textContent))'), false);

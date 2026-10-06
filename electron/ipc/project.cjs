@@ -325,6 +325,7 @@ function register(ctx) {
   });
 
   ipcMain.handle('project:write', async (_event, root, relPath, content, backup = true, expectedMtimeMs) => {
+    if (/\.cnode$/i.test(String(relPath || ''))) return {ok:false,error:'工程文件通过工作台修改，不能以文本保存'};
     try {
       const full = safeProjectPath(root, relPath);
       if (!full || !String(relPath || '').trim()) return { ok: false, error: '路径越界或为空' };
