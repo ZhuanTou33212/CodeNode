@@ -60,7 +60,7 @@ jobs:
         run: npm test
       - name: 上传评测报告（JSON + Markdown，绑定 commit/模型/参数/数据集版本）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-${{ runner.os }}
           path: docs/eval-reports/
@@ -118,7 +118,7 @@ jobs:
       - name: 打包（Windows / macOS）
         if: runner.os != 'Linux'
         run: ${{ matrix.command }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: codenode-${{ runner.os }}
           path: release/*
