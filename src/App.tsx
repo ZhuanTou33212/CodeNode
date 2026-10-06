@@ -10,6 +10,7 @@ import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
 import { useUiStore } from './store/uiStore';
+import { useSessionStore } from './store/sessionStore';
 import { useProjectStore } from './store/projectStore';
 import { newProject, openProject, saveProject, restoreLastProject } from './lib/projectActions';
 import { installToolListener } from './lib/toolUi';
@@ -86,11 +87,15 @@ export default function App() {
   // 窄窗口优先保留画布与 Prompt：侧栏改为浮层，过窄时默认收起。
   useEffect(() => {
     let wasNarrow = window.innerWidth <= 860;
-    if (window.innerWidth <= 600) useUiStore.setState({ navigationOpen: false });
+    let navigationCompact = window.innerWidth <= 600;
+    if (navigationCompact) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
     if (wasNarrow && useUiStore.getState().sideOpen) useUiStore.getState().setSideOpen(false);
     const onResize = () => {
       const isNarrow = window.innerWidth <= 860;
-      if (window.innerWidth <= 600) useUiStore.setState({ navigationOpen: false });
+      const nextNavigationCompact = window.innerWidth <= 600;
+      if (nextNavigationCompact && !navigationCompact && useUiStore.getState().navigationOpen) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
+      if (!nextNavigationCompact && navigationCompact && useUiStore.getState().navigationAutoHidden) useUiStore.setState({ navigationOpen: true, navigationAutoHidden: false });
+      navigationCompact = nextNavigationCompact;
       if (isNarrow && !wasNarrow && useUiStore.getState().sideOpen) {
         useUiStore.getState().setSideOpen(false);
       }
@@ -99,6 +104,26 @@ export default function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  useEffect(() => {
+    if (!projectRoot) return;
+    const workspace = document.querySelector('.workspace-main');
+    if (!workspace) return;
+    let wasCompact: boolean | null = null;
+    const adapt = () => {
+      const compact = workspace.getBoundingClientRect().width <= 660;
+      if (compact === wasCompact) return;
+      wasCompact = compact;
+      const ui = useUiStore.getState();
+      if (compact && ui.conversationOpen && !useSessionStore.getState().streaming && !ui.modelManagerOpen && !document.activeElement?.closest('.conversation-right, .hermes-picker-layer')) {
+        useUiStore.setState({ conversationOpen: false, conversationAutoHidden: true });
+      } else if (!compact && ui.conversationAutoHidden) {
+        useUiStore.setState({ conversationOpen: true, conversationAutoHidden: false });
+      }
+    };
+    const observer = new ResizeObserver(adapt); observer.observe(workspace); adapt();
+    return () => observer.disconnect();
+  }, [projectRoot]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -241,7 +266,7 @@ export default function App() {
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
           <nav className="workspace-tabs" aria-label="工作区视图">
             {([['agent', '工作台'], ['project', '文件'], ['preview', '预览']] as const).map(([tab, label]) => <button key={tab} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
-            <button className="conversation-toggle" aria-label="显示或隐藏对话栏" aria-pressed={conversationOpen} onClick={() => useUiStore.getState().toggleConversation()}>对话</button>
+            <button className="conversation-toggle" aria-label="显示或隐藏对话栏" aria-pressed={conversationOpen} title="对话栏" onClick={() => useUiStore.getState().toggleConversation()}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg></button>
           </nav>
           <div className="workspace-content">
             {sideTab !== 'agent' && (sideOpen || sideTab !== 'node') && <SidePanel />}

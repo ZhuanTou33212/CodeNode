@@ -4345,9 +4345,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .model-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-right .pp-model { gap: 6px; min-width: 0; }
 .workspace-node .workspace-content > .side-panel { bottom: 0; }
-@media(max-width:1000px) {
+@container workspace (max-width:660px) {
   .workspace-main .conversation-workspace.conversation-right { position: absolute; right: 10px; top: 0; bottom: 10px; width: min(var(--conversation-width),calc(100% - 20px)); height: auto; z-index: 70; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 16px; box-shadow: var(--glass-shadow); }
-  .conversation-resize { display: none; }
+  .conversation-resize { display: block; }
 }
 
 .conversation-right .ap-head { display: none; }
@@ -4359,3 +4359,25 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .is-resizing-side { cursor: ew-resize; user-select: none; }
 @media(max-width:1000px) { .conversation-resize { display: block; } }
 @media(max-width:600px) { .glass-theme .project-navigation { position: absolute; width: min(var(--navigation-width,216px),calc(100% - 60px)); left: 0; top: 0; bottom: 0; } }
+
+/* Adapt to the actual space left between the sidebars. */
+.workspace-main { container-type: inline-size; container-name: workspace; }
+.workspace-main .conversation-workspace.conversation-right { width: min(var(--conversation-width),max(320px,calc(100% - 280px))); }
+@container workspace (max-width:660px) {
+  .workspace-main .conversation-workspace.conversation-right { width: min(var(--conversation-width),calc(100% - 20px)); }
+}
+.glass-theme.ui-clean .toolbar { min-height: 46px; padding-block: 7px; }
+.workspace-tabs { padding: 7px 18px; gap: 4px; }
+.glass-theme .workspace-tabs button { padding: 7px 11px; }
+.glass-theme .workspace-tabs .conversation-toggle { display: flex; align-items: center; justify-content: center; padding: 8px; }
+.conversation-head { padding: 13px 4px; border-bottom: 1px solid var(--glass-border); margin-bottom: 6px; }
+.conversation-head strong { font-size: 15px; }
+.conversation-right .ap-body { scrollbar-width: thin; padding: 10px 4px; }
+.conversation-right .cs-msg-text { font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
+.conversation-right .pp-input { font-size: 14px; line-height: 1.65; min-height: 64px; max-height: 160px; }
+.project-nav-head { margin-bottom: 16px; }
+.project-nav-head strong { font-size: 16px; }
+.project-nav-new { font-size: 13px; }
+.project-group-name small { white-space: nowrap; flex: none; }
+@media(max-width:1100px) { .status-hint { display: none; } }
+@media(max-height:650px) { .conversation-right .pp-input { min-height: 36px; max-height: 90px; } .conversation-head { padding-block: 8px; } }

@@ -18,12 +18,14 @@ interface UiState {
   openSettings: (tab?: UiState['settingsTab']) => void;
   closeSettings: () => void;
   conversationOpen: boolean;
+  conversationAutoHidden: boolean;
   conversationWidth: number;
   toggleConversation: () => void;
   setConversationWidth: (width: number) => void;
   navigationWidth: number;
   setNavigationWidth: (width: number) => void;
   navigationOpen: boolean;
+  navigationAutoHidden: boolean;
   toggleNavigation: () => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
@@ -81,13 +83,15 @@ export const useUiStore = create<UiState>((set, get) => ({
   openSettings: (tab = 'general') => set({ settingsOpen: true, settingsTab: tab }),
   closeSettings: () => set({ settingsOpen: false }),
   conversationOpen: true,
+  conversationAutoHidden: false,
   conversationWidth: (() => { try { const value = Number(localStorage.getItem('codenode.conversationWidth')); return value >= 320 && value <= 640 ? value : 400; } catch { return 400; } })(),
-  toggleConversation: () => set(state => ({ conversationOpen: !state.conversationOpen })),
+  toggleConversation: () => set(state => ({ conversationOpen: !state.conversationOpen, conversationAutoHidden: false })),
   setConversationWidth: value => { const width = Math.min(640, Math.max(320, Math.round(value))); try { localStorage.setItem('codenode.conversationWidth',String(width)); } catch {} set({conversationWidth:width}); },
   navigationWidth: (() => { try { const value = Number(localStorage.getItem('codenode.navigationWidth')); return value >= 180 && value <= 400 ? value : 216; } catch { return 216; } })(),
   setNavigationWidth: value => { const width = Math.min(400,Math.max(180,Math.round(Number.isFinite(value) ? value : 216))); try { localStorage.setItem('codenode.navigationWidth',String(width)); } catch {} set({navigationWidth:width}); },
   navigationOpen: true,
-  toggleNavigation: () => set(state => ({ navigationOpen: !state.navigationOpen })),
+  navigationAutoHidden: false,
+  toggleNavigation: () => set(state => ({ navigationOpen: !state.navigationOpen, navigationAutoHidden: false })),
   theme: savedTheme(),
   toggleTheme: () => set((state) => {
     const theme = state.theme === 'dark' ? 'light' : 'dark';

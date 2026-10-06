@@ -73,6 +73,36 @@ app.whenReady().then(async () => {
 
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
+    if (process.env.CODENODE_RESPONSIVE_UI_TEST === '1') {
+      for (const theme of ['light','dark']) {
+        await win.webContents.executeJavaScript('window.__codenodeUi.setState({theme:'+JSON.stringify(theme)+'})');
+        for (const [width,height] of [[1920,1080],[1280,800],[1024,700],[820,640],[520,600]]) {
+          await win.webContents.executeJavaScript('document.activeElement?.blur()');
+          win.setSize(width,height); await sleep(200);
+          if (await win.webContents.executeJavaScript('document.querySelector(".conversation-right").hidden')) await win.webContents.executeJavaScript('document.querySelector(".conversation-toggle").click()');
+          await sleep(80);
+          const layout = await win.webContents.executeJavaScript(`(() => {const pane=document.querySelector('.conversation-right'),p=pane.getBoundingClientRect(),input=document.querySelector('.pp-composer').getBoundingClientRect(),canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(),toolbar=document.querySelector('.toolbar'),workspace=document.querySelector('.workspace-main').getBoundingClientRect();return {overflow:document.documentElement.scrollWidth>innerWidth||toolbar.scrollWidth>toolbar.clientWidth,contained:input.left>=p.left&&input.right<=p.right+1&&input.bottom<=p.bottom+1,mode:getComputedStyle(pane).position,canvas:canvas.width,overlap:canvas.right>p.left+1,workspace:workspace.width,pane:p.width};})()`);
+          assert.ok(!layout.overflow && layout.contained, 'responsive controls at '+theme+' '+width+'x'+height+': '+JSON.stringify(layout));
+          if (layout.mode==='relative') assert.ok(layout.canvas>=278 && !layout.overlap, 'docked sidebars preserve the canvas');
+          else assert.ok(layout.workspace<=660 && layout.pane<=layout.workspace-18,'compact conversation floats within the workspace');
+        }
+      }
+      win.setSize(1280,800); await sleep(150);
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().setNavigationWidth(400);window.__codenodeUi.getState().setConversationWidth(640);window.__codenodeUi.setState({navigationOpen:true,conversationOpen:true,conversationAutoHidden:false})');
+      await sleep(150);
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".canvas-wrap").getBoundingClientRect().width')>=278,'largest sidebar widths must not squeeze away the canvas');
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().setNavigationWidth(216);window.__codenodeUi.getState().setConversationWidth(400)');
+      win.setSize(520,600); await sleep(200);
+      await win.webContents.executeJavaScript('window.__codenodeUi.setState({conversationOpen:false,conversationAutoHidden:false})');
+      await win.webContents.executeJavaScript('window.__codenodeUi.setState({navigationOpen:true,navigationAutoHidden:false})');
+      await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".project-nav-new")'), '窄窗口展开项目栏');
+      await win.webContents.executeJavaScript('document.querySelector(".project-nav-new").click()');
+      await sleep(100);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".conversation-right").hidden'),false,'new chat must reveal the composer even in a narrow window');
+      await win.webContents.executeJavaScript('window.__codenodeUi.setState({navigationOpen:true,conversationOpen:true,conversationAutoHidden:false})');
+      win.setSize(1300,850); await sleep(100);
+      console.log('RESPONSIVE WORKBENCH: PASS (five window sizes, both themes, maximum widths, new chat)');
+    }
     if (process.env.CODENODE_FIRST_SEND_UI_TEST === '1') {
       await win.webContents.executeJavaScript('document.querySelector(".project-nav-new").click()');
       await sleep(100);
@@ -288,7 +318,7 @@ app.whenReady().then(async () => {
       const dayCapture = await Promise.race([win.webContents.capturePage(),sleep(5000).then(()=>{throw new Error('capture timeout');})]);
       fs.writeFileSync(path.join(__dirname,'..','out','workbench-glass-light.png'),dayCapture.toPNG());
       win.setSize(500,740); await sleep(200);
-      await win.webContents.executeJavaScript('window.__codenodeUi.getState().setSideTab("agent")');
+      await win.webContents.executeJavaScript('window.__codenodeUi.getState().setSideTab("agent");window.__codenodeUi.setState({conversationOpen:true,conversationAutoHidden:false})');
       await sleep(100);
       const narrow = await win.webContents.executeJavaScript(`(() => { const toolbar=document.querySelector('.toolbar'); const input=document.querySelector('.pp-input'); return {overflow:toolbar.scrollWidth>toolbar.clientWidth,input:input.getBoundingClientRect().width}; })()`);
       assert.ok(!narrow.overflow && narrow.input>200, 'narrow window toolbar and composer must remain usable');
