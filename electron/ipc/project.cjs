@@ -442,6 +442,8 @@ function register(ctx) {
     try { job.child.stdin.write(String(input ?? '') + '\n'); return { ok: true }; } catch { return { ok: false }; }
   });
 
+  ipcMain.handle('extensions:add', (_event,root,input) => require('../tools/extensionSetup.cjs').add(root,input));
+
   ipcMain.handle('extensions:list', async (_event, root) => {
     const builtinRegistry = toolkit.buildDefaultRegistryWithConfig({});
     const builtins = builtinRegistry.listTools().map((tool) => {

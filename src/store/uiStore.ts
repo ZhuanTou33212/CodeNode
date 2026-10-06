@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { loadUiPreferences, normalizeUiPreferences, UI_PREFERENCES_KEY, type UiPreferences } from '../lib/uiPreferences';
 import { formatResumePlanNotice, type ResumePlanLike } from '../lib/resumePlan';
 
 /** 左侧侧栏的标签页：Agent 对话 / 节点属性 / 项目树 / 文件预览 */
@@ -12,7 +13,16 @@ function savedTheme(): 'light' | 'dark' {
   try { return localStorage.getItem('codenode.theme') === 'light' ? 'light' : 'dark'; } catch { return 'dark'; }
 }
 
+const initialPreferences = loadUiPreferences();
+
 interface UiState {
+  appPage: 'workbench' | 'plugins';
+  setAppPage: (page: UiState['appPage']) => void;
+  pluginView: 'plugins' | 'skills';
+  setPluginView: (view: UiState['pluginView']) => void;
+  preferences: UiPreferences;
+  updatePreferences: (patch: Partial<UiPreferences>) => void;
+  resetPreferences: () => void;
   settingsOpen: boolean;
   settingsTab: 'general' | 'rag' | 'extensions' | 'archived';
   openSettings: (tab?: UiState['settingsTab']) => void;
@@ -78,20 +88,32 @@ interface UiState {
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useUiStore = create<UiState>((set, get) => ({
+  appPage: 'workbench',
+  setAppPage: appPage => set({appPage,settingsOpen:false}),
+  pluginView: 'plugins',
+  setPluginView: pluginView => set({pluginView,appPage:'plugins',settingsOpen:false}),
+  preferences: initialPreferences,
+  updatePreferences: patch => {
+    const preferences = normalizeUiPreferences({ ...get().preferences, ...patch });
+    try { localStorage.setItem(UI_PREFERENCES_KEY,JSON.stringify(preferences)); }
+    catch { get().setToast('界面设置已应用，但无法保存到本机'); }
+    set({preferences,...('navigationOpen' in patch ? {navigationOpen:preferences.navigationOpen,navigationAutoHidden:false} : {}),...('conversationOpen' in patch ? {conversationOpen:preferences.conversationOpen,conversationAutoHidden:false} : {})});
+  },
+  resetPreferences: () => get().updatePreferences(normalizeUiPreferences(null)),
   settingsOpen: false,
   settingsTab: 'general',
-  openSettings: (tab = 'general') => set({ settingsOpen: true, settingsTab: tab }),
+  openSettings: (tab = 'general') => tab === 'extensions' ? set({appPage:'plugins',pluginView:'plugins',settingsOpen:false}) : set({ settingsOpen: true, settingsTab: tab }),
   closeSettings: () => set({ settingsOpen: false }),
-  conversationOpen: true,
+  conversationOpen: initialPreferences.conversationOpen,
   conversationAutoHidden: false,
   conversationWidth: (() => { try { const value = Number(localStorage.getItem('codenode.conversationWidth')); return value >= 320 && value <= 640 ? value : 400; } catch { return 400; } })(),
-  toggleConversation: () => set(state => ({ conversationOpen: !state.conversationOpen, conversationAutoHidden: false })),
+  toggleConversation: () => get().updatePreferences({conversationOpen:!get().conversationOpen}),
   setConversationWidth: value => { const width = Math.min(640, Math.max(320, Math.round(value))); try { localStorage.setItem('codenode.conversationWidth',String(width)); } catch {} set({conversationWidth:width}); },
   navigationWidth: (() => { try { const value = Number(localStorage.getItem('codenode.navigationWidth')); return value >= 180 && value <= 400 ? value : 216; } catch { return 216; } })(),
   setNavigationWidth: value => { const width = Math.min(400,Math.max(180,Math.round(Number.isFinite(value) ? value : 216))); try { localStorage.setItem('codenode.navigationWidth',String(width)); } catch {} set({navigationWidth:width}); },
-  navigationOpen: true,
+  navigationOpen: initialPreferences.navigationOpen,
   navigationAutoHidden: false,
-  toggleNavigation: () => set(state => ({ navigationOpen: !state.navigationOpen, navigationAutoHidden: false })),
+  toggleNavigation: () => get().updatePreferences({navigationOpen:!get().navigationOpen}),
   theme: savedTheme(),
   toggleTheme: () => set((state) => {
     const theme = state.theme === 'dark' ? 'light' : 'dark';
@@ -136,7 +158,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   openModelManager: (target) => set({ modelManagerOpen: true, modelConnectionTarget: target || null }),
   closeModelManager: () => set({ modelManagerOpen: false, modelConnectionTarget: null }),
-  openDock: (tab) => tab === 'editor' ? set({sideTab:'project',sideOpen:true,dockOpen:false}) : tab === 'rag' || tab === 'extensions' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
+  openDock: (tab) => tab === 'editor' ? set({sideTab:'project',sideOpen:true,dockOpen:false}) : tab === 'extensions' ? set({appPage:'plugins',pluginView:'plugins',settingsOpen:false}) : tab === 'rag' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, ...(tab ? { dockTab: tab } : {}) }),
   closeDock: () => set({ dockOpen: false }),
   setDockTab: (tab) => tab === 'editor' ? set({sideTab:'project',sideOpen:true,dockOpen:false}) : tab === 'rag' || tab === 'extensions' ? set({ settingsOpen: true, settingsTab: tab }) : set({ dockOpen: true, dockTab: tab }),
   setEditorTarget: (editorTarget) => set({ editorTarget }),

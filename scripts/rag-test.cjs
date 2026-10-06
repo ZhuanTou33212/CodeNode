@@ -168,7 +168,8 @@ async function main() {
 
   const absent = await index.retrieve('totallyAbsentQuantumBananaIdentifier');
   assert.strictEqual(absent.results.length, 0, '完全无匹配时不得返回伪相关结果');
-  assert.strictEqual(absent.quality.answerable, false, '无结果必须标记为不可回答');
+  assert.strictEqual(absent.admission.admitted, false, '无结果只表示当前无候选');
+  assert.strictEqual(absent.quality.answerable, undefined, '不得把未召回等同不可回答');
   assert.strictEqual(absent.quality.level, 'none');
 
   assert.ok(tokenize('refreshSessionToken').includes('session'), 'camelCase 应拆词');

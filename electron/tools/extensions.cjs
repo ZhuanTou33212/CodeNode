@@ -148,6 +148,7 @@ async function runHook(root, hook, args, signal, allowlist, context) {
 
 function registerProjectExtensions(registry, projectRoot) {
   for (const extension of readManifest(projectRoot)) {
+    if (extension.enabled === false) continue;
     const name = String(extension.name).trim();
     if (!name || registry.contains(name)) continue;
     if (Array.isArray(extension.tools) && extension.tools.length) {

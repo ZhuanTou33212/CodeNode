@@ -1,6 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
+import { themeTokens } from './lib/themeTokens';
 import { useReactFlow } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
+import ActivityBar from './components/ActivityBar';
+import PluginWorkspace from './components/PluginWorkspace';
 import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
@@ -63,11 +66,15 @@ export default function App() {
   const layoutNodes = useGraphStore((s) => s.layoutNodes);
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
+  const appPage = useUiStore(s => s.appPage);
   const sideOpen = useUiStore((s) => s.sideOpen);
   const sideTab = useUiStore(s => s.sideTab);
-  const conversationOpen = useUiStore(s => s.conversationOpen);
   const theme = useUiStore((s) => s.theme);
-  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; }, [theme]);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme; root.style.colorScheme = theme;
+    for (const [name,value] of Object.entries(themeTokens(theme))) root.style.setProperty(name,value);
+  }, [theme]);
   const dockOpen = useUiStore((s) => s.dockOpen);
   const booted = useUiStore((s) => s.booted);
   const projectRoot = useProjectStore((s) => s.root);
@@ -89,15 +96,15 @@ export default function App() {
   useEffect(() => {
     let wasNarrow = window.innerWidth <= 860;
     let navigationCompact = window.innerWidth <= 600;
-    if (navigationCompact) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
-    if (wasNarrow && useUiStore.getState().sideOpen) useUiStore.getState().setSideOpen(false);
+    if (navigationCompact && useUiStore.getState().preferences.autoCollapseSidebars) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
+    if (wasNarrow && useUiStore.getState().preferences.autoCollapseSidebars && useUiStore.getState().sideOpen) useUiStore.getState().setSideOpen(false);
     const onResize = () => {
       const isNarrow = window.innerWidth <= 860;
       const nextNavigationCompact = window.innerWidth <= 600;
-      if (nextNavigationCompact && !navigationCompact && useUiStore.getState().navigationOpen) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
+      if (useUiStore.getState().preferences.autoCollapseSidebars && nextNavigationCompact && !navigationCompact && useUiStore.getState().navigationOpen) useUiStore.setState({ navigationOpen: false, navigationAutoHidden: true });
       if (!nextNavigationCompact && navigationCompact && useUiStore.getState().navigationAutoHidden) useUiStore.setState({ navigationOpen: true, navigationAutoHidden: false });
       navigationCompact = nextNavigationCompact;
-      if (isNarrow && !wasNarrow && useUiStore.getState().sideOpen) {
+      if (useUiStore.getState().preferences.autoCollapseSidebars && isNarrow && !wasNarrow && useUiStore.getState().sideOpen) {
         useUiStore.getState().setSideOpen(false);
       }
       wasNarrow = isNarrow;
@@ -188,7 +195,7 @@ export default function App() {
       }
 
       if (mod && e.key.toLowerCase() === 'p') {
-        e.preventDefault(); useUiStore.getState().setSideTab('project');
+        e.preventDefault(); useUiStore.getState().setAppPage('workbench'); useUiStore.getState().setSideTab('project');
         window.setTimeout(() => document.querySelector<HTMLInputElement>('.files-workspace .pm-search input')?.focus(),0);
         return;
       }
@@ -270,25 +277,25 @@ export default function App() {
 
   return (
     <div className={`app ui-clean glass-theme theme-${theme}`}>
-      <Toolbar />
-      <div className={`app-body side-left${dockOpen ? ' has-dock' : ''}`}>
-        <ProjectNavigation />
+      <div className="app-shell"><ActivityBar/><div className="app-shell-main">
+      <div className="app-workbench-toolbar" hidden={appPage!=='workbench'}><Toolbar /></div>
+      <div className={`app-body side-left${dockOpen && appPage==='workbench' ? ' has-dock' : ''}`}>
+        {appPage==='plugins'&&<PluginWorkspace/>}
+        <div className="app-workbench-layer" data-inactive={appPage!=='workbench'} aria-hidden={appPage!=='workbench'} {...(appPage!=='workbench'?{inert:''}:{})}>
+        <div className="app-project-navigation"><ProjectNavigation /></div>
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
-          <nav className="workspace-tabs" aria-label="工作区视图">
-            {([['agent', '工作台'], ['project', '文件']] as const).map(([tab, label]) => <button key={tab} className={sideTab === tab || (tab === 'agent' && sideTab === 'node') || (tab === 'project' && sideTab === 'preview') ? 'is-active' : ''} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node') || (tab === 'project' && sideTab === 'preview')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
-            <button className="conversation-toggle" aria-label="显示或隐藏对话栏" aria-pressed={conversationOpen} title="对话栏" onClick={() => useUiStore.getState().toggleConversation()}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg></button>
-          </nav>
-          <div className="workspace-content">
+<div className="workspace-content">
             {(sideTab === 'project' || sideTab === 'preview') && <FileWorkspace />}
             {sideTab === 'node' && sideOpen && <SidePanel />}
             <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>
             <ConversationPanel />
           </div>
         </main>
-        <AddMenu />
-        <WorkbenchDock />
+        <div className="app-workbench-overlays" hidden={appPage!=='workbench'}><AddMenu />
+        <WorkbenchDock /></div></div>
       </div>
-      <StatusBar />
+      <div hidden={appPage!=='workbench'} className="app-workbench-status"><StatusBar /></div>
+      </div></div>
       <ToolDialog />
       <GlobalSettings />
       <ModelManager />

@@ -66,6 +66,20 @@ const readCalls = /** @type {any[]} */ ([
 const subRange = validateRagGrounding('依据 [docs/session.md#L3-L3]。', readCalls);
 assert.strictEqual(subRange.status, 'valid');
 assert.deepStrictEqual(subRange.invalid, []);
+assert.strictEqual(validateRagGrounding('依据 [docs/session.md#L3]。', readCalls).status, 'valid');
+assert.strictEqual(validateRagGrounding('依据 `docs/session.md#L3`。', readCalls).status, 'valid');
+assert.strictEqual(validateRagGrounding('依据 docs/session.md#L3。', readCalls).status, 'valid');
+assert.strictEqual(validateRagGrounding('依据（docs/session.md#L3）。', readCalls).status, 'valid');
+assert.strictEqual(validateRagGrounding('依据 docs/session.md#L9。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 docs/unknown.md#L3。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 [第三行](docs/session.md#L3)。', readCalls).status, 'valid');
+assert.strictEqual(validateRagGrounding('依据 [第三行](<docs/session.md#L3>)。', readCalls).status, 'valid');
+assert.strictEqual(validateRagGrounding('依据 `docs/session.md#L9`。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 [第三行](docs/session.md#L9)。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 [第三行](docs/unknown.md#L3)。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 [docs/session.md#L0]。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 [docs/session.md#L9]。', readCalls).status, 'invalid');
+assert.strictEqual(validateRagGrounding('依据 [docs/session.md#L4-L2]。', readCalls).status, 'invalid');
 
 // 2. 按系统提示「先检索、再用 read_file 深读候选文件后引用」产生的引用必须算有效
 assert.strictEqual(validateRagGrounding('实现见 [src/big.cjs#L150-L200]。', readCalls).status, 'valid');

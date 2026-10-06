@@ -15,16 +15,16 @@ const output = outputArg ? path.resolve(root, outputArg.slice('--out='.length)) 
 const base = {
   include: ['electron/**', 'docs/**', 'README.md'],
   exclude: ['docs/eval-reports/**'],
-  embedProvider: 'local', vectorStore: 'memory', topK: 6,
+  embedProvider: 'none', vectorStore: 'memory', topK: 6,
   bm25K1: 1.35, bm25B: 0.72, vectorWeight: 0.35, graphHops: 1,
 };
 const variants = [
-  { name: 'baseline', options: {} },
+  { name: 'default-lexical', options: {} },
   { name: 'bm25-1.2-0.75', options: { bm25K1: 1.2, bm25B: 0.75 } },
   { name: 'bm25-1.8-0.5', options: { bm25K1: 1.8, bm25B: 0.5 } },
-  { name: 'hash-weight-0.1', options: { vectorWeight: 0.1 } },
-  { name: 'hash-weight-0.2', options: { vectorWeight: 0.2 } },
-  { name: 'hash-weight-0.4', options: { vectorWeight: 0.4 } },
+  { name: 'hash-weight-0.1', options: { embedProvider: 'local', vectorWeight: 0.1 } },
+  { name: 'hash-weight-0.2', options: { embedProvider: 'local', vectorWeight: 0.2 } },
+  { name: 'hash-weight-0.4', options: { embedProvider: 'local', vectorWeight: 0.4 } },
   { name: 'lexical-only', options: { embedProvider: 'none', vectorWeight: 0 } },
   { name: 'no-graph', options: { graphHops: 0 } },
 ];

@@ -6,7 +6,6 @@ export default function ConversationPanel() {
   const open = useUiStore(state => state.conversationOpen);
   const width = useUiStore(state => state.conversationWidth);
   const setWidth = useUiStore(state => state.setConversationWidth);
-  const toggle = useUiStore(state => state.toggleConversation);
   const panel = useRef<HTMLElement>(null);
   const cleanup = useRef<() => void>(() => {});
   useEffect(() => () => cleanup.current(), []);
@@ -22,9 +21,9 @@ export default function ConversationPanel() {
     cleanup.current = finish; document.body.classList.add('is-resizing-side');
     window.addEventListener('blur',finish); window.addEventListener('pointermove',move); window.addEventListener('pointerup',finish); window.addEventListener('pointercancel',finish);
   };
-  return <aside ref={panel} className="conversation-workspace conversation-right" hidden={!open} aria-label="对话" style={{'--conversation-width': width+'px'} as CSSProperties}>
+  return <aside ref={panel} id="conversation-panel" className="conversation-workspace conversation-right" hidden={!open} aria-label="对话" style={{'--conversation-width': width+'px'} as CSSProperties}>
     <div className="conversation-resize" role="separator" aria-label="调整对话栏宽度" aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0} onPointerDown={resize} onDoubleClick={()=>setWidth(400)} onKeyDown={event => { if(event.key==='ArrowLeft'||event.key==='ArrowRight') { event.preventDefault(); setWidth(width+(event.key==='ArrowLeft'?16:-16)); } }} />
-    <header className="conversation-head"><strong>对话</strong><button aria-label="收起对话栏" title="收起对话栏" onClick={toggle}>›</button></header>
+    <header className="conversation-head"><strong>对话</strong></header>
     <AgentPanel />
   </aside>;
 }

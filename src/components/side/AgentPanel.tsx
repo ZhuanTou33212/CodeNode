@@ -440,7 +440,7 @@ export default function AgentPanel() {
         aria-label="Agent 对话记录"
       >
 
-        {messages.filter(m => !(m.role === 'assistant' && /^(你好[，,]?\s*我能为你做什么[？?]?|你好[，,]?\s*我能为你做些什么[？?]?)$/.test(m.content.trim()))).map((m, i) => (
+        {messages.map((m, i) => (
           <MessageViewMemo key={i} msg={m} />
         ))}
       </div>

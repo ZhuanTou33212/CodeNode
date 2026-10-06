@@ -1,0 +1,31 @@
+{
+  "asarSha256": "bbb487ae6d118b85a6e1f5b6297d8117ad0d5f724fbc8fef0bbf14555e3fb478",
+  "rows": [
+    {
+      "file": "electron/agent.cjs",
+      "expected": "e1bee43a9325f56a3b6cd8d40154837e7aefe8553e6b4a03325b301829f3f571",
+      "actual": "e1bee43a9325f56a3b6cd8d40154837e7aefe8553e6b4a03325b301829f3f571"
+    },
+    {
+      "file": "electron/rag/faithfulness.cjs",
+      "expected": "568b3d50f3112143482391728eead8ef0b3eda6fe41217ad598a734ae6bf0553",
+      "actual": "568b3d50f3112143482391728eead8ef0b3eda6fe41217ad598a734ae6bf0553"
+    },
+    {
+      "file": "electron/rag/judgeJson.cjs",
+      "expected": "b535b2317336f4d89fb1ae9692cca2837b7e85df030aec624e93b01d06616b31",
+      "actual": "b535b2317336f4d89fb1ae9692cca2837b7e85df030aec624e93b01d06616b31"
+    },
+    {
+      "file": "electron/rag/deliveryRepair.cjs",
+      "expected": "5fe05ac36cb2e9d30f43faa13d1c9433438aabd703b55b5a20eb1319bc31a016",
+      "actual": "5fe05ac36cb2e9d30f43faa13d1c9433438aabd703b55b5a20eb1319bc31a016"
+    },
+    {
+      "file": "electron/rag/citations.cjs",
+      "expected": "00553b6d38597847b4d75ef1cd1d6cee4a89e088656d1768f762e58f68c859b1",
+      "actual": "00553b6d38597847b4d75ef1cd1d6cee4a89e088656d1768f762e58f68c859b1"
+    }
+  ],
+  "matches": true
+}

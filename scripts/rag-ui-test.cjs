@@ -73,20 +73,33 @@ app.whenReady().then(async () => {
         }]
       });
       const invalid = await waitFor(()=>document.querySelector('.rag-grounding-invalid'));
+      const invalidText = invalid ? invalid.textContent : '';
+      const invalidTitle = invalid ? invalid.getAttribute('title') : '';
+      session.setState({ messages: [{ role: 'assistant', content: '当前证据不足。', status: 'done',
+        grounding: { status: 'valid', valid: true, required: false, allowed: [], used: [], invalid: [],
+          semantic: { status: 'abstained', supported: false, safeForDelivery: true } } }] });
+      const limited = await waitFor(()=>{const n=document.querySelector('.rag-grounding-missing');return n&&n.textContent.includes('限定范围')?n:null});
+      const limitedText = limited ? limited.textContent : '';
+      session.setState({ messages: [{ role: 'assistant', content: '答复未通过，未交付。', status: 'done',
+        grounding: { status: 'valid', valid: true, required: true, allowed: ['src/a.ts#L1-L4'], used: ['src/a.ts#L1-L4'], invalid: [],
+          semantic: { status: 'unknown', supported: false } } }] });
+      const semanticFailed = await waitFor(()=>{const n=document.querySelector('.rag-grounding-invalid');return n&&n.textContent.includes('未通过')?n:null});
       return {
         sideTab: ui ? ui.getState().sideTab : '(no ui store)',
         hasPanel: Boolean(document.querySelector('.side-panel')),
         validText,
         sourceText,
-        invalidText: invalid ? invalid.textContent : '',
-        invalidTitle: invalid ? invalid.getAttribute('title') : ''
+        invalidText, invalidTitle, limitedText,
+        semanticFailedText: semanticFailed ? semanticFailed.textContent : ''
       };
     })()`);
     const ok =
       result.validText && result.validText.includes('引用位置可追溯') &&
       result.sourceText && result.sourceText.includes('src/a.ts#L1-L4') &&
       result.invalidText && result.invalidText.includes('无效引用') &&
-      result.invalidTitle && result.invalidTitle.includes('src/fake.ts#L1-L2');
+      result.invalidTitle && result.invalidTitle.includes('src/fake.ts#L1-L2') &&
+      result.limitedText && result.limitedText.includes('证据不足') &&
+      result.semanticFailedText && result.semanticFailedText.includes('未通过');
     console.log('RAG UI TEST:', JSON.stringify(result));
     console.log(ok ? 'RAG UI TEST: PASS' : 'RAG UI TEST: FAIL');
     try {

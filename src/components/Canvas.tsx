@@ -431,7 +431,7 @@ export default function Canvas() {
           animated: false,
         }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#2a2f3a" />
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="var(--canvas-dot)" />
       </ReactFlow>
       {!nodes.length && <div className="canvas-welcome">
         <p>Shift + A 添加节点</p>

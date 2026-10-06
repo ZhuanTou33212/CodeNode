@@ -75,6 +75,7 @@ const PAYLOADS = {
   scanProject: { root },
   findFiles: { root, pattern: '**/*', limit: 1000 },
   searchFiles: { root, start: root, pattern: 'needle', maxCollect: 1000 },
+  fileVersions: { root, files: ['src/a.ts', 'src/lib/b.js'] },
 };
 
 (async () => {

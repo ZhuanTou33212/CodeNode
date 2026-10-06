@@ -2,7 +2,9 @@
 # PII 处理：off（默认）| warn（只检测）| redact（输入和最终输出均脱敏）
 # agent.pii.mode=off
 # agent.pii.categories=email,phone   # 另可选 card,national_id_cn,ssn_us
-# agent.grounding.semantic_mode=off  # off（默认）| warn | enforce；仅来源带正文片段时生效
+# agent.grounding.semantic_mode=off  # off（默认）| warn | enforce；启用后额外调用模型逐条判定断言支持性，共用 Run 预算
+# agent.grounding.mode=enforce      # 与 semantic_mode=enforce 配合时阻断证据不足/判定失败的交付
+# agent.rag.answerability=verify   # 兼容配置名：默认 verify 仅在检索前规划核心需求与查询；off 禁用规划。检索准入不裁决最终可回答性，结论校验由 grounding.semantic_mode 控制
 api_base=https://api.deepseek.com
 api_key=
 model=deepseek-v4-flash
@@ -134,11 +136,15 @@ soul_file=config/soul.md
 # rag.embed_base=               # openai 默认 https://api.openai.com/v1；ollama 默认 http://localhost:11434
 # rag.embed_key=                # openai 需要
 # rag.embed_dimensions=         # OpenAI v3 模型降维（如 1536 → 1024）；ollama 走模型原生维度，留空
+# rag.embed_query_prefix=query:     # E5 等模型需查询前缀；未配置时为空，不自动修改其他模型输入
+# rag.embed_document_prefix=passage: # E5 等模型需文档前缀；变更前缀后持久化缓存使用新身份
 # 生产档（百万级 / 每条 1024 维）：二选一
 #   openai：embed_provider=openai + embed_model=text-embedding-3-small + embed_dim=1024 + embed_dimensions=1024
 #   ollama：embed_provider=ollama + embed_model=bge-m3 + embed_dim=1024（bge-m3 原生 1024 维，中文友好）
 # rag.embed_top_k=40            # BM25 预筛候选上限；Milvus 后端下是 ANN topK
 # rag.memory_semantic_max_chunks=128  # 学习式嵌入 + memory：块数不超过此值时独立向量召回；超出则预筛。0=关闭
+# rag.adjacent_context_lines=12      # 同一文件相邻原文的最大行距（0 关闭）；共享检索字符预算，不跨文件扩读
+# rag.index_worker=true             # 桌面与 headless 生产默认后台扫描/文档提取/AST/图构建；false 为显式同步诊断，不自动降级
 # rag.vector_weight=0.35        # BM25 与向量倒数排名融合中的向量权重（0~1）
 # 可选重排：完整 POST URL，接受 {model,query,documents,top_n}，返回 results[{index,relevance_score}]
 # 只有显式配置 URL 才会向该服务发送候选代码片段；失败时保留原 RRF 顺序
@@ -303,3 +309,6 @@ soul_file=config/soul.md
 #   「工具层静态审计（shellGuard）+ 路径校验（writeRoots）+ 一或两次用户确认」。静态审计判不出的写目标
 #   （变量/通配，如 `> $OUT`）**不再静默放行**：默认模式要求确认，strict 模式直接拒绝。
 
+# 人格成长：默认开启；每 5 轮成功对话反思，保存到 CodeNode 的 config/soul.md。
+# false 停止学习及注入成长人格。
+soul.evolution.enabled=true

@@ -1,0 +1,32 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {alignCitations,pruneAncillary,repairDelivery}=require('../electron/rag/deliveryRepair.cjs');
+const {verifyFaithfulness,buildEvidence}=require('../electron/rag/faithfulness.cjs');
+const {stripCitations}=require('../electron/rag/citations.cjs');
+const {judgeJson}=require('../electron/rag/judgeJson.cjs');
+const calls=[{name:'read_file',ok:true,data:{path:'a.ts',startLine:10,endLine:14,evidenceText:'heading\nexport const limit = 5;\nbranch\nreturn limit;\nend'}}];
+const answer='The limit is 5. [a.ts#L10]';
+const aligned=alignCitations(answer,calls);assert.equal(aligned.answer,'The limit is 5. [a.ts#L10-L14]');assert.equal(stripCitations(answer),stripCitations(aligned.answer));assert.ok(buildEvidence(calls,aligned.answer)[0].text.includes('limit = 5'));
+for(const bad of ['Other fact [b.ts#L10]','Other fact [a.ts#L9]','Other fact [a.ts#L0]','Other fact [a.ts#L14-L10]'])assert.equal(alignCitations(bad,calls).answer,bad);
+assert.equal(alignCitations(answer,[{...calls[0],data:{...calls[0].data,charOffset:1}}]).changes.length,0);
+const draft='The limit is 5. [a.ts#L10-L14]\nOptional unrelated cap is 99.';
+const ground={semantic:{status:'judged',supported:false,claims:[{id:1,verdict:'entailed'},{id:2,verdict:'insufficient'}]}};
+const question='What is the limit?';
+function planner(covered=true){return async messages=>{const p=JSON.parse(messages[1].content);return JSON.stringify(p.stage==='ancillary-pruning'?{removeLineIds:[2]}:{allRequiredFactsCovered:covered,requirements:[{id:1,questionSpan:'the limit',verdict:covered?'covered':'missing',answerQuote:covered?'The limit is 5.':''}]});};}
+(async()=>{
+const candidate=await pruneAncillary(draft,question,ground,planner());assert.equal(candidate.answer,draft.split('\n')[0]);
+assert.equal(await pruneAncillary(draft,question,ground,planner(false)),null,'Missing core fact must not be hidden');
+let used=0;assert.equal(await pruneAncillary('Required fact missing.',question,{semantic:{status:'judged',claims:[{id:1,verdict:'insufficient'}]}},async()=>{used++;}),null);assert.equal(used,0);
+const refused=await repairDelivery({answer:draft,question,calls,grounding:ground,judge:planner(),check:async()=>({semantic:{supported:false}}),rejected:()=>false});assert.equal(refused.audit.accepted,false,'Location success cannot bypass final entailment');
+const fixed=await repairDelivery({answer:draft,question,calls,grounding:ground,judge:planner(),check:async()=>({semantic:{supported:true}}),rejected:()=>false});assert.equal(fixed.audit.accepted,true);assert.equal(fixed.audit.removedLines[0].id,2);
+let attempts=0;const parsed=await judgeJson(async()=>++attempts===1?{content:'{"ok":true}',finishReason:'length'}:{content:'{"ok":true}',finishReason:'stop'},[],v=>assert.equal(v.ok,true));assert.equal(attempts,2);assert.equal(parsed.judgeProtocol[0].error,'JUDGE_OUTPUT_TRUNCATED');
+let requests=0;const many=Array.from({length:13},(_,i)=>'Fact '+(i+1)+'.').join('\n');const verified=await verifyFaithfulness(many,calls,async messages=>{requests++;const p=JSON.parse(messages[1].content);assert.ok(p.claims.length<=4);return JSON.stringify({claims:p.claims.map(c=>({id:c.id,verdict:'entailed',evidence:[{citation:'a.ts#L10-L14',quote:'export const limit = 5;'}]}))});});assert.equal(requests,4);assert.equal(verified.supported,true);assert.equal(verified.claims.length,13);
+const partial=await verifyFaithfulness(many,calls,async messages=>{const p=JSON.parse(messages[1].content);return JSON.stringify({claims:p.claims.slice(1).map(c=>({id:c.id,verdict:'non_factual',evidence:[]}))});});assert.equal(partial.status,'unknown');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');const root=fs.mkdtempSync(path.join(os.tmpdir(),'rag-delivery-repair-'));try{
+fs.writeFileSync(path.join(root,'a.ts'),'export const limit = 5;\n// context\n// end');
+const {runAgentChat}=require('../electron/agent.cjs'),{AgentToolContext}=require('../electron/tools/context.cjs'),{buildDefaultRegistryWithConfig}=require('../electron/tools/toolkit.cjs'),{AgentToolResult}=require('../electron/tools/result.cjs'),{installScriptedModel}=require('./lib/scripted-model.cjs');
+const registry=buildDefaultRegistryWithConfig({projectRoot:root,ragEnabled:true,toolsAllowed:['retrieve_context']});registry.register('retrieve_context','read-only fixture',{type:'object',properties:{query:{type:'string'}},required:['query']},async()=>AgentToolResult.ok('source',{sources:[{citation:'a.ts#L1-L3',excerpt:fs.readFileSync(path.join(root,'a.ts'),'utf8'),sourceSha256:'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'a.ts'))).digest('hex')}]}));
+const original='The limit is 5. [a.ts#L1-L3]\nOptional unrelated cap is 99.';const scripted=installScriptedModel([{toolCalls:[{name:'retrieve_context',args:{query:'limit'}}]},{content:original},{content:JSON.stringify({claims:[{id:1,verdict:'entailed',evidence:[{citation:'a.ts#L1-L3',quote:'export const limit = 5;'}]},{id:2,verdict:'insufficient',evidence:[]}]})},{content:'{"removeLineIds":[2]}'},{content:'{"allRequiredFactsCovered":true,"requirements":[{"id":1,"questionSpan":"the limit","verdict":"covered","answerQuote":"The limit is 5."}]}'},{content:JSON.stringify({claims:[{id:1,verdict:'entailed',evidence:[{citation:'a.ts#L1-L3',quote:'export const limit = 5;'}]}]})}],{loopLast:false});const deltas=[];try{const run=await runAgentChat({cfg:{apiBase:'http://127.0.0.1:9',apiKey:'mock-key',model:'scripted',maxTokens:512,limits:{},compression:{enabled:false},reliability:{maxAttempts:1},grounding:{mode:'enforce',semanticMode:'enforce',maxRetries:0,answerability:false}},messages:[{role:'user',content:question}],tools:{registry,context:new AgentToolContext({projectRoot:root})},onDelta:e=>deltas.push(e)});assert.ok(!run.groundingBlocked);assert.equal(run.content,original.split('\n')[0]);assert.equal(run.grounding.deliveryRepair.accepted,true);assert.equal(run.grounding.versionCheck.status,'verified');assert.ok(!deltas.some(e=>e.kind==='content'&&String(e.text).includes('99')));assert.equal(scripted.calls,6);}finally{scripted.restore();}
+}finally{fs.rmSync(root,{recursive:true,force:true});}
+console.log('DELIVERY REPAIR: PASS (read-range boundaries, core coverage refusal, fresh entailment, bounded truncation repair, batch IDs, production final publication/version gate)');
+})().catch(e=>{console.error(e);process.exitCode=1;});

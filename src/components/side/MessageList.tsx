@@ -10,6 +10,8 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
   const [showTools, setShowTools] = useState(false);
   const tools = msg.tools || [];
   const grounding = msg.grounding;
+  const safeAbstention = grounding?.status === 'valid' && grounding.semantic?.status === 'abstained' && grounding.semantic.safeForDelivery === true;
+  const semanticFailed = grounding?.semantic?.supported === false && !safeAbstention;
   const projectRoot = useProjectStore((state) => state.root);
   const sessionId = useSessionStore((state) => state.activeId);
   const [feedback, setFeedback] = useState<'accept' | 'reject' | null>(null);
@@ -84,12 +86,12 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
           <button type="button" className={feedback === 'reject' ? 'active' : ''} aria-pressed={feedback === 'reject'} onClick={() => void sendFeedback('reject')}>需改进</button>
         </div>
       ) : null}
-      {grounding && grounding.status !== 'not_required' ? (
+      {grounding && (grounding.status !== 'not_required' || semanticFailed) ? (
         <div
-          className={`rag-grounding rag-grounding-${grounding.status}`}
-          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : '仅核对引用位置是否在本轮读过的来源内，未验证结论是否得到支持'}
+          className={`rag-grounding rag-grounding-${safeAbstention ? 'missing' : semanticFailed ? 'invalid' : grounding.status}`}
+          title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : safeAbstention ? '答复限定于已检查的证据范围，未证明项目存在或不存在所问机制' : semanticFailed ? '事实支持性未通过；证据不足或校验失败不等同于已证明结论错误' : '仅核对引用位置是否在本轮读过的来源内，未验证结论是否得到支持'}
         >
-          {grounding.status === 'valid'
+          {safeAbstention ? '△ 证据不足，已限定范围拒答' : semanticFailed ? '! 事实支持性未通过' : grounding.status === 'valid'
             ? grounding.used.length
               ? `✓ 引用位置可追溯（${grounding.used.length} 处）`
               : '✓ 本轮无需文件引用'

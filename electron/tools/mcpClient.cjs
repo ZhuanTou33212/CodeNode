@@ -62,7 +62,7 @@ function openStdioTransport(root, extension, options) {
     { file: tokens[0], args: [...tokens.slice(1), ...(Array.isArray(extension.args) ? extension.args.map(String) : [])] },
     {
       cwd: root,
-      env: require('./extensions.cjs').safeEnvironment({ PYTHONUTF8: '1' }, extension.envAllowlist),
+      env: require('./extensions.cjs').safeEnvironment({ ...(extension.env || {}), PYTHONUTF8: '1' }, extension.envAllowlist),
       policy: sandbox.currentPolicy(context),
       context,
     }
@@ -358,6 +358,8 @@ async function ensureSession(root, extension, options) {
   // tools/list 只发一次并缓存：既省一轮往返，也让「server 实际声明了哪些工具」可回查
   try {
     const listed = await session.rpc('tools/list', {}, handshakeMs * 2, options.signal);
+    session.toolsNextCursor = listed && listed.nextCursor;
+    session.toolDefinitions = Array.isArray(listed && listed.tools) ? listed.tools : [];
     session.declaredTools = ((listed && listed.tools) || []).map((t) => String((t && t.name) || '')).filter(Boolean);
     session.toolsListAt = new Date().toISOString();
     stats.toolLists += 1;

@@ -487,7 +487,8 @@ async function main() {
   assert.ok(semantic.results[0].vectorScore > 0.9);
   assert.strictEqual(vectorStats(semantic).vectorOnly, 1);
   assert.strictEqual(semantic.quality.level, 'low', '纯向量候选不能仅凭相似度升级为可回答');
-  assert.strictEqual(semantic.quality.answerable, false, '即使向量分很高，无词法证据仍需深读');
+  assert.strictEqual(semantic.admission.admitted, true, '纯语义候选可进入深读');
+  assert.strictEqual(semantic.quality.answerable, undefined, '相似度不能代替最终支持判定');
   assert.strictEqual(semantic.quality.basis, 'semantic_candidate', '候选来源仍应明确标为语义候选');
   assert.match(semantic.quality.reason, /深读原文件/, '工具应提示下一步核实来源');
   const bm25Only = await index.retrieve('totallyAbsentQuantumBananaIdentifier', { mode: 'file' });

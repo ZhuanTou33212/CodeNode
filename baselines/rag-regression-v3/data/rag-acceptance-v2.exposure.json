@@ -1,0 +1,25 @@
+{
+  "datasetHash": "4a1bb3f5afa3b7f5cd2fdf6c5236fb642e55e9b341d8ac6299bbee19cd60de5a",
+  "status": "exposed-regression-set",
+  "firstOracleFinishedAt": "2026-10-04T18:45:11.957Z",
+  "firstRetrievalFinishedAt": "2026-10-04T18:45:54.691Z",
+  "model": "deepseek-chat",
+  "originalJudgeHashes": {
+    "answerability": "6860f9f7cf38bb69ab0ab18fe13ac3762a820ea135673a8e98bd2943d083aa46",
+    "faithfulness": "681b47ae314a7e2bfec2d159aa10632791ef6e6093a7b2b42f611e32392dbec0"
+  },
+  "records": [
+    "out/rag-acceptance-oracle.json",
+    "out/rag-acceptance-retrieval.json"
+  ],
+  "noHumanGold": true,
+  "notes": [
+    "Reference labels remain pending independent human review.",
+    "Original measurements are retained; do not report this set as unseen after tuning.",
+    "Citation-only claim extraction defect fixed after baseline; no tuned score replaces baseline."
+  ],
+  "resultHashes": {
+    "out/rag-acceptance-oracle.json": "b062d31510d998ad6d392cf29a8777acb22ee9de1d4636c1402f3a239cae8bcd",
+    "out/rag-acceptance-retrieval.json": "3931843affba86766cf16711be6b03d44eff72fec519959efa0f193a37298bb9"
+  }
+}

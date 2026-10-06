@@ -578,6 +578,8 @@ function renderReact(element) {
 }
 
 function prepareForRender() {
+  // The browser exposes viewport dimensions on globalThis as well as window.
+  global.innerWidth = 1180; global.innerHeight = 760;
   react.__hooks.reset();
   stateSlots = {};
   refSlots = {};

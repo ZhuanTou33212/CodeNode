@@ -1,0 +1,94 @@
+{
+  "summaryLength": 120,
+  "categories": [
+    {
+      "id": "all",
+      "label": "全部",
+      "kinds": []
+    },
+    {
+      "id": "builtin",
+      "label": "内置工具",
+      "kinds": [
+        "内置工具"
+      ]
+    },
+    {
+      "id": "mcp",
+      "label": "MCP",
+      "kinds": [
+        "mcp"
+      ]
+    },
+    {
+      "id": "plugin",
+      "label": "插件",
+      "kinds": [
+        "plugin",
+        "插件"
+      ]
+    },
+    {
+      "id": "skill",
+      "label": "Skills",
+      "kinds": [
+        "skill",
+        "skills"
+      ]
+    },
+    {
+      "id": "hook",
+      "label": "Hooks",
+      "kinds": [
+        "hook",
+        "hooks"
+      ]
+    },
+    {
+      "id": "project",
+      "label": "项目扩展",
+      "kinds": [
+        "项目扩展",
+        "extension"
+      ]
+    }
+  ],
+  "summaries": {
+    "edit_file": "精准修改项目文件中的指定内容",
+    "scan_project": "扫描项目文件，查看目录结构与代码概况",
+    "find_files": "按名称或路径查找项目文件",
+    "read_file": "读取文本、代码及常见文档文件",
+    "get_workbench_model": "查看当前画布中的节点、连线和整体结构",
+    "workbench_edit": "创建、编辑、连接和整理画布节点",
+    "write_file": "向项目文件写入内容"
+  },
+  "displayNames": {
+    "get_workbench_model": "画布结构",
+    "workbench_edit": "画布编辑",
+    "scan_project": "项目扫描",
+    "read_file": "读取文件",
+    "write_file": "写入文件",
+    "edit_file": "编辑文件",
+    "find_files": "查找文件"
+  },
+  "connectors": [
+    {
+      "kind": "mcp",
+      "name": "MCP 服务",
+      "description": "连接本地或远程服务，自动发现工具",
+      "symbol": "M"
+    },
+    {
+      "kind": "command",
+      "name": "命令工具",
+      "description": "接入本地脚本或命令行工具",
+      "symbol": "⌘"
+    },
+    {
+      "kind": "skills",
+      "name": "Skill 指令",
+      "description": "为 Agent 添加可复用的工作指令",
+      "symbol": "S"
+    }
+  ]
+}

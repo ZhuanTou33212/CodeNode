@@ -1,0 +1,75 @@
+{
+  "datasetHash": "4a1bb3f5afa3b7f5cd2fdf6c5236fb642e55e9b341d8ac6299bbee19cd60de5a",
+  "role": "exposed-regression-agent-tasks",
+  "labels": "AI authored, pending independent human review",
+  "model": "deepseek-chat",
+  "sameModelGrader": true,
+  "scoringVersion": "task-agreement-v2",
+  "runtimeHashes": {
+    "electron/agent.cjs": "e1bee43a9325f56a3b6cd8d40154837e7aefe8553e6b4a03325b301829f3f571",
+    "electron/rag/answerability.cjs": "9f726402718a4da3fe1563583cd600a00b655aac7a24034d2c2bbeff85dac9c3",
+    "electron/rag/faithfulness.cjs": "568b3d50f3112143482391728eead8ef0b3eda6fe41217ad598a734ae6bf0553",
+    "electron/rag/abstention.cjs": "f8178b0e859d4af046da120a059545341a5b78e21cddde997ccf0837f0f813d5",
+    "electron/rag/citations.cjs": "00553b6d38597847b4d75ef1cd1d6cee4a89e088656d1768f762e58f68c859b1",
+    "electron/tools/impl/readFileTool.cjs": "06f6a3a372fd5f2dac82c77c86da7883596c2723eb5a856ae9bc9d40d51bfd0d",
+    "scripts/rag-agent-task-eval.cjs": "497e8b101d577310e4918654bd458caedd84a74426eaac075bbd2bbdf6d65168"
+  },
+  "runtimeProfile": "production",
+  "systemPromptProfile": "native-read-only",
+  "terminalReport": true,
+  "totalExpected": 100,
+  "completed": 100,
+  "completeDatasetRun": true,
+  "successes": 63,
+  "successRate": 0.63,
+  "missingIds": [],
+  "groups": {
+    "single": {
+      "expected": 40,
+      "completed": 40,
+      "successes": 34,
+      "successRate": 0.85,
+      "evidenceComplete": 37,
+      "errors": 0,
+      "citationFailures": 3,
+      "safeAbstentions": 0,
+      "factFailures": 6,
+      "graderFailures": 0,
+      "answerDisagreements": 6
+    },
+    "cross-file": {
+      "expected": 30,
+      "completed": 30,
+      "successes": 16,
+      "successRate": 0.5333333333333333,
+      "evidenceComplete": 24,
+      "errors": 0,
+      "citationFailures": 4,
+      "safeAbstentions": 4,
+      "factFailures": 6,
+      "graderFailures": 0,
+      "answerDisagreements": 14
+    },
+    "negative": {
+      "expected": 30,
+      "completed": 30,
+      "successes": 13,
+      "successRate": 0.43333333333333335,
+      "evidenceComplete": 20,
+      "errors": 0,
+      "citationFailures": 2,
+      "safeAbstentions": 10,
+      "factFailures": 17,
+      "graderFailures": 0,
+      "answerDisagreements": 0
+    }
+  },
+  "caveats": [
+    "Model agreement with AI author labels, not human accuracy",
+    "Exposed regression, not unseen holdout",
+    "Failure categories overlap",
+    "Negative labels concern bounded author evidence; extra retrieved evidence needs review"
+  ],
+  "inputSha256": "fcf73bbc0eaaed8f91defcec5269b438a3b0255b8f901590a52ebd6f1762595d",
+  "summarizedAt": "2026-10-05T11:38:35.912Z"
+}

@@ -852,20 +852,7 @@ function CheckpointsPanel() {
   return <div className="dock-checkpoints"><div className="dock-run-toolbar"><div><strong>可恢复检查点</strong><span className="dock-file-meta">自动保留最近 30 个，浏览器重启后仍可恢复</span></div><button className="dock-primary" onClick={() => create('手动检查点')}>立即创建</button></div>{items.length === 0 ? <div className="dock-empty">还没有检查点。运行工作流前后会自动创建。</div> : <div className="dock-checkpoint-list">{items.map((item) => <div className="dock-checkpoint" key={item.id}><div><strong>{item.label}</strong><span>{new Date(item.createdAt).toLocaleString()} · {item.doc.root.nodes.length} 节点</span></div><div><button onClick={() => { if (restore(item.id)) useUiStore.getState().setToast('已恢复检查点：' + item.label); }}>恢复</button><button className="dock-danger" onClick={() => remove(item.id)}>删除</button></div></div>)}</div>}</div>;
 }
 
-export function ExtensionsPanel() {
-  const root = useProjectStore((s) => s.root);
-  const [items, setItems] = useState<ProjectExtensionDto[]>([]);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    if (!window.codenode?.listExtensions) return;
-    setLoading(true);
-    void window.codenode.listExtensions(root).then((res) => { if (alive) { setItems(res.extensions || []); setLoading(false); } });
-    return () => { alive = false; };
-  }, [root]);
-  const groups = ['内置工具', 'MCP', '插件', 'Skills', 'Hooks', '项目扩展'];
-  return <div className="dock-extensions"><div className="dock-run-toolbar"><div><strong>扩展与工具</strong><span className="dock-file-meta">工具按注册表统一管理；项目可通过 .codenode/extensions.json 声明扩展</span></div><span className="dock-extension-count">{loading ? '加载中…' : `${items.length} 个已发现`}</span></div><div className="dock-extension-cards">{groups.slice(1).map((group) => <div className="dock-extension-card" key={group}><span className="dock-extension-icon">{group[0]}</span><div><strong>{group}</strong><p>可通过项目扩展清单接入</p></div><span className="dock-extension-state">可用</span></div>)}</div><div className="dock-tool-list">{items.map((item) => <div className="dock-tool-row" key={`${item.source}-${item.name}`}><span className="dock-tool-state" /><div><strong>{item.name}</strong><span>{item.kind} · {item.source}</span><p>{item.description || '无描述'}</p>{item.contract ? <small>{item.contract.outputSchema ? '输出契约' : '未声明输出契约'} · {item.contract.readOnly ? '只读' : '可写'}{item.contract.timeoutMs != null ? ` · ${item.contract.timeoutMs}ms` : ''}</small> : null}</div></div>)}</div></div>;
-}
+export { default as ExtensionsPanel } from './ExtensionsPanel';
 
 export default function WorkbenchDock() {
   const open = useUiStore((s) => s.dockOpen);

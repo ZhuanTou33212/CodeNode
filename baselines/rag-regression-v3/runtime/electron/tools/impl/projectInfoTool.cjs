@@ -1,0 +1,56 @@
+/**
+ * project_info：识别给定（或当前）项目目录的工程信息——构建系统、模块、源集、入口候选、语言概览。
+ * path 缺省时使用当前项目根。
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { AgentToolResult } = require('../result.cjs');
+const fsRunner = require('../fsRunner.cjs');
+const { isCancelled } = require('./shared.cjs');
+
+function register(registry) {
+  registry.register(
+    'project_info',
+    '识别项目目录的工程信息：构建系统（npm/Maven/Gradle/Python/Go/纯项目）、模块/源目录列表、入口候选文件、' +
+      '语言分布概览与文件总数。path 缺省使用当前项目目录。',
+    {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '项目根目录（可选，缺省当前项目）' },
+      },
+      required: [],
+    },
+    async (context, args) => {
+      const rawPath = String(args.path || '').trim();
+      const root = rawPath ? path.resolve(rawPath) : path.resolve(context.projectRoot());
+      if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return AgentToolResult.error('项目目录不存在: ' + root);
+      context.audit('project_info root=' + root);
+      // P7 收口：识别工程信息要**扫全项目**（每个源文件读一遍算行数），与 scan_project 属同一类重活 ——
+      // 放进 worker 才不会冻住 Electron 主进程，取消也才真的生效。降级时下面 audit 留痕。
+      const outcome = await fsRunner.runFsTask(
+        'detectProjectInfo',
+        { root, shouldStop: () => isCancelled(context) },
+        { enabled: fsRunner.fsWorkerEnabled(context), signal: context.signal && context.signal() },
+      );
+      if (outcome.cancelled || outcome.timedOut) {
+        return AgentToolResult.failure('CANCELLED', '项目识别已取消（用户停止），结果不完整。', { cancelled: true, root });
+      }
+      if (outcome.mode === 'sync-fallback') {
+        context.audit('project_info worker 不可用，已退回主线程同步执行：' + outcome.fallbackReason);
+      }
+      const info = outcome.result;
+      const lines = [
+        '构建系统: ' + info.buildSystem,
+        '模块/源目录: ' + (info.modules.length ? info.modules.join(', ') : '无'),
+        '入口候选: ' + (info.mainCandidates.length ? info.mainCandidates.join(', ') : '无'),
+        '文件总数: ' + info.fileCount,
+      ];
+      return AgentToolResult.ok(lines.join('  |  '), { ...info, root, workerMode: outcome.mode });
+    }
+  );
+  require('../builtInOutputSchemas.cjs').declareOutputContracts(registry, ["project_info"]);
+}
+
+module.exports = { register };

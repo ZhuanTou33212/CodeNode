@@ -1,6 +1,7 @@
 import { useSessionStore } from '../store/sessionStore';
 import { useReactFlow } from '@xyflow/react';
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
+import { CANVAS_ACTIONS } from '../lib/uiPreferences';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { saveProject } from '../lib/projectActions';
@@ -11,7 +12,10 @@ export default function Toolbar() {
   useEffect(() => {
     const closeMenus = (event: Event) => {
       document.querySelectorAll<HTMLDetailsElement>('.toolbar-dropdown[open]').forEach((menu) => {
-        if (event instanceof KeyboardEvent ? event.key === 'Escape' : !menu.contains(event.target as Node)) menu.open = false;
+        if (event instanceof KeyboardEvent ? event.key === 'Escape' : !menu.contains(event.target as Node)) {
+          menu.open = false;
+          if (event instanceof KeyboardEvent) menu.querySelector('summary')?.focus();
+        }
       });
     };
     document.addEventListener('pointerdown', closeMenus);
@@ -29,8 +33,9 @@ export default function Toolbar() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
-  const sideOpen = useUiStore((s) => s.navigationOpen);
-  const toggleSide = useUiStore((s) => s.toggleNavigation);
+  const conversationOpen=useUiStore(s=>s.conversationOpen);
+  const toggleConversation=useUiStore(s=>s.toggleConversation);
+  const preferences = useUiStore(s => s.preferences);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
   const { fitView, getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
@@ -48,17 +53,6 @@ export default function Toolbar() {
         </button>
       </div>
 
-      <div className="toolbar-group">
-        <button
-          className={`toolbar-side ${sideOpen ? 'is-on' : ''}`}
-          title="显示 / 隐藏项目导航"
-          aria-pressed={sideOpen}
-          onClick={toggleSide}
-        >
-          侧栏
-        </button>
-      </div>
-
       <div className="toolbar-group toolbar-primary-actions">
         <button
           className="toolbar-run"
@@ -69,61 +63,49 @@ export default function Toolbar() {
           运行
         </button>
       </div>
-      <details className="toolbar-group toolbar-dropdown"><summary>更多⌄</summary><div className="toolbar-menu" onClick={(event) => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.parentElement?.removeAttribute('open'); }}>
-        <button className="toolbar-overflow-small" onClick={() => void saveProject()}>保存</button>
-        <button onClick={() => openDock('terminal')}>工具面板</button>
-        <button className="toolbar-overflow-small" disabled={!nodeCount} onClick={() => openDock('runs')}>运行</button>
-        <button
-          title="复制节点 (Ctrl+D)"
-          disabled={!selectedId}
-          onClick={() => selectedId && duplicateNode(selectedId)}
-        >
-          复制
-        </button>
-        <button
-          title="删除选中 (Del)"
-          disabled={!selectedId}
-          onClick={() => selectedId && deleteNodes([selectedId])}
-        >
-          删除
-        </button>
-        <button
-          title="横向整理：全部节点排在同一行，分支并列 (Ctrl+L)"
-          disabled={nodeCount === 0}
-          onClick={() => {
-            layoutNodes();
-            setToast('已横向整理：全部节点排在同一行');
-          }}
-        >
-          横排
-        </button>
-        <button
-          title="自动整理（Blender Node Arrange 风格）：按依赖分层为列，分支并列 (Ctrl+Shift+A)"
-          disabled={nodeCount === 0}
-          onClick={() => {
-            arrangeNodes();
-            setToast('已自动整理：按依赖分层、分支并列');
-          }}
-        >
-          自动整理
-        </button>
-        <button
-          title="运行数据流：按连线拓扑计算各节点输入/输出"
-          disabled={nodeCount === 0}
-          onClick={() => {
-            runFlow();
-            setToast('数据流已计算');
-          }}
-        >
-          数据流
-        </button>
-        <button title="打开检查点与恢复历史" onClick={() => openDock('checkpoints')}>
-          恢复
-        </button>
-        <button title="聚焦全部 (Z)" onClick={() => fitView({ padding: 0.2 })}>
-          聚焦
-        </button>
-      </div></details>
+      <details className="toolbar-group toolbar-dropdown" onToggle={(event) => {
+        const dropdown = event.currentTarget;
+        const menu = dropdown.querySelector<HTMLElement>('.toolbar-menu');
+        if (!dropdown.open || !menu) return;
+        menu.style.left = '0px';
+        const bounds = menu.getBoundingClientRect();
+        menu.style.left = `${Math.min(0, window.innerWidth - bounds.right - 12)}px`;
+      }}>
+        <summary>画布操作 <span className="toolbar-chevron" aria-hidden="true">⌄</span></summary>
+        <div className="toolbar-menu" style={{'--canvas-menu-width': preferences.menuWidth + 'px', '--canvas-menu-row-height': preferences.menuRowHeight + 'px'} as CSSProperties} aria-label="画布操作" onClick={(event) => {
+          const button = (event.target as HTMLElement).closest('button');
+          if (button && !button.disabled) {
+            const menu = event.currentTarget.parentElement as HTMLDetailsElement;
+            menu.open = false;
+            menu.querySelector('summary')?.focus();
+          }
+        }}>
+          <div className="toolbar-menu-section toolbar-overflow-small">
+            <button onClick={() => void saveProject()}><span>保存项目</span>{preferences.showShortcuts && <kbd>Ctrl+S</kbd>}</button>
+            <button disabled={!nodeCount} onClick={() => openDock('runs')}><span>运行工作流</span></button>
+          </div>
+          {[...new Set(CANVAS_ACTIONS.map(action => action.group))].map(group => {
+            const actions = CANVAS_ACTIONS.filter(action => action.group === group && preferences.visibleActions.includes(action.id))
+              .filter(action => !preferences.hideDisabledActions || !(action.requires === 'selection' ? !selectedId : action.requires === 'nodes' ? !nodeCount : false));
+            if (!actions.length) return null;
+            const handlers: Record<string, () => void> = {
+              duplicate: () => { if (selectedId) duplicateNode(selectedId); },
+              delete: () => { if (selectedId) deleteNodes([selectedId]); },
+              layout: () => { layoutNodes(); setToast('已横向整理：全部节点排在同一行'); },
+              arrange: () => { arrangeNodes(); setToast('已自动整理：按依赖分层、分支并列'); },
+              fit: () => { fitView({padding:0.2}); },
+              flow: () => { runFlow(); setToast('数据流已计算'); },
+              terminal: () => openDock('terminal'), checkpoints: () => openDock('checkpoints'),
+            };
+            return <div className="toolbar-menu-section" role="group" aria-label={group} key={group}>
+              {preferences.showGroupLabels && <div className="toolbar-menu-label">{group}</div>}
+              {actions.map(action => <button key={action.id} data-action={action.id} className={action.danger ? 'toolbar-menu-danger' : undefined} disabled={action.requires === 'selection' ? !selectedId : action.requires === 'nodes' ? !nodeCount : false} onClick={handlers[action.id]}>
+                <span>{action.label}</span>{preferences.showShortcuts && action.shortcut && <kbd>{action.shortcut}</kbd>}
+              </button>)}
+            </div>;
+          })}
+        </div>
+      </details>
 
       <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
         <button
@@ -168,6 +150,9 @@ export default function Toolbar() {
           }}
         >
           ✦ 画布节点
+        </button>
+        <button className="conversation-toggle" title={conversationOpen?'隐藏对话栏':'显示对话栏'} aria-label={conversationOpen?'隐藏对话栏':'显示对话栏'} aria-expanded={conversationOpen} aria-controls="conversation-panel" onClick={toggleConversation}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>
         </button>
       </div>
     </header>

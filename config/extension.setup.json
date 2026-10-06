@@ -1,0 +1,20 @@
+{
+  "discoveryTimeoutMs": 20000,
+  "maxImportBytes": 262144,
+  "maxEntries": 50,
+  "types": [
+    {
+      "id": "command",
+      "label": "命令工具"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP 服务"
+    },
+    {
+      "id": "skills",
+      "label": "Skill 指令"
+    }
+  ],
+  "maxDiscoveryPages": 20
+}

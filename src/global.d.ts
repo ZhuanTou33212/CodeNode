@@ -176,6 +176,7 @@ interface CodenodeApi {
   stopProjectCommand: (sessionId: string) => Promise<{ ok: boolean }>;
   sendProjectCommandInput: (sessionId: string, input: string) => Promise<{ ok: boolean }>;
   onProjectCommandEvent: (cb: (data: { sessionId?: string; kind: 'output' | 'done' | 'error'; text?: string; exitCode?: number | null; timedOut?: boolean; error?: string }) => void) => () => void;
+  addExtensions: (root: string, input: unknown) => Promise<{ok:boolean;error?:string;added?:{name:string;kind:string;toolCount:number}[];file?:string}>;
   listExtensions: (root: string | null) => Promise<{ ok: boolean; extensions?: ProjectExtensionDto[]; error?: string }>;
   saveProject: (target: string, payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   loadProject: (target: string) => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
@@ -411,6 +412,7 @@ interface CodenodeApi {
     toolCalls?: ToolRecordDto[];
     usage?: unknown;
     grounding?: {
+      semantic?: { status: string; supported: boolean | null; safeForDelivery?: boolean };
       status: 'not_required' | 'valid' | 'missing' | 'invalid';
       valid: boolean;
       required: boolean;

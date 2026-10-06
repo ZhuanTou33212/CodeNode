@@ -1,0 +1,132 @@
+{
+  "baselineId": "rag-regression-v3",
+  "datasetHash": "4a1bb3f5afa3b7f5cd2fdf6c5236fb642e55e9b341d8ac6299bbee19cd60de5a",
+  "role": "blind-source-first-human-audit-of-exposed-regression",
+  "notUnseenAcceptance": true,
+  "status": "pending-human-review",
+  "sampling": "10 per type, deterministic hash, independent of outcome",
+  "reviewerFieldsPreFilled": false,
+  "cases": [
+    {
+      "number": "001",
+      "id": "S31"
+    },
+    {
+      "number": "002",
+      "id": "S08"
+    },
+    {
+      "number": "003",
+      "id": "S14"
+    },
+    {
+      "number": "004",
+      "id": "N19"
+    },
+    {
+      "number": "005",
+      "id": "S01"
+    },
+    {
+      "number": "006",
+      "id": "S30"
+    },
+    {
+      "number": "007",
+      "id": "N29"
+    },
+    {
+      "number": "008",
+      "id": "S34"
+    },
+    {
+      "number": "009",
+      "id": "S39"
+    },
+    {
+      "number": "010",
+      "id": "N15"
+    },
+    {
+      "number": "011",
+      "id": "N24"
+    },
+    {
+      "number": "012",
+      "id": "N12"
+    },
+    {
+      "number": "013",
+      "id": "N21"
+    },
+    {
+      "number": "014",
+      "id": "S38"
+    },
+    {
+      "number": "015",
+      "id": "X16"
+    },
+    {
+      "number": "016",
+      "id": "N04"
+    },
+    {
+      "number": "017",
+      "id": "S28"
+    },
+    {
+      "number": "018",
+      "id": "X19"
+    },
+    {
+      "number": "019",
+      "id": "N13"
+    },
+    {
+      "number": "020",
+      "id": "N02"
+    },
+    {
+      "number": "021",
+      "id": "N06"
+    },
+    {
+      "number": "022",
+      "id": "X11"
+    },
+    {
+      "number": "023",
+      "id": "X09"
+    },
+    {
+      "number": "024",
+      "id": "X21"
+    },
+    {
+      "number": "025",
+      "id": "S11"
+    },
+    {
+      "number": "026",
+      "id": "X01"
+    },
+    {
+      "number": "027",
+      "id": "X06"
+    },
+    {
+      "number": "028",
+      "id": "X28"
+    },
+    {
+      "number": "029",
+      "id": "X07"
+    },
+    {
+      "number": "030",
+      "id": "X24"
+    }
+  ],
+  "reviewProtocol": "Read frozen source before seeing model outputs or author labels. Ambiguous cases remain unclear; no AI may sign as human."
+}

@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('codenode', {
     ipcRenderer.on('project:run:event', listener);
     return () => ipcRenderer.removeListener('project:run:event', listener);
   },
+  addExtensions: (root,input) => ipcRenderer.invoke('extensions:add', root,input),
   listExtensions: (root) => ipcRenderer.invoke('extensions:list', root),
   saveProject: (target, payload) => ipcRenderer.invoke('project:save', target, payload),
   loadProject: (target) => ipcRenderer.invoke('project:load', target),

@@ -1,0 +1,23 @@
+{
+  "corpusHash": "3ab5163599aa75fffc454c0088bcbb3a5adc6ba1db541412c1653d3453c9ee38",
+  "metrics": {
+    "development": {
+      "positive": 12,
+      "negative": 4,
+      "fileRecallAt6": 1,
+      "allEvidenceRecallAt6": 1,
+      "mrr": 0.7222222222222223,
+      "noAnswerFalsePositiveRate": 0.5,
+      "p95Ms": 146.9133
+    },
+    "holdout": {
+      "positive": 12,
+      "negative": 4,
+      "fileRecallAt6": 0.5833333333333334,
+      "allEvidenceRecallAt6": 0.5833333333333334,
+      "mrr": 0.4305555555555556,
+      "noAnswerFalsePositiveRate": 0.5,
+      "p95Ms": 1.4499000000000137
+    }
+  }
+}

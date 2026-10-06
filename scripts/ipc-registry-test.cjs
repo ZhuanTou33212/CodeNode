@@ -21,7 +21,7 @@ const EXPECTED = {
     'graph:save', 'graph:open',
     'project:choose', 'project:create', 'project:list', 'project:read', 'project:write', 'project:search',
     'project:run', 'project:run:start', 'project:run:stop', 'project:run:input', 'project:workflow-state', 'project:workflow-execute',
-    'project:save', 'project:load', 'extensions:list',
+    'project:save', 'project:load', 'extensions:list', 'extensions:add',
   ],
   'agent.cjs': [
     'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:greeting', 'agent:tools', 'agent:runs',

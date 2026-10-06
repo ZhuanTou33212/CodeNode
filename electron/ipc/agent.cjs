@@ -1216,6 +1216,8 @@ function register(ctx) {
       try {
         result = await agent.runAgentChat({
           cfg,
+          soulEvolution: true,
+          soulMessages: [{ role: 'user', content: prompt }],
           messages,
           onDelta: onAgentDelta,
           tools,

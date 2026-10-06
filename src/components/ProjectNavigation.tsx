@@ -14,7 +14,6 @@ export default function ProjectNavigation() {
   const order = useSessionStore(s => s.order);
   const activeId = useSessionStore(s => s.activeId);
   const open = useUiStore(s => s.navigationOpen);
-  const toggle = useUiStore(s => s.toggleNavigation);
   const width = useUiStore(s => s.navigationWidth);
   const setWidth = useUiStore(s => s.setNavigationWidth);
   const panel = useRef<HTMLElement>(null);
@@ -64,10 +63,10 @@ export default function ProjectNavigation() {
   const rank = (path: string) => { const key = identity(path); const index = projectOrder.indexOf(key); return index >= 0 ? index : projectOrder.length + candidateKeys.indexOf(key); };
   projects.sort((a,b) => Number(!!meta[b.file || b.root]?.pinned)-Number(!!meta[a.file || a.root]?.pinned) || rank(a.root)-rank(b.root));
   void revision;
-  if (!open) return <><button className="project-nav-toggle" aria-label="展开项目导航" onClick={toggle}>☰</button><button className="global-settings-trigger settings-collapsed" aria-label="全局设置" onClick={() => useUiStore.getState().openSettings()}>⚙</button></>;
+  if (!open) return null;
   return <aside ref={panel} className="project-navigation" aria-label="项目与会话" style={{'--navigation-width':width+'px'} as CSSProperties}>
     <div className="navigation-resize" role="separator" aria-label="调整项目栏宽度" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={400} aria-valuenow={width} tabIndex={0} onPointerDown={startResize} onDoubleClick={()=>setWidth(216)} onKeyDown={event => { if(event.key==='ArrowLeft'||event.key==='ArrowRight') { event.preventDefault(); setWidth(width+(event.key==='ArrowRight'?16:-16)); } }} />
-    <div className="project-nav-head"><strong>CodeNode</strong><button aria-label="收起项目导航" onClick={toggle}>☰</button></div>
+    <div className="project-nav-head"><strong>CodeNode</strong></div>
     <button className="project-nav-new" disabled={streaming} onClick={() => { useSessionStore.getState().newConversation(); useUiStore.getState().setSideTab('agent'); useUiStore.setState({conversationOpen:true,conversationAutoHidden:false,...(window.innerWidth<=600?{navigationOpen:false}:{})}); void saveProject(); }}>＋ 新对话</button>
     <div className="project-nav-title"><span>项目</span><details className="project-actions"><summary aria-label="项目操作">＋</summary><div><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(newProject); }}>新建项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProject); }}>打开项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProjectFile); }}>打开工程文件</button></div></details></div>
     <div className="project-nav-scroll">
@@ -94,7 +93,6 @@ export default function ProjectNavigation() {
         </section>;
       })}
     </div>
-    <button className="global-settings-trigger" onClick={() => useUiStore.getState().openSettings()}>⚙ 设置</button>
-    {error && <div className="project-nav-error" role="alert">{error}</div>}
+{error && <div className="project-nav-error" role="alert">{error}</div>}
   </aside>;
 }

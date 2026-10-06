@@ -1,0 +1,504 @@
+{
+  "before": {
+    "all": {
+      "count": 100,
+      "passed": 57,
+      "rate": 0.57,
+      "strictAnchorPassed": 57,
+      "evidenceComplete": 78,
+      "blocked": 34,
+      "safeAbstentions": 19,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 4,
+      "graderInvented": 0,
+      "finalUnknown": 6
+    },
+    "positive": {
+      "count": 70,
+      "passed": 41,
+      "rate": 0.5857142857142857,
+      "strictAnchorPassed": 41,
+      "evidenceComplete": 63,
+      "blocked": 20,
+      "safeAbstentions": 8,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0
+    },
+    "single": {
+      "count": 40,
+      "passed": 28,
+      "rate": 0.7,
+      "strictAnchorPassed": 28,
+      "evidenceComplete": 36,
+      "blocked": 8,
+      "safeAbstentions": 4,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0
+    },
+    "crossFile": {
+      "count": 30,
+      "passed": 13,
+      "rate": 0.43333333333333335,
+      "strictAnchorPassed": 13,
+      "evidenceComplete": 27,
+      "blocked": 12,
+      "safeAbstentions": 4,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0
+    },
+    "negative": {
+      "count": 30,
+      "passed": 16,
+      "rate": 0.5333333333333333,
+      "strictAnchorPassed": 16,
+      "evidenceComplete": 15,
+      "blocked": 14,
+      "safeAbstentions": 11,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 4,
+      "graderInvented": 0
+    }
+  },
+  "after": {
+    "all": {
+      "count": 100,
+      "passed": 63,
+      "rate": 0.63,
+      "strictAnchorPassed": 61,
+      "evidenceComplete": 81,
+      "blocked": 31,
+      "safeAbstentions": 14,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0,
+      "finalUnknown": 2
+    },
+    "positive": {
+      "count": 70,
+      "passed": 50,
+      "rate": 0.7142857142857143,
+      "strictAnchorPassed": 48,
+      "evidenceComplete": 61,
+      "blocked": 14,
+      "safeAbstentions": 4,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0
+    },
+    "single": {
+      "count": 40,
+      "passed": 34,
+      "rate": 0.85,
+      "strictAnchorPassed": 33,
+      "evidenceComplete": 37,
+      "blocked": 6,
+      "safeAbstentions": 0,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0
+    },
+    "crossFile": {
+      "count": 30,
+      "passed": 16,
+      "rate": 0.5333333333333333,
+      "strictAnchorPassed": 15,
+      "evidenceComplete": 24,
+      "blocked": 8,
+      "safeAbstentions": 4,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0
+    },
+    "negative": {
+      "count": 30,
+      "passed": 13,
+      "rate": 0.43333333333333335,
+      "strictAnchorPassed": 13,
+      "evidenceComplete": 20,
+      "blocked": 17,
+      "safeAbstentions": 10,
+      "errors": 0,
+      "gradingErrors": 0,
+      "finalJsonUnknown": 0,
+      "graderInvented": 0,
+      "failedAllBlocked": true
+    }
+  },
+  "completeExecutionAndGrading": true,
+  "model": "deepseek-chat",
+  "datasetHash": "4a1bb3f5afa3b7f5cd2fdf6c5236fb642e55e9b341d8ac6299bbee19cd60de5a",
+  "repairs": [
+    {
+      "id": "S02",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/rag/index.cjs#L31",
+            "to": "electron/rag/index.cjs#L27-L35"
+          },
+          {
+            "from": "electron/rag/index.cjs#L141",
+            "to": "electron/rag/index.cjs#L137-L145"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "S06",
+      "success": true,
+      "audit": {
+        "citationChanges": [],
+        "removedLines": [
+          {
+            "id": 5,
+            "text": "工具：search_files（模式 `\\r\\n|CRLF|carriage`）与 retrieve_context（含中英改写查询），本轮仅确认了上述 `chunkMetadata.cjs` 的引用。"
+          }
+        ],
+        "accepted": true,
+        "coverage": {
+          "allRequiredFactsCovered": true,
+          "requirements": [
+            {
+              "id": 1,
+              "questionSpan": "原文偏移计算识别哪些换行形式？",
+              "verdict": "covered",
+              "answerQuote": "识别三种换行形式：`\\r\\n`（CRLF）、`\\r`（CR）、`\\n`（LF）。"
+            }
+          ]
+        }
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "S18",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/workflowConditions.cjs#L29",
+            "to": "electron/workflowConditions.cjs#L25-L30"
+          }
+        ],
+        "removedLines": [
+          {
+            "id": 6,
+            "text": "依据：`read_file` 读取 electron/workflowConditions.cjs 全文（32 行），`completionCheck` 仅在该文件内定义，未见项目内其他调用点。"
+          }
+        ],
+        "accepted": true,
+        "coverage": {
+          "allRequiredFactsCovered": true,
+          "requirements": [
+            {
+              "id": 1,
+              "questionSpan": "自然语言完成条件是否被当成已强制执行的检查？",
+              "verdict": "covered",
+              "answerQuote": "结论：自然语言完成条件没有被当成强制执行——它被单独标记为未强制执行并留给人工核对。"
+            }
+          ]
+        }
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "S23",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/modelRouting.cjs#L60-L63",
+            "to": "electron/modelRouting.cjs#L56-L67"
+          },
+          {
+            "from": "electron/modelRouting.cjs#L55",
+            "to": "electron/modelRouting.cjs#L51-L59"
+          },
+          {
+            "from": "electron/modelRouting.cjs#L57-L59",
+            "to": "electron/modelRouting.cjs#L53-L63"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "X04",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/rag/index.cjs#L543-L545",
+            "to": "electron/rag/index.cjs#L543-L549"
+          },
+          {
+            "from": "electron/rag/faithfulness.cjs#L19-L24",
+            "to": "electron/rag/faithfulness.cjs#L19-L28"
+          },
+          {
+            "from": "electron/rag/faithfulness.cjs#L14-L16",
+            "to": "electron/rag/faithfulness.cjs#L14-L18"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "X17",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/workflowConditions.cjs#L6-L6",
+            "to": "electron/workflowConditions.cjs#L4-L10"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L19-L20",
+            "to": "electron/tools/outputSchema.cjs#L15-L24"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L25-L26",
+            "to": "electron/tools/outputSchema.cjs#L21-L30"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L148-L150",
+            "to": "electron/tools/outputSchema.cjs#L148-L154"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "X24",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/modelRouting.cjs#L68-L68",
+            "to": "electron/modelRouting.cjs#L64-L72"
+          },
+          {
+            "from": "electron/requestBudget.cjs#L93-L93",
+            "to": "electron/requestBudget.cjs#L89-L97"
+          },
+          {
+            "from": "electron/requestBudget.cjs#L186-L190",
+            "to": "electron/requestBudget.cjs#L182-L194"
+          },
+          {
+            "from": "electron/requestBudget.cjs#L172-L180",
+            "to": "electron/requestBudget.cjs#L170-L184"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "N25",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/tools/outputSchema.cjs#L3-L5",
+            "to": "electron/tools/outputSchema.cjs#L1-L9"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L122-L125",
+            "to": "electron/tools/outputSchema.cjs#L118-L129"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    },
+    {
+      "id": "N28",
+      "success": true,
+      "audit": {
+        "citationChanges": [
+          {
+            "from": "electron/tools/outputSchema.cjs#L25-L50",
+            "to": "electron/tools/outputSchema.cjs#L24-L50"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L64-L69",
+            "to": "electron/tools/outputSchema.cjs#L60-L73"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L24-L24",
+            "to": "electron/tools/outputSchema.cjs#L24-L28"
+          },
+          {
+            "from": "electron/tools/outputSchema.cjs#L11-L11",
+            "to": "electron/tools/outputSchema.cjs#L7-L15"
+          }
+        ],
+        "removedLines": [],
+        "accepted": true
+      },
+      "semanticSupported": true,
+      "version": "verified"
+    }
+  ],
+  "transitions": {
+    "gained": [
+      "S03",
+      "S04",
+      "S22",
+      "S26",
+      "S28",
+      "S29",
+      "S30",
+      "S32",
+      "S40",
+      "X03",
+      "X04",
+      "X05",
+      "X08",
+      "X09",
+      "X11",
+      "X14",
+      "X17",
+      "X19",
+      "X24",
+      "N01",
+      "N12",
+      "N15",
+      "N22",
+      "N29",
+      "N30"
+    ],
+    "lost": [
+      "S16",
+      "S25",
+      "S27",
+      "X01",
+      "X02",
+      "X15",
+      "X16",
+      "X20",
+      "X23",
+      "X27",
+      "N06",
+      "N07",
+      "N09",
+      "N10",
+      "N14",
+      "N17",
+      "N18",
+      "N20",
+      "N23"
+    ],
+    "unchangedPass": [
+      "S02",
+      "S05",
+      "S06",
+      "S07",
+      "S08",
+      "S09",
+      "S10",
+      "S11",
+      "S13",
+      "S14",
+      "S15",
+      "S17",
+      "S18",
+      "S20",
+      "S21",
+      "S23",
+      "S24",
+      "S31",
+      "S33",
+      "S34",
+      "S35",
+      "S36",
+      "S37",
+      "S38",
+      "S39",
+      "X10",
+      "X18",
+      "X21",
+      "X22",
+      "X29",
+      "X30",
+      "N02",
+      "N03",
+      "N04",
+      "N05",
+      "N21",
+      "N25",
+      "N28"
+    ],
+    "unchangedFail": [
+      "S01",
+      "S12",
+      "S19",
+      "X06",
+      "X07",
+      "X12",
+      "X13",
+      "X25",
+      "X26",
+      "X28",
+      "N08",
+      "N11",
+      "N13",
+      "N16",
+      "N19",
+      "N24",
+      "N26",
+      "N27"
+    ]
+  },
+  "reports": [
+    "out/rag-stages-after-completed-100.json",
+    "out/rag-repair-agent-100.json"
+  ],
+  "caveats": [
+    "Exposed AI-authored regression and same-model grader, not independent human accuracy",
+    "Before is a balance-recovery two-batch merge; after is one new stochastic run",
+    "Final JSON-unknown count does not include intermediate errors repaired before delivery",
+    "Accepted repairs are not all causal gains; controls and repeated runs are needed for causal/significance claims"
+  ],
+  "tokenCounters": {
+    "before": 5247394,
+    "after": 5980257,
+    "note": "Run budget accounting counters, not supplier bill"
+  },
+  "meanCaseDurationMs": {
+    "before": 17487.05,
+    "after": 22633.83
+  }
+}

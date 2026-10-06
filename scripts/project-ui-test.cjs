@@ -43,7 +43,7 @@ async function waitFor(check, label) {
 app.whenReady().then(async () => {
   if (process.env.CODENODE_FIRST_SEND_UI_TEST === '1') {
     ipcMain.removeHandler('agent:chat');
-    ipcMain.handle('agent:chat', async (_event, payload) => { firstSendCalls++; assert.equal(payload.prompt, '你好'); return await new Promise(resolve => { completeFirstSend = () => resolve({ok:true,reply:'你好，已收到。',reasoning:'',tools:[]}); }); });
+    ipcMain.handle('agent:chat', async (_event, payload) => { firstSendCalls++; assert.equal(payload.prompt, '你好'); return await new Promise(resolve => { completeFirstSend = () => resolve({ok:true,reply:'你好，我能为你做什么？',reasoning:'',tools:[]}); }); });
   }
   try {
     await waitFor(async () => win && await win.webContents.executeJavaScript('!!document.querySelector(".gate-actions")').catch(() => false), '启动页');
@@ -73,6 +73,286 @@ app.whenReady().then(async () => {
 
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
+    if (process.env.CODENODE_PLUGIN_RAIL_UI_TEST === '1') {
+      const js=code=>win.webContents.executeJavaScript(code);
+      win.setSize(1300,850);win.showInactive();await sleep(100);
+      await js(`window.__codenodeUi.setState({navigationOpen:true});const input=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'离开工作台也要保留这份草稿');input.dispatchEvent(new Event('input',{bubbles:true}));window.__codenodeStore.getState().addNode({id:'rail-test-node',type:'task',position:{x:60,y:70},data:{label:'保留节点'}});window.__codenodeStore.getState().setSelectedIds([])`);await sleep(80);
+      const before=await js(`({messages:window.__codenodeSession.getState().messages,model:document.querySelector('.pp-model').textContent,nodes:window.__codenodeStore.getState().nodes})`);
+      const rail=await js(`(() => {const r=document.querySelector('.activity-bar').getBoundingClientRect();return {x:r.x,width:r.width,height:r.height,h:innerHeight}})()`);
+      assert.equal(rail.x,0);assert.equal(rail.width,48);assert.ok(Math.abs(rail.height-rail.h)<1);
+      for(const theme of ['light','dark']) {
+        await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}});document.querySelector('.activity-bar button[aria-label="插件"]').click()`);await sleep(350);
+        assert.equal(await js(`!!document.querySelector('.settings-mask')`),false);
+        assert.equal(await js(`getComputedStyle(document.querySelector('.workspace-main')).visibility`),'hidden');
+        assert.equal(await js(`getComputedStyle(document.querySelector('.app-workbench-toolbar')).display`),'none');
+        assert.ok(await js(`document.querySelector('.plugin-navigation').textContent.includes('自定义')`));
+        const layout=await js(`(() => {const rail=document.querySelector('.activity-bar').getBoundingClientRect(),nav=document.querySelector('.plugin-navigation').getBoundingClientRect(),page=document.querySelector('.plugin-page').getBoundingClientRect();return {railRight:rail.right,navX:nav.x,navRight:nav.right,pageX:page.x,pageW:page.width,viewport:innerWidth,pageR:page.right}})()`);
+        assert.equal(layout.navX,layout.railRight);assert.equal(layout.pageX,layout.navRight);assert.ok(Math.abs(layout.pageR-layout.viewport)<1);
+        fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});fs.writeFileSync(path.join(__dirname,'..','out','plugin-rail-'+theme+'.png'),(await win.webContents.capturePage()).toPNG());
+        await js(`document.querySelector('.plugin-navigation button[aria-pressed="false"]').click()`);await sleep(80);
+        assert.equal(await js(`document.querySelector('.extensions-heading h2').textContent`),'技能');
+        await js(`document.querySelector('.extensions-add').click()`);await sleep(80);
+        assert.equal(await js(`document.querySelector('[aria-label="扩展类型"]').value`),'skills');
+        await js(`document.querySelector('.extension-connect-head button').click();document.querySelector('.toolbar-navigation-toggle').click()`);await sleep(80);
+        assert.equal(await js(`!!document.querySelector('.plugin-navigation')`),false);
+        await js(`document.querySelector('.toolbar-navigation-toggle').click();document.querySelector('.activity-bar button[aria-label="工作台"]').click()`);await sleep(80);
+        assert.equal(await js(`document.querySelector('.pp-input').value`),'离开工作台也要保留这份草稿');
+        assert.deepEqual(await js(`({messages:window.__codenodeSession.getState().messages,model:document.querySelector('.pp-model').textContent,nodes:window.__codenodeStore.getState().nodes})`),before);
+        await js(`document.querySelector('.activity-bar button[aria-label="全局设置"]').click()`);await sleep(60);
+        assert.equal(await js(`!![...document.querySelectorAll('.settings-layout nav button')].find(button=>button.textContent==='插件'||button.textContent==='扩展')`),false);
+        await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().setPluginView('plugins')`);await sleep(60);
+      }
+      for(const width of [700,500]) {
+        win.setSize(width,740);await sleep(150);
+        assert.equal(await js(`document.querySelector('.plugin-page').scrollWidth>document.querySelector('.plugin-page').clientWidth`),false);
+        assert.ok(await js(`document.querySelector('.activity-bar button[aria-label="插件"]').getBoundingClientRect().width`)>0);
+      }
+      win.setSize(1300,850);await js(`window.__codenodeUi.getState().setAppPage('workbench');window.__codenodeStore.getState().clear()`);await sleep(100);
+      console.log('PLUGIN RAIL UI: PASS (full-height narrow rail, independent page, secondary sidebar, Skills, no settings duplication, retained draft/session/model/canvas, themes and narrow layouts)');
+    }
+    if (process.env.CODENODE_EXTENSION_CONNECT_UI_TEST === '1') {
+      const js=code=>win.webContents.executeJavaScript(code);
+      win.setSize(1300,850);win.showInactive();
+      await js(`window.__codenodeUi.getState().openSettings('extensions')`);
+      await waitFor(async()=>await js(`!!document.querySelector('.extension-connector')`),'插件接入入口');
+      assert.equal(await js(`getComputedStyle(document.querySelector('.extensions-connect-grid')).gridTemplateColumns.split(' ').length`),2);
+      const fill=async(label,value)=>await js(`(() => {const input=document.querySelector('[aria-label='+${JSON.stringify(JSON.stringify(label))}+']');Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await js(`document.querySelector('.extensions-add').click()`);await sleep(80);
+      await fill('扩展名称','ui-command');await fill('扩展启动命令','node tools/helper.cjs');await fill('扩展用途','处理项目文件');
+      await js(`document.querySelector('.extension-connect button[type="submit"]').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.extensions-notice')`),'扩展保存成功');
+      const manifest=path.join(root,'.codenode','extensions.json');
+      assert.equal(JSON.parse(fs.readFileSync(manifest,'utf8')).extensions[0].name,'ui-command');
+      await waitFor(async()=>await js(`document.querySelector('.extensions-installed')?.textContent.includes('ui-command')`),'已接入列表自动刷新');
+      await js(`[...document.querySelectorAll('.plugin-navigation nav button')].find(button=>button.textContent.includes('技能')).click()`);await sleep(80);await js(`document.querySelector('.extensions-add').click()`);await sleep(80);
+      await fill('扩展名称','ui-skill');await fill('Skill 指令','分析任务时先列出验证步骤。');
+      await js(`document.querySelector('.extension-connect button[type="submit"]').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.extensions-notice') && !document.querySelector('.extension-connect')`),'Skill 保存成功');
+      assert.equal(JSON.parse(fs.readFileSync(manifest,'utf8')).extensions.length,2);
+      await js(`[...document.querySelectorAll('.plugin-navigation nav button')].find(button=>button.textContent.includes('插件')).click()`);await sleep(80);
+      await js(`document.querySelector('.extensions-add').click()`);await sleep(80);
+      await fill('扩展名称','ui-command');await fill('扩展启动命令','node x');
+      await js(`document.querySelector('.extension-connect button[type="submit"]').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.extension-connect-error')`),'重名提示');
+      assert.equal(JSON.parse(fs.readFileSync(manifest,'utf8')).extensions.length,2);
+      await js(`[...document.querySelectorAll('.extension-connect-modes button')].find(button=>button.textContent.includes('粘贴')).click()`);await sleep(60);
+      await fill('扩展配置',JSON.stringify({name:'ui-import',command:'node tools/import.cjs'}));
+      await js(`document.querySelector('.extension-connect button[type="submit"]').click()`);
+      await waitFor(async()=>await js(`!document.querySelector('.extension-connect')`),'配置导入成功');
+      assert.equal(JSON.parse(fs.readFileSync(manifest,'utf8')).extensions.length,3);
+      for (const theme of ['light','dark']) {
+        await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(350);
+        fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});fs.writeFileSync(path.join(__dirname,'..','out','plugin-catalog-'+theme+'.png'),(await win.webContents.capturePage()).toPNG());
+      }
+      await js(`document.querySelector('.extensions-add').click()`);await sleep(80);
+      for (const width of [700,500]) {win.setSize(width,740);await sleep(150);assert.equal(await js(`document.querySelector('.plugin-page').scrollWidth>document.querySelector('.plugin-page').clientWidth`),false);}
+      await js(`window.__codenodeUi.getState().setAppPage('workbench')`);win.setSize(1300,850);await sleep(80);
+      console.log('EXTENSION CONNECT UI: PASS (two-column catalog, add form, Skill, import, duplicate rejection, saved manifest, automatic refresh, themes, narrow layouts)');
+    }
+    if (process.env.CODENODE_EXTENSIONS_UI_TEST === '1') {
+      const js=code=>win.webContents.executeJavaScript(code);
+      win.setSize(1300,850);win.showInactive();
+      await js(`window.__codenodeUi.getState().openSettings('extensions')`);
+      await waitFor(async()=>await js(`document.querySelectorAll('.extension-entry').length>0`),'扩展列表');
+      const original=await js(`window.codenode.listExtensions(${JSON.stringify(root)})`);
+      const rows=await js(`document.querySelectorAll('.extension-entry').length`);
+      assert.equal(rows,original.extensions.length);
+      for (const theme of ['light','dark']) {
+        await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(350);
+        assert.equal(await js(`document.documentElement.dataset.theme`),theme);
+        console.log('EXTENSION THEME',theme,await js(`getComputedStyle(document.documentElement).getPropertyValue('--glass-text')`));
+        const layout=await js(`(() => { const list=document.querySelector('.extensions-list'),rows=[...list.querySelectorAll('details')];return {rows:rows.length,expanded:rows.filter(row=>row.open).length,maxHeight:Math.max(...rows.map(row=>row.getBoundingClientRect().height)),overflow:getComputedStyle(list).overflowY,nested:[...document.querySelectorAll('.plugin-page-content *')].filter(el=>['auto','scroll'].includes(getComputedStyle(el).overflowY)&&el.scrollHeight>el.clientHeight).length};})()`);
+        assert.equal(layout.expanded,0);assert.ok(layout.maxHeight<90);assert.equal(layout.nested,0);
+        fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+        fs.writeFileSync(path.join(__dirname,'..','out','extensions-'+theme+'.png'),(await win.webContents.capturePage()).toPNG());
+      }
+      await js(`(() => {const input=document.querySelector('[aria-label="搜索扩展与工具"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'workbench_edit');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);await sleep(80);
+      assert.equal(await js(`document.querySelectorAll('.extension-entry').length`),1);
+      await js(`document.querySelector('.extension-entry summary').click()`);await sleep(80);
+      assert.equal(await js(`document.querySelector('.extension-entry').open`),true);
+      assert.ok(await js(`document.querySelector('.extension-detail p').textContent.length`)>200);
+      await js(`document.querySelector('[data-category="mcp"]').click()`);await sleep(80);
+      assert.equal(await js(`!!document.querySelector('.extensions-empty')`),true);
+      await js(`document.querySelector('.extensions-empty button').click()`);await sleep(80);
+      ipcMain.removeHandler('extensions:list');
+      let fixtureError=true;
+      ipcMain.handle('extensions:list',async()=>fixtureError ? {ok:false,error:'测试读取失败'} : {ok:true,extensions:[...original.extensions,{name:'demo-mcp',kind:'mcp',description:'用于验证登记信息展示',enabled:false,source:'fixture'}]});
+      await js(`document.querySelector('.extensions-refresh').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.extensions-empty[role="alert"]')`),'读取失败提示');
+      fixtureError=false;
+      await js(`document.querySelector('.extensions-empty button').click()`);
+      await waitFor(async()=>await js(`document.querySelectorAll('.extension-entry').length===${rows+1}`),'重试刷新');
+      await js(`document.querySelector('[data-category="mcp"]').click()`);await sleep(80);
+      assert.equal(await js(`document.querySelectorAll('.extension-entry').length`),1);
+      assert.equal(await js(`document.querySelector('.extension-state').textContent`),'已停用');
+      for (const width of [700,500]) {
+        win.setSize(width,740);await sleep(150);
+        const overflow=await js(`(() => {const el=document.querySelector('.plugin-page');return el.scrollWidth>el.clientWidth})()`);
+        assert.equal(overflow,false,'extension controls must fit at '+width);
+      }
+      await js(`window.__codenodeUi.getState().setAppPage('workbench')`);win.setSize(1300,850);await sleep(80);
+      console.log('EXTENSIONS UI: PASS (actual counts, summaries, search, filters, details, error/retry, disabled state, one scroll, both themes, narrow layouts)');
+    }
+    if (process.env.CODENODE_NIGHT_PALETTE_UI_TEST === '1') {
+      const js=code=>win.webContents.executeJavaScript(code);
+      win.setSize(1300,850); win.showInactive();
+      await js(`window.__codenodeUi.setState({theme:'dark',navigationOpen:true,conversationOpen:true})`);await sleep(150);
+      assert.equal(await js(`getComputedStyle(document.querySelector('.app')).backgroundColor`),'rgb(23, 25, 29)');
+      await js(`window.__codenodeSession.getState().pushUser('这个项目可以做什么？');window.__codenodeSession.getState().beginTurn();window.__codenodeSession.getState().finishTurn('可以在这里查看项目文件、编辑代码，或在画布中整理任务。告诉我具体需求，我们就可以开始。','',[])`);await sleep(100);
+      fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+      fs.writeFileSync(path.join(__dirname,'..','out','night-graphite-workspace.png'),(await win.webContents.capturePage()).toPNG());
+      await js(`window.__codenodeUi.getState().openSettings()`);await sleep(100);
+      fs.writeFileSync(path.join(__dirname,'..','out','night-graphite-settings.png'),(await win.webContents.capturePage()).toPNG());
+      assert.equal(await js(`!!document.querySelector('[aria-label="夜间配色"]')`),false);
+      await js(`localStorage.setItem('codenode.uiPreferences',JSON.stringify({...window.__codenodeUi.getState().preferences,nightPalette:'blue'}))`);
+      win.webContents.reload(); await sleep(400);
+      await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(root)})`);
+      await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(projectFile)})`);
+      await sleep(100);
+      assert.equal(await js(`getComputedStyle(document.querySelector('.app')).backgroundColor`),'rgb(23, 25, 29)');
+      assert.equal(await js(`'nightPalette' in JSON.parse(localStorage.getItem('codenode.uiPreferences'))`),false);
+      await js(`window.__codenodeUi.getState().toggleTheme()`);await sleep(60);
+      assert.equal(await js(`document.documentElement.dataset.theme`),'light');
+      await js(`window.__codenodeUi.getState().toggleTheme()`);await sleep(60);
+      assert.equal(await js(`getComputedStyle(document.querySelector('.app')).backgroundColor`),'rgb(23, 25, 29)');
+      console.log('NIGHT THEME UI: PASS (single appearance toggle, obsolete palette migration, neutral night theme)');
+    }
+    if (process.env.CODENODE_UI_PREFERENCES_TEST === '1') {
+      const js = code => win.webContents.executeJavaScript(code);
+      win.showInactive();
+      await js(`window.__codenodeUi.getState().openSettings()`); await sleep(100);
+      await js(`(() => {const input=document.querySelector('input[aria-label="菜单宽度"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'280');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await js(`(() => {const label=[...document.querySelectorAll('.settings-row')].find(el=>el.textContent==='显示快捷键提示');label.querySelector('input').click()})()`); await sleep(80);
+      assert.equal(await js(`window.__codenodeUi.getState().preferences.menuWidth`),280);
+      assert.equal(await js(`window.__codenodeUi.getState().preferences.showShortcuts`),false);
+      await js(`window.__codenodeUi.getState().updatePreferences({menuRowHeight:40,showGroupLabels:false,visibleActions:['terminal','duplicate'],hideDisabledActions:true,autoCollapseSidebars:false});window.__codenodeUi.getState().closeSettings();document.querySelector('.toolbar-dropdown').open=true`); await sleep(100);
+      const configured=await js(`(() => {const menu=document.querySelector('.toolbar-menu');return {width:menu.getBoundingClientRect().width,labels:menu.querySelectorAll('.toolbar-menu-label').length,shortcuts:menu.querySelectorAll('kbd').length,ids:[...menu.querySelectorAll('[data-action]')].map(el=>el.dataset.action),height:menu.querySelector('[data-action]').getBoundingClientRect().height};})()`);
+      assert.deepEqual(configured,{width:280,labels:0,shortcuts:0,ids:['terminal'],height:40});
+      const saved=await js(`JSON.stringify(window.__codenodeUi.getState().preferences)`);
+      await js(`window.__codenodeUi.getState().toggleTheme()`); await sleep(80);
+      assert.equal(await js(`JSON.stringify(window.__codenodeUi.getState().preferences)`),saved);
+      win.webContents.reload(); await sleep(400);
+      await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(root)})`);
+      await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(projectFile)})`);
+      await waitFor(async()=>await js(`!!document.querySelector('.toolbar-navigation-toggle')`).catch(()=>false),'配置重新加载');
+      assert.equal(await js(`JSON.stringify(window.__codenodeUi.getState().preferences)`),saved);
+      await js(`window.__codenodeUi.getState().resetPreferences();window.__codenodeUi.setState({theme:'light',navigationOpen:true,conversationOpen:true})`); await sleep(80);
+      assert.equal(await js(`window.__codenodeUi.getState().preferences.menuWidth`),220);
+      await js(`localStorage.setItem('codenode.uiPreferences',JSON.stringify({menuWidth:99999,menuRowHeight:'oops',visibleActions:['unknown','terminal','terminal']}))`);
+      win.webContents.reload(); await sleep(400);
+      await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(root)})`);
+      await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(projectFile)})`);
+      await waitFor(async()=>await js(`!!document.querySelector('.toolbar-navigation-toggle')`).catch(()=>false),'异常配置恢复');
+      const sanitized=await js(`window.__codenodeUi.getState().preferences`);
+      assert.equal(sanitized.menuWidth,360); assert.equal(sanitized.menuRowHeight,34);assert.deepEqual(sanitized.visibleActions,['terminal']);
+      await js(`window.__codenodeUi.getState().resetPreferences()`);
+      console.log('UI PREFERENCES: PASS (settings controls, immediate menu changes, reload persistence, shared themes, defaults, validation)');
+    }
+    if (process.env.CODENODE_THEME_PARITY_UI_TEST === '1') {
+      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".workspace-tabs").length`),0);
+      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".activity-bar button[aria-label=文件]").length`),1);
+      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".conversation-toggle").length`),1);
+      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".conversation-head button").length`),0);
+      const js = code => win.webContents.executeJavaScript(code);
+      win.setSize(1300,850); win.showInactive(); await sleep(150);
+      await js(`window.__codenodeUi.setState({theme:'light',navigationOpen:true,conversationOpen:true}); const input=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'切换主题保留草稿');input.dispatchEvent(new Event('input',{bubbles:true}));`);
+      await sleep(100);
+      for (const navigationOpen of [true,false]) {
+        for (const conversationOpen of [true,false]) {
+          await js(`window.__codenodeUi.setState({theme:'light',navigationOpen:${navigationOpen},conversationOpen:${conversationOpen}});document.querySelector('.toolbar-dropdown').open=true`);
+          await sleep(100);
+          const snapshot = `(() => {
+            const ui=window.__codenodeUi.getState(), ss=window.__codenodeSession.getState();
+            const selectors=['.toolbar','.toolbar-navigation-toggle','.project-navigation','.workspace-tabs','.conversation-right','.pp-composer','.toolbar-menu'];
+            return {state:{navigationOpen:ui.navigationOpen,conversationOpen:ui.conversationOpen,navigationWidth:ui.navigationWidth,conversationWidth:ui.conversationWidth,sideTab:ui.sideTab,activeId:ss.activeId,messages:ss.messages},
+              draft:document.querySelector('.pp-input').value,model:document.querySelector('.pp-model').textContent,
+              controls:[...document.querySelectorAll('.toolbar button,.toolbar summary,.toolbar-menu-label')].map(el=>({text:el.textContent,label:el.getAttribute('aria-label'),disabled:!!el.disabled,expanded:el.getAttribute('aria-expanded')})),
+              layout:selectors.map(selector=>{const el=document.querySelector(selector);if(!el)return null;const r=el.getBoundingClientRect(),s=getComputedStyle(el);return {selector,x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,position:s.position,visibility:s.visibility,pointerEvents:s.pointerEvents}})};
+          })()`;
+          const day=await js(snapshot);
+          const dayColor=await js(`getComputedStyle(document.querySelector('.toolbar-menu')).backgroundColor`);
+          await js(`window.__codenodeUi.getState().toggleTheme()`); await sleep(100);
+          assert.deepEqual(await js(snapshot),day,'theme must preserve layout, controls and work state');
+          assert.notEqual(await js(`getComputedStyle(document.querySelector('.toolbar-menu')).backgroundColor`),dayColor);
+          assert.equal(await js(`localStorage.getItem('codenode.theme')`),'dark');
+          for (const theme of ['dark','light']) {
+            assert.equal(await js(`document.documentElement.dataset.theme`),theme);
+            await js(`document.querySelector('.toolbar-navigation-toggle').click()`); await sleep(60);
+            assert.equal(await js(`window.__codenodeUi.getState().navigationOpen`),!navigationOpen);
+            await js(`document.querySelector('.toolbar-navigation-toggle').click();document.querySelector('.conversation-toggle').click()`); await sleep(60);
+            assert.equal(await js(`window.__codenodeUi.getState().conversationOpen`),!conversationOpen);
+            await js(`document.querySelector('.conversation-toggle').click()`);
+            await js(`window.__codenodeUi.getState().toggleTheme()`); await sleep(80);
+          }
+          await js(`document.querySelector('.toolbar-dropdown').open=false`);
+        }
+      }
+      await js(`window.__codenodeUi.setState({navigationOpen:true,conversationOpen:true,theme:'light'})`);
+      console.log('THEME PARITY UI: PASS (same DOM, geometry, controls, sidebar actions, draft, model, session and persistence)');
+    }
+    if (process.env.CODENODE_CANVAS_MENU_UI_TEST === '1') {
+      const js = code => win.webContents.executeJavaScript(code);
+      assert.equal(await js(`document.querySelectorAll('.toolbar-navigation-toggle').length`),1);
+      assert.equal(await js(`!!document.querySelector('.project-nav-toggle') || !!document.querySelector('[aria-label="收起项目导航"]')`),false);
+      await js(`window.__codenodeUi.setState({navigationOpen:true})`);
+      await sleep(80);
+      await js(`document.querySelector('.toolbar-navigation-toggle').click()`);
+      await sleep(80);
+      assert.equal(await js(`!!document.querySelector('.project-navigation')`),false);
+      assert.equal(await js(`document.querySelector('.toolbar-navigation-toggle').getAttribute('aria-label')`),'显示侧边栏');
+      await js(`document.querySelector('.toolbar-navigation-toggle').click()`);
+      await sleep(80);
+      assert.equal(await js(`!!document.querySelector('.project-navigation')`),true);
+      assert.equal(await js(`document.querySelector('.toolbar-navigation-toggle').getAttribute('aria-expanded')`),'true');
+      for (const theme of ['light', 'dark']) {
+        for (const width of [1300, 500, 360]) {
+          win.setSize(width, 800); win.showInactive();
+          await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);
+          await sleep(100);
+          await js(`document.querySelector('.toolbar-dropdown').open=false`);
+          await js(`document.querySelector('.toolbar-dropdown summary').click()`);
+          await sleep(100);
+          const menu = await js(`(() => {
+            const el=document.querySelector('.toolbar-menu'), r=el.getBoundingClientRect(), s=getComputedStyle(el);
+            const buttons=[...el.querySelectorAll('button')].filter(b=>b.getBoundingClientRect().height);
+            return {left:r.left,right:r.right,bottom:r.bottom,width:r.width,background:s.backgroundColor,
+              rows:buttons.map(b=>b.getBoundingClientRect().height),labels:[...el.querySelectorAll('.toolbar-menu-label')].map(b=>b.textContent),
+              copyDisabled:buttons.find(b=>b.textContent.includes('复制节点')).disabled,
+              overflowVisible:el.querySelector('.toolbar-overflow-small').getBoundingClientRect().height>0};
+          })()`);
+          assert.equal(menu.width, 220);
+          assert.ok(menu.left>=0 && menu.right<=width && menu.bottom<=800, JSON.stringify(menu));
+          assert.ok(!menu.background.startsWith('rgba'), 'menu surface must be opaque');
+          assert.ok(menu.rows.every(height=>height===34), JSON.stringify(menu.rows));
+          assert.deepEqual(menu.labels, ['节点','布局','视图','工具与历史']);
+          assert.equal(menu.copyDisabled,true);
+          assert.equal(menu.overflowVisible,width<=780, JSON.stringify({width,menu}));
+          if (width===1300) {
+            win.showInactive(); await sleep(150);
+            const bounds=await js(`(() => { const r=document.querySelector('.toolbar-menu').getBoundingClientRect();return {x:Math.floor(r.x)-8,y:Math.floor(r.y)-8,width:Math.ceil(r.width)+16,height:Math.ceil(r.height)+16};})()`);
+            fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+            fs.writeFileSync(path.join(__dirname,'..','out','canvas-menu-'+theme+'.png'),(await win.webContents.capturePage(bounds)).toPNG());
+
+          }
+          await js(`document.querySelector('.toolbar-menu button:not(:disabled)').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+          assert.equal(await js(`document.querySelector('.toolbar-dropdown').open`),false);
+          assert.equal(await js(`document.activeElement===document.querySelector('.toolbar-dropdown summary')`),true);
+        }
+      }
+      win.setSize(1300,850);
+      await js(`window.__codenodeStore.getState().addNode({id:'menu-node',type:'task',position:{x:50,y:50},data:{label:'菜单验证'}});window.__codenodeStore.getState().setSelectedIds(['menu-node'])`);
+      await sleep(100);
+      await js(`document.querySelector('.toolbar-dropdown summary').click()`);
+      await sleep(100);
+      assert.equal(await js(`document.querySelector('.toolbar-menu button[data-action="duplicate"]').disabled`),false);
+      await js(`document.querySelector('.toolbar-menu button[data-action="duplicate"]').click()`);
+      assert.equal(await js(`window.__codenodeStore.getState().nodes.length`),2);
+      assert.equal(await js(`document.querySelector('.toolbar-dropdown').open`),false);
+      await js(`document.querySelector('.toolbar-dropdown summary').click();document.querySelector('.toolbar-save').dispatchEvent(new Event('pointerdown',{bubbles:true}))`);
+      assert.equal(await js(`document.querySelector('.toolbar-dropdown').open`),false);
+      await js(`window.__codenodeStore.getState().clear()`);
+      console.log('CANVAS MENU UI: PASS (both themes, three widths, disabled state, copy, dismissal, keyboard focus)');
+    }
     if (process.env.CODENODE_RESPONSIVE_UI_TEST === '1') {
       for (const theme of ['light','dark']) {
         await win.webContents.executeJavaScript('window.__codenodeUi.setState({theme:'+JSON.stringify(theme)+'})');
@@ -126,7 +406,7 @@ app.whenReady().then(async () => {
       fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
       fs.writeFileSync(path.join(__dirname,'..','out','first-send-running.png'),(await win.webContents.capturePage()).toPNG());
       win.hide(); completeFirstSend();
-      await waitFor(async () => await win.webContents.executeJavaScript('!window.__codenodeSession.getState().streaming && document.querySelector(".ap-body").textContent.includes("你好，已收到")'), '首次回复显示');
+      await waitFor(async () => await win.webContents.executeJavaScript('!window.__codenodeSession.getState().streaming && document.querySelector(".ap-body").textContent.includes("你好，我能为你做什么？")'), '首次回复显示');
       assert.equal(firstSendCalls,1,'first send must run exactly once');
       console.log('FIRST SEND UI: PASS (Chinese IME, immediate status, running layout, reply)');
     }
@@ -162,7 +442,7 @@ app.whenReady().then(async () => {
       }
       assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), 'draft retained');
       const canvasWidth = await win.webContents.executeJavaScript('document.querySelector(".canvas-wrap").getBoundingClientRect().width');
-      await win.webContents.executeJavaScript('document.querySelector(".conversation-head button").click()');
+      await win.webContents.executeJavaScript('document.querySelector(".conversation-toggle").click()');
       await sleep(100);
       assert.ok(await win.webContents.executeJavaScript('document.querySelector(".conversation-right").hidden'));
       assert.ok(await win.webContents.executeJavaScript('document.querySelector(".canvas-wrap").getBoundingClientRect().width') > canvasWidth);
@@ -190,12 +470,12 @@ app.whenReady().then(async () => {
       assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".workspace-tabs button")).some(button=>button.textContent==="预览")'), false);
       fs.writeFileSync(path.join(root,'readme.txt'),'文件内容直接打开');
       await win.webContents.executeJavaScript('window.__codenodeProject.getState().refresh()');
-      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button=>button.textContent==='文件').click()`);
+      await win.webContents.executeJavaScript(`document.querySelector('.activity-bar button[aria-label="文件"]').click()`);
       await waitFor(async () => await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".files-explorer .pm-file")).some(row=>row.title==="readme.txt")'), '文件列表');
       await win.webContents.executeJavaScript(`document.querySelector('.files-explorer .pm-file[title="readme.txt"]').click()`);
       await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".files-document .dock-code-editor")?.value==="文件内容直接打开"'), '点击文件直接显示内容');
       assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().sideTab'), 'project');
-      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".workspace-tabs button.is-active").textContent'), '文件');
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".activity-bar button[aria-current=page]").getAttribute("aria-label")'), '文件');
       win.showInactive(); await sleep(100);
       fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
       fs.writeFileSync(path.join(__dirname,'..','out','unified-file-view.png'),(await win.webContents.capturePage()).toPNG());
@@ -223,7 +503,7 @@ app.whenReady().then(async () => {
       assert.ok(fs.readFileSync(projectFile).equals(engineeringBytes),'project container must retain its exact bytes');
       assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".toolbar button")).some(button=>button.textContent.trim()==="编辑")'),false);
 
-      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button=>button.textContent==='工作台').click()`);
+      await win.webContents.executeJavaScript(`document.querySelector('.activity-bar button[aria-label="工作台"]').click()`);
       await sleep(80);
       const beforeProjectOrder = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)');
       await win.webContents.executeJavaScript('document.querySelectorAll(".project-group-name")[1].click()');
@@ -300,7 +580,7 @@ app.whenReady().then(async () => {
       assert.ok(await win.webContents.executeJavaScript('document.querySelector(".settings-content").textContent.includes("画布1")'));
       await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.settings-content button')).find(b=>b.textContent==='恢复').click()`);
       await waitFor(async () => cnode.decodeCnode(fs.readFileSync(projectFile)).canvases?.sessions.some(s=>s.id===originalSession && !s.archived), '恢复写入工程');
-      for (const setting of ['检索','扩展']) {
+      for (const setting of ['检索']) {
         await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.settings-layout nav button')).find(b=>b.textContent==='${setting}').click()`);
         await sleep(100);
         assert.ok(await win.webContents.executeJavaScript('document.querySelector(".settings-content h2").textContent === '+JSON.stringify(setting)));
@@ -335,7 +615,7 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript('document.querySelector(".pp-model").click()');
       assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".toolbar summary")).some(el=>el.textContent.includes("项目"))'), false);
       await win.webContents.executeJavaScript(`document.querySelector('.toolbar-dropdown').open=true`);
-      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.toolbar-menu button')).find(b=>b.textContent.trim()==='恢复').click()`);
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.toolbar-menu button')).find(b=>b.textContent.trim()==='检查点与恢复').click()`);
       await waitFor(async () => await win.webContents.executeJavaScript('!!document.querySelector(".dock-checkpoints")'), '恢复菜单入口');
       await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeDock()');
       win.showInactive(); await sleep(200);

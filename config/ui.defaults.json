@@ -1,0 +1,65 @@
+{
+  "menuWidth": 220,
+  "menuRowHeight": 34,
+  "showShortcuts": true,
+  "showGroupLabels": true,
+  "hideDisabledActions": false,
+  "navigationOpen": true,
+  "conversationOpen": true,
+  "autoCollapseSidebars": true,
+  "menuActions": [
+    {
+      "id": "duplicate",
+      "group": "节点",
+      "label": "复制节点",
+      "shortcut": "Ctrl+D",
+      "requires": "selection"
+    },
+    {
+      "id": "delete",
+      "group": "节点",
+      "label": "删除节点",
+      "shortcut": "Del",
+      "requires": "selection",
+      "danger": true
+    },
+    {
+      "id": "layout",
+      "group": "布局",
+      "label": "横向排列",
+      "shortcut": "Ctrl+L",
+      "requires": "nodes"
+    },
+    {
+      "id": "arrange",
+      "group": "布局",
+      "label": "自动整理",
+      "shortcut": "Ctrl+Shift+A",
+      "requires": "nodes"
+    },
+    {
+      "id": "fit",
+      "group": "视图",
+      "label": "显示全部节点",
+      "shortcut": "Z",
+      "requires": "nodes"
+    },
+    {
+      "id": "flow",
+      "group": "工具与历史",
+      "label": "计算数据流",
+      "requires": "nodes"
+    },
+    {
+      "id": "terminal",
+      "group": "工具与历史",
+      "label": "打开工具面板"
+    },
+    {
+      "id": "checkpoints",
+      "group": "工具与历史",
+      "label": "检查点与恢复"
+    }
+  ],
+  "activityBarWidth": 48
+}

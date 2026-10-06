@@ -308,6 +308,8 @@ async function main() {
   try {
     result = await agent.runAgentChat({
       cfg,
+      soulEvolution: true,
+      soulMessages: [{ role: 'user', content: prompt }],
       messages: [
         { role: 'system', content: systemContent },
         { role: 'user', content: prompt },

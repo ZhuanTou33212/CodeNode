@@ -19,6 +19,7 @@ const path = require('path');
 
 // 核心套件：全部为纯 Node 断言，不弹窗、不联网、可在三平台无显示环境运行。
 const CORE = [
+  'test:soul',
   'test:session',
   'test:arrange',
   'test:model',
@@ -95,6 +96,22 @@ const CORE = [
   'test:security',
   'test:ipc',
   'test:rag',
+  'test:rag-benchmark',
+  'test:rag-ast-mapping',
+  'test:rag-faithfulness',
+  'test:rag-delivery-repair',
+  'test:rag-answerability',
+  'test:rag-core-sufficiency',
+  'test:rag-abstention',
+  'test:rag-symbol-terms',
+  'test:rag-dense-prefix',
+  'test:rag-context-rerank',
+  'test:rag-vector-concurrency',
+  'test:rag-deep-read-evidence',
+  'test:rag-evidence-history',
+  'test:rag-live-versions',
+  'test:rag-scan-worker',
+  'test:rag-acceptance',
   'test:rag-document',
   'test:shell-output',
   'test:bg',
@@ -182,7 +199,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui', 'test:rag-review-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);

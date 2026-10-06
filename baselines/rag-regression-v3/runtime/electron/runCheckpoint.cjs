@@ -1,0 +1,720 @@
+/**
+ * runCheckpoint.cjs —— 可续跑状态机（真正的断点续跑）
+ *
+ * 解决审阅缺口：「事件记录不等于崩溃续跑」「把状态标成 interrupted 仅能识别未完成记录，不能恢复任务」。
+ *
+ * 与 runStore 的分工：
+ *   runStore   = 运行事件流（审计视角，给人看）
+ *   runCheckpoint = 执行检查点（恢复视角，给机器用）：
+ *       - 每一步工具调用的 intent / commit / fail（含参数摘要、副作用类别、幂等键）
+ *       - 最近的对话消息快照（重建续跑上下文，不必重新问用户）
+ *   sideEffects   = 幂等账本（副作用是否真的发生过）
+ *
+ * 续跑分类（planResume）：
+ *   complete       已完成，无需续跑
+ *   auto           可自动续跑：待办步骤只有只读，或写步骤在幂等账本里已提交（跳过即可）
+ *   review         必须人工复核：存在「结果未知」的外部副作用（shell 等）或未提交的写操作
+ *   unknown        无法判断（缺检查点、缺少 run_start 等）→ 一律按 review 处理
+ *
+ * 原则：宁可要求人工确认，也不盲目重放未知副作用。
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const runStore = require('./runStore.cjs');
+const planLib = require('./plan.cjs');
+const { classify, SideEffectLedger } = require('./sideEffects.cjs');
+const { STATE_INFO } = require('./agentState.cjs');
+
+const MAX_CHECKPOINT_MESSAGES = 24;
+const MAX_MESSAGE_CHARS = 6000;
+// Time Travel may carry a small, non-secret execution snapshot.  Keep this
+// allow-list deliberately narrow: provider URLs, API keys, approval tokens and
+// arbitrary model output must never be copied into a branch checkpoint.
+const CONTROL_STATE_KEYS = Object.freeze([
+  'model', 'modelTaskType', 'reasoningEffort', 'compacted', 'contextTrims',
+  'contextTrimmedChars', 'overflowRecoveries',
+]);
+
+function sanitizeControlState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const key of CONTROL_STATE_KEYS) {
+    const item = value[key];
+    if (typeof item === 'string') out[key] = item.slice(0, 160);
+    else if (typeof item === 'number' && Number.isFinite(item)) out[key] = Math.max(0, Math.floor(item));
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function checkpointFile(projectRoot, runId) {
+  const safe = runStore.normalizeRunId(runId);
+  return path.join(path.resolve(projectRoot || '.'), '.codenode', 'runs', safe + '.checkpoints.jsonl');
+}
+
+function appendCheckpoint(projectRoot, runId, record) {
+  if (!projectRoot) return null;
+  const entry = { ts: new Date().toISOString(), runId: runStore.normalizeRunId(runId), ...(record || {}) };
+  try {
+    const written = runStore.appendJsonl(checkpointFile(projectRoot, runId), entry) ? entry : null;
+    // S8：检查点也进统一事件流（回放时能看到「哪一步登记了意图、哪一步提交了」）
+    if (written) {
+      try {
+        require('./eventBus.cjs').bridge(projectRoot, 'checkpoint', {
+          runId: entry.runId || null,
+          turnId: entry.turnId == null ? null : entry.turnId,
+          toolCallId: entry.callId || entry.toolCallId || null,
+          waitId: entry.waitId || null,
+          batchId: entry.batchId || null,
+          taskIds: Array.isArray(entry.taskIds) ? entry.taskIds : null,
+          type: entry.type || null,
+          tool: entry.tool || null,
+          ok: entry.ok === undefined ? null : entry.ok === true,
+          effect: entry.effect || null,
+        });
+      } catch {
+        // 审计事件桥接失败不改变检查点已成功落盘的事实。
+      }
+    }
+    return written;
+  } catch {
+    return null;
+  }
+}
+
+/** 工具执行前：登记意图（参数摘要 + 副作用类别 + 幂等键） */
+function recordIntent(projectRoot, runId, { callId, tool, argsDigest, effect, idemKey }) {
+  return appendCheckpoint(projectRoot, runId, {
+    type: 'tool_intent',
+    callId: callId || null,
+    tool: String(tool || ''),
+    argsDigest: argsDigest || null,
+    effect: effect || classify(tool),
+    idemKey: idemKey || null,
+  });
+}
+
+/** 工具执行后：提交结果摘要（ok / 错误 / 结果摘要，不存正文，避免日志膨胀） */
+function recordCommit(projectRoot, runId, { callId, tool, ok, resultDigest, error, elapsedMs, idemKey, effect }) {
+  return appendCheckpoint(projectRoot, runId, {
+    type: 'tool_commit',
+    callId: callId || null,
+    tool: String(tool || ''),
+    idemKey: idemKey || null,
+    effect: effect || null,
+    ok: ok !== false,
+    resultDigest: resultDigest || null,
+    error: error ? String(error).slice(0, 400) : null,
+    elapsedMs: Number(elapsedMs) || 0,
+  });
+}
+
+/** 用户等待只记录关联标识与结算结果；问题正文和审批令牌都不入盘。 */
+function recordWait(projectRoot, runId, payload) {
+  const item = payload || {};
+  if (!['wait_start', 'wait_settle'].includes(item.type) || !item.waitId) return null;
+  return appendCheckpoint(projectRoot, runId, {
+    type: item.type,
+    waitId: String(item.waitId).slice(0, 100),
+    kind: item.kind === 'question' ? 'question' : 'approval',
+    toolCallId: item.toolCallId ? String(item.toolCallId).slice(0, 120) : null,
+    taskId: item.taskId ? String(item.taskId).slice(0, 120) : null,
+    ...(item.type === 'wait_start' ? {
+      what: String(item.what || '').slice(0, 160),
+      level: String(item.level || 'WRITE').slice(0, 24),
+      capability: item.capability ? String(item.capability).slice(0, 120) : null,
+      scope: Array.isArray(item.scope) ? item.scope.map((value) => String(value).slice(0, 200)).slice(0, 32) : null,
+      detailDigest: item.detailDigest ? String(item.detailDigest).slice(0, 128) : null,
+    } : {}),
+    ...(item.type === 'wait_settle' ? { outcome: String(item.outcome || 'unknown').slice(0, 32) } : {}),
+  });
+}
+
+/** 从检查点重建仍未结算的等待，不根据单独的 WAITING_USER 标签猜测。 */
+function pendingWaitsOf(checkpoints) {
+  const pending = new Map();
+  for (const item of Array.isArray(checkpoints) ? checkpoints : []) {
+    if (!item || !item.waitId) continue;
+    if (item.type === 'wait_start') {
+      pending.set(item.waitId, { waitId: item.waitId, kind: item.kind || 'approval', toolCallId: item.toolCallId || null,
+        taskId: item.taskId || null, startedAt: item.ts || null, what: item.what || null, level: item.level || null,
+        capability: item.capability || null, scope: item.scope || null, detailDigest: item.detailDigest || null });
+    } else if (item.type === 'wait_settle') {
+      pending.delete(item.waitId);
+    }
+  }
+  return [...pending.values()];
+}
+
+/** Fan-out 的开始与汇合必须成对；缺少汇合记录时不能假定子任务已结束。 */
+function pendingBatchesOf(checkpoints) {
+  const pending = new Map();
+  for (const item of Array.isArray(checkpoints) ? checkpoints : []) {
+    if (!item || !item.batchId) continue;
+    if (item.type === 'subagent_batch_start') {
+      pending.set(item.batchId, { batchId: item.batchId, taskIds: Array.isArray(item.taskIds) ? item.taskIds : [], startedAt: item.ts || null });
+    } else if (item.type === 'subagent_batch_finish') {
+      pending.delete(item.batchId);
+    }
+  }
+  return [...pending.values()];
+}
+
+/** tool_call 的稳定调用 id：agent.assignCallIds 写在 `callId`，供应商原始值在 `id`；tool 消息的
+ *  `tool_call_id` 用的是 callId —— 三处必须同一口径，否则修配对会修错。 */
+function callIdOf(toolCall) {
+  return String((toolCall && (toolCall.callId || toolCall.id)) || '');
+}
+
+/**
+ * 修复 `tool_calls ↔ tool_call_id` 配对（纯函数，不改入参）。
+ *
+ * 为什么需要：检查点快照是按**位置**切片的（`slice(-MAX_CHECKPOINT_MESSAGES)`），
+ * 切片边界不保证落在 assistant/tool 组边界上；而「达到工具调用上限」的中断路径还会在
+ * `break` 之前写入「声明了 N 个 tool_calls、只回了 k 个」的残缺报文。两种形态都会被
+ * `buildResumeMessages` 原样当作请求报文发出，OpenAI 兼容接口对孤立 tool 消息会返回 400
+ * —— 表现就是「点续跑就报错，且看不出是检查点坏了」。
+ *
+ * 规则（与供应商的实际要求一致）：
+ *   - 每条 `tool` 消息必须由**紧邻其前**的 assistant 块声明，否则丢弃（孤儿）；
+ *   - 每条 assistant 声明的 tool_call 必须在同一块内被应答，否则从 tool_calls 里移除；
+ *   - 移除后若 assistant 既无 tool_calls 又无正文，补一句占位说明（避免空消息被拒）。
+ * @param {Array<any>} messages
+ * @returns {Array<any>} 新的消息数组
+ */
+function repairToolPairing(messages) {
+  const list = (Array.isArray(messages) ? messages : []).filter((message) => message && message.role);
+  const out = [];
+  /** 当前打开的 assistant 配对块 */
+  let open = null;
+
+  const settle = () => {
+    if (!open) return;
+    const { at, calls, answered } = open;
+    open = null;
+    if (answered.size === calls.length) return;
+    const kept = calls.filter((tc) => answered.has(callIdOf(tc)));
+    const copy = { ...out[at] };
+    if (kept.length) {
+      copy.tool_calls = kept;
+    } else {
+      delete copy.tool_calls;
+      if (!copy.content || !String(copy.content).trim()) {
+        copy.content = '（上一轮的工具调用因中断未完成，已从续跑上下文丢弃）';
+      }
+    }
+    out[at] = copy;
+  };
+
+  for (const message of list) {
+    if (message.role === 'assistant') {
+      settle();
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls.filter((tc) => callIdOf(tc)) : [];
+      out.push(message);
+      if (calls.length) open = { at: out.length - 1, calls, answered: new Set() };
+      continue;
+    }
+    if (message.role === 'tool') {
+      const id = message.tool_call_id ? String(message.tool_call_id) : '';
+      // 孤儿：没有前驱 assistant，或前驱没声明这个 id
+      if (!open || !id || !open.calls.some((tc) => callIdOf(tc) === id)) continue;
+      open.answered.add(id);
+      out.push(message);
+      continue;
+    }
+    settle();
+    out.push(message);
+  }
+  settle();
+  return out;
+}
+
+/**
+ * 配对是否合法（严格口径：tool 必须紧跟声明它的 assistant 块，且声明必须全部被应答）。
+ * 供测试断言与运行期自检使用 —— 判据只看结构，不看模型自述。
+ * @param {Array<any>} messages
+ * @returns {boolean}
+ */
+function isToolPairingValid(messages) {
+  let open = null;
+  const flush = () => {
+    if (open && open.answered.size !== open.declared.size) return false;
+    open = null;
+    return true;
+  };
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message || !message.role) return false;
+    if (message.role === 'assistant') {
+      if (!flush()) return false;
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      open = { declared: new Set(calls.map(callIdOf).filter(Boolean)), answered: new Set() };
+      continue;
+    }
+    if (message.role === 'tool') {
+      const id = message.tool_call_id ? String(message.tool_call_id) : '';
+      if (!open || !id || !open.declared.has(id)) return false;
+      open.answered.add(id);
+      continue;
+    }
+    if (!flush()) return false;
+  }
+  return flush();
+}
+
+/**
+ * 保存对话快照：续跑时重建上下文用（裁剪 + 截断，只保留可恢复所需的最小信息）
+ * @param {any} projectRoot
+ * @param {string} runId
+ * @param {Array<any>} messages
+ * @param {{ reason?: string, controlState?: object }} [options]
+ */
+function saveMessages(projectRoot, runId, messages, { reason, controlState } = {}) {
+  const list = Array.isArray(messages) ? messages : [];
+  const trimmed = list
+    .filter((message) => message && message.role)
+    .slice(-MAX_CHECKPOINT_MESSAGES)
+    .map((message) => ({
+      role: String(message.role),
+      content: String(message.content == null ? '' : message.content).slice(0, MAX_MESSAGE_CHARS),
+      tool_calls: message.tool_calls || undefined,
+      tool_call_id: message.tool_call_id || undefined,
+      // `name` 也必须落盘：主循环 push 的 tool 消息带工具名，检查点快照若只留 4 个字段，
+      // 续跑重建后 tool 消息就比生产少一个字段 —— 硬裁剪的占位符随即退化成「此处原本是**工具**的结果」。
+      // 判据：scripts/fixture-shape-test.cjs 的 B 段（snapshot → planResume → buildResumeMessages 逐字段对齐）。
+      name: message.name || undefined,
+    }));
+  // 先切片、再修配对：顺序反过来的话切片仍会切断配对（这正是原来漏掉的一步）
+  const repaired = repairToolPairing(trimmed);
+  return appendCheckpoint(projectRoot, runId, {
+    type: 'messages',
+    reason: reason || 'round',
+    count: repaired.length,
+    messages: repaired,
+    controlState: sanitizeControlState(controlState),
+  });
+}
+
+function readCheckpoints(projectRoot, runId) {
+  const file = checkpointFile(projectRoot, runId);
+  try {
+    return fs
+      .readFileSync(file, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Create a new Run branch from a persisted message checkpoint. This preserves
+ * the original Run and deliberately carries a review-required marker: file,
+ * shell and remote side effects are never undone by a time-travel branch.
+ */
+function createTimeTravelBranch(projectRoot, sourceRunId, branchRunId, checkpointIndex) {
+  if (!projectRoot || !sourceRunId || !branchRunId) return { ok: false, error: '缺少 Run 标识' };
+  const source = String(sourceRunId);
+  const branch = String(branchRunId);
+  if (source === branch) return { ok: false, error: '分支 Run 必须使用新的标识' };
+  const events = readCheckpoints(projectRoot, source);
+  const snapshots = events.filter((event) => event && event.type === 'messages' && Array.isArray(event.messages));
+  const index = Number.isInteger(Number(checkpointIndex)) ? Number(checkpointIndex) : snapshots.length - 1;
+  const selected = snapshots[index];
+  if (!selected) return { ok: false, error: '找不到指定的消息检查点' };
+  const runEvents = require('./runStore.cjs').readRun(projectRoot, source);
+  const start = runEvents.find((event) => event.type === 'run_start') || {};
+  const started = require('./runStore.cjs').startRun(projectRoot, branch, {
+    prompt: String(start.prompt || ''), model: start.model || null, parentRunId: source,
+    timeTravelFrom: source, timeTravelCheckpoint: index, requiresReview: true,
+  });
+  if (!started) return { ok: false, error: '新分支 Run 无法落盘' };
+  const saved = saveMessages(projectRoot, branch, selected.messages, {
+    reason: 'time_travel_branch',
+    controlState: selected.controlState,
+  });
+  if (!saved) return { ok: false, error: '分支消息检查点无法落盘' };
+  require('./runStore.cjs').appendEvent(projectRoot, branch, 'time_travel_branch', {
+    parentRunId: source, checkpointIndex: index, requiresReview: true,
+    warning: '分支不会撤销源 Run 已发生的文件、命令或外部副作用；继续前需人工核对。',
+  });
+  return { ok: true, runId: branch, parentRunId: source, checkpointIndex: index, requiresReview: true,
+    messageCount: selected.messages.length, controlState: sanitizeControlState(selected.controlState) };
+}
+
+/** 从检查点事件流归约出「每一步的状态」 */
+function stepsOf(checkpoints) {
+  const steps = new Map();
+  for (const entry of checkpoints) {
+    if (entry.type === 'tool_intent') {
+      const key = entry.idemKey || entry.callId || entry.tool + ':' + (entry.argsDigest || '');
+      const current = steps.get(key) || { key, tool: entry.tool, effect: entry.effect, idemKey: entry.idemKey || null, intents: 0 };
+      current.intents += 1;
+      current.intentAt = entry.ts;
+      current.argsDigest = entry.argsDigest || current.argsDigest || null;
+      steps.set(key, current);
+    } else if (entry.type === 'tool_commit') {
+      const key = entry.idemKey || entry.callId || entry.tool + ':' + (entry.argsDigest || '');
+      const current = steps.get(key) || { key, tool: entry.tool, effect: classify(entry.tool), intents: 1 };
+      current.committed = entry.ok !== false;
+      current.failed = entry.ok === false;
+      current.error = entry.error || null;
+      current.commitAt = entry.ts;
+      current.elapsedMs = entry.elapsedMs || 0;
+      steps.set(key, current);
+    }
+  }
+  return [...steps.values()];
+}
+
+function lastMessages(checkpoints) {
+  for (let i = checkpoints.length - 1; i >= 0; i--) {
+    if (checkpoints[i].type === 'messages' && Array.isArray(checkpoints[i].messages)) return checkpoints[i].messages;
+  }
+  return [];
+}
+
+function lastControlState(checkpoints) {
+  for (let i = checkpoints.length - 1; i >= 0; i--) {
+    const value = sanitizeControlState(checkpoints[i] && checkpoints[i].controlState);
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
+ * 续跑计划：失败分支只带 error，成功分支带上下面这些字段（字段含义见 planResume 实现）。
+ * @typedef {Object} ResumePlan
+ * @property {boolean} ok
+ * @property {'complete'|'auto'|'review'|'unknown'} mode
+ * @property {string} [error]
+ * @property {string|null} [reason]
+ * @property {boolean} [requiresReview]
+ * @property {string|null} [warning]
+ * @property {string} [runId]
+ * @property {string|null} [state]
+ * @property {boolean|null} [stateHistoryValid]
+ * @property {Array<any>} [stateHistoryIssues]
+ * @property {string|null} [limitKind]
+ * @property {string|null} [stopReason]
+ * @property {string|null} [planSessionId]
+ * @property {any} [taskPlan]
+ * @property {string} [status]
+ * @property {string} [prompt]
+ * @property {any} [model]
+ * @property {string|null} [modelTaskType]
+ * @property {any} [nodeId]
+ * @property {string} [startedAt]
+ * @property {string} [finishedAt]
+ * @property {Array<any>} [completedSteps]
+ * @property {Array<any>} [failedSteps]
+ * @property {Array<any>} [pendingSteps]
+ * @property {Array<any>} [pendingWaits]
+ * @property {Array<any>} [pendingBatches]
+ * @property {Array<any>} [pendingSubagentTasks]
+ * @property {Array<any>} [skippedByLedger]
+ * @property {Array<any>} [unknownEffects]
+ * @property {Array<any>} [messages]
+ * @property {number} [checkpointCount]
+ * @property {number} [messageCheckpointCount]
+ * @property {number} [ledgerCommitted]
+ */
+
+/**
+ * 生成续跑计划。
+ * @param {any} projectRoot
+ * @param {string} runId
+ * @param {object} [options]
+ *   activeIds: 仍在运行的 runId 集合（这些不该被判为中断）
+ *   ledger:    SideEffectLedger（幂等账本），用于把「意图未提交但账本已提交」的写操作判为已完成
+ * @returns {ResumePlan}
+ */
+function planResume(projectRoot, runId, options = {}) {
+  const events = runStore.readRun(projectRoot, runId);
+  const summary = runStore.summarizeRun(events);
+  if (!summary.runId) return { ok: false, mode: 'unknown', error: 'Run 不存在' };
+  const start = events.find((event) => event.type === 'run_start') || {};
+  const checkpoints = readCheckpoints(projectRoot, runId);
+  const steps = stepsOf(checkpoints);
+  const pendingWaits = pendingWaitsOf(checkpoints);
+  const pendingBatches = pendingBatchesOf(checkpoints);
+  const taskViews = require('./subagents.cjs').readTaskViews(projectRoot, runId);
+  // 结算事件是恢复依据，视图是展示投影；崩溃发生在结算与视图刷新之间时以事件为准。
+  const persistedTasks = new Map(taskViews.tasks.map((task) => [task.taskId, task]));
+  const recoveredTasks = new Map(persistedTasks);
+  for (const entry of checkpoints) {
+    const persisted = persistedTasks.get(entry.taskId);
+    if (persisted && persisted.executionId && (!entry.task || entry.task.executionId !== persisted.executionId)) continue;
+    if (entry.type === 'subagent_task_settled' && entry.taskId && entry.task && entry.task.executionSettled === true &&
+        entry.task.taskId === entry.taskId && ['done', 'failed', 'blocked', 'cancelled'].includes(entry.task.status)) recoveredTasks.set(entry.taskId, entry.task);
+  }
+  const pendingSubagentTasks = [...recoveredTasks.values()].filter((task) => task &&
+    (['queued', 'running', 'cancelling'].includes(task.status) || task.requiresReview ||
+      (task.lifecycleVersion === 2 && task.executionSettled !== true)));
+  const ledger = options.ledger || (projectRoot ? new SideEffectLedger({ projectRoot, scopeRunId: summary.runId }) : null);
+  const ledgerReview = ledger ? ledger.review() : { committed: [], pending: [], unknown: [] };
+
+  const isActive = options.activeIds instanceof Set ? options.activeIds.has(summary.runId) : false;
+  const status = isActive ? 'running' : summary.status;
+
+  const pendingSteps = steps.filter((step) => !step.committed && !step.failed);
+  const uncommittedWrites = [];
+  const unknownSteps = [];
+  const skippable = [];
+  for (const step of pendingSteps) {
+    const effect = step.effect || classify(step.tool);
+    // 只有写操作（effect==='write'）才可能被幂等账本「真的跳过」—— 执行期 begin() 的去重条件
+    // 就是 phase==='committed' && effect==='write'。unknown 类即使已提交也不能进 skippable，
+    // 否则会出现「文案说跳过、执行期照样重跑」的重复副作用。
+    const committedInLedger =
+      effect === 'write' && step.idemKey && ledgerReview.committed.some((item) => item.idemKey === step.idemKey);
+    if (committedInLedger) {
+      skippable.push({ tool: step.tool, idemKey: step.idemKey, reason: '幂等账本显示该写操作已提交，续跑时跳过' });
+      continue;
+    }
+    if (effect === 'write') uncommittedWrites.push({ tool: step.tool, argsDigest: step.argsDigest, effect });
+    else if (effect === 'unknown') unknownSteps.push({ tool: step.tool, argsDigest: step.argsDigest, effect });
+  }
+  // 已提交的 unknown 同样是「做了但结果不可知」（例如成功返回的 execute_shell）：
+  // 不能因为 phase 是 committed 就放过 —— 那恰恰是最危险的一类（副作用可能已经生效）。
+  const unknownFromLedger = ledgerReview.unknown;
+
+  const base = {
+    ok: true,
+    runId: summary.runId,
+    state: summary.state || null,
+    stateHistoryValid: summary.stateHistoryValid,
+    stateHistoryIssues: summary.stateHistoryIssues || [],
+    limitKind: summary.limitKind || null,
+    stopReason: summary.stopReason || null,
+    planSessionId: start.planSessionId || null,
+    status,
+    prompt: String(start.prompt || ''),
+    model: start.model || null,
+    modelTaskType: events.find((event) => event.type === 'task_route')?.modelTaskType || start.modelTaskType || null,
+    nodeId: start.nodeId || null,
+    startedAt: summary.startedAt,
+    finishedAt: summary.finishedAt,
+    completedSteps: steps.filter((step) => step.committed).map((step) => ({ tool: step.tool, idemKey: step.idemKey, at: step.commitAt || null })),
+    failedSteps: steps.filter((step) => step.failed).map((step) => ({ tool: step.tool, error: step.error, at: step.commitAt || null })),
+    pendingSteps: pendingSteps.map((step) => ({ tool: step.tool, effect: step.effect || classify(step.tool), idemKey: step.idemKey || null })),
+    pendingWaits,
+    pendingBatches,
+    pendingSubagentTasks: pendingSubagentTasks.map((task) => ({ taskId: task.taskId, role: task.role, status: task.status,
+      executionSettled: task.executionSettled === true, requiresReview: task.requiresReview === true, reason: task.outcomeReason || null })),
+    skippedByLedger: skippable,
+    unknownEffects: [...unknownSteps, ...unknownFromLedger],
+    messages: lastMessages(checkpoints),
+    controlState: lastControlState(checkpoints),
+    taskPlan: planLib.readPlan(projectRoot, summary.runId),
+    checkpointCount: checkpoints.length,
+    // Time Travel indexes message snapshots, not every tool/wait checkpoint.
+    // Expose the exact count so the UI cannot offer indexes that do not exist.
+    messageCheckpointCount: checkpoints.filter((event) => event && event.type === 'messages' && Array.isArray(event.messages)).length,
+    ledgerCommitted: ledgerReview.committed.length,
+    warning: null,
+    reason: null,
+  };
+
+  if (status === 'cancelled') {
+    return { ...base, mode: 'review', reason: '该 Run 由用户主动停止，自动续跑前需要你确认', requiresReview: true };
+  }
+  if (status === 'running' && isActive) {
+    return { ...base, mode: 'complete', reason: '该 Run 仍在运行中' };
+  }
+  if (summary.stateHistoryValid === false) {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: 'Run 的状态迁移记录不连续或包含非法迁移。',
+      warning: '自动续跑已暂停。请检查 run_state 事件记录和当前项目状态，再决定是否强制续跑。',
+    };
+  }
+  if (pendingWaits.length) {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '中断时有 ' + pendingWaits.length + ' 个用户输入或审批尚未结算，原交互请求无法续接。',
+      warning: '系统不会代替用户审批；请核对待处理调用及其副作用后，再决定是否重新发起。',
+    };
+  }
+  if (!taskViews.ok || pendingBatches.length || pendingSubagentTasks.length) {
+    const count = new Set([...pendingBatches.flatMap((batch) => batch.taskIds), ...pendingSubagentTasks.map((task) => task.taskId)]).size;
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: !taskViews.ok ? '子代理任务记录不可读。' : '中断时有 ' + count + ' 个子代理任务的汇合结果尚未确认。',
+      warning: '请核对子任务状态与可能已发生的写入；系统不会仅凭旧的 running 标记重启子任务。',
+    };
+  }
+  if (status === 'completed') {
+    return { ...base, mode: 'complete', reason: 'Run 已正常完成，无需续跑' };
+  }
+  if (STATE_INFO[summary.state] && STATE_INFO[summary.state].recoveryPolicy === 'review-required') {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: summary.state === 'WAITING_USER'
+        ? '该 Run 在等待用户输入或审批时中断，原交互请求无法续接。'
+        : '该 Run 的状态要求人工复核后才能续跑：' + summary.state,
+      warning: summary.state === 'WAITING_USER'
+        ? '请先核对当前项目状态和待处理操作；系统不会代替用户作出审批决定。确认后才能强制续跑。'
+        : '请先核对当前项目状态和副作用，再决定是否强制续跑。',
+    };
+  }
+  if (summary.state === 'LIMIT_REACHED' && summary.limitKind === 'context_window') {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '该 Run 因上下文窗口上限停止；原请求不变时，自动续跑会再次撞到同一上限。',
+      warning: '请先缩短保留上下文、开始新会话或切换到窗口更大的模型，再确认续跑。',
+    };
+  }
+  if (!checkpoints.length) {
+    return { ...base, mode: 'review', requiresReview: true, reason: '没有可用检查点（可能来自旧版本或被清理），无法判断副作用状态', warning: '缺少检查点：只能人工确认后重新发起，不能自动续跑。' };
+  }
+  if (unknownSteps.length || unknownFromLedger.length) {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '存在结果未知的外部副作用：' + [...new Set(base.unknownEffects.map((item) => item.tool))].join('、'),
+      warning: '这些步骤（如 shell 命令）无法从本地状态判断是否已生效，必须人工核对后再继续，系统不会自动重放。',
+    };
+  }
+  if (uncommittedWrites.length) {
+    return {
+      ...base,
+      mode: 'review',
+      requiresReview: true,
+      reason: '存在未提交的写操作：' + [...new Set(uncommittedWrites.map((item) => item.tool))].join('、'),
+      warning: '崩溃发生在写操作提交之前，文件可能只写入了一半，请核对后再继续。',
+    };
+  }
+  return {
+    ...base,
+    mode: 'auto',
+    reason: skippable.length
+      ? '待办步骤均为只读，且 ' + skippable.length + ' 个写操作已在幂等账本中提交（续跑时跳过）'
+      : '待办步骤均为只读，可安全自动续跑',
+  };
+}
+
+/**
+ * 构造续跑消息：用检查点里的对话快照 + 明确的续跑指令，不需要用户重述任务
+ * @param {ResumePlan} plan
+ * @param {{ systemPrompt?: string }} [options]
+ */
+function buildResumeMessages(plan, { systemPrompt } = {}) {
+  const messages = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  // 防御：磁盘上可能已经有**旧版本**写入的坏检查点（没经过 saveMessages 的修复），
+  // 读出来再修一次 —— 否则历史 Run 的「续跑」会一直报 400，而用户看不出是检查点坏了。
+  const history = repairToolPairing(
+    Array.isArray(plan.messages) ? plan.messages.filter((message) => message.role !== 'system') : []
+  );
+  for (const message of history) {
+    const entry = { role: message.role, content: message.content || '' };
+    if (message.tool_calls) entry.tool_calls = message.tool_calls;
+    if (message.tool_call_id) entry.tool_call_id = message.tool_call_id;
+    // 工具名必须一起带回来：主循环 push 的 tool 消息带 `name`，续跑重建时若丢掉，
+    // 同一份历史在两条路径上形状不同 —— 硬裁剪的占位符会退化成「此处原本是**工具**的结果」，
+    // 模型拿不到「该用哪个工具重取」。判据见 scripts/fixture-shape-test.cjs 的 B 段。
+    if (message.name) entry.name = message.name;
+    messages.push(entry);
+  }
+  const lines = [
+    '【断点续跑】上一次执行被中断，请从中断处继续完成任务，不要从头重复已完成的工作。',
+    '原始任务：' + String(plan.prompt || '').slice(0, 2000),
+  ];
+  if (plan.taskPlan && Array.isArray(plan.taskPlan.items) && plan.taskPlan.items.length) {
+    lines.push('中断前的结构化任务计划（继续沿用步骤 id；已完成项必须保留其证据编号）：\n' + planLib.renderPlan(plan.taskPlan));
+  }
+  const completedSteps = Array.isArray(plan.completedSteps) ? plan.completedSteps : [];
+  if (completedSteps.length) {
+    lines.push('已完成步骤（不要重复执行）：' + completedSteps.map((step) => step.tool).join('、'));
+  }
+  if (plan.skippedByLedger && plan.skippedByLedger.length) {
+    lines.push('已由幂等账本确认完成、本次会被自动跳过的写操作：' + plan.skippedByLedger.map((step) => step.tool).join('、'));
+  }
+  const skippedKeys = new Set((plan.skippedByLedger || []).map((item) => item.idemKey).filter(Boolean));
+  const pendingOnly = (plan.pendingSteps || []).filter((step) => !(step.idemKey && skippedKeys.has(step.idemKey)));
+  if (pendingOnly.length) {
+    lines.push('中断时未完成的步骤（按需继续）：' + pendingOnly.map((step) => step.tool).join('、'));
+  }
+  if (plan.failedSteps && plan.failedSteps.length) {
+    lines.push('中断前失败的步骤（分析原因后重试或换方式）：' + plan.failedSteps.map((step) => step.tool).join('、'));
+  }
+  lines.push('若任务其实已经完成，请直接给出最终结论，不要再调用工具。');
+  messages.push({ role: 'user', content: lines.join('\n') });
+  return messages;
+}
+
+/** 把续跑源 Run 的结构化计划复制到新 Run，并更新同一画布会话的最新计划。 */
+function inheritTaskPlan(projectRoot, runId, planSessionId, taskPlan, sourceRunId) {
+  if (!projectRoot || !runId || !taskPlan || !Array.isArray(taskPlan.items) || !taskPlan.items.length) {
+    return { ok: false, runFilePersisted: false, sessionFilePersisted: false, eventPersisted: false };
+  }
+  const updatedAt = new Date().toISOString();
+  const runFile = planLib.writePlan(projectRoot, runId, taskPlan.items, { updatedAt, sessionId: planSessionId });
+  const sessionFile = planSessionId
+    ? planLib.writeSessionPlan(projectRoot, planSessionId, runId, taskPlan.items, { updatedAt })
+    : null;
+  const event = runStore.appendEvent(projectRoot, runId, 'plan_inherited', {
+    sourceRunId: String(sourceRunId || taskPlan.runId || ''),
+    sessionId: planSessionId || null,
+    runFilePersisted: !!runFile,
+    sessionFilePersisted: !planSessionId || !!sessionFile,
+    items: taskPlan.items,
+  });
+  const runFilePersisted = !!runFile;
+  const sessionFilePersisted = !planSessionId || !!sessionFile;
+  const eventPersisted = !!event;
+  return { ok: runFilePersisted && sessionFilePersisted && eventPersisted, runFilePersisted, sessionFilePersisted, eventPersisted };
+}
+
+function clearCheckpoints(projectRoot, runId) {
+  const file = checkpointFile(projectRoot, runId);
+  try {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = {
+  checkpointFile,
+  appendCheckpoint,
+  recordIntent,
+  recordCommit,
+  recordWait,
+  pendingWaitsOf,
+  pendingBatchesOf,
+  saveMessages,
+  repairToolPairing,
+  isToolPairingValid,
+  readCheckpoints,
+  createTimeTravelBranch,
+  stepsOf,
+  lastMessages,
+  lastControlState,
+  sanitizeControlState,
+  planResume,
+  buildResumeMessages,
+  inheritTaskPlan,
+  clearCheckpoints,
+  MAX_CHECKPOINT_MESSAGES,
+};

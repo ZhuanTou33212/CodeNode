@@ -113,6 +113,7 @@ export type ToolRecord = {
 };
 
 export type RagGrounding = {
+  semantic?: { status: string; supported: boolean | null; safeForDelivery?: boolean };
   status: 'not_required' | 'valid' | 'missing' | 'invalid';
   valid: boolean;
   required: boolean;

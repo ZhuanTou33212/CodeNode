@@ -672,6 +672,7 @@ function buildOpenAiRequest(cfg, messages, /** @type {{ stream?: boolean, tools?
   if (cfg.reasoningEffort) {
     body.reasoning_effort = cfg.reasoningEffort;
   }
+  if (cfg.jsonOutput === true) body.response_format = { type: 'json_object' };
   // stream_options 只有流式才有意义；且**可关**（网关不认这个字段时用 agent.send_stream_options=false）
   if (stream && cfg.sendStreamOptions !== false) {
     body.stream_options = { include_usage: true };

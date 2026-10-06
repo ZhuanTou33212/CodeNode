@@ -81,7 +81,7 @@ function runCli(args, env) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       cwd: ROOT,
-      env: Object.assign({}, process.env, env || {}),
+      env: Object.assign({}, process.env, { CODENODE_HOME: path.join(root, 'user-home'), CODENODE_SOUL_FILE: path.join(root, 'soul.md') }, env || {}),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

@@ -1,0 +1,137 @@
+{
+  "ok": true,
+  "kind": "codenode-selftest",
+  "mode": "verify",
+  "version": "0.13.0",
+  "productName": "codenode-desktop-next",
+  "appId": null,
+  "commit": null,
+  "startedAt": "2026-10-05T11:45:07.179Z",
+  "finishedAt": "2026-10-05T11:45:07.185Z",
+  "platform": "win32",
+  "arch": "x64",
+  "electron": "44.0.0",
+  "node": "24.18.1",
+  "appPath": "E:\\CodeNode\\release\\win-unpacked\\resources\\app.asar",
+  "userDataDir": "E:\\CodeNode\\out\\rag-repair-selftest-user",
+  "projectRoot": "E:\\CodeNode\\out\\rag-repair-selftest-project",
+  "marker": "selftest-default",
+  "markerProvided": false,
+  "expectVersion": null,
+  "seed": null,
+  "data": {
+    "paths": {
+      "userDataDir": "E:\\CodeNode\\out\\rag-repair-selftest-user",
+      "projectRoot": "E:\\CodeNode\\out\\rag-repair-selftest-project",
+      "modelsFile": "E:\\CodeNode\\out\\rag-repair-selftest-user\\models.json",
+      "runsDir": "E:\\CodeNode\\out\\rag-repair-selftest-project\\.codenode\\runs",
+      "memoryFile": "E:\\CodeNode\\out\\rag-repair-selftest-project\\.codenode\\memory.json",
+      "projectConfig": "E:\\CodeNode\\out\\rag-repair-selftest-project\\.codenode\\agent.properties",
+      "projectFile": "E:\\CodeNode\\out\\rag-repair-selftest-project\\selftest-project.cnode"
+    },
+    "modelsConfig": {
+      "exists": true,
+      "path": "E:\\CodeNode\\out\\rag-repair-selftest-user\\models.json",
+      "sizeBytes": 1231,
+      "count": 3,
+      "activeId": "deepseek-v4-flash",
+      "ids": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "selftest-marker"
+      ],
+      "apiKeySetCount": 2,
+      "error": null
+    },
+    "runRecords": {
+      "dir": "E:\\CodeNode\\out\\rag-repair-selftest-project\\.codenode\\runs",
+      "fileCount": 1,
+      "count": 1,
+      "latest": {
+        "runId": "selftest-selftest-default",
+        "status": "completed",
+        "state": "RUNNING",
+        "outcome": null,
+        "limitKind": null,
+        "stopReason": null,
+        "stateHistoryValid": null,
+        "stateHistoryIssues": [],
+        "startedAt": "2026-10-05T11:06:51.527Z",
+        "finishedAt": "2026-10-05T11:06:51.531Z",
+        "eventCount": 3,
+        "lastEvent": {
+          "ts": "2026-10-05T11:06:51.531Z",
+          "runId": "selftest-selftest-default",
+          "type": "run_finish",
+          "status": "completed",
+          "toolCount": 1,
+          "marker": "selftest-default"
+        }
+      }
+    },
+    "memory": {
+      "path": "E:\\CodeNode\\out\\rag-repair-selftest-project\\.codenode\\memory.json",
+      "exists": true,
+      "sizeBytes": 288,
+      "count": 1
+    },
+    "projectFiles": {
+      "count": 1,
+      "names": [
+        "selftest-project.cnode"
+      ],
+      "selftestFile": {
+        "path": "E:\\CodeNode\\out\\rag-repair-selftest-project\\selftest-project.cnode",
+        "exists": true,
+        "decodeOk": true,
+        "markerHit": true,
+        "warnings": []
+      }
+    },
+    "projectConfig": {
+      "path": "E:\\CodeNode\\out\\rag-repair-selftest-project\\.codenode\\agent.properties",
+      "exists": false
+    },
+    "markerHits": {
+      "modelsFile": true,
+      "runRecord": true,
+      "memory": true,
+      "projectFile": true
+    }
+  },
+  "config": {
+    "source": "config/agent.properties",
+    "model": "deepseek-chat",
+    "apiBase": "https://api.deepseek.com",
+    "apiKeySet": true,
+    "maxTokens": 32768,
+    "reasoningEffort": "medium",
+    "protocol": "",
+    "endpoint": "",
+    "auth": "",
+    "toolsEnabled": true,
+    "ragEnabled": true,
+    "limits": {
+      "progressEvery": 3,
+      "outputTiers": true,
+      "toolMaxTokens": 12000,
+      "finalMaxTokens": 32000,
+      "truncationBumps": 1,
+      "maxConcurrentRuns": 2,
+      "maxTotalTokens": 600000,
+      "maxTotalRetries": 12,
+      "maxCostUsd": 0,
+      "maxToolIterations": 12,
+      "maxTotalToolCalls": 100,
+      "dataTruncateCap": 120000
+    }
+  },
+  "checks": {
+    "projectRootExists": true,
+    "userDataDirWritable": true,
+    "modelsConfigReadable": true,
+    "markerIntact": true,
+    "versionMatch": true
+  },
+  "warnings": []
+}
