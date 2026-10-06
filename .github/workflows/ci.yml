@@ -24,7 +24,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           # 版本单一来源：.nvmrc（与 package.json engines 保持一致）
@@ -87,7 +87,7 @@ jobs:
           - os: ubuntu-latest
             command: npm run dist:linux
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
