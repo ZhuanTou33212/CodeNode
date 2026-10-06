@@ -32,7 +32,7 @@ jobs:
           cache: npm
       - name: 缓存 Electron 二进制（Electron 与 electron-builder 都要从 GitHub 下载；
           # 网络一抖就 fetch failed → 作业假红，2026-09-16 windows 上实测红过一次）
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
@@ -94,7 +94,7 @@ jobs:
           cache: npm
       - name: 缓存 Electron 二进制（Electron 与 electron-builder 都要从 GitHub 下载；
           # 网络一抖就 fetch failed → 作业假红，2026-09-16 windows 上实测红过一次）
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
