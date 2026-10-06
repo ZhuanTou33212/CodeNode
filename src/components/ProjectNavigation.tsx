@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useSessionStore } from '../store/sessionStore';
 import { useUiStore } from '../store/uiStore';
@@ -15,6 +15,23 @@ export default function ProjectNavigation() {
   const activeId = useSessionStore(s => s.activeId);
   const open = useUiStore(s => s.navigationOpen);
   const toggle = useUiStore(s => s.toggleNavigation);
+  const width = useUiStore(s => s.navigationWidth);
+  const setWidth = useUiStore(s => s.setNavigationWidth);
+  const panel = useRef<HTMLElement>(null);
+  const resizeCleanup = useRef<() => void>(() => {});
+  useEffect(() => () => resizeCleanup.current(), []);
+  const startResize = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault(); resizeCleanup.current();
+    const handle = event.currentTarget;
+    const pointerId = event.pointerId;
+    try { if (pointerId) handle.setPointerCapture(pointerId); } catch {}
+    const left = panel.current?.getBoundingClientRect().left || 0;
+    const move = (pointer: PointerEvent) => setWidth(pointer.clientX - left);
+    const finish = () => { document.body.classList.remove('is-resizing-side'); try { if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId); } catch {} window.removeEventListener('blur',finish); window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',finish); window.removeEventListener('pointercancel',finish); };
+    resizeCleanup.current = finish; document.body.classList.add('is-resizing-side');
+    window.addEventListener('blur',finish); window.addEventListener('pointermove',move); window.addEventListener('pointerup',finish); window.addEventListener('pointercancel',finish);
+  };
   const [error, setError] = useState('');
   const [revision, refresh] = useState(0);
   const [projectOrder, setProjectOrder] = useState<string[]>(() => { try { const value = JSON.parse(localStorage.getItem('codenode.projectOrder') || '[]'); return Array.isArray(value) ? value.filter(key => typeof key === 'string') : []; } catch { return []; } });
@@ -48,7 +65,8 @@ export default function ProjectNavigation() {
   projects.sort((a,b) => Number(!!meta[b.file || b.root]?.pinned)-Number(!!meta[a.file || a.root]?.pinned) || rank(a.root)-rank(b.root));
   void revision;
   if (!open) return <><button className="project-nav-toggle" aria-label="展开项目导航" onClick={toggle}>☰</button><button className="global-settings-trigger settings-collapsed" aria-label="全局设置" onClick={() => useUiStore.getState().openSettings()}>⚙</button></>;
-  return <aside className="project-navigation" aria-label="项目与会话">
+  return <aside ref={panel} className="project-navigation" aria-label="项目与会话" style={{'--navigation-width':width+'px'} as CSSProperties}>
+    <div className="navigation-resize" role="separator" aria-label="调整项目栏宽度" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={400} aria-valuenow={width} tabIndex={0} onPointerDown={startResize} onDoubleClick={()=>setWidth(216)} onKeyDown={event => { if(event.key==='ArrowLeft'||event.key==='ArrowRight') { event.preventDefault(); setWidth(width+(event.key==='ArrowRight'?16:-16)); } }} />
     <div className="project-nav-head"><strong>CodeNode</strong><button aria-label="收起项目导航" onClick={toggle}>☰</button></div>
     <button className="project-nav-new" disabled={streaming} onClick={() => { useSessionStore.getState().newConversation(); useUiStore.getState().setSideTab('agent'); void saveProject(); }}>＋ 新对话</button>
     <div className="project-nav-title"><span>项目</span><details className="project-actions"><summary aria-label="项目操作">＋</summary><div><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(newProject); }}>新建项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProject); }}>打开项目</button><button onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void act(openProjectFile); }}>打开工程文件</button></div></details></div>

@@ -4326,3 +4326,36 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .glass-theme .conversation-workspace .pp-steer-input { background: transparent; border: 0; box-shadow: none; color: var(--glass-text); }
 .glass-theme .conversation-workspace .pp-steer-input::placeholder { color: var(--glass-muted); }
 .glass-theme .conversation-workspace .pp-steer-send { background: var(--glass-selected); color: var(--glass-text); border: 0; }
+
+/* Three columns: projects, canvas, conversation. */
+.workspace-main .workspace-content { flex-direction: row; }
+.workspace-main .workspace-canvas { order: 0; min-height: 0; }
+.workspace-main .conversation-workspace.conversation-right { position: relative; order: 2; width: min(var(--conversation-width),45%); height: 100%; flex: 0 0 auto; padding: 0 14px 14px; background: var(--glass-surface); backdrop-filter: blur(20px); border-left: 1px solid var(--glass-border); }
+.conversation-right[hidden] { display: none !important; }
+.conversation-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 14px 2px; }
+.conversation-head strong { font-size: 14px; }
+.glass-theme .conversation-head button { background: transparent; color: var(--glass-muted); border: 0; padding: 2px 8px; font-size: 22px; }
+.conversation-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 30; touch-action: none; }
+.conversation-resize:hover,.conversation-resize:focus-visible { background: var(--glass-selected); }
+.conversation-toggle { margin-left: auto; }
+.conversation-right .sp-pane-agent { min-height: 0; width: 100%; margin: 0; }
+.conversation-right .ap-body { padding: 12px 2px; }
+.conversation-right .pp-composer { margin-top: 10px; }
+.conversation-right .pp-model-picker { max-width: 235px; min-width: 0; }
+.model-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-right .pp-model { gap: 6px; min-width: 0; }
+.workspace-node .workspace-content > .side-panel { bottom: 0; }
+@media(max-width:1000px) {
+  .workspace-main .conversation-workspace.conversation-right { position: absolute; right: 10px; top: 0; bottom: 10px; width: min(var(--conversation-width),calc(100% - 20px)); height: auto; z-index: 70; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 16px; box-shadow: var(--glass-shadow); }
+  .conversation-resize { display: none; }
+}
+
+.conversation-right .ap-head { display: none; }
+
+/* Drag either side of the workspace to resize its sidebar. */
+.glass-theme .project-navigation { position: relative; width: var(--navigation-width,216px); flex-basis: var(--navigation-width,216px); }
+.navigation-resize { position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 30; touch-action: none; }
+.navigation-resize:hover,.navigation-resize:focus-visible { background: var(--glass-selected); }
+.is-resizing-side { cursor: ew-resize; user-select: none; }
+@media(max-width:1000px) { .conversation-resize { display: block; } }
+@media(max-width:600px) { .glass-theme .project-navigation { position: absolute; width: min(var(--navigation-width,216px),calc(100% - 60px)); left: 0; top: 0; bottom: 0; } }

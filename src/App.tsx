@@ -5,7 +5,7 @@ import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
 import ProjectNavigation from './components/ProjectNavigation';
-import AgentPanel from './components/side/AgentPanel';
+import ConversationPanel from './components/ConversationPanel';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
@@ -63,6 +63,7 @@ export default function App() {
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
   const sideOpen = useUiStore((s) => s.sideOpen);
   const sideTab = useUiStore(s => s.sideTab);
+  const conversationOpen = useUiStore(s => s.conversationOpen);
   const theme = useUiStore((s) => s.theme);
   useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; }, [theme]);
   const dockOpen = useUiStore((s) => s.dockOpen);
@@ -240,11 +241,12 @@ export default function App() {
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
           <nav className="workspace-tabs" aria-label="工作区视图">
             {([['agent', '工作台'], ['project', '文件'], ['preview', '预览']] as const).map(([tab, label]) => <button key={tab} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
+            <button className="conversation-toggle" aria-label="显示或隐藏对话栏" aria-pressed={conversationOpen} onClick={() => useUiStore.getState().toggleConversation()}>对话</button>
           </nav>
           <div className="workspace-content">
-            <div className="conversation-workspace" hidden={sideTab === 'project' || sideTab === 'preview'}><AgentPanel /></div>
             {sideTab !== 'agent' && (sideOpen || sideTab !== 'node') && <SidePanel />}
             <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>
+            <ConversationPanel />
           </div>
         </main>
         <AddMenu />

@@ -37,7 +37,7 @@ export default function ModelPicker({ busy }: { busy: boolean }) {
   const right = position.left + 296;
   const settingsLeft = right + 170 < innerWidth ? right + 4 : Math.max(8, position.left - 174);
   return <div className="pp-model-picker">
-    <button ref={trigger} className="pp-model" aria-expanded={open} aria-haspopup="dialog" onClick={() => { setOpen(!open); setSettings(null); }} title={model?.label}>{model?.label || '选择模型'}{model?.supportsEffort && levels.length ? ` · ${effort}` : ''}<span>⌄</span></button>
+    <button ref={trigger} className="pp-model" aria-expanded={open} aria-haspopup="dialog" onClick={() => { setOpen(!open); setSettings(null); }} title={model?.label}><span className="model-picker-label">{model?.label || '选择模型'}{model?.supportsEffort && levels.length ? ` · ${effort}` : ''}</span><span>⌄</span></button>
     {open && createPortal(<div className={`glass-theme theme-${theme} hermes-picker-layer`}>
       <div ref={menu} className="hermes-model-menu" role="dialog" aria-label="模型选择" style={{ left: position.left, bottom: position.bottom }}>
         <input autoFocus aria-label="搜索对话模型" placeholder="搜索模型" value={query} onChange={event => { setQuery(event.target.value); setSettings(null); }} />

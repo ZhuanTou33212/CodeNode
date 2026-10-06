@@ -68,8 +68,8 @@ app.whenReady().then(async () => {
     win.webContents.on('console-message', event => { if (event.level === 'error') console.log('RENDER ERROR', event.message); });
     const agentView = await win.webContents.executeJavaScript(`(() => { const panel=document.querySelector('.conversation-workspace'); const input=document.querySelector('.pp-input'); return { crash:document.querySelector('.crash')?.textContent, panel:panel?.getBoundingClientRect().toJSON(), input:input?.getBoundingClientRect().toJSON(), text:panel?.textContent }; })()`);
     console.log('AGENT VIEW', JSON.stringify(agentView));
-    const centered = await win.webContents.executeJavaScript(`(() => { const a=document.querySelector('.workspace-main').getBoundingClientRect(), b=document.querySelector('.pp-composer').getBoundingClientRect(); return {offset:Math.abs((a.left+a.right-b.left-b.right)/2),bottom:a.bottom-b.bottom,width:b.width,sideAgent:!!document.querySelector('.side-panel .pp-input')}; })()`);
-    assert.ok(centered.offset < 2 && centered.bottom < 35 && centered.width > 600 && !centered.sideAgent, 'Agent composer must be centered at the bottom of the main workspace');
+    const centered = await win.webContents.executeJavaScript(`(() => { const a=document.querySelector('.conversation-right').getBoundingClientRect(), b=document.querySelector('.pp-composer').getBoundingClientRect(); return {offset:Math.abs((a.left+a.right-b.left-b.right)/2),bottom:a.bottom-b.bottom,width:b.width,sideAgent:!!document.querySelector('.side-panel .pp-input')}; })()`);
+    assert.ok(centered.offset < 2 && centered.bottom < 35 && centered.width > 280 && !centered.sideAgent, 'Agent composer must remain at the bottom of the right conversation pane');
 
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
@@ -131,6 +131,32 @@ app.whenReady().then(async () => {
         assert.ok(await win.webContents.executeJavaScript(`document.querySelector('.workspace-${view}') !== null`));
       }
       assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), 'draft retained');
+      const canvasWidth = await win.webContents.executeJavaScript('document.querySelector(".canvas-wrap").getBoundingClientRect().width');
+      await win.webContents.executeJavaScript('document.querySelector(".conversation-head button").click()');
+      await sleep(100);
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".conversation-right").hidden'));
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".canvas-wrap").getBoundingClientRect().width') > canvasWidth);
+      await win.webContents.executeJavaScript('document.querySelector(".conversation-toggle").click()');
+      await sleep(100);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".pp-input").value'), 'draft retained');
+      await win.webContents.executeJavaScript(`document.querySelector('.conversation-resize').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))`);
+      await sleep(80);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().conversationWidth'), 416);
+      await win.webContents.executeJavaScript(`(() => {const handle=document.querySelector('.conversation-resize'),right=document.querySelector('.conversation-right').getBoundingClientRect().right;handle.dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:right-480}));window.dispatchEvent(new PointerEvent('pointerup',{}));})()`);
+      await sleep(80);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().conversationWidth'), 480);
+      assert.equal(await win.webContents.executeJavaScript('localStorage.getItem("codenode.conversationWidth")'), '480');
+      await win.webContents.executeJavaScript(`document.querySelector('.conversation-resize').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+      await sleep(80);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().conversationWidth'), 400);
+      await win.webContents.executeJavaScript(`(() => {const handle=document.querySelector('.navigation-resize'),left=document.querySelector('.project-navigation').getBoundingClientRect().left;handle.dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:left+300}));window.dispatchEvent(new PointerEvent('pointerup',{}));})()`);
+      await sleep(80);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().navigationWidth'), 300);
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".project-navigation").getBoundingClientRect().width'), 300);
+      assert.equal(await win.webContents.executeJavaScript('localStorage.getItem("codenode.navigationWidth")'), '300');
+      await win.webContents.executeJavaScript(`document.querySelector('.navigation-resize').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+      await sleep(80);
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().navigationWidth'), 216);
       const beforeProjectOrder = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)');
       await win.webContents.executeJavaScript('document.querySelectorAll(".project-group-name")[1].click()');
       await waitFor(async () => await win.webContents.executeJavaScript('window.__codenodeProject.getState().root === '+JSON.stringify(alternateRoot)+' && window.__codenodeProject.getState().projectFile === '+JSON.stringify(alternateFile)+' && !!window.__codenodeSession.getState().sessions["alternate-session"]'), '展开其他项目');
@@ -189,7 +215,7 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript('(() => { const store=window.__codenodeSession; store.getState().order.forEach(id=>store.getState().setArchived(id,false)); })()');
       await sleep(80);
       await win.webContents.executeJavaScript('window.__codenodeSession.getState().switchSession('+JSON.stringify(originalSession)+')');
-      const samePage = await win.webContents.executeJavaScript(`(() => { const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(), composer=document.querySelector('.pp-composer').getBoundingClientRect(); return {canvas:canvas.height,composer:composer.height,separated:canvas.bottom<=composer.top,visible:getComputedStyle(document.querySelector('.workspace-canvas')).visibility}; })()`);
+      const samePage = await win.webContents.executeJavaScript(`(() => { const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(), composer=document.querySelector('.pp-composer').getBoundingClientRect(), panel=document.querySelector('.conversation-right').getBoundingClientRect(); return {canvas:canvas.height,composer:composer.height,separated:canvas.right<=panel.left,visible:getComputedStyle(document.querySelector('.workspace-canvas')).visibility}; })()`);
       assert.ok(samePage.canvas > 150 && samePage.composer > 80 && samePage.separated && samePage.visible === 'visible', 'canvas and composer must be usable together on the same page');
       await win.webContents.executeJavaScript('document.querySelector(".session-archive").click()');
       await waitFor(async () => cnode.decodeCnode(fs.readFileSync(projectFile)).canvases?.sessions.some(s=>s.id===originalSession && s.archived), '归档写入工程');
