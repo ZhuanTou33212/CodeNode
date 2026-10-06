@@ -32,3 +32,14 @@ Reviewed every conflict in CLI, config, agent, IPC, request budget and Dify test
 ## Dependency compatibility review
 
 React DOM 19.3 requires React 19.3; both runtime packages and both React type packages are paired. React Flow declares support for versions >=17. Plugin React 6.1.1 requires Vite 8, so the bundler must be paired with that upgrade. TypeScript 7 exposes the native CLI and version entry point, not the classic compiler API; runtime AST consumers and the incremental test use the official @typescript/typescript6 compatibility package. CheckJS module resolution is migrated from removed node10 behavior to Node16 before the compiler upgrade.
+
+## Final validation
+
+- Clean npm ci succeeds with the combined lock file.
+- TypeScript 7 renderer build and main-process/script CheckJS pass.
+- Core suite: 120/120 test commands pass (Windows symlink privilege-dependent assertion retains its existing explicit skip).
+- UI: inline edit/Ctrl+S and exact-byte project-container protection, responsive layouts in five sizes and both themes, first Chinese IME send, model reconnection, and workflow recovery pass.
+- Model effort and dedup unit tests pass.
+- All existing local and fetched remote branch tips are ancestors of the integration head.
+
+Publishing and branch deletion must occur only after packaged startup and UI self-checks. Keep main and the user-requested yimi-branch; delete other remote branches only when their current tip is contained in published main.

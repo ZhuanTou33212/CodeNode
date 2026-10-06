@@ -11,7 +11,7 @@ const OUT = path.join(os.tmpdir(), 'codenode-scope-frame-test');
 
 const result = childProcess.spawnSync(
   process.platform === 'win32' ? 'npx.cmd' : 'npx',
-  ['tsc', 'src/store/graphStore.ts', 'src/lib/flow.ts', 'src/types.ts', '--outDir', OUT, '--module', 'commonjs', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'node'],
+  ['tsc', '--ignoreConfig', 'src/store/graphStore.ts', 'src/lib/flow.ts', 'src/types.ts', '--outDir', OUT, '--module', 'Node16', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'Node16'],
   { cwd: PROJECT, encoding: 'utf-8', shell: process.platform === 'win32' }
 );
 if (result.status !== 0) throw new Error(result.stdout || result.stderr || 'scope frame compile failed');

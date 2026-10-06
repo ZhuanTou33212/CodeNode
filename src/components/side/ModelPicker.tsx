@@ -34,8 +34,9 @@ export default function ModelPicker({ busy }: { busy: boolean }) {
   }, [open]);
   const visible = models.filter(item => (item.label + ' ' + item.model).toLowerCase().includes(query.toLowerCase()));
   const levels = model?.effortLevels || [];
+  const viewportWidth = typeof window === 'undefined' ? 1280 : Number(window.innerWidth) || 1280;
   const right = position.left + 296;
-  const settingsLeft = right + 170 < innerWidth ? right + 4 : Math.max(8, position.left - 174);
+  const settingsLeft = right + 170 < viewportWidth ? right + 4 : Math.max(8, position.left - 174);
   return <div className="pp-model-picker">
     <button ref={trigger} className="pp-model" aria-expanded={open} aria-haspopup="dialog" onClick={() => { setOpen(!open); setSettings(null); }} title={model?.label}><span className="model-picker-label">{model?.label || '选择模型'}{model?.supportsEffort && levels.length ? ` · ${effort}` : ''}</span><span>⌄</span></button>
     {open && createPortal(<div className={`glass-theme theme-${theme} hermes-picker-layer`}>
