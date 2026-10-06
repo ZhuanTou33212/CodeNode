@@ -4310,3 +4310,19 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .glass-theme.ui-clean .conversation-workspace .pp-input,
 .glass-theme.ui-clean .conversation-workspace .pp-input:focus { border: 0 !important; outline: none !important; box-shadow: none !important; border-radius: 0; background: transparent !important; }
 .composer-project-context { flex: none; padding: 8px 12px 0; color: var(--glass-muted); font-size: 12px; }
+
+/* Keep composer geometry stable while a response is running. */
+.conversation-workspace .pp-controls { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 8px; min-width: 0; }
+.conversation-workspace .pp-model-picker { grid-column: 2; grid-row: 1; margin: 0; max-width: min(280px,45vw); }
+.conversation-workspace .pp-attach-btn { grid-column: 1; grid-row: 1; order: 0; margin: 0; }
+.conversation-workspace .pp-send { grid-column: 3; grid-row: 1; }
+.conversation-workspace .pp-steer { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: nowrap; align-items: center; width: 100%; min-width: 0; margin: 0; gap: 8px; }
+.conversation-workspace .pp-steer-input { min-width: 0; width: 0; flex: 1; }
+.conversation-workspace .pp-stop { font-size: 12px; width: 30px; border-radius: 50%; }
+.conversation-workspace:has(.pp-stop) { height: clamp(260px,38vh,360px); }
+.agent-run-status { flex: none; padding: 4px; color: var(--glass-muted); font-size: 12px; }
+@media(max-width:600px) { .conversation-workspace .pp-model-picker { max-width: 210px; } }
+
+.glass-theme .conversation-workspace .pp-steer-input { background: transparent; border: 0; box-shadow: none; color: var(--glass-text); }
+.glass-theme .conversation-workspace .pp-steer-input::placeholder { color: var(--glass-muted); }
+.glass-theme .conversation-workspace .pp-steer-send { background: var(--glass-selected); color: var(--glass-text); border: 0; }

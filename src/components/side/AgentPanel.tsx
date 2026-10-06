@@ -159,6 +159,7 @@ function PromptComposer() {
   const loadModels = useUsageStore((s) => s.loadModels);
   const busy = sending || streaming;
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const composing = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   // §4.2：运行中插话（steering）—— 长任务跑偏时不用整停，这句话会在下一轮进请求体
   const [steerText, setSteerText] = useState('');
@@ -219,6 +220,7 @@ function PromptComposer() {
   };
 
   const send = async () => {
+    if (composing.current) return;
     if (selectedNode && !busy) { await saveProject(); return; }
     const prompt = text.trim();
     if ((!prompt && !attachments.length) || busy) return;
@@ -281,6 +283,8 @@ function PromptComposer() {
         value={inputText}
         rows={1}
         disabled={busy}
+        onCompositionStart={() => { composing.current = true; }}
+        onCompositionEnd={() => { composing.current = false; }}
         onFocus={() => { if (selectedNode) useGraphStore.getState().commit(); }}
         placeholder={
           selectedNode ? '输入此阶段的任务…' : canVision
@@ -302,6 +306,7 @@ function PromptComposer() {
           void addFiles(files);
         }}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || composing.current || e.nativeEvent.keyCode === 229) return;
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             void send();
@@ -345,6 +350,8 @@ function PromptComposer() {
         </button>
 
         {busy ? (
+          <>
+          <button className="pp-send pp-stop" onClick={() => useChatStore.getState().stop()} aria-label="停止生成" title="停止生成">■</button>
           <div className="pp-steer" title="运行中插话：这句话会在下一轮送进模型，不中断当前运行">
             <input
               className="pp-steer-input"
@@ -352,6 +359,7 @@ function PromptComposer() {
               placeholder="插话纠偏…（如：别改 utils，只改 api 层）"
               onChange={(e) => setSteerText(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   void steer();
@@ -363,10 +371,9 @@ function PromptComposer() {
             <button className="pp-steer-send" onClick={() => void steer()} disabled={steering || !steerText.trim()} data-testid="pp-steer-send">
               插话
             </button>
-            <button className="pp-send pp-stop" onClick={() => useChatStore.getState().stop()} title="停止思考">
-              停止
-            </button>
+
           </div>
+          </>
         ) : (
           <button
             className="pp-send"
@@ -415,6 +422,7 @@ export default function AgentPanel() {
 
       {/* 计划卡：任务清单来自主进程的 kind:'plan' 增量（update_plan 工具）。
           没有计划时它自己返回 null —— 不占位、不留空壳。 */}
+      {streaming && <div className="agent-run-status" role="status">正在回复…</div>}
       <PlanCard />
 
       {/* 意图识别标：每轮由主进程的 kind:'intent' 增量更新（高风险/授权不明时审批会收紧）。

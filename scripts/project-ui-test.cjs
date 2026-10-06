@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, dialog } = require('electron');
+const { app, dialog, ipcMain } = require('electron');
 const cnode = require('../electron/cnode.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-project-ui-'));
@@ -12,6 +12,7 @@ const projectFile = path.join(root, 'created.cnode');
 const invalidFile = path.join(root, 'invalid.cnode');
 process.env.CODENODE_USER_DATA_DIR = path.join(root, 'userData');
 let win = null;
+let firstSendCalls = 0, completeFirstSend;
 app.on('browser-window-created', (_event, window) => { win = window; });
 const originalSaveDialog = dialog.showSaveDialog;
 const originalOpenDialog = dialog.showOpenDialog;
@@ -40,6 +41,10 @@ async function waitFor(check, label) {
 }
 
 app.whenReady().then(async () => {
+  if (process.env.CODENODE_FIRST_SEND_UI_TEST === '1') {
+    ipcMain.removeHandler('agent:chat');
+    ipcMain.handle('agent:chat', async (_event, payload) => { firstSendCalls++; assert.equal(payload.prompt, '你好'); return await new Promise(resolve => { completeFirstSend = () => resolve({ok:true,reply:'你好，已收到。',reasoning:'',tools:[]}); }); });
+  }
   try {
     await waitFor(async () => win && await win.webContents.executeJavaScript('!!document.querySelector(".gate-actions")').catch(() => false), '启动页');
     win.hide();
@@ -68,6 +73,33 @@ app.whenReady().then(async () => {
 
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
+    if (process.env.CODENODE_FIRST_SEND_UI_TEST === '1') {
+      await win.webContents.executeJavaScript('document.querySelector(".project-nav-new").click()');
+      await sleep(100);
+      await win.webContents.executeJavaScript(`(() => { const input=document.querySelector('.pp-input'); input.focus(); input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true})); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'你好'); input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',isComposing:true,bubbles:true})); })()`);
+      await sleep(150);
+      assert.equal(firstSendCalls,0,'IME Enter must only confirm composing text');
+      await win.webContents.executeJavaScript(`document.querySelector('.pp-input').dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}))`);
+      await sleep(80);
+      await win.webContents.executeJavaScript(`document.querySelector('.pp-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true}))`);
+      await waitFor(async () => firstSendCalls === 1, '首次发送你好');
+      assert.ok(await win.webContents.executeJavaScript('document.querySelector(".agent-run-status").textContent.includes("正在回复")'));
+      for (const theme of ['dark','light']) {
+      await win.webContents.executeJavaScript('window.__codenodeUi.setState({theme:'+JSON.stringify(theme)+'})');
+      for (const width of [1300,900,500]) {
+        win.setSize(width,740); await sleep(150);
+        const layout = await win.webContents.executeJavaScript(`(() => {const a=document.querySelector('.pp-composer').getBoundingClientRect(),b=document.querySelector('.pp-input').getBoundingClientRect(),c=document.querySelector('.pp-stop').getBoundingClientRect(),d=document.querySelector('.pp-steer-input').getBoundingClientRect(),host=document.querySelector('.workspace-main').getBoundingClientRect(),controls=document.querySelector('.pp-controls');return {input:b.height,stop:c.height,steer:d.width,contained:c.right<=a.right&&d.left>=a.left&&d.right<=a.right,overflow:controls.scrollWidth>controls.clientWidth,bottom:a.bottom<=host.bottom+1};})()`);
+        assert.ok(layout.input>=28 && layout.stop>=24 && layout.steer>50 && layout.contained && !layout.overflow && layout.bottom, 'running composer must stay visible and contained at '+width+': '+JSON.stringify(layout));
+      }
+      }
+      win.setSize(1300,850); win.showInactive(); await sleep(150);
+      fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+      fs.writeFileSync(path.join(__dirname,'..','out','first-send-running.png'),(await win.webContents.capturePage()).toPNG());
+      win.hide(); completeFirstSend();
+      await waitFor(async () => await win.webContents.executeJavaScript('!window.__codenodeSession.getState().streaming && document.querySelector(".ap-body").textContent.includes("你好，已收到")'), '首次回复显示');
+      assert.equal(firstSendCalls,1,'first send must run exactly once');
+      console.log('FIRST SEND UI: PASS (Chinese IME, immediate status, running layout, reply)');
+    }
     if (process.env.CODENODE_WORKBENCH_UI_TEST === '1') {
       assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".canvas-welcome")'), true);
       const otherModel = await win.webContents.executeJavaScript('window.__codenodeUi && document.querySelector(".pp-model").textContent');
