@@ -187,6 +187,24 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript(`document.querySelector('.navigation-resize').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
       await sleep(80);
       assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().navigationWidth'), 216);
+      assert.equal(await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".workspace-tabs button")).some(button=>button.textContent==="预览")'), false);
+      fs.writeFileSync(path.join(root,'readme.txt'),'文件内容直接打开');
+      await win.webContents.executeJavaScript('window.__codenodeProject.getState().refresh()');
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button=>button.textContent==='文件').click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".files-explorer .pm-file")).some(row=>row.title==="readme.txt")'), '文件列表');
+      await win.webContents.executeJavaScript(`document.querySelector('.files-explorer .pm-file[title="readme.txt"]').click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".files-document .fp-content")?.textContent==="文件内容直接打开"'), '点击文件直接显示内容');
+      assert.equal(await win.webContents.executeJavaScript('window.__codenodeUi.getState().sideTab'), 'project');
+      assert.equal(await win.webContents.executeJavaScript('document.querySelector(".workspace-tabs button.is-active").textContent'), '文件');
+      win.showInactive(); await sleep(100);
+      fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});
+      fs.writeFileSync(path.join(__dirname,'..','out','unified-file-view.png'),(await win.webContents.capturePage()).toPNG());
+      win.hide();
+
+      await win.webContents.executeJavaScript(`document.querySelector('.files-explorer .pm-file[title="created.cnode"]').click()`);
+      await waitFor(async () => await win.webContents.executeJavaScript('document.querySelector(".project-document-summary")?.textContent.includes("画布")'), '工程文件显示摘要');
+      await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button=>button.textContent==='工作台').click()`);
+      await sleep(80);
       const beforeProjectOrder = await win.webContents.executeJavaScript('Array.from(document.querySelectorAll(".project-group-name")).map(button=>button.title)');
       await win.webContents.executeJavaScript('document.querySelectorAll(".project-group-name")[1].click()');
       await waitFor(async () => await win.webContents.executeJavaScript('window.__codenodeProject.getState().root === '+JSON.stringify(alternateRoot)+' && window.__codenodeProject.getState().projectFile === '+JSON.stringify(alternateFile)+' && !!window.__codenodeSession.getState().sessions["alternate-session"]'), '展开其他项目');

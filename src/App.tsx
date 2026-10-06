@@ -6,6 +6,7 @@ import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
 import ProjectNavigation from './components/ProjectNavigation';
 import ConversationPanel from './components/ConversationPanel';
+import FileWorkspace from './components/FileWorkspace';
 import AddMenu from './components/AddMenu';
 import StatusBar from './components/StatusBar';
 import { useGraphStore } from './store/graphStore';
@@ -183,6 +184,12 @@ export default function App() {
         return;
       }
 
+      if (mod && e.key.toLowerCase() === 'p') {
+        e.preventDefault(); useUiStore.getState().setSideTab('project');
+        window.setTimeout(() => document.querySelector<HTMLInputElement>('.files-workspace .pm-search input')?.focus(),0);
+        return;
+      }
+
       if (isTypingTarget()) return;
 
       // Ctrl+B：开合右侧侧栏（对齐 VS Code 的习惯）
@@ -265,11 +272,12 @@ export default function App() {
         <ProjectNavigation />
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
           <nav className="workspace-tabs" aria-label="工作区视图">
-            {([['agent', '工作台'], ['project', '文件'], ['preview', '预览']] as const).map(([tab, label]) => <button key={tab} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
+            {([['agent', '工作台'], ['project', '文件']] as const).map(([tab, label]) => <button key={tab} className={sideTab === tab || (tab === 'agent' && sideTab === 'node') || (tab === 'project' && sideTab === 'preview') ? 'is-active' : ''} aria-pressed={sideTab === tab || (tab === 'agent' && sideTab === 'node') || (tab === 'project' && sideTab === 'preview')} onClick={() => useUiStore.getState().setSideTab(tab)}>{label}</button>)}
             <button className="conversation-toggle" aria-label="显示或隐藏对话栏" aria-pressed={conversationOpen} title="对话栏" onClick={() => useUiStore.getState().toggleConversation()}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg></button>
           </nav>
           <div className="workspace-content">
-            {sideTab !== 'agent' && (sideOpen || sideTab !== 'node') && <SidePanel />}
+            {(sideTab === 'project' || sideTab === 'preview') && <FileWorkspace />}
+            {sideTab === 'node' && sideOpen && <SidePanel />}
             <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>
             <ConversationPanel />
           </div>
