@@ -29,8 +29,6 @@ export default function Toolbar() {
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const runFlow = useGraphStore((s) => s.runFlow);
   const nodeCount = useGraphStore((s) => s.nodes.length);
-  const sideOpen = useUiStore((s) => s.navigationOpen);
-  const toggleSide = useUiStore((s) => s.toggleNavigation);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
   const { fitView, getViewport, setViewport: rfSetViewport, screenToFlowPosition } = useReactFlow();
@@ -45,17 +43,6 @@ export default function Toolbar() {
         </button>
         <button title="重做 (Ctrl+Y)" disabled={!canRedo} onClick={redo}>
           ↷
-        </button>
-      </div>
-
-      <div className="toolbar-group">
-        <button
-          className={`toolbar-side ${sideOpen ? 'is-on' : ''}`}
-          title="显示 / 隐藏项目导航"
-          aria-pressed={sideOpen}
-          onClick={toggleSide}
-        >
-          侧栏
         </button>
       </div>
 
