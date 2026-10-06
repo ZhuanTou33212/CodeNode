@@ -28,3 +28,7 @@ The merge commit retains the legacy tip as a parent. Later retry-budget and depe
 ## Retry-budget branch conflict review
 
 Reviewed every conflict in CLI, config, agent, IPC, request budget and Dify test. Current conflict-side blocks retain shared retry limits plus later money reservations, actual-model pricing, image billing ceilings, routing and trace spans. Choosing the legacy blocks would remove those later controls. Kept the current blocks while retaining the branch's non-conflicting CI/JSDoc typing changes and ledger changes. The request-budget and retry regression suites are required before publishing.
+
+## Dependency compatibility review
+
+React DOM 19.3 requires React 19.3; both runtime packages and both React type packages are paired. React Flow declares support for versions >=17. Plugin React 6.1.1 requires Vite 8, so the bundler must be paired with that upgrade. TypeScript 7 exposes the native CLI and version entry point, not the classic compiler API; runtime AST consumers and the incremental test use the official @typescript/typescript6 compatibility package. CheckJS module resolution is migrated from removed node10 behavior to Node16 before the compiler upgrade.
