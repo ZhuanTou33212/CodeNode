@@ -6,6 +6,7 @@ import RagSettingsPanel from './RagSettingsPanel';
 import EditingSettingsPanel from './EditingSettingsPanel';
 import AgentExecutionSettings from './AgentExecutionSettings';
 import SchedulingSettingsPanel from './SchedulingSettingsPanel';
+import outputUi from '../../config/ui.output.json';
 import CostSettingsPanel from './CostSettingsPanel';
 
 
@@ -39,6 +40,10 @@ export default function GlobalSettings() {
       {([['navigationOpen','默认显示左侧栏'],['conversationOpen','默认显示对话栏'],['autoCollapseSidebars','窄窗口自动收起侧栏']] as const).map(([key,label]) => <label className="settings-row" key={key}><span>{label}</span><input type="checkbox" checked={preferences[key]} onChange={e => updatePreferences({[key]:e.target.checked})}/></label>)}
       <AgentExecutionSettings />
       <SchedulingSettingsPanel />
+      <h3>回复显示</h3>
+      <label className="settings-row"><span>逐字显示 Agent 回复</span><input aria-label="逐字显示 Agent 回复" type="checkbox" checked={preferences.typewriterEnabled} onChange={event => updatePreferences({typewriterEnabled:event.target.checked})} /></label>
+      <label className="settings-row"><span>回复显示速度</span><input aria-label="回复显示速度" type="range" min={outputUi.charactersPerSecond.min} max={outputUi.charactersPerSecond.max} step="10" value={preferences.typewriterCharsPerSecond} disabled={!preferences.typewriterEnabled} onChange={event => updatePreferences({typewriterCharsPerSecond:Number(event.target.value)})}/><output>{preferences.typewriterCharsPerSecond} 字/秒</output></label>
+      <p className="settings-scope">调整文字的显示节奏，模型的生成速度由服务决定。长段落会加快追赶；启用严格核验时，核验通过后开始显示。偏好自动保存，昼夜共用。</p>
       <h3>画布操作菜单</h3>
       <label className="settings-row"><span>菜单宽度</span><input aria-label="菜单宽度" type="range" min="200" max="360" value={preferences.menuWidth} onChange={e => updatePreferences({menuWidth:Number(e.target.value)})}/><output>{preferences.menuWidth}px</output></label>
       <label className="settings-row"><span>菜单行高</span><input aria-label="菜单行高" type="range" min="28" max="44" value={preferences.menuRowHeight} onChange={e => updatePreferences({menuRowHeight:Number(e.target.value)})}/><output>{preferences.menuRowHeight}px</output></label>

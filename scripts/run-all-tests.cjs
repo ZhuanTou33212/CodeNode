@@ -51,6 +51,7 @@ const CORE = [
   'test:atomic-file',
   'test:dep-declaration',
   'test:subagent',
+  'test:text-reveal',
   'test:subagent-attempts',
   'test:scheduling',
   'test:token-cost-policy',
@@ -216,6 +217,7 @@ const DISPLAY = ['test:agent-compact-ui', 'test:smoke', 'test:rag-ui', 'test:cod
 DISPLAY.push('test:node-inspector-ui');
 DISPLAY.push('test:token-cost-ui');
 DISPLAY.push('test:scheduling-ui');
+DISPLAY.push('test:streaming-ui');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const valueOf = (name) => {

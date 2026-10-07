@@ -139,6 +139,8 @@ export type AgentAttachment = {
 export type SessionMsg = {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** Renderer revision: a discarded/restarted stream must clear pending text. */
+  contentRevision?: number;
   /** 脱敏前由主进程重新截断；用于人工反馈样本来源，不作为默认模型上下文。 */
   feedbackInput?: string;
   reasoning?: string;

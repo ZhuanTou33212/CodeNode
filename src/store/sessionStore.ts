@@ -554,6 +554,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // 流中途断线 → 主进程整轮重发：已流出的半截内容作废，否则重发的完整回答
       // 会接在半截后面，用户看到两遍开头。
       last.content = '';
+      last.contentRevision = (last.contentRevision || 0) + 1;
       last.reasoning = '';
       last.tools = [];
     }

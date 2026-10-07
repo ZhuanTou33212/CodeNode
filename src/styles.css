@@ -4639,3 +4639,6 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .archived-chat-choice { min-width: 0; flex: 1; font-size: 13px; }
 .archived-chat-choice input { flex: none; }
 .archived-chat-choice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-typewriter-cursor{display:inline-block;height:1em;border-inline-start:2px solid var(--text-dim);margin-inline-start:2px;vertical-align:text-bottom;animation:reply-cursor-blink .85s steps(1,end) infinite}
+@keyframes reply-cursor-blink{50%{opacity:0}}
+@media(prefers-reduced-motion:reduce){.cs-typewriter-cursor{animation:none}}

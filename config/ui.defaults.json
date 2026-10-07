@@ -76,5 +76,7 @@
   "activityBarWidth": 48,
   "autoSaveEnabled": true,
   "autoSaveDelayMs": 1200,
-  "preferenceVersion": 3
+  "preferenceVersion": 4,
+  "typewriterEnabled": true,
+  "typewriterCharsPerSecond": 60
 }

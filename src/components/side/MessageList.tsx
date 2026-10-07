@@ -3,14 +3,20 @@ import type { SessionMsg } from '../../types';
 import FileChangesCard from './FileChangesCard';
 import { useProjectStore } from '../../store/projectStore';
 import { useSessionStore } from '../../store/sessionStore';
+import { useUiStore } from '../../store/uiStore';
+import { useTextReveal } from '../../hooks/useTextReveal';
 
 /** 对话正文与简洁文件变更；工具和推理记录保留在运行数据中。 */
-export function MessageView({ msg }: { msg: SessionMsg }) {
+export function MessageView({ msg, isLatest = true }: { msg: SessionMsg; isLatest?: boolean }) {
   const grounding = msg.grounding;
   const safeAbstention = grounding?.status === 'valid' && grounding.semantic?.status === 'abstained' && grounding.semantic.safeForDelivery === true;
   const semanticFailed = grounding?.semantic?.supported === false && !safeAbstention;
   const projectRoot = useProjectStore((state) => state.root);
   const sessionId = useSessionStore((state) => state.activeId);
+  const enabled = useUiStore(state => state.preferences.typewriterEnabled);
+  const speed = useUiStore(state => state.preferences.typewriterCharsPerSecond);
+  const display = useTextReveal(msg.content, { enabled: enabled && isLatest && msg.role === 'assistant' && !msg.compaction,
+    speed, revision: msg.contentRevision || 0, scope: sessionId || '', status: msg.status });
   const [feedback, setFeedback] = useState<'accept' | 'reject' | null>(null);
   const sendFeedback = async (verdict: 'accept' | 'reject') => {
     if (!projectRoot || !msg.content || !window.codenode?.agentFeedback) return;
@@ -69,16 +75,16 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
   return (
     <div className="cs-msg cs-msg-agent">
       <span className={`cs-msg-label ${msg.status === 'running' ? 'cs-running' : ''}`}>
-        CodeNode{msg.status === 'running' ? ' · 思考中…' : ''}
+        CodeNode{display.revealing || msg.status === 'running' && msg.content ? ' · 输出中…' : msg.status === 'running' ? ' · 思考中…' : ''}
       </span>
       {/* #25(b)：关键状态不能只靠颜色/图标表达 —— 读屏与键盘用户需要文本层的
           「已停止 / 已截断 / 失败」，这也让「点停止后界面像没反应」当场可见。 */}
       {msg.status === 'stopped' ? <div className="cs-msg-state" role="status">已停止（本轮回答可能不完整）</div> : null}
       {msg.status === 'truncated' ? <div className="cs-msg-state cs-msg-state-warn" role="status">已截断（触到模型长度上限，回复「继续」可接着写）</div> : null}
       {msg.status === 'failed' ? <div className="cs-msg-state cs-msg-state-error" role="status">本轮失败（详见下方错误说明）</div> : null}
-      <div className="cs-msg-text">{msg.content || (msg.status === 'running' ? '…' : '')}</div>
+      <div className="cs-msg-text" data-revealing={display.revealing ? 'true' : 'false'}>{display.text || (msg.status === 'running' ? '…' : '')}{display.revealing && <span className="cs-typewriter-cursor" aria-hidden="true" />}</div>
       <FileChangesCard message={msg} />
-      {msg.content && msg.status !== 'running' ? (
+      {msg.content && msg.status !== 'running' && !display.revealing ? (
         <div className="cs-msg-feedback" aria-label="回答反馈">
           <button type="button" className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>
           <button type="button" className={feedback === 'reject' ? 'active' : ''} aria-pressed={feedback === 'reject'} onClick={() => void sendFeedback('reject')}>需改进</button>

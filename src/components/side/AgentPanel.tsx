@@ -396,11 +396,31 @@ export default function AgentPanel() {
   const active = useSessionStore((s) => (s.activeId ? s.sessions[s.activeId] : null));
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
+  const countRef = useRef(messages.length);
+  const automaticTop = useRef<number | null>(null);
+  const scrollBottom = () => { const element = bodyRef.current; if (element) { element.scrollTop = element.scrollHeight; automaticTop.current = element.scrollTop; } };
   // 新消息 / 流式增量时保持贴底
   useEffect(() => {
     const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (messages.length > countRef.current && messages.some((message, index) => index >= countRef.current && message.role === 'user')) followRef.current = true;
+    countRef.current = messages.length;
+    if (el && followRef.current) scrollBottom();
   }, [messages, streaming]);
+  useEffect(() => {
+    const element = bodyRef.current;
+    const latest = element?.lastElementChild;
+    if (!element || !latest || typeof ResizeObserver === 'undefined') return;
+    const scroll = () => {
+      if (automaticTop.current !== null && Math.abs(element.scrollTop - automaticTop.current) < 1) return;
+      automaticTop.current = null;
+      followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+    };
+    const observer = new ResizeObserver(() => { if (followRef.current) scrollBottom(); });
+    observer.observe(latest); element.addEventListener('scroll', scroll);
+    return () => { observer.disconnect(); element.removeEventListener('scroll', scroll); };
+  }, [messages.length, active?.id]);
+  useEffect(() => { followRef.current = true; scrollBottom(); }, [active?.id]);
 
   return (
     <div className="sp-pane sp-pane-agent">
@@ -436,7 +456,7 @@ export default function AgentPanel() {
       >
 
         {messages.map((m, i) => (
-          <MessageViewMemo key={i} msg={m} />
+          <MessageViewMemo key={`${active?.id || 'session'}:${i}`} msg={m} isLatest={i === messages.length - 1} />
         ))}
       </div>
 

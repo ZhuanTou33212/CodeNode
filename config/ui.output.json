@@ -1,0 +1,4 @@
+{
+  "charactersPerSecond": { "min": 20, "max": 160 },
+  "maxCatchupMs": 3000
+}

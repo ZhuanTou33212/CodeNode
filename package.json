@@ -45,6 +45,8 @@
     "test:vector-choice": "node scripts/vector-storage-choice-test.cjs",
     "test:shell-output": "node scripts/shell-output-test.cjs",
     "test:subagent": "node scripts/subagent-test.cjs",
+    "test:text-reveal": "node scripts/text-reveal-test.cjs",
+    "test:streaming-ui": "node scripts/run-electron.cjs scripts/streaming-ui-test.cjs",
     "test:subagent-attempts": "node scripts/subagent-attempts-test.cjs",
     "test:scheduling": "node scripts/scheduling-test.cjs",
     "test:scheduling-ui": "node scripts/run-electron.cjs scripts/scheduling-ui-test.cjs",
