@@ -17,6 +17,7 @@ import { useSessionStore } from '../store/sessionStore';
 import { nodeTypes } from '../nodes';
 import { edgeTypes } from '../edges';
 import { childIdsOf, computeChildren, parentIdOf, isDescendantOf } from '../lib/flow';
+import { useSpacePan } from '../hooks/useSpacePan';
 
 function collectHiddenIds(nodes: Node[]): Set<string> {
   const hidden = new Set<string>();
@@ -125,6 +126,7 @@ function lineHitsEdge(dragPts: Pt[], edgePts: Pt[]): Pt | null {
 }
 
 export default function Canvas() {
+  const { spacePressed } = useSpacePan();
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const onNodesChange = useGraphStore((s) => s.onNodesChange);
@@ -318,7 +320,9 @@ export default function Canvas() {
         onNodesChange={onNodesChange as (changes: NodeChange[]) => void}
         onEdgesChange={onEdgesChange as (changes: EdgeChange[]) => void}
         onConnect={onConnect as (conn: Connection) => void}
-        panOnDrag={[1]}
+        panOnDrag={spacePressed ? true : [1]}
+        panOnScroll={spacePressed}
+        panActivationKeyCode={null}
         selectionOnDrag
         selectionMode={SelectionMode.Full}
         multiSelectionKeyCode="Control"

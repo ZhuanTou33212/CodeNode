@@ -6,6 +6,7 @@
  * 全部指针手势统一在 svg 的 pointer 事件中按命中目标分类分发。
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useSpacePan } from '../hooks/useSpacePan';
 import { useVector, type VectorStore } from './vectorStore';
 import { computeLogicAnalysisForSets } from './region';
 import type { Bounds, LogicAnalysis, VecObject, VecShapeKind } from './types';
@@ -118,7 +119,7 @@ export function VectorSurface(props: VectorSurfaceProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const gestureRef = useRef<Gesture>({ kind: 'none' });
-  const spaceRef = useRef(false);
+  const { spacePressedRef: spaceRef } = useSpacePan();
   const penLastActionRef = useRef(0);
   const penSuppressRef = useRef(false);
   const [box, setBox] = useState({ w: 1000, h: 600 });
@@ -717,24 +718,6 @@ export function VectorSurface(props: VectorSurfaceProps) {
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
   }, [store, stageScale]);
-
-  // 空格平移
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      const el = document.activeElement as HTMLElement | null;
-      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
-      if (e.code === 'Space' && !typing) spaceRef.current = true;
-    };
-    const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceRef.current = false;
-    };
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-    };
-  }, []);
 
   const panned = gestureRef.current.kind === 'pan' || spaceRef.current;
   const cursorClass =

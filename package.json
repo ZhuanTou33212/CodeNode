@@ -23,6 +23,7 @@
     "test:coding-safety": "node scripts/coding-safety-test.cjs",
     "test:coding-loop": "node scripts/coding-loop-test.cjs",
     "test:coding-settings-ui": "node scripts/run-electron.cjs scripts/coding-settings-ui-test.cjs",
+    "test:ime-shortcut-ui": "node scripts/run-electron.cjs scripts/ime-shortcut-ui-test.cjs",
     "test:rag-document": "node scripts/rag-document-test.cjs",
     "test:scalar": "node scripts/scalar-vector-test.cjs",
     "test:vector-store": "node scripts/vector-store-test.cjs",
