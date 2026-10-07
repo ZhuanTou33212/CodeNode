@@ -2,7 +2,7 @@
 'use strict';
 
 const path = require('path');
-const ts = require('typescript');
+const ts = require('@typescript/typescript6');
 
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
 

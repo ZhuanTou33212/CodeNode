@@ -24,15 +24,15 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           # 版本单一来源：.nvmrc（与 package.json engines 保持一致）
           node-version-file: .nvmrc
           cache: npm
       - name: 缓存 Electron 二进制（Electron 与 electron-builder 都要从 GitHub 下载；
           # 网络一抖就 fetch failed → 作业假红，2026-09-16 windows 上实测红过一次）
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
@@ -60,7 +60,7 @@ jobs:
         run: npm test
       - name: 上传评测报告（JSON + Markdown，绑定 commit/模型/参数/数据集版本）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-${{ runner.os }}
           path: docs/eval-reports/
@@ -87,14 +87,14 @@ jobs:
           - os: ubuntu-latest
             command: npm run dist:linux
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
       - name: 缓存 Electron 二进制（Electron 与 electron-builder 都要从 GitHub 下载；
           # 网络一抖就 fetch failed → 作业假红，2026-09-16 windows 上实测红过一次）
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
@@ -118,7 +118,7 @@ jobs:
       - name: 打包（Windows / macOS）
         if: runner.os != 'Linux'
         run: ${{ matrix.command }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: codenode-${{ runner.os }}
           path: release/*

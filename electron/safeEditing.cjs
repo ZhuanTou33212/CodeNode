@@ -41,7 +41,7 @@ function syntaxCheck(file, content) {
     catch (error) { return { status: 'failed', diagnostics: [{ message: error.message }] }; }
   }
   if (!/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file)) return { status: 'not_supported', diagnostics: [] };
-  const ts = require('typescript');
+  const ts = require('@typescript/typescript6');
   const kind = /\.tsx$/i.test(file) ? ts.ScriptKind.TSX : /\.jsx$/i.test(file) ? ts.ScriptKind.JSX : /\.[cm]?ts$/i.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, kind);
   const options = { noResolve: true, noLib: true, allowJs: true, target: ts.ScriptTarget.ESNext, jsx: ts.JsxEmit.Preserve };

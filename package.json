@@ -10,7 +10,7 @@
     "codenode-agent": "bin/codenode-agent.cjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "test:soul": "node scripts/soul-evolution-test.cjs",
@@ -231,7 +231,8 @@
       "electron/vectorStore/index.cjs",
       "electron/vectorStore/memory.cjs",
       "electron/tools/toolFiles.cjs",
-      "node_modules/typescript/**/*"
+      "node_modules/typescript/**/*",
+      "node_modules/@typescript/typescript6/**/*"
     ],
     "win": {
       "target": [
@@ -273,22 +274,23 @@
     }
   },
   "dependencies": {
-    "@xyflow/react": "^12.3.5",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "typescript": "^5.7.2",
-    "zustand": "^4.5.5"
+    "@xyflow/react": "^12.11.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^4.5.5",
+    "@typescript/typescript6": "^6.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
     "cross-env": "^7.0.3",
-    "electron": "^44.0.0",
+    "electron": "^44.4.1",
     "electron-builder": "^24.13.3",
-    "vite": "^5.4.11",
+    "typescript": "^7.0.2",
+    "vite": "^8.0.0",
     "wait-on": "^8.0.1"
   }
 }

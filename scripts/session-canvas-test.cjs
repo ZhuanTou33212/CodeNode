@@ -39,7 +39,7 @@ function compile() {
   ];
   const res = childProcess.spawnSync(
     'npx',
-    ['tsc', ...src, '--outDir', OUT, '--rootDir', PROJECT, '--resolveJsonModule', '--module', 'commonjs', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'node'],
+    ['tsc', '--ignoreConfig', ...src, '--outDir', OUT, '--rootDir', PROJECT, '--resolveJsonModule', '--module', 'Node16', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'Node16'],
     { cwd: PROJECT, encoding: 'utf-8', shell: process.platform === 'win32' }
   );
   if (res.status !== 0) {

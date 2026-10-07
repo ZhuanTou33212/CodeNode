@@ -20,7 +20,7 @@ function compile() {
   fs.rmSync(OUT, { recursive: true, force: true });
   const res = childProcess.spawnSync(
     'npx',
-    ['tsc', 'src/store/graphStore.ts', 'src/lib/flow.ts', 'src/types.ts', '--outDir', OUT, '--module', 'commonjs', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'node'],
+    ['tsc', '--ignoreConfig', 'src/store/graphStore.ts', 'src/lib/flow.ts', 'src/types.ts', '--outDir', OUT, '--module', 'Node16', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'Node16'],
     { cwd: PROJECT, encoding: 'utf-8', shell: process.platform === 'win32' }
   );
   if (res.status !== 0) {

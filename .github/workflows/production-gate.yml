@@ -84,8 +84,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -106,7 +106,7 @@ jobs:
         run: npm test
       - name: 上传评测报告（三平台各一份，含失败与跳过清单）
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-${{ runner.os }}
           path: docs/eval-reports/
@@ -123,8 +123,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -151,8 +151,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -165,7 +165,7 @@ jobs:
           CODENODE_EVAL_MODEL: ${{ vars.CODENODE_EVAL_MODEL }}
       - name: 上传真实模型评测报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-model
           path: docs/eval-reports/
@@ -178,8 +178,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm

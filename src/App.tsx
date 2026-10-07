@@ -283,7 +283,7 @@ export default function App() {
       <div className="app-workbench-toolbar" hidden={appPage!=='workbench'}><Toolbar /></div>
       <div className={`app-body side-left${dockOpen && appPage==='workbench' ? ' has-dock' : ''}`}>
         {appPage==='plugins'&&<PluginWorkspace/>}
-        <div className="app-workbench-layer" data-inactive={appPage!=='workbench'} aria-hidden={appPage!=='workbench'} {...(appPage!=='workbench'?{inert:''}:{})}>
+        <div className="app-workbench-layer" data-inactive={appPage!=='workbench'} aria-hidden={appPage!=='workbench'} inert={appPage!=='workbench'}>
         <div className="app-project-navigation"><ProjectNavigation /></div>
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
 <div className="workspace-content">

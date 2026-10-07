@@ -6,7 +6,7 @@
 const { resolveImport } = require('./codeGraph.cjs');
 
 function extractNavigation(sourceFile) {
-  const ts = require('typescript');
+  const ts = require('@typescript/typescript6');
   const definitions = [], references = [], imports = [];
   const declarationNames = new Set();
   const commonExports = new Set();
