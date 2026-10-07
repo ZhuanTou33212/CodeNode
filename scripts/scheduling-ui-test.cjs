@@ -74,6 +74,7 @@ app.whenReady().then(async () => {
       themes.push(await js(`JSON.stringify([...document.querySelectorAll('.scheduling-settings input')].map(input=>({label:input.getAttribute('aria-label'),type:input.type,value:input.value,disabled:input.disabled})))`));
       assert.match(await js(`document.querySelector('.scheduling-settings').textContent`), /23\/28/);
       await js(`document.querySelector('.scheduling-settings').scrollIntoView({block:'center'})`);
+      await sleep(160); // Let the compositor present the scrolled settings panel.
       const screenshot = await win.webContents.capturePage();
       fs.mkdirSync(path.join(__dirname, '../out'), { recursive: true });
       fs.writeFileSync(path.join(__dirname, '../out/scheduling-' + theme + '.png'), screenshot.toPNG());
