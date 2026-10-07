@@ -51,6 +51,7 @@ const CORE = [
   'test:atomic-file',
   'test:dep-declaration',
   'test:subagent',
+  'test:subagent-attempts',
   'test:scheduling',
   'test:token-cost-policy',
   'test:token-result-reference',

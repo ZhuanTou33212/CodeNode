@@ -34,6 +34,18 @@ app.whenReady().then(async () => {
     require(path.join(moduleRoot, 'electron/modelStore.cjs')).writeModels(path.join(root, 'userData'), [
       { id: 'scheduling-fixture', model: 'fixture-model', label: '调度测试模型', apiBase: 'http://127.0.0.1:12345', apiKey: 'synthetic-test-key' },
     ], 'scheduling-fixture');
+    const toolkit = require(path.join(moduleRoot, 'electron/tools/toolkit.cjs'));
+    const { AgentToolContext } = require(path.join(moduleRoot, 'electron/tools/context.cjs'));
+    const { GraphModel } = require(path.join(moduleRoot, 'electron/tools/GraphModel.cjs'));
+    const { SubagentManager } = require(path.join(moduleRoot, 'electron/subagents.cjs'));
+    const context = new AgentToolContext({ projectRoot: root, model: new GraphModel({ root: { nodes: [], edges: [] } }), confirm: async () => true, audit: () => {} });
+    let attemptCalls = 0;
+    const manager = new SubagentManager({ toolkit, registry: toolkit.buildDefaultRegistry(), runId: 'attempt-ui', cfg: { tools: {}, rag: { enabled: false }, costSettings: { delegationGate: false, roleModels: {} } },
+      agent: { runAgentChat: async () => ++attemptCalls === 1 ? { content: '', error: '首次尝试失败', toolCalls: [] } : { content: '第二次尝试完成', toolCalls: [] } } });
+    await manager.delegate(context, { taskId: 'ui-attempt', role: 'explorer', objective: '探查模块并归纳结论' });
+    const retryPlan = manager.inspectRetry(context, { taskId: 'ui-attempt' });
+    const redone = await manager.retry(context, { taskId: 'ui-attempt', expectedExecutionId: retryPlan.executionId, planDigest: retryPlan.planDigest, reason: '再次探查并核验' });
+    assert.equal(redone.ok, true, redone.text);
     await wait('!!window.__codenodeProject', 'project store');
     assert.equal((await js('window.codenode.agentConfig(null)')).scheduling.concurrency, 4);
     await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(root)})`);
@@ -49,14 +61,14 @@ app.whenReady().then(async () => {
     const before = await state();
     await js(`window.__codenodeUi.getState().openSettings('general')`);
     await wait(`document.querySelector('[aria-label="子任务与模型请求并发上限"]')?.disabled===false`, 'loaded settings');
-    const labels = ['子任务与模型请求并发上限', '每次运行子任务上限', '单批子任务上限', '子任务配额预警百分比'];
+    const labels = ['子任务与模型请求并发上限', '每次运行子任务上限', '单批子任务上限', '子任务配额预警百分比', '单任务尝试上限（含首次）', '每次运行尝试上限（含首次）'];
     for (let index = 0; index < labels.length; index++) {
-      await js(`(()=>{const input=document.querySelector('[aria-label="'+${JSON.stringify(labels[index])}+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(String([6, 28, 8, 80][index]))});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await js(`(()=>{const input=document.querySelector('[aria-label="'+${JSON.stringify(labels[index])}+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(String([6, 28, 8, 80, 2, 50][index]))});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await sleep(30);
     }
     await js(`document.querySelector('.scheduling-settings button').click()`);
     await wait(`document.querySelector('.scheduling-settings [role="status"]')?.textContent.includes('已保存')`, 'saved global settings');
-    const expected = { concurrency: 6, maxTasksPerRun: 28, maxBatchTasks: 8, warningPercent: 80 };
+    const expected = { concurrency: 6, maxTasksPerRun: 28, maxBatchTasks: 8, warningPercent: 80, maxAttemptsPerTask: 2, maxAttemptsPerRun: 50 };
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'home/agent-scheduling.json'), 'utf8')).settings, expected);
     const queue = require(path.join(moduleRoot, 'electron/requestQueue.cjs')).modelQueue;
     assert.equal(queue.stats().limit, 6);
@@ -89,7 +101,26 @@ app.whenReady().then(async () => {
       assert.equal(rejected.ok, false); assert.match(rejected.error, /正在运行/);
     } finally { release(); }
     assert.equal(queue.stats().limit, 6);
-    console.log('SCHEDULING UI: PASS (real global IPC persistence, reopen/cross-project, linked queue, both themes/state retention, active request guard)');
+    await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openDock('runs')`);
+    await wait(`!!document.querySelector('[data-testid="dock-subagents"] .dock-attempt-history')`, 'persisted Attempt history');
+    const historyState = await state();
+    const histories = [];
+    for (const theme of ['light', 'dark']) {
+      await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`); await sleep(80);
+      assert.equal(await state(), historyState);
+      const content = await js(`(()=>{const history=document.querySelector('.dock-attempt-history');if(!history.open)history.querySelector('summary').click();return history.textContent;})()`);
+      assert.match(content, /第 1 次.*failed.*首次尝试失败/);
+      assert.match(content, /第 2 次.*done.*第二次尝试完成/);
+      histories.push(content);
+      await js(`document.querySelector('.dock-attempt-history').scrollIntoView({block:'center'})`); await sleep(160);
+      const layout = await js(`(()=>{const history=document.querySelector('.dock-attempt-history');const lines=history.querySelectorAll('p');return {width:history.getBoundingClientRect().width,firstY:lines[0].getBoundingClientRect().y,secondY:lines[1].getBoundingClientRect().y};})()`);
+      assert.ok(layout.width > 200 && layout.secondY > layout.firstY, 'Expanded history is laid out as readable rows');
+      const capture = await win.webContents.capturePage();
+      fs.writeFileSync(path.join(__dirname, '../out/attempt-history-' + theme + '.png'), capture.toPNG());
+      await js(`document.querySelector('.dock-attempt-history summary').click()`);
+    }
+    assert.equal(histories[0], histories[1]);
+    console.log('SCHEDULING UI: PASS (real settings/Attempt persistence, cross-project, both themes/history interactions/state retention, linked queue and active request guard)');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });

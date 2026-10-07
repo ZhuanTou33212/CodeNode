@@ -98,14 +98,22 @@ async function warningChecks() {
 
 (async () => {
   try {
-    assert.deepEqual(settings.readSettings(), { concurrency: 4, maxTasksPerRun: 24, maxBatchTasks: 8, warningPercent: 75 });
+    assert.deepEqual(settings.readSettings(), require('../config/ui.scheduling.json').defaults);
     assert.equal(settings.budgetState(17, 24).warning, false);
     assert.equal(settings.budgetState(18, 24).warning, true);
     assert.equal(settings.budgetState(18, 24).remaining, 6);
     assert.equal(settings.budgetState(2, 3).warning, false);
-    const saved = settings.writeSettings({ concurrency: 6, maxTasksPerRun: 30, maxBatchTasks: 8, warningPercent: 80 });
+    assert.equal(settings.budgetState(1, 24, 75, 6, 8).warning, true, 'Attempt consumption has its own 75% warning');
+    const saved = settings.writeSettings({ ...require('../config/ui.scheduling.json').defaults, concurrency: 6, maxTasksPerRun: 30, maxBatchTasks: 8, warningPercent: 80 });
     const file = settings.settingsFile();
     const before = fs.readFileSync(file, 'utf8');
+    const legacy = JSON.parse(before); delete legacy.settings.maxAttemptsPerTask; delete legacy.settings.maxAttemptsPerRun;
+    fs.writeFileSync(file, JSON.stringify(legacy));
+    assert.equal(settings.readSettings().maxAttemptsPerTask, 3);
+    assert.equal(settings.readSettings().maxAttemptsPerRun, 72);
+    assert.equal(settings.readSettings().concurrency, saved.concurrency);
+    fs.writeFileSync(file, before);
+    assert.throws(() => settings.writeSettings({ ...saved, maxAttemptsPerTask: 0 }), /整数/);
     assert.throws(() => settings.writeSettings({ ...saved, concurrency: 9 }), /整数/);
     assert.throws(() => settings.writeSettings({ ...saved, warningPercent: '75' }), /整数/);
     assert.equal(fs.readFileSync(file, 'utf8'), before);

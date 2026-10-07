@@ -278,6 +278,8 @@ soul_file=config/soul.md
 # agent.subagent.max_tasks_per_run=24            # 每次运行累计子任务上限（1–100），已启动后失败/取消仍计入
 # agent.subagent.max_batch_tasks=8               # 单次批量委派上限（1–32）
 # agent.subagent.warning_percent=75              # 配额预警百分比（10–95）；24 个额度在 18 个时提醒收敛
+# agent.subagent.max_attempts_per_task=3           # 同一 taskId 的整任务尝试上限（1–10，含首次）；显式重做时递增
+# agent.subagent.max_attempts_per_run=72           # 每次运行的累计整任务尝试上限（1–1000，含首次）
 # 设置 → 常规 → 全局调度保存到用户级 agent-scheduling.json，优先于以上全局属性；项目属性不覆盖这些全局选项
 # agent.subagent.max_concurrent_tasks=4          # 兼容旧键；未设置 agent.scheduling.concurrency 时联动两层并发
 # agent.subagent.max_total_tokens=120000         # 每个子代理的默认独立 Token 上限；delegate_task 可用 tokenBudget 收紧，父 Run 总预算仍生效

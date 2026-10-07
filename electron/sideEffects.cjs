@@ -26,6 +26,7 @@ const READ_TOOLS = new Set([
   'find_definition', 'find_references', 'get_callers', 'get_callees',
   'get_workbench_model', 'query_scalars', 'project_info', 'code_review', 'retrieve_context',
   'read_project', 'read_run', 'poll_job', 'ask_user', 'user_memory_read',
+  'inspect_subagent_retry',
 ]);
 
 /** 写工具：本地状态变更，幂等键可去重 */

@@ -210,4 +210,6 @@ export interface SchedulingSettings {
   maxTasksPerRun: number;
   maxBatchTasks: number;
   warningPercent: number;
+  maxAttemptsPerTask: number;
+  maxAttemptsPerRun: number;
 }

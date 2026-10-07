@@ -66,6 +66,7 @@ const PROFILE_TOOLS = Object.freeze({
   /** 编排面：子代理与工作树隔离（单价最贵的一组，实测 delegate_task 557 tokens + worktree 201） */
   orchestration: Object.freeze([
     'delegate_task', 'delegate_tasks', 'get_subagent_task', 'cancel_subagent_task',
+    'inspect_subagent_retry', 'retry_subagent_task',
     'merge_subagent_results', 'review_subagent_result', 'worktree',
   ]),
   /** 单文件小改：目标文件读写、必要的定位/验证与按需取回；不常驻 RAG/编排/全项目分析。 */

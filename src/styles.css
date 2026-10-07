@@ -3462,6 +3462,13 @@ textarea:focus-visible {
 .dock-rollback-item[data-action="restore"] .dock-rollback-act{color:#8ab4f8}
 .dock-rollback-item[data-action="delete"] .dock-rollback-act{color:#e0a45e}
 .dock-rollback-item[data-action="skip"] .dock-rollback-act{color:#8b8f98}
+.dock-subagents-panel > strong{color:var(--text)}
+.dock-subagent-task{flex-wrap:wrap}
+.dock-subagent-task .dock-rollback-path{color:var(--text);min-width:0}
+.dock-rollback-item.dock-subagent-task .dock-rollback-act{color:var(--text-dim)}
+.dock-attempt-history{flex:1 0 100%;color:var(--text)}
+.dock-attempt-history summary{cursor:pointer;color:var(--text-dim)}
+.dock-attempt-history p{margin:4px 0;white-space:normal;overflow-wrap:anywhere}
 .dock-rollback-why{flex:0 0 auto;color:#e0a45e;font-size:10px}
 .dock-rollback-force{display:flex;align-items:center;gap:6px;margin:6px 0;font-size:11px;color:#e8d3a8;cursor:pointer}
 .dock-rollback-force input{accent-color:#e0a45e}

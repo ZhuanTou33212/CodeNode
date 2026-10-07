@@ -47,7 +47,8 @@ type RollbackReport = {
 type SubagentRunView = {
   runId: string;
   updatedAt: string | null;
-  tasks: { taskId: string; role: string | null; objective: string; status: string | null; summary: string; error: string | null; finishedAt: string | null }[];
+  tasks: { taskId: string; role: string | null; objective: string; status: string | null; summary: string; error: string | null; finishedAt: string | null;
+    attempt?: number; attempts?: { attempt: number; executionId: string; status: string; summary: string; error: string | null; compensation?: { ok: boolean; applied?: string[] } | null }[] }[];
 };
 /**
  * 哪些 Run 值得出现在「可续跑」列表里（第 2 项缺陷）：
@@ -772,17 +773,19 @@ function RunsPanel() {
         </div>}
       </div>}
       {/* §4.2：子代理任务视图 —— 落盘可查，跨 run（此前只有进程内 Map，刷新即失忆） */}
-      {subagentRuns.length > 0 && <div className="dock-agent-recovery" data-testid="dock-subagents">
+      {subagentRuns.length > 0 && <div className="dock-agent-recovery dock-subagents-panel" data-testid="dock-subagents">
         <strong>子代理任务（跨运行留存，最近 3 个运行）</strong>
         {subagentRuns.map((run) => <div key={run.runId} className="dock-subagent-run">
           <div className="dock-recovery-meta">
             {run.runId} · {run.updatedAt ? new Date(run.updatedAt).toLocaleString() : '未知时间'} · {run.tasks.length} 个任务
           </div>
           {run.tasks.map((task) => (
-            <div className="dock-rollback-item" key={task.taskId} data-action={task.status === 'done' ? 'restore' : 'skip'}>
+            <div className="dock-rollback-item dock-subagent-task" key={task.taskId} data-action={task.status === 'done' ? 'restore' : 'skip'}>
               <span className="dock-rollback-path" title={task.objective}>{task.objective || task.taskId}</span>
               <span className="dock-rollback-act">{task.role || '未知角色'} · {task.status || '未知'}</span>
+              <span className="dock-rollback-why">尝试 {task.attempt || 1}</span>
               {task.error ? <span className="dock-rollback-why" title={task.error}>未完成</span> : null}
+              {!!task.attempts?.length && <details className="dock-attempt-history"><summary>尝试记录（{task.attempts.length}）</summary>{task.attempts.map(attempt => <p key={attempt.executionId} title={attempt.executionId}>第 {attempt.attempt} 次 · {attempt.status}{attempt.compensation ? attempt.compensation.ok ? ' · 已补偿' : ' · 补偿待复核' : ''} · {(attempt.error || attempt.summary || '').slice(0, 160)}</p>)}</details>}
             </div>
           ))}
         </div>)}

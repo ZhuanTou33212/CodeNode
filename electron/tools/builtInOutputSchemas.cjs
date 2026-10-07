@@ -93,6 +93,11 @@ const taskWorktree = object({ path: nonempty, relativePath: str, branch: str, ba
   name: str, changed: strings, commits: nat,
   sourceSnapshot: object({ ok: bool, sourceHead: str, pendingDigest: str, pending: strings }, ['ok'], true) }, ['path'], true);
 const taskView = object({
+  attempt: nat, attempts: list(object({ attempt: nat, executionId: nonempty, status: taskStatus,
+    queuedAt: nullable(str), startedAt: nullable(str), finishedAt: nullable(str), executionSettled: bool, requiresReview: bool,
+    effectRoot: nullable(str), compensation: nullable(object({}, [], true)), summary: str, summaryChars: nat, summaryDroppedChars: nat, error: nullable(str), resultDigest: nullable(str),
+    review: nullable(reviewStatus), worktree: nullable(taskWorktree), usage: nullable(usage), sideEffects: nullable(object({}, [], true)) })),
+  everStarted: bool, request: nullable(object({}, [], true)), retryReason: nullable(str), effectRoot: nullable(str),
   executionId: nullable(str), taskId: nonempty, runId: str, role: nonempty, objective: str, acceptanceCriteria: strings,
   stageNodeId: str, status: taskStatus, summary: str, summaryChars: nat, summaryStorageDroppedChars: nat,
   error: nullable(str), grounding: nullable(object({ answerable: bool, valid: bool }, [], true)), usage: nullable(usage),
@@ -225,6 +230,10 @@ const schemas = {
     object({ path: nonempty, branch: str, discardedChanges: nat }),
   ),
   delegate_task: taskView,
+  retry_subagent_task: taskView,
+  inspect_subagent_retry: object({ taskId: str, executionId: nullable(str), attempt: nat, canRetry: bool, planDigest: nullable(str),
+    items: list(object({ path: str, action: str, currentSha256: nullable(str), beforeSha256: nullable(str) })),
+    attemptsUsed: nat, attemptsLimit: nat, error: nullable(str), effectRoot: str, blocked: list(object({ tool: str, phase: str })) }, ['taskId', 'executionId', 'attempt', 'canRetry', 'planDigest', 'items', 'attemptsUsed', 'attemptsLimit']),
   get_subagent_task: taskView,
   cancel_subagent_task: object({ taskId: nonempty, role: nonempty, status: { const: 'cancelling' }, executionSettled: { const: false }, worktree: nullable(taskWorktree) }),
   review_subagent_result: object({ taskId: nonempty, review: reviewStatus }),

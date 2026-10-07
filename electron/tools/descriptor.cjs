@@ -29,6 +29,7 @@ const READ_ONLY_TOOLS = new Set([
   'find_definition', 'find_references', 'get_callers', 'get_callees',
   // 语义上只读，但**故意不进缓存白名单**：画布/标量是权威读源，变更后必须立刻读到最新状态
   'get_workbench_model', 'query_scalars', 'poll_job', 'recall', 'get_subagent_task',
+  'inspect_subagent_retry',
   // 取消子任务（第 6 项）：只 abort 一个子代理，不改工作区；与 get_subagent_task 同类
   'cancel_subagent_task',
 ]);
@@ -58,6 +59,7 @@ const MUTATION_TOOLS = new Set([
   'workbench_edit', 'bulk_edit', 'write_file', 'edit_file',
   'write_analysis_md', 'save_project', 'ui_control', 'remember',
   'delegate_task', 'delegate_tasks', 'review_subagent_result',
+  'retry_subagent_task',
 ]);
 
 /**
@@ -117,6 +119,8 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   ask_user: 'ui.interact',
   delegate_task: 'subagent.delegate',
   delegate_tasks: 'subagent.delegate',
+  inspect_subagent_retry: 'subagent.inspect',
+  retry_subagent_task: 'subagent.delegate',
   review_subagent_result: 'subagent.delegate',
 });
 
@@ -126,6 +130,7 @@ const SELF_TIMED_TOOLS = Object.freeze({
   poll_job: 0,
   delegate_task: 0,
   delegate_tasks: 0,
+  retry_subagent_task: 0,
   retrieve_context: 0,
   scan_project: 0,
   analyze_project: 0,

@@ -39,6 +39,7 @@ const { atomicWriteFile } = require('./atomicFile.cjs');
 const { SubagentScheduler, transitionTask } = require('./subagentScheduler.cjs');
 const schedulingSettings = require('./schedulingSettings.cjs');
 const schedulingUi = require('../config/ui.scheduling.json');
+const attemptsLib = require('./subagentAttempts.cjs');
 
 /**
  * 子代理任务视图的**持久化**（§4.2 的第一件事）。
@@ -75,6 +76,7 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
   /** @type {any[]} */
   let list = [];
   let startedTaskCount = 0;
+  let startedAttemptCount = 0;
   try {
     if (fs.existsSync(file)) {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -82,6 +84,8 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
       if (parsed.startedTaskCount != null && (!Number.isInteger(parsed.startedTaskCount) || parsed.startedTaskCount < 0)) throw new Error('任务配额格式无效');
       list = parsed.tasks;
       startedTaskCount = Math.max(Number(parsed.startedTaskCount) || 0, list.filter(item => item?.startedAt).length);
+      if (parsed.startedAttemptCount != null && (!Number.isInteger(parsed.startedAttemptCount) || parsed.startedAttemptCount < 0)) throw new Error('任务尝试配额格式无效');
+      startedAttemptCount = Math.max(Number(parsed.startedAttemptCount) || 0, list.reduce((count, item) => count + (Array.isArray(item.attempts) ? item.attempts.filter(attempt => attempt.startedAt).length : item.startedAt ? 1 : 0), 0));
     }
   } catch (error) {
     throw new Error('任务视图不可读，拒绝覆盖：' + String(error.message || error));
@@ -89,6 +93,12 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
   const record = {
     lifecycleVersion: 2,
     executionId: view.executionId || null,
+    attempt: view.attempt || 1,
+    attempts: Array.isArray(view.attempts) ? view.attempts : [],
+    everStarted: view.everStarted === true || !!view.startedAt || (view.attempts || []).some(attempt => attempt.startedAt),
+    request: view.request || null,
+    retryReason: view.retryReason || null,
+    effectRoot: view.effectRoot || null,
     taskId: view.taskId,
     runId: view.runId || runId || null,
     role: view.role || null,
@@ -122,17 +132,18 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
   };
   const index = list.findIndex((item) => item && item.taskId === record.taskId);
   // Count before retention, independently of the number of task views kept.
-  if (record.startedAt && (index < 0 || !list[index].startedAt)) startedTaskCount++;
+  if (record.everStarted && (index < 0 || !(list[index].everStarted || list[index].startedAt || list[index].attempts?.some(attempt => attempt.startedAt)))) startedTaskCount++;
+  if (record.startedAt && (index < 0 || !list[index].startedAt || list[index].executionId !== record.executionId)) startedAttemptCount++;
   if (index >= 0) list[index] = { ...list[index], ...record };
   else list.push(record);
   const requestedLimit = Number(options.maxTasks);
   const retentionLimit = Number.isInteger(requestedLimit) && requestedLimit > 0
     ? Math.min(100, requestedLimit) : MAX_PERSISTED_TASKS;
-  const protectedItems = list.filter((item) => ['queued', 'running', 'cancelling'].includes(item.status) || item.requiresReview);
+  const protectedItems = list.filter((item) => ['queued', 'running', 'cancelling'].includes(item.status) || item.requiresReview || item.request && item.effectRoot);
   const settled = list.filter((item) => !protectedItems.includes(item));
   const settledSlots = Math.max(0, retentionLimit - protectedItems.length);
   list = [...protectedItems, ...(settledSlots ? settled.slice(-settledSlots) : [])];
-  atomicWriteFile(file, JSON.stringify({ runId: String(runId || ''), updatedAt: new Date().toISOString(), startedTaskCount, tasks: list }, null, 2));
+  atomicWriteFile(file, JSON.stringify({ runId: String(runId || ''), updatedAt: new Date().toISOString(), startedTaskCount, startedAttemptCount, tasks: list }, null, 2));
   return record;
 }
 
@@ -143,12 +154,15 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
 function readTaskViews(projectRoot, runId) {
   const file = subagentViewFile(projectRoot, runId);
   try {
-    if (!fs.existsSync(file)) return { ok: true, runId: String(runId || ''), updatedAt: null, startedTaskCount: 0, tasks: [] };
+    if (!fs.existsSync(file)) return { ok: true, runId: String(runId || ''), updatedAt: null, startedTaskCount: 0, startedAttemptCount: 0, tasks: [] };
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!Array.isArray(parsed.tasks) || parsed.tasks.some((item) => !item || !item.taskId || !['queued', 'running', 'cancelling', 'done', 'failed', 'blocked', 'cancelled'].includes(item.status))) throw new Error('任务视图格式无效');
     if (parsed.startedTaskCount != null && (!Number.isInteger(parsed.startedTaskCount) || parsed.startedTaskCount < 0)) throw new Error('任务配额格式无效');
+    if (parsed.startedAttemptCount != null && (!Number.isInteger(parsed.startedAttemptCount) || parsed.startedAttemptCount < 0)) throw new Error('任务尝试配额格式无效');
+    if (parsed.tasks.some(task => task.attempts != null && (!Array.isArray(task.attempts) || task.attempts.length > 10 || task.attempts.some(attempt => !attempt.executionId || !Number.isInteger(attempt.attempt) || attempt.attempt < 1)))) throw new Error('任务尝试记录格式无效');
     return { ok: true, runId: String(runId || ''), updatedAt: parsed.updatedAt || null,
-      startedTaskCount: Math.max(Number(parsed.startedTaskCount) || 0, parsed.tasks.filter(item => item?.startedAt).length), tasks: parsed.tasks };
+      startedTaskCount: Math.max(Number(parsed.startedTaskCount) || 0, parsed.tasks.filter(item => item?.everStarted || item?.startedAt || item?.attempts?.some(attempt => attempt.startedAt)).length),
+      startedAttemptCount: Math.max(Number(parsed.startedAttemptCount) || 0, parsed.tasks.reduce((count, item) => count + (Array.isArray(item.attempts) && item.attempts.length ? item.attempts.filter(attempt => attempt.startedAt).length : item.startedAt ? 1 : 0), 0)), tasks: parsed.tasks };
   } catch (error) {
     return { ok: false, runId: String(runId || ''), updatedAt: null, tasks: [], error: '任务视图损坏：' + String((error && error.message) || error) };
   }
@@ -220,13 +234,15 @@ const ROLE_PROMPTS = Object.freeze(
  * `true`、`leaseTtlMs` 收窄成 `120000`，随后 `this.subCfg.leases !== false` 会被 tsc 判成
  * 「number 与 boolean 不可能重叠」（checkJs 实测）。
  * @type {{maxTasksPerRun: number, maxBatchTasks: number, maxConcurrentTasks: number, totalTimeoutSeconds: number,
- *         resultMaxChars: number, leases: boolean, leaseTtlMs: number, warningPercent: number}}
+ *         resultMaxChars: number, leases: boolean, leaseTtlMs: number, warningPercent: number, maxAttemptsPerTask: number, maxAttemptsPerRun: number}}
  */
 const DEFAULTS = Object.freeze({
   maxTasksPerRun: schedulingUi.defaults.maxTasksPerRun,
   maxBatchTasks: schedulingUi.defaults.maxBatchTasks,
   maxConcurrentTasks: schedulingUi.defaults.concurrency,
   warningPercent: schedulingUi.defaults.warningPercent,
+  maxAttemptsPerTask: schedulingUi.defaults.maxAttemptsPerTask,
+  maxAttemptsPerRun: schedulingUi.defaults.maxAttemptsPerRun,
   totalTimeoutSeconds: 600,
   resultMaxChars: 8000,
   /** 跨 Agent 资源租约（P3）：默认开 */
@@ -330,6 +346,12 @@ function renderWorktreeSummary(info) {
 function taskView(task) {
   return {
     executionId: task.executionId || null,
+    attempt: task.attempt || 1,
+    attempts: attemptsLib.attemptHistory(task),
+    everStarted: task.everStarted === true || !!task.startedAt,
+    request: task.request || null,
+    retryReason: task.retryReason || null,
+    effectRoot: task.effectRoot || null,
     taskId: task.taskId,
     runId: task.runId,
     role: task.role,
@@ -382,6 +404,9 @@ function renderTaskModelCard(view, options = {}) {
   const files = Array.isArray(evidence.files) ? evidence.files : [];
   const card = {
     taskId: task.taskId || null,
+    executionId: task.executionId || null,
+    attempt: task.attempt || 1,
+    attemptCount: Array.isArray(task.attempts) ? task.attempts.length : 1,
     role: task.role || null,
     status: task.status || null,
     verifiesTaskId: task.verifiesTaskId || null,
@@ -564,6 +589,8 @@ class SubagentManager {
      * @type {number}
      */
     this.startedTaskCount = 0;
+    this.startedAttemptCount = 0;
+    this.retrying = new Set();
     /** @type {Record<string, number>} 子代理配置（agent.subagent.*），缺项用默认值 */
     this.subCfg = Object.assign({}, DEFAULTS, (o.cfg && o.cfg.subagent) || {});
     this.scheduler = new SubagentScheduler(this.subCfg.maxConcurrentTasks);
@@ -574,7 +601,7 @@ class SubagentManager {
         const hydrated = this.hydrateTasks(context);
         if (!hydrated.ok) throw new Error(hydrated.error || '子任务配额无法恢复');
       }
-      return schedulingSettings.budgetState(this.startedTaskCount, this.subCfg.maxTasksPerRun, this.subCfg.warningPercent);
+      return schedulingSettings.budgetState(this.startedTaskCount, this.subCfg.maxTasksPerRun, this.subCfg.warningPercent, this.startedAttemptCount, this.subCfg.maxAttemptsPerRun);
     };
     this.reservations = new Map();
     /**
@@ -610,6 +637,8 @@ class SubagentManager {
       const envelope = record.envelope || null;
       this.tasks.set(String(record.taskId), {
         ...record,
+        sideEffects: record.attempts?.find(attempt => attempt.executionId === record.executionId)?.sideEffects || null,
+        compensation: record.attempts?.find(attempt => attempt.executionId === record.executionId)?.compensation || null,
         taskId: String(record.taskId),
         runId: record.runId || this.runId,
         summary: String(record.summary || (envelope && envelope.payload && envelope.payload.summary) || ''),
@@ -626,6 +655,7 @@ class SubagentManager {
     this.startedTaskCount = Math.max(this.startedTaskCount,
       Number(stored.startedTaskCount) || 0,
       stored.tasks.filter((record) => record && record.startedAt).length);
+    this.startedAttemptCount = Math.max(this.startedAttemptCount, Number(stored.startedAttemptCount) || 0);
     // 兜底重放撤回/过期状态的依赖失效传播，防止上次落盘在传播中途退出。
     for (const task of this.tasks.values()) {
       const state = task.review && task.review.status;
@@ -1001,6 +1031,12 @@ class SubagentManager {
       },
       (context, args) => this.delegate(context, args)
     );
+    registry.register('inspect_subagent_retry', '只读核对上次 Attempt 的文件、副作用和尝试额度，返回可重做性、执行 ID 与补偿计划指纹。未知副作用或后续修改会阻止重做。',
+      { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] },
+      async (context, args) => { const plan = this.inspectRetry(context, args); return AgentToolResult.ok(JSON.stringify(plan), plan); });
+    registry.register('retry_subagent_task', '显式重做整个子任务：保留 taskId，创建新的 Attempt 与 executionId。先 inspect_subagent_retry，绑定旧执行 ID 和计划指纹；文件补偿需批准。失败、取消及未知副作用不会自动重做。',
+      { type: 'object', properties: { taskId: { type: 'string' }, expectedExecutionId: { type: 'string' }, planDigest: { type: 'string' }, reason: { type: 'string', minLength: 1, maxLength: 2000 } }, required: ['taskId', 'expectedExecutionId', 'planDigest', 'reason'] },
+      (context, args) => this.retry(context, args));
     registry.register(
       'get_subagent_task',
       '读取已创建的子代理任务。默认返回短摘要与核验元数据；需要核对正文时传 detail="full"，使用 summaryOffset/summaryChars 分页展开。',
@@ -1508,28 +1544,111 @@ class SubagentManager {
         }, { modelContent });
       }
     );
-    require('./tools/builtInOutputSchemas.cjs').declareOutputContracts(registry, ['delegate_task', 'get_subagent_task', 'review_subagent_result', 'cancel_subagent_task', 'delegate_tasks', 'merge_subagent_results']);
+    require('./tools/builtInOutputSchemas.cjs').declareOutputContracts(registry, ['delegate_task', 'get_subagent_task', 'review_subagent_result', 'cancel_subagent_task', 'delegate_tasks', 'merge_subagent_results', 'inspect_subagent_retry', 'retry_subagent_task']);
   }
 
-  async delegate(context, args) {
+  /** @returns {any} */
+  inspectRetry(context, args) {
+    const hydrated = this.hydrateTasks(context);
+    const task = this.tasks.get(String(args.taskId || ''));
+    const base = { taskId: String(args.taskId || ''), executionId: task?.executionId || null,
+      attempt: task?.attempt || 1, canRetry: false, planDigest: null, items: [],
+      attemptsUsed: this.startedAttemptCount, attemptsLimit: this.subCfg.maxAttemptsPerRun };
+    const blocked = error => ({ ...base, error });
+    if (!hydrated.ok) return blocked(hydrated.error);
+    if (!task) return blocked('子任务不存在');
+    if (!task.executionSettled || !['done', 'failed', 'blocked', 'cancelled'].includes(task.status) || this.reservations.has(task.taskId) || this.retrying.has(task.taskId)) return blocked('上次执行尚未真正退出，或已有重做请求');
+    if (!task.request || !task.effectRoot) return blocked('旧任务缺少 Attempt 请求或副作用记录，不能证明可安全重做');
+    if (task.review?.integration) return blocked('该尝试已合入主工作树，不能自动撤销已集成的代码；请另建修复任务');
+    if ((task.attempt || 1) >= this.subCfg.maxAttemptsPerTask || this.startedAttemptCount >= this.subCfg.maxAttemptsPerRun) return blocked('已达到单任务或全局整任务尝试上限');
+    const dependencies = this.confirmedSources(context, task.dependsOnTaskIds);
+    if (!dependencies.ok) return blocked('重做的上游依赖未有效确认：' + dependencies.error);
+    try { if (typeof this.cfg.resolveRoleModel === 'function') this.cfg.resolveRoleModel(task.role, this.cfg); }
+    catch (error) { return blocked('重做的角色模型不可用：' + String(error.message || error)); }
+    const visited = new Set([task.taskId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const candidate of this.tasks.values()) {
+        if (!visited.has(candidate.taskId) && (candidate.dependsOnTaskIds || []).some(id => visited.has(id))) {
+          visited.add(candidate.taskId); changed = true;
+          if (['queued', 'running', 'cancelling'].includes(candidate.status) && !candidate.executionSettled) return blocked('下游任务仍在执行，暂不能重做上游：' + candidate.taskId);
+        }
+      }
+    }
+    try {
+      const project = path.resolve(context.projectRoot());
+      const root = path.resolve(task.effectRoot);
+      const managed = path.join(project, '.codenode', 'worktrees');
+      if (root !== project && (!root.startsWith(managed + path.sep) || !fs.realpathSync(root).startsWith(fs.realpathSync(project) + path.sep))) return blocked('Attempt 副作用根目录不属于本项目或受管工作树');
+      const plan = attemptsLib.planCompensation(root, task.executionId);
+      return { ...base, canRetry: plan.ok, planDigest: plan.digest || null, items: plan.items,
+        error: plan.error || null, blocked: plan.blocked || [], effectRoot: root };
+    } catch (error) { return blocked(String(error.message || error)); }
+  }
+
+  async retry(context, args) {
+    if (typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) return AgentToolResult.error('重做需要提供最多 2000 字的明确原因');
+    if (typeof context.role === 'function' && context.role() !== 'supervisor' || context.readOnly()) return AgentToolResult.error('只有主 Agent 的可写上下文可以重做子任务');
+    const plan = this.inspectRetry(context, args);
+    if (!plan.canRetry || plan.executionId !== args.expectedExecutionId || plan.planDigest !== args.planDigest) return AgentToolResult.error(plan.error || '上次执行或补偿计划已变化，请先重新 inspect_subagent_retry', plan);
+    const task = this.tasks.get(plan.taskId);
+    this.retrying.add(task.taskId);
+    let release = null;
+    const keys = plan.items.map(item => 'file:' + path.resolve(plan.effectRoot, item.path).split(path.sep).join('/'));
+    try {
+      release = await this.scheduler.acquire(false, context.signal() || new AbortController().signal);
+      if (context.cancelled()) return AgentToolResult.error('重做请求已取消，未补偿或启动新尝试');
+      if (this.startedAttemptCount >= this.subCfg.maxAttemptsPerRun) return AgentToolResult.error('全局整任务尝试额度已用尽');
+      if (plan.items.some(item => item.action !== 'skip') || task.status === 'cancelled') {
+        const approved = await context.confirm(ConfirmationLevel.HIGH, '重做子任务前补偿文件',
+          '任务 ' + task.taskId + '：Attempt ' + task.attempt + ' → ' + (task.attempt + 1) + '\n原因：' + args.reason + '\n' + plan.items.map(item => item.action + ' ' + item.path).join('\n'),
+          { tool: 'retry_subagent_task', args, capability: 'subagent-retry-compensation', scopePaths: plan.items.map(item => path.resolve(plan.effectRoot, item.path)), scopeRoot: plan.effectRoot });
+        if (!approved || context.cancelled()) return AgentToolResult.error('补偿未获批准或已取消，上次结果保持原样');
+      }
+      const leased = this.leases.acquire(keys, task.taskId, { role: 'supervisor' });
+      if (!leased.ok) return AgentToolResult.error('补偿文件正被其他任务持有，请等待后重新核对');
+      const recheck = attemptsLib.planCompensation(plan.effectRoot, task.executionId);
+      if (!recheck.ok || recheck.digest !== plan.planDigest) return AgentToolResult.error(recheck.error || '审批期间文件或补偿计划发生变化，未执行补偿');
+      this.invalidateDependentTasks(context, task.taskId, '上游任务开始新的 Attempt，旧结果需重新核验');
+      task.review = { status: 'retracted', note: String(args.reason), retractedAt: new Date().toISOString(),
+        retractedBy: typeof context.taskId === 'function' && context.taskId() || 'supervisor',
+        source: { runId: task.runId || this.runId, taskId: task.taskId, msgId: task.envelope?.msgId || null,
+          snapshotHash: task.envelope?.snapshot?.hash || null, snapshotRevision: task.envelope?.snapshot?.revision ?? null } };
+      this.persistTask(context, task);
+      const compensation = attemptsLib.compensate(plan.effectRoot, task.executionId, plan.planDigest);
+      task.compensation = compensation;
+      this.persistTask(context, task);
+      if (!compensation.ok) return AgentToolResult.error('补偿未全部完成，未启动新 Attempt：' + compensation.error, compensation);
+      const pending = this.delegate(context, { ...task.request, taskId: task.taskId, retryReason: String(args.reason) }, task);
+      release(); release = null;
+      return await pending;
+    } catch (error) { return AgentToolResult.error(String(error.message || error)); }
+    finally { if (release) release(); this.leases.release(keys, task.taskId); this.retrying.delete(task.taskId); }
+  }
+
+  /** @param {any} context @param {any} args @param {any} [previous] */
+  async delegate(context, args, previous = null) {
     if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
     const decision = require('./costSettings.cjs').delegationDecision(args,
       this.cfg.costSettings || require('./costSettings.cjs').parseSettings());
-    if (!decision.delegate) {
+    if (!decision.delegate && !previous) {
       return AgentToolResult.error('该任务是单步操作，请由主 Agent 直接调用工具完成；未启动子 Agent。不要原样重复委派。',
         { code: 'DELEGATION_NOT_NEEDED', status: 'not_started', reason: decision.reason, nextAction: 'execute_in_main' });
     }
     this.hydrateTasks(context);
     const taskId = String(args.taskId || '').trim() || makeTaskId();
-    if (this.tasks.has(taskId) || this.reservations.has(taskId)) return AgentToolResult.error('taskId 已被占用：' + taskId);
+    if (this.reservations.has(taskId) || this.tasks.has(taskId) && (!previous || this.tasks.get(taskId).executionId !== previous.executionId)) return AgentToolResult.error('taskId 已被占用：' + taskId);
     if (!roles.roleDefinition(args.role) || !String(args.objective || '').trim()) return AgentToolResult.error('无效的 role 或 objective');
     const parent = typeof context.signal === 'function' ? context.signal() : null;
     const controller = new AbortController();
     const totalMs = clampTotalTimeout(args.timeoutSeconds, this.subCfg.totalTimeoutSeconds);
     const queuedAt = new Date().toISOString();
     const lifecycle = {
-      controller, timedOut: false,
+      controller, timedOut: false, previous,
       task: { taskId, executionId: randomUUID(), runId: this.runId, role: args.role, objective: args.objective, status: 'queued', queuedAt,
+        attempt: previous ? (previous.attempt || 1) + 1 : 1, attempts: previous ? attemptsLib.attemptHistory(previous) : [],
+        everStarted: !!previous, request: { ...args }, retryReason: args.retryReason || null, version: previous ? (Number(previous.version) || 0) + 1 : 0,
         deadline: new Date(Date.now() + totalMs).toISOString(), executionSettled: false },
     };
     const traceRoot = typeof context.projectRoot === 'function' ? context.projectRoot() : null;
@@ -1548,6 +1667,7 @@ class SubagentManager {
     const onParentAbort = () => controller.abort();
     if (parent) parent.addEventListener('abort', onParentAbort, { once: true });
     this.reservations.set(taskId, lifecycle);
+    this.tasks.set(taskId, lifecycle.task);
     let release = null;
     let result;
     const timer = setTimeout(() => { lifecycle.timedOut = true; controller.abort(); }, totalMs);
@@ -1588,6 +1708,10 @@ class SubagentManager {
       task.deadline = lifecycle.task.deadline;
       task.executionSettled = true; // 只确认本地执行 Promise 退出，不宣称外部副作用已撤销。
       task.finishedAt = new Date().toISOString();
+      if (task.effectRoot) {
+        try { task.sideEffects = attemptsLib.effectSummary(task.effectRoot, task.executionId); }
+        catch (error) { task.requiresReview = true; task.error = task.error || 'Attempt 副作用记录不可核对：' + String(error.message || error); }
+      }
       this.tasks.set(taskId, task);
       try {
         if (this.leases) {
@@ -1626,12 +1750,13 @@ class SubagentManager {
   async executeTask(context, args, lifecycle) {
     if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
     // #18：配额按「曾进入 running」计数，不按 tasks.size（模型复用同一 taskId 会让后者恒为 1）
-    if (this.startedTaskCount >= this.subCfg.maxTasksPerRun) {
+    if (!lifecycle.previous && this.startedTaskCount >= this.subCfg.maxTasksPerRun) {
       return AgentToolResult.error(
         '本轮最多执行 ' + this.subCfg.maxTasksPerRun + ' 个子代理任务（已启动 ' + this.startedTaskCount + ' 个）'
       );
     }
     const role = String(args.role || '').trim();
+    if (this.startedAttemptCount >= this.subCfg.maxAttemptsPerRun || lifecycle.task.attempt > this.subCfg.maxAttemptsPerTask) return AgentToolResult.error('已达到整任务尝试上限，未启动子代理');
     const objective = String(args.objective || '').trim();
     if (!roles.roleDefinition(role)) {
       return AgentToolResult.error('不支持的子代理角色：' + role + '（可选：' + roles.ROLE_NAMES.join('/') + '）');
@@ -1654,7 +1779,7 @@ class SubagentManager {
      * 旧任务结束时回写又把新任务的视图盖回去。冲突一律显式拒绝，让模型换个 id 或省略由系统生成。
      */
     const requestedTaskId = String(args.taskId || '').trim();
-    if (requestedTaskId && this.tasks.has(requestedTaskId)) {
+    if (requestedTaskId && this.tasks.has(requestedTaskId) && this.tasks.get(requestedTaskId).executionId !== lifecycle.task.executionId) {
       return AgentToolResult.error(
         'taskId 已被占用：' +
           requestedTaskId +
@@ -1668,6 +1793,8 @@ class SubagentManager {
       this.cfg.costSettings || require('./costSettings.cjs').parseSettings());
     const task = {
       taskId: requestedTaskId || makeTaskId(),
+      attempt: lifecycle.task.attempt, attempts: lifecycle.task.attempts,
+      everStarted: true, request: lifecycle.task.request, retryReason: lifecycle.task.retryReason,
       executionId: lifecycle.task.executionId,
       queuedAt: lifecycle.task.queuedAt,
       deadline: lifecycle.task.deadline,
@@ -1700,7 +1827,8 @@ class SubagentManager {
       return AgentToolResult.error('子代理任务登记失败，未开始执行：' + String((error && error.message) || error).slice(0, 200));
     }
     // 计数与登记都在首个 await 前完成，并发批量不能绕过总配额。
-    this.startedTaskCount += 1;
+    if (!lifecycle.previous) this.startedTaskCount += 1;
+    this.startedAttemptCount += 1;
     this.tasks.set(task.taskId, task);
     context.audit(JSON.stringify({ kind: 'subagent_start', runId: this.runId, taskId: task.taskId, role, totalTimeoutMs: totalMs }));
     /**
@@ -1712,6 +1840,10 @@ class SubagentManager {
     /** @type {any} */
     let worktreeInfo = null;
     if (String(args.isolation || 'none').trim() === 'worktree') {
+      if (lifecycle.previous?.worktree) {
+        worktreeInfo = { ...lifecycle.previous.worktree };
+        task.worktree = worktreeInfo;
+      } else {
       const created = await worktreeLib.createWorktree(
         context.projectRoot(),
         { name: task.taskId },
@@ -1731,6 +1863,7 @@ class SubagentManager {
       worktreeInfo = { path: created.path, relativePath: created.relativePath, branch: created.branch, base: created.base };
       task.worktree = worktreeInfo;
       context.audit(JSON.stringify({ kind: 'subagent_worktree', taskId: task.taskId, path: created.relativePath, branch: created.branch, base: created.base }));
+      }
     }
     // 产物哈希必须按实际执行目录计算；隔离工作树里的改动不能拿主工作树的同名旧文件冒充。
     task.artifactRoot = task.verificationRoot || (worktreeInfo ? worktreeInfo.path : context.projectRoot());
@@ -1765,6 +1898,14 @@ class SubagentManager {
         // 隔离：子代理的工具全部以工作树为 projectRoot（读写都落在独立检出里）
         projectRoot: worktreeInfo ? worktreeInfo.path : task.verificationRoot || undefined,
       });
+      task.effectRoot = childContext.projectRoot();
+      const journal = new attemptsLib.AttemptJournal(task.effectRoot, task.taskId, task.executionId);
+      // Isolated files need their own rooted idempotency ledger; shared files
+      // retain the Run ledger used by the supervisor and other children.
+      const parentGuard = task.effectRoot === context.projectRoot() ? childContext.sideEffectGuardValue
+        : require('./sideEffects.cjs').createGuard(new (require('./sideEffects.cjs').SideEffectLedger)({ projectRoot: task.effectRoot, scopeRunId: task.executionId }));
+      childContext.sideEffectGuardValue = journal.wrap(parentGuard);
+      this.persistTask(context, task);
       // 独立配额（父子链）：0 = 不设独立配额，直接共享父预算（旧行为）
       const childBudget = createSubagentBudget(this.cfg.requestBudget, task.tokenBudget);
       /**
@@ -1805,7 +1946,7 @@ class SubagentManager {
         cfg: childCfg,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: objective },
+          { role: 'user', content: objective + (task.attempt > 1 ? '\n【本次重做】Attempt ' + task.attempt + '，上次文件补偿已完成；原因：' + task.retryReason + '。从目标重新执行并核验，不沿用上次成功结论。' : '') },
         ],
         tools: { registry: childRegistry, context: childContext },
         signal: controller.signal,
@@ -1816,6 +1957,8 @@ class SubagentManager {
       task.grounding = result.grounding || null;
       task.usage = result.usage || null;
       task.summary = String(result.content || '');
+      task.sideEffects = { files: journal.data.files.map(file => ({ path: file.path, beforeSha256: file.before.sha256, afterSha256: file.postSha256 })),
+        operations: journal.data.operations.map(operation => ({ tool: operation.tool, phase: operation.phase })) };
       // #5：把主循环的收尾原因如实带出来 —— 信封据此判定「这是不是完整结论」
       task.stopReason = result.stopReason || null;
       task.finishReason = result.finishReason || null;

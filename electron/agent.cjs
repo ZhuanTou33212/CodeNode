@@ -183,7 +183,8 @@ function loadConfig(projectRoot) {
     scheduling,
     subagent: { ...parseSubagentConfig(cfg), maxConcurrentTasks: scheduling.concurrency,
       maxTasksPerRun: scheduling.maxTasksPerRun, maxBatchTasks: scheduling.maxBatchTasks,
-      warningPercent: scheduling.warningPercent },
+      warningPercent: scheduling.warningPercent, maxAttemptsPerTask: scheduling.maxAttemptsPerTask,
+      maxAttemptsPerRun: scheduling.maxAttemptsPerRun },
     costSettings: require('./costSettings.cjs').parseSettings(cfg),
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
@@ -434,6 +435,8 @@ function parseSubagentConfig(cfg) {
     maxBatchTasks: scheduling.maxBatchTasks,
     maxConcurrentTasks: scheduling.concurrency,
     warningPercent: scheduling.warningPercent,
+    maxAttemptsPerTask: scheduling.maxAttemptsPerTask,
+    maxAttemptsPerRun: scheduling.maxAttemptsPerRun,
     // 跨 Agent 资源租约（多 Agent 信息完整性 P3）：同一资源同一时刻只允许一个写者
     leases: cfg['agent.subagent.leases'] == null ? true : String(cfg['agent.subagent.leases']).toLowerCase() !== 'false',
     leaseTtlMs: configInteger(cfg, 'agent.subagent.lease_ttl_ms', 120000, 5000, 3600000),

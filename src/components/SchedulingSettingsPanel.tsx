@@ -9,6 +9,8 @@ const fields: { key: keyof SchedulingSettings; label: string }[] = [
   { key: 'maxTasksPerRun', label: '每次运行子任务上限' },
   { key: 'maxBatchTasks', label: '单批子任务上限' },
   { key: 'warningPercent', label: '子任务配额预警百分比' },
+  { key: 'maxAttemptsPerTask', label: '单任务尝试上限（含首次）' },
+  { key: 'maxAttemptsPerRun', label: '每次运行尝试上限（含首次）' },
 ];
 
 export default function SchedulingSettingsPanel() {
@@ -41,6 +43,7 @@ export default function SchedulingSettingsPanel() {
     {fields.map(({ key, label }) => <label className="settings-row" key={key}><span>{label}</span><input aria-label={label} type="number" min={schedulingUi.limits[key].min} max={schedulingUi.limits[key].max} step="1" value={Number.isFinite(settings[key]) ? settings[key] : ''} disabled={busy || streaming} onChange={event => setSettings(previous => ({ ...previous, [key]: event.target.value === '' ? NaN : Number(event.target.value) }))} /></label>)}
     <p className="settings-scope">应用于所有项目，昼夜共用。并发值同时限制子任务和模型请求；共享工作区写任务仍独占执行。</p>
     <p className="settings-scope">已启动 {Math.ceil(settings.maxTasksPerRun * settings.warningPercent / 100) || 0}/{settings.maxTasksPerRun || 0} 个子任务时，提醒主 Agent 收敛计划、优先验证并汇总结果。失败或启动后取消仍计入额度。</p>
+    <p className="settings-scope">同一任务重做保留任务 ID，每次启动计入尝试额度；重做前核对并补偿上一尝试的文件改动，后续修改或未知副作用会阻止重做。</p>
     <button disabled={busy || streaming} onClick={() => void save()}>保存调度设置</button>
     {message && <p className="settings-scope" role="status">{message}</p>}
   </div>;

@@ -24,7 +24,7 @@ async function main() {
   manager.register(registry);
   const actual = registry.listDescriptors();
   assert.deepEqual(actual.map((d) => d.name).sort(), Object.keys(schemas).sort());
-  assert.equal(actual.length, 41, 'New built-ins require a named executable output contract');
+  assert.equal(actual.length, 43, 'New built-ins require a named executable output contract');
   for (const descriptor of actual) {
     assert.notEqual(descriptor.outputSchema, null, descriptor.name);
     assert.notEqual(validateOutput([], descriptor.outputSchema), null, descriptor.name + ' must not accept arbitrary data');
@@ -41,7 +41,7 @@ async function main() {
     module.register(direct);
     for (const descriptor of direct.listDescriptors()) assert.notEqual(descriptor.outputSchema, null, descriptor.name);
   }
-  console.log('PASS 41 built-in output contracts are registered, executable, and reject missing/wrong payloads');
+  console.log('PASS 43 built-in output contracts are registered, executable, and reject missing/wrong payloads');
 
   const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: root });
   sandbox.setDefaultPolicy(policy);

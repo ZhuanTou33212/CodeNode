@@ -330,6 +330,8 @@ interface CodenodeApi {
       error: string | null;
       tasks: {
         taskId: string;
+        attempt?: number;
+        attempts?: { attempt: number; executionId: string; status: string; startedAt: string | null; finishedAt: string | null; summary: string; error: string | null; compensation?: { ok: boolean; applied?: string[]; error?: string } | null }[];
         role: string | null;
         objective: string;
         status: string | null;
