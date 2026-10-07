@@ -19,7 +19,8 @@ let server;
   const defaults = settings.parseSettings();
   fs.mkdirSync(path.join(root, '.codenode'));
   fs.writeFileSync(path.join(root, '.codenode/agent.properties'), 'tools.confirm_writes=false\ncustom.retained=yes\n');
-  const saved = settings.writeSettings(root, { ...defaults, roleModels: { ...defaults.roleModels, explorer: 'cheap-connected' } }, id => ({ id, enabled: true }));
+  const saved = settings.writeSettings(root, { ...defaults, roleModels: { ...defaults.roleModels, explorer: 'cheap-connected' },
+    roleBudgets: { ...defaults.roleBudgets, explorer: { maxTurns: 3, tokenBudget: 30000, maxOutputTokens: 1024 } } }, id => ({ id, enabled: true }));
   const cfg = agent.loadConfig(root);
   assert.deepEqual(cfg.costSettings, saved);
   const before = fs.readFileSync(path.join(root, '.codenode/agent.properties'), 'utf8');
@@ -27,6 +28,12 @@ let server;
   assert.throws(() => settings.writeSettings(root, saved, () => null), /不可用/);
   assert.equal(fs.readFileSync(path.join(root, '.codenode/agent.properties'), 'utf8'), before);
   assert.throws(() => settings.writeSettings(root, { ...saved, roleModels: { ...saved.roleModels, explorer: 'x\napi_key=secret' } }, () => ({})), /ID 无效/);
+  assert.throws(() => settings.writeSettings(root, { ...saved, roleBudgets: { ...saved.roleBudgets, explorer: { maxTurns: -1, tokenBudget: 0, maxOutputTokens: 0 } } }, () => ({})), /非负整数/);
+  assert.equal(fs.readFileSync(path.join(root, '.codenode/agent.properties'), 'utf8'), before, 'Invalid budgets do not overwrite settings');
+  assert.deepEqual(settings.taskBudget({ limits: { maxToolIterations: 2 } }, { maxTotalTokens: 10000 }, 'explorer', { maxTurns: 20, tokenBudget: 100000 }, saved),
+    { maxTurns: 2, tokenBudget: 10000, maxOutputTokens: 1024 });
+  assert.deepEqual(settings.taskBudget({ limits: { maxToolIterations: 12 } }, { maxTotalTokens: 120000 }, 'explorer', { maxTurns: 1, tokenBudget: 5000 }, saved),
+    { maxTurns: 1, tokenBudget: 5000, maxOutputTokens: 1024 });
 
   for (const objective of ['read src/app.ts', '读取 src/app.ts', '请 阅读 `src/app.ts`']) assert.equal(settings.delegationDecision({ role: 'explorer', objective }, defaults).delegate, false);
   for (const args of [
@@ -79,6 +86,9 @@ let server;
   const result = await manager.delegate(context, { role: 'explorer', objective: 'Locate the implementation and compare its callers', taskSize: 'multi_step' });
   assert.equal(result.ok, true, result.text);
   assert.equal(requests.length, 1); assert.equal(requests[0].body.model, 'cheap');
+  assert.equal(requests[0].body.max_tokens, 1024);
+  assert.equal(manager.tasks.get(result.data.taskId).maxTurns, 3);
+  assert.equal(manager.tasks.get(result.data.taskId).tokenBudget, 30000);
   assert.equal(requests[0].authorization, 'Bearer synthetic-child-key'); assert.match(requests[0].path, /^\/child\//);
   assert.equal(ledger.entries.length, 1, 'No duplicate child charge');
   assert.equal(ledger.entries[0].role, 'explorer'); assert.equal(ledger.entries[0].taskId, result.data.taskId);
@@ -89,6 +99,9 @@ let server;
   // A reviewer without a role selection inherits the main connection.
   const inherited = settings.childConfig(cfg, 'reviewer', saved, () => null);
   assert.equal(inherited.model, 'expensive'); assert.equal(inherited.apiKey, cfg.apiKey);
+  const capped = settings.applyOutputBudget({ ...cfg, maxTokens: 32000 }, 1024);
+  const helper = await routing.run({ ...capped, maxTokens: 8192, modelTaskType: 'compression' }, {}, null, { count: 0, maxAttempts: 1 }, async actual => ({ max: actual.maxTokens }));
+  assert.equal(helper.max, 1024, 'Compression/fallback path cannot expand the role output cap');
 
   ledger.record({ runId: 'failed-run', kind: 'failed-attempt', model: 'expensive', usage: { prompt_tokens: 100, completion_tokens: 0 }, ok: false });
   ledger.recordOutcome({ runId: 'failed-run', status: 'failed' });

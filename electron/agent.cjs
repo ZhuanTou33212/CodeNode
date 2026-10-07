@@ -3323,6 +3323,7 @@ async function runAgentChatInternal({ cfg, messages, onDelta, tools, signal, tim
        * 「OpenAI 形状的工具面」供 token 估算与 run 事件留痕，别拿它当实际发出的报文。
        */
       const payload = { tools: tools && tools.registry ? tools.registry.toOpenAiTools() : null };
+      require('./toolResultReferences.cjs').repair(messages);
       const turnStartedAt = Date.now();
       const onEvent = (ev) => {
         if (ev.kind === 'model_route' || ev.kind === 'model_fallback' || ev.kind === 'model_retry') {
@@ -3371,7 +3372,10 @@ async function runAgentChatInternal({ cfg, messages, onDelta, tools, signal, tim
        *   ③ 强制一次语义压缩（越过阈值判定），然后用压缩后的历史重发。
        * 只救一次：压完还超说明剩下的东西本身超窗 —— 那种情况该走预检/开新会话，硬重试只会烧钱。
        */
-      const buildTurnCfg = () => (turnMaxTokens === Number(cfg.maxTokens) ? cfg : { ...cfg, maxTokens: turnMaxTokens });
+      const buildTurnCfg = () => {
+        require('./toolResultReferences.cjs').repair(messages);
+        return turnMaxTokens === Number(cfg.maxTokens) ? cfg : { ...cfg, maxTokens: turnMaxTokens };
+      };
       const sendTurn = async () => {
         try {
           return await chatCompletionStream(buildTurnCfg(), messages, onEvent, { signal, timeoutMs: turnTimeoutMs, tools: payload.tools || undefined });
@@ -3830,7 +3834,15 @@ async function runAgentChatInternal({ cfg, messages, onDelta, tools, signal, tim
             const body = cached && cached.content
               ? cached.content
               : buildToolContent(result, tc.name, malformed, false, dataTruncateCap);
-            toolContent = body ? REPEAT_NOTICE + body : body;
+            const reference = require('./toolResultReferences.cjs').project(body, tc.name, messages,
+              (cfg.costSettings || require('./costSettings.cjs').parseSettings()).repeatResultReferences);
+            toolContent = reference.content;
+            if (reference.source) record.contextReference = reference.source;
+            const stat = toolProjection.get(tc.name) || { calls: 0, rawTokens: 0, modelTokens: 0 };
+            stat.calls++;
+            stat.rawTokens += compactionLib.estimateTextTokens(REPEAT_NOTICE + body);
+            stat.modelTokens += compactionLib.estimateTextTokens(toolContent);
+            toolProjection.set(tc.name, stat);
             if (cached && cached.compressed) record.compressed = true;
           } else {
             toolContent = buildToolContent(result, tc.name, malformed, repeated, dataTruncateCap);

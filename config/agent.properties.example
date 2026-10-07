@@ -317,6 +317,10 @@ soul_file=config/soul.md
 # 成本与角色模型（设置 → 成本与模型；按项目保存）
 # agent.subagent.delegation_gate=true            # 单步普通工具操作留给主 Agent，本地判断，不调用规划模型
 # agent.subagent.model.explorer=<已接入模型 ID>    # 留空跟随主 Agent；builder/verifier/reviewer/canvas 同样支持
+# agent.repeat_result_references=true            # 正文仍在上下文时，重复只读调用仅发送可校验的引用
+# agent.subagent.budget.explorer.maxTurns=6        # 0=继承；角色与调用参数只能收紧父上限
+# agent.subagent.budget.explorer.tokenBudget=60000
+# agent.subagent.budget.explorer.maxOutputTokens=8192
 # 角色模型 ID 来自模型管理的连接，独立使用该连接的凭据、上下文与价格。
 # 人格成长：默认开启；每 5 轮成功对话反思，保存到 CodeNode 的 config/soul.md。
 # false 停止学习及注入成长人格。

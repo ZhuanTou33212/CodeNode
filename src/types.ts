@@ -196,7 +196,8 @@ export type SessionCanvas = {
   nodeCount: number;
   summary?: string;
 };
-export interface CostSettings { delegationGate: boolean; roleModels: Record<string, string> }
+export interface RoleBudget { maxTurns: number; tokenBudget: number; maxOutputTokens: number }
+export interface CostSettings { delegationGate: boolean; repeatResultReferences: boolean; roleModels: Record<string, string>; roleBudgets: Record<string, RoleBudget> }
 export interface TaskCosts {
   runCount: number; completedRuns: number; verifiedRuns: number; totalCostUsd: number | null;
   costPerCompletedRun: number | null; costPerVerifiedRun: number | null;

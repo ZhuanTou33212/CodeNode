@@ -122,17 +122,16 @@ function callsOf(result, name) {
     JSON.stringify(reads[2] && reads[2].result));
   check('只读之间：内容仍是 OLD-CONTENT', String(reads[2] && reads[2].result).includes('OLD-CONTENT'));
 
-  // 第 8 节 #3 探针挖出的真问题：命中缓存的 tool 消息此前退化成裸 result.text ——
-  // 既没有「请勿重复调用」提示（模型会继续空转重复调），也没有首次那条的 [data] 段（信息缩水）。
-  // 第 3 轮请求里能同时看到「首次」与「命中」两条 tool 消息，正好用来对比。
+  // 首次正文和数据仍须可用；重复消息可以保留正文，也可以引用仍在上下文中的首条结果。
+  // 引用的失效与裁剪恢复另由 token-result-reference-test 覆盖。
   const turnMessages = (lastSeen || []).map((s) => (s.messages || []).filter((m) => String(m.role) === 'tool'));
   const firstToolText = turnMessages[2] && turnMessages[2][0] ? String(turnMessages[2][0].content) : '';
   const repeatedToolText = turnMessages[2] && turnMessages[2][1] ? String(turnMessages[2][1].content) : '';
   check('缓存命中：第二条 tool 消息带「请勿重复调用」提示（劝退空转）',
     /请勿再次重复/.test(repeatedToolText), repeatedToolText.slice(0, 120));
-  check('缓存命中：第二条 tool 消息与首次一样带 [data] 段（信息不缩水）',
-    /\[data\]/.test(firstToolText) && /\[data\]/.test(repeatedToolText),
-    JSON.stringify({ first: /\[data\]/.test(firstToolText), repeated: /\[data\]/.test(repeatedToolText) }));
+  check('缓存命中：正文保留在首条结果，重复消息携带数据或指向仍在上下文中的原结果',
+    /\[data\]/.test(firstToolText) && (/\[data\]/.test(repeatedToolText) || /"source":"c1"/.test(repeatedToolText)),
+    JSON.stringify({ first: /\[data\]/.test(firstToolText), repeated: repeatedToolText.slice(0, 240) }));
 
   // ---------------------------------------------------------------- 场景 2：回归主场景（shell 改文件后必须失效）
   resetWorkspace();

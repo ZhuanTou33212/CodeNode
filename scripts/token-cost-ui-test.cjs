@@ -37,8 +37,11 @@ app.whenReady().then(async () => {
       await costWait(()=>!select.disabled);
       select.value='cheap-ui';select.dispatchEvent(new Event('change',{bubbles:true}));
       await new Promise(r=>setTimeout(r,40));
+      document.querySelector('.role-budget summary').click();
+      document.querySelector('.role-budget button').click();
+      await new Promise(r=>setTimeout(r,40));
       document.querySelector('.cost-settings input').click();
-      await new Promise(r=>setTimeout(r,40));document.querySelector('.cost-settings button').click();
+      await new Promise(r=>setTimeout(r,40));document.querySelector('.cost-settings-save').click();
       await costWait(()=>document.querySelector('.cost-settings [role="status"]')?.textContent.includes('已保存'));
       const config=await window.codenode.agentConfig(${JSON.stringify(root)});
       const metrics=await window.codenode.agentMetrics(${JSON.stringify(root)});
@@ -49,6 +52,8 @@ app.whenReady().then(async () => {
         draft:input.value,navigation:window.__codenodeUi.getState().navigationOpen,side:window.__codenodeUi.getState().sideTab};
     })()`);
     assert.equal(setup.settings.roleModels.explorer, 'cheap-ui'); assert.equal(setup.settings.delegationGate, false);
+    assert.equal(setup.settings.repeatResultReferences, true);
+    assert.deepEqual(setup.settings.roleBudgets.explorer, { maxTurns: 6, tokenBudget: 60000, maxOutputTokens: 8192 });
     assert.equal(setup.activeId, 'main-ui'); assert.equal(setup.metrics.completedRuns, 1); assert.equal(setup.metrics.verifiedRuns, 0);
     assert.equal(setup.metrics.tasks.find(task => task.role === 'explorer').totalTokens, 120);
     const themes = [];
@@ -63,7 +68,7 @@ app.whenReady().then(async () => {
       })()`);
       assert.equal(result.theme, theme); assert.equal(result.sessionId, setup.sessionId); assert.equal(result.activeId, setup.activeId);
       assert.equal(result.draft, setup.draft); assert.equal(result.navigation, setup.navigation); assert.equal(result.side, setup.side);
-      assert.equal(result.controls.length, 6); assert.match(result.text, /120 token/); assert.match(result.text, /已完成/);
+      assert.equal(result.controls.length, 22); assert.match(result.text, /120 token/); assert.match(result.text, /已完成/);
       themes.push(result);
       win.showInactive(); await new Promise(resolve => setTimeout(resolve, 120));
       const picture = await win.webContents.capturePage(); win.hide();
@@ -82,6 +87,7 @@ app.whenReady().then(async () => {
       assert.equal(run.ok, true, run.error);
       const models = scripted.seen.filter(call => call.kind !== 'intent').map(call => call.model);
       assert.deepEqual(models, ['capable', 'cheap', 'capable'], 'Actual IPC selects child model and keeps parent model');
+      assert.equal(scripted.seen.find(call => call.model === 'cheap').body.max_tokens, 8192, 'Saved output budget reaches actual request');
       assert.equal(run.taskCosts.tasks.find(task => task.runId === 'ui-live-run' && task.role === 'explorer').requests, 1);
       const main = run.taskCosts.tasks.find(task => task.runId === 'ui-live-run' && task.role === 'main');
       assert.equal(main.kinds.main, 2);

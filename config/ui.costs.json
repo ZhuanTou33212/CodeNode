@@ -1,6 +1,16 @@
 {
   "defaults": {
     "delegationGate": true,
-    "roleModels": { "explorer": "", "builder": "", "verifier": "", "reviewer": "", "canvas": "" }
-  }
+    "repeatResultReferences": true,
+    "roleModels": { "explorer": "", "builder": "", "verifier": "", "reviewer": "", "canvas": "" },
+    "roleBudgets": {
+      "explorer": { "maxTurns": 0, "tokenBudget": 0, "maxOutputTokens": 0 },
+      "builder": { "maxTurns": 0, "tokenBudget": 0, "maxOutputTokens": 0 },
+      "verifier": { "maxTurns": 0, "tokenBudget": 0, "maxOutputTokens": 0 },
+      "reviewer": { "maxTurns": 0, "tokenBudget": 0, "maxOutputTokens": 0 },
+      "canvas": { "maxTurns": 0, "tokenBudget": 0, "maxOutputTokens": 0 }
+    }
+  },
+  "budgetLimits": { "maxTurns": 200, "tokenBudget": 4000000, "maxOutputTokens": 200000 },
+  "presets": { "lightExplorer": { "maxTurns": 6, "tokenBudget": 60000, "maxOutputTokens": 8192 } }
 }

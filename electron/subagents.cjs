@@ -1664,6 +1664,8 @@ class SubagentManager {
 
     const totalMs = clampTotalTimeout(args.timeoutSeconds, this.subCfg.totalTimeoutSeconds);
     const controller = lifecycle.controller;
+    const roleBudget = require('./costSettings.cjs').taskBudget(this.cfg, this.subCfg, role, args,
+      this.cfg.costSettings || require('./costSettings.cjs').parseSettings());
     const task = {
       taskId: requestedTaskId || makeTaskId(),
       executionId: lifecycle.task.executionId,
@@ -1683,12 +1685,8 @@ class SubagentManager {
       acceptanceCriteria: Array.isArray(args.acceptanceCriteria) ? args.acceptanceCriteria.map(String) : [],
       stageNodeId: String(args.stageNodeId || ''),
       totalTimeoutMs: totalMs,
-      maxTurns: Number.isInteger(args.maxTurns) && args.maxTurns > 0
-        ? Math.min(200, args.maxTurns, Number(this.cfg.limits && this.cfg.limits.maxToolIterations) || 12)
-        : Number(this.cfg.limits && this.cfg.limits.maxToolIterations) || 12,
-      tokenBudget: Number.isInteger(args.tokenBudget) && args.tokenBudget > 0
-        ? Math.min(4000000, args.tokenBudget, Number(this.subCfg.maxTotalTokens) > 0 ? Number(this.subCfg.maxTotalTokens) : 4000000)
-        : Number(this.subCfg.maxTotalTokens) || 0,
+      maxTurns: roleBudget.maxTurns,
+      tokenBudget: roleBudget.tokenBudget,
       status: 'queued',
       version: lifecycle.task.version || 0,
       startedAt: new Date().toISOString(),
@@ -1788,6 +1786,7 @@ class SubagentManager {
         limits: { ...(this.cfg.limits || {}), maxToolIterations: task.maxTurns },
         ...(childBudget && childBudget !== this.cfg.requestBudget ? { requestBudget: childBudget } : {}),
       };
+      Object.assign(childCfg, require('./costSettings.cjs').applyOutputBudget(childCfg, roleBudget.maxOutputTokens));
       childContext.modelRuntimeValue = { budget: childCfg.requestBudget,
         queue: require('./requestQueue.cjs').modelQueue, prices: childCfg.costPrices,
         traceContext: childCfg.traceContext, traceProjectRoot: childCfg.traceProjectRoot,

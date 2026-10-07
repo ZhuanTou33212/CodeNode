@@ -4265,6 +4265,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .task-cost-list details { padding: 12px 0; border-bottom: 1px solid var(--glass-border); }
 .task-cost-list summary { cursor: pointer; overflow-wrap: anywhere; }
 .task-cost-list p { overflow-wrap: anywhere; }
+.role-budget { padding: 10px 0; border-bottom: 1px solid var(--glass-border); }
+.role-budget summary { cursor: pointer; color: var(--glass-muted); }
+.role-budget input[type="number"] { width: 130px; padding: 6px 8px; background: var(--glass-control); color: var(--glass-text); border: 1px solid var(--glass-border); border-radius: 7px; font: inherit; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--glass-border); }
 .settings-content .dock-rag-settings { max-width: none; }
 .settings-content .dock-extensions { min-width: 0; }

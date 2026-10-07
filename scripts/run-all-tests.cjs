@@ -53,6 +53,7 @@ const CORE = [
   'test:subagent',
   'test:scheduling',
   'test:token-cost-policy',
+  'test:token-result-reference',
   'test:subagent-isolation',
   'test:subagent-role-skill',
   'test:compression-batch',

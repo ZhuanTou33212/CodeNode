@@ -116,9 +116,11 @@ async function run(cfg, options, onEvent, ref, operation) {
     if (remaining != null && remaining <= 0) throw Object.assign(new Error('本轮模型请求已达总时长上限'), { code: 'TURN_TIMEOUT', retryable: false });
     // With fallbacks configured, spend retries on the next approved candidate.
     // The overall HTTP ceiling is unchanged and retries still use the root budget.
-    const actualCfg = plan.entries.length > 1 ? { ...entry.cfg, reliability: {
+    let actualCfg = plan.entries.length > 1 ? { ...entry.cfg, reliability: {
       ...entry.cfg.reliability, maxAttempts: 1, streamMaxAttempts: 0,
     } } : entry.cfg;
+    if (Number(actualCfg.maxOutputTokensCap) > 0) actualCfg = { ...actualCfg,
+      maxTokens: Math.min(Number(actualCfg.maxTokens) || Number(actualCfg.maxOutputTokensCap), Number(actualCfg.maxOutputTokensCap)) };
     try {
       const result = await operation(actualCfg, { ...options,
         ...(remaining == null ? {} : { timeoutMs: remaining }),
