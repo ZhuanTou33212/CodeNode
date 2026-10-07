@@ -88,6 +88,7 @@ interface SessionState {
   beginTurn: () => void;
   streamDelta: (d: {
     codeVerification?: import('../types').CodeVerificationReport;
+    fileChange?: { path?: string; kind?: string; detail?: string };
     kind?: string;
     text?: string;
     toolCalls?: unknown;
@@ -412,6 +413,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    if (d.kind === 'file_change' && d.fileChange?.path) {
+      const messages = s.messages.slice();
+      const at = messages.map(message => message.role).lastIndexOf('assistant');
+      if (at >= 0) messages[at] = { ...messages[at], editedFiles: [...new Set([...(messages[at].editedFiles || []), d.fileChange.path])] };
+      set({ messages }); return;
+    }
     if (d.kind === 'code_verification' && d.codeVerification) {
       const messages = s.messages.slice();
       const at = messages.map(message=>message.role).lastIndexOf('assistant');

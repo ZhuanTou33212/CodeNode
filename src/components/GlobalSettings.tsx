@@ -4,6 +4,7 @@ import { useUiStore } from '../store/uiStore';
 import ArchivedChatsSettings from './ArchivedChatsSettings';
 import RagSettingsPanel from './RagSettingsPanel';
 import EditingSettingsPanel from './EditingSettingsPanel';
+import AgentExecutionSettings from './AgentExecutionSettings';
 
 
 export default function GlobalSettings() {
@@ -34,6 +35,7 @@ export default function GlobalSettings() {
       <label className="settings-row"><span>左侧栏宽度</span><input aria-label="左侧栏宽度" type="range" min="180" max="400" value={navigationWidth} onChange={e => setNavigationWidth(Number(e.target.value))}/><output>{navigationWidth}px</output></label>
       <label className="settings-row"><span>对话栏宽度</span><input aria-label="对话栏宽度" type="range" min="320" max="640" value={conversationWidth} onChange={e => setConversationWidth(Number(e.target.value))}/><output>{conversationWidth}px</output></label>
       {([['navigationOpen','默认显示左侧栏'],['conversationOpen','默认显示对话栏'],['autoCollapseSidebars','窄窗口自动收起侧栏']] as const).map(([key,label]) => <label className="settings-row" key={key}><span>{label}</span><input type="checkbox" checked={preferences[key]} onChange={e => updatePreferences({[key]:e.target.checked})}/></label>)}
+      <AgentExecutionSettings />
       <h3>画布操作菜单</h3>
       <label className="settings-row"><span>菜单宽度</span><input aria-label="菜单宽度" type="range" min="200" max="360" value={preferences.menuWidth} onChange={e => updatePreferences({menuWidth:Number(e.target.value)})}/><output>{preferences.menuWidth}px</output></label>
       <label className="settings-row"><span>菜单行高</span><input aria-label="菜单行高" type="range" min="28" max="44" value={preferences.menuRowHeight} onChange={e => updatePreferences({menuRowHeight:Number(e.target.value)})}/><output>{preferences.menuRowHeight}px</output></label>

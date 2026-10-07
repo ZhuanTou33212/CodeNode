@@ -143,6 +143,8 @@ export type SessionMsg = {
   feedbackInput?: string;
   reasoning?: string;
   tools?: ToolRecord[];
+  /** 本轮实际写入通知中的文件路径，不包含纯画布操作。 */
+  editedFiles?: string[];
   status?: string;
   grounding?: RagGrounding;
   codeVerification?: CodeVerificationReport;

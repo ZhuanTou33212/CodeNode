@@ -4032,6 +4032,22 @@ textarea:focus-visible {
 .ui-clean .ap-usage { opacity: .65; }
 .ui-clean .ap-body { padding: 14px 2px; }
 .ui-clean .cs-msg { padding: 0; margin-bottom: 24px; background: transparent; border: 0; box-shadow: none; }
+.file-changes-card { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: 12px; background: var(--glass-control); color: var(--glass-text); }
+.file-changes-summary { display: flex; align-items: center; gap: 9px; width: 100%; padding: 2px 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.file-changes-summary svg { flex: 0 0 auto; }
+.file-changes-summary strong { font-size: 13px; font-weight: 600; }
+.file-changes-summary > span { margin-left: auto; font-size: 12px; color: var(--glass-muted); white-space: nowrap; }
+.file-change-verification.code-verification { margin: 4px 0 0 27px; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: 11px; color: var(--glass-muted); }
+.file-changes-list { margin-top: 10px; max-height: 320px; overflow: auto; }
+.file-changes-item + .file-changes-item { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--glass-border); }
+.file-changes-path { display: flex; align-items: baseline; gap: 8px; }
+.file-changes-path button { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--glass-text); font-size: 12px; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.file-changes-path small { margin-left: auto; white-space: nowrap; }
+.file-changes-item small, .file-changes-item summary { font-size: 11px; color: var(--glass-muted); }
+.file-changes-item summary { margin-top: 5px; cursor: pointer; }
+.file-changes-item pre { margin: 6px 0 0; padding: 8px; overflow: auto; max-height: 220px; border-radius: 6px; background: var(--glass-surface); font-size: 11px; line-height: 1.6; }
+.file-changes-item .is-add { color: var(--glass-accent); }
+.file-changes-item .is-remove { color: var(--menu-danger); }
 .ui-clean .cs-msg-label { color: #939ba8; font-size: 11px; font-weight: 500; margin-bottom: 7px; }
 .ui-clean .cs-msg-text { color: #d7dbe1; font-size: 13px; line-height: 1.75; user-select: text; overflow-wrap: anywhere; }
 .ui-clean .cs-msg-feedback { display: flex; gap: 8px; margin-top: 8px; opacity: 0; transition: opacity 120ms ease; }

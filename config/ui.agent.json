@@ -1,0 +1,5 @@
+{
+  "defaults": { "autoExecuteTools": true },
+  "ordinaryWriteTools": ["write_file", "edit_file", "workbench_edit"],
+  "ordinaryCanvasActions": ["create", "rename", "set_prompt", "set_status", "set_category", "set_goal", "move", "duplicate", "connect", "disconnect", "set_members", "add_members", "remove_members"]
+}

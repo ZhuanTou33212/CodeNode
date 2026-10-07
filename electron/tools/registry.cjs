@@ -405,6 +405,9 @@ class AgentToolRegistry {
     if (!tool) return AgentToolResult.failure('FATAL_FAILURE', '未知工具：' + name, { tool: name });
     const descriptor = tool.descriptor;
     const args = arguments_ == null ? {} : arguments_;
+    const destructiveCanvas = name === 'workbench_edit' && (Array.isArray(args.operations) && args.operations.length ? args.operations : [args])
+      .some(operation => operation && ['delete', 'clear', 'reset'].includes(String(operation.action || '').toLowerCase()));
+    const ordinaryAuto = this.confirmWrites === false && descriptor.requiresConfirmation !== 'HIGH' && require('../agentSettings.cjs').canAutoExecute(name, args);
     // 按该工具的契约现场组装最小能力面（工具只看到自己需要的那几个面 + deprecated 旧方法转发）
     const execContext = createExecutionContext(context, descriptor, callInfo);
 
@@ -456,9 +459,10 @@ class AgentToolRegistry {
        *   - `ruleAllows`   —— 命中了免打扰规则（静态层会放行）→ 收紧才有意义。
        * 判定本身是纯函数（`intent.shouldConsultGuardian`），这里只负责**如实提供事实**。
        */
-      const staticRequires =
+      const staticRequires = destructiveCanvas ||
+        descriptor.requiresConfirmation === 'HIGH' ||
         !!descriptor.requiresConfirmation &&
-        (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true);
+        (this.confirmWrites === true ? true : ordinaryAuto ? false : descriptor.confirmationEnforced === true);
       let ruleAllows = null;
       try {
         const approvalForPreview = /** @type {any} */ (execContext.approval);
@@ -536,9 +540,9 @@ class AgentToolRegistry {
     // 旧 register() 合成的契约（requiresConfirmation=false）不触发，保持既有行为。
     // 意图复核收紧（A2）优先：即使这个工具本身不需要确认，被判定为「授权不明 / 高风险」时也要问用户
     const requiresApproval =
-      intentTighten === true ||
+      destructiveCanvas || descriptor.requiresConfirmation === 'HIGH' || intentTighten === true ||
       (!!descriptor.requiresConfirmation &&
-        (this.confirmWrites === true ? true : this.confirmWrites === false ? false : descriptor.confirmationEnforced === true));
+        (this.confirmWrites === true ? true : ordinaryAuto ? false : descriptor.confirmationEnforced === true));
     if (requiresApproval) {
       const approval = /** @type {any} */ (execContext.approval);
       // 「没有审批通道」与「用户拒绝」必须分开报（前者是配置/接线问题，后者要劝退重试）
@@ -563,7 +567,7 @@ class AgentToolRegistry {
         : '';
       const token = await approval.request({
         capability: descriptor.requiredCapability || null,
-        level: descriptor.requiresConfirmation,
+        level: destructiveCanvas ? 'HIGH' : descriptor.requiresConfirmation,
         what: name,
         detail: (descriptor.description || '') + intentNote,
         scope,

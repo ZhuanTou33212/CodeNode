@@ -44,10 +44,10 @@ app.whenReady().then(async()=>{
       window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openSettings('editing');
       await wait(()=>document.querySelector('.editing-settings input[aria-label="单项校验超时"]')?.value==='23');
       return{saved:saved.editing,activeId:session.getState().activeId,modelId:model.activeId,draft:document.querySelector('.pp-composer textarea').value,
-        card:document.querySelector('.code-verification').textContent,navigation:window.__codenodeUi.getState().navigationOpen,side:window.__codenodeUi.getState().sideTab};
+        card:document.querySelector('.code-verification').textContent,checks:session.getState().messages.at(-1).codeVerification.checks.map(check=>check.status),navigation:window.__codenodeUi.getState().navigationOpen,side:window.__codenodeUi.getState().sideTab};
     })()`);
     assert.equal(setup.saved.autoVerify,false);assert.equal(setup.saved.timeoutSeconds,23);assert.equal(setup.draft,'draft-preserved');assert.equal(setup.modelId,'coding-ui-model');
-    assert.match(setup.card,/仅部分校验完成/);assert.match(setup.card,/未执行/);
+    assert.match(setup.card,/仅部分校验完成/);assert.doesNotMatch(setup.card,/所选局部校验通过/);assert.ok(setup.checks.includes('not_run'));
     const themes=[];
     for(const theme of ['light','dark']){
       const result=await win.webContents.executeJavaScript(`(async()=>{

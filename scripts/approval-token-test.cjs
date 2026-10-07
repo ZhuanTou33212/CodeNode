@@ -226,7 +226,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     ok('H5 令牌校验失败 → 拒绝执行（不因「用户已批准」就放行）');
   }
 
-  // ---- I. 配置开关：tools.confirm_writes=false 整体关闭 ----
+  // ---- I. 自主模式只放行已列明的普通工具，未列明 WRITE 仍保留审批 ----
   {
     const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false, toolsAllowed: [], toolsConfirmWrites: false });
     let ran = false;
@@ -253,9 +253,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     );
     assert.strictEqual(registry.confirmWrites, false, '配置必须下发到注册表');
     const result = await registry.execute('guarded_write2', {}, new AgentToolContext({ projectRoot: root, audit: () => {}, runId: 'run-i' }));
-    assert.strictEqual(result.ok, true, '关闭确认后即使没有审批通道也应执行');
-    assert.strictEqual(ran, true);
-    ok('I tools.confirm_writes=false 可整体关闭（声明仍在，强制可关）');
+    assert.strictEqual(result.ok, false, '未列明的 WRITE 工具不能借普通自动模式绕过审批');
+    assert.strictEqual(result.data.code, 'APPROVAL_REQUIRED');
+    assert.strictEqual(ran, false);
+    ok('I 普通自动模式保留未列明工具的审批要求');
   }
 
   // ---- J. 主循环层：脚本化模型跑真实工具循环 ----

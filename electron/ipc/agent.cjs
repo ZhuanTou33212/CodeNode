@@ -199,6 +199,7 @@ function register(ctx) {
       model: cfg.model,
       soul,
       toolsEnabled: cfg.tools.toolsEnabled,
+      autoExecuteTools: cfg.tools.toolsConfirmWrites === false,
       ragEnabled: cfg.rag.enabled,
       rag: ragSettings.publicSettings(cfg.rag, cfg.grounding),
       editing: cfg.editing,
@@ -222,6 +223,13 @@ function register(ctx) {
       const settings = ragSettings.normalizedSettings(input, cfg.rag, cfg.grounding);
       return await ragSettings.checkSettings(settings);
     } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
+  });
+  ipcMain.handle('agent:execution-save', async (_event, projectRoot, input) => {
+    try {
+      if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' };
+      if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请在任务结束后修改执行设置' };
+      return { ok: true, settings: require('../agentSettings.cjs').writeSettings(projectRoot, input) };
+    } catch (error) { return { ok: false, error: error.message }; }
   });
 
   ipcMain.handle('agent:rag-save', async (_event, projectRoot, input) => {
@@ -1139,6 +1147,7 @@ function register(ctx) {
           // web_search 后端配置：未启用时工具已被卸载，这里是「配了才用得上」的那份配置
           webSearchConfig: webSearchConfig(cfg),
           confirm: (level, what, detail, meta) => bridge.confirm(level, what, detail, meta),
+          autoExecuteTools: cfg.tools.toolsConfirmWrites === false,
           askUser: (question, options) => bridge.askUser(question, options),
           ui: (action, args) => bridge.ui(action, args),
           audit: (entry) => {

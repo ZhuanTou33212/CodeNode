@@ -57,10 +57,9 @@ app.whenReady().then(async () => {
           } }]
         }]
       });
-      const valid = await waitFor(()=>document.querySelector('.rag-grounding-valid'));
-      const validText = valid ? valid.textContent : '';
-      const source = await waitFor(()=>document.querySelector('.task-trace-source'));
-      const sourceText = source ? source.textContent : '';
+      const hasValidBadge = Boolean(document.querySelector('.rag-grounding-valid'));
+      const storedSources = session.getState().messages[0].tools[0].data.sources.length;
+      const hasTrace = Boolean(document.querySelector('.task-trace'));
       session.setState({
         messages: [{
           role: 'assistant',
@@ -87,15 +86,15 @@ app.whenReady().then(async () => {
       return {
         sideTab: ui ? ui.getState().sideTab : '(no ui store)',
         hasPanel: Boolean(document.querySelector('.side-panel')),
-        validText,
-        sourceText,
+        hasValidBadge, storedSources,
+        hasTrace,
         invalidText, invalidTitle, limitedText,
         semanticFailedText: semanticFailed ? semanticFailed.textContent : ''
       };
     })()`);
     const ok =
-      result.validText && result.validText.includes('引用位置可追溯') &&
-      result.sourceText && result.sourceText.includes('src/a.ts#L1-L4') &&
+      result.hasValidBadge === false && result.storedSources === 1 &&
+      result.hasTrace === false &&
       result.invalidText && result.invalidText.includes('无效引用') &&
       result.invalidTitle && result.invalidTitle.includes('src/fake.ts#L1-L2') &&
       result.limitedText && result.limitedText.includes('证据不足') &&

@@ -1,15 +1,11 @@
 import { memo, useState } from 'react';
 import type { SessionMsg } from '../../types';
-import TaskTrace from './TaskTrace';
-import CodeVerificationCard from './CodeVerificationCard';
+import FileChangesCard from './FileChangesCard';
 import { useProjectStore } from '../../store/projectStore';
 import { useSessionStore } from '../../store/sessionStore';
 
-/** 单条会话消息（用户 / Agent），含推理与工具调用折叠区。原 ChatSidebar 内联实现，现供侧栏 Agent 标签复用。 */
+/** 对话正文与简洁文件变更；工具和推理记录保留在运行数据中。 */
 export function MessageView({ msg }: { msg: SessionMsg }) {
-  const [showReasoning, setShowReasoning] = useState(false);
-  const [showTools, setShowTools] = useState(false);
-  const tools = msg.tools || [];
   const grounding = msg.grounding;
   const safeAbstention = grounding?.status === 'valid' && grounding.semantic?.status === 'abstained' && grounding.semantic.safeForDelivery === true;
   const semanticFailed = grounding?.semantic?.supported === false && !safeAbstention;
@@ -81,14 +77,14 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
       {msg.status === 'truncated' ? <div className="cs-msg-state cs-msg-state-warn" role="status">已截断（触到模型长度上限，回复「继续」可接着写）</div> : null}
       {msg.status === 'failed' ? <div className="cs-msg-state cs-msg-state-error" role="status">本轮失败（详见下方错误说明）</div> : null}
       <div className="cs-msg-text">{msg.content || (msg.status === 'running' ? '…' : '')}</div>
-      {msg.codeVerification && <CodeVerificationCard report={msg.codeVerification}/>}
+      <FileChangesCard message={msg} />
       {msg.content && msg.status !== 'running' ? (
         <div className="cs-msg-feedback" aria-label="回答反馈">
           <button type="button" className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>
           <button type="button" className={feedback === 'reject' ? 'active' : ''} aria-pressed={feedback === 'reject'} onClick={() => void sendFeedback('reject')}>需改进</button>
         </div>
       ) : null}
-      {grounding && (grounding.status !== 'not_required' || semanticFailed) ? (
+      {grounding && (safeAbstention || semanticFailed || grounding.status === 'missing' || grounding.status === 'invalid') ? (
         <div
           className={`rag-grounding rag-grounding-${safeAbstention ? 'missing' : semanticFailed ? 'invalid' : grounding.status}`}
           title={grounding.invalid.length ? `无效引用：${grounding.invalid.join(', ')}` : safeAbstention ? '答复限定于已检查的证据范围，未证明项目存在或不存在所问机制' : semanticFailed ? '事实支持性未通过；证据不足或校验失败不等同于已证明结论错误' : '仅核对引用位置是否在本轮读过的来源内，未验证结论是否得到支持'}
@@ -100,35 +96,6 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
             : grounding.status === 'missing'
               ? '△ 回答缺少来源引用'
               : `! 发现 ${grounding.invalid.length} 个无效引用`}
-        </div>
-      ) : null}
-      {tools.length ? <TaskTrace tools={tools} status={msg.status} /> : null}
-      {msg.reasoning ? (
-        <div className="chat-section">
-          <button className="chat-section-toggle" onClick={() => setShowReasoning((v) => !v)}>
-            推理 {showReasoning ? '▾' : '▸'}
-          </button>
-          {showReasoning && <div className="chat-section-body chat-reasoning">{msg.reasoning}</div>}
-        </div>
-      ) : null}
-      {tools.length ? (
-        <div className="chat-section">
-          <button className="chat-section-toggle" onClick={() => setShowTools((v) => !v)}>
-            工具调用（{tools.length}）{showTools ? '▾' : '▸'}
-          </button>
-          {showTools && (
-            <div className="chat-section-body">
-              {tools.map((t, i) => (
-                <div key={i} className="chat-tool">
-                  <span className={`ct-name ${t.ok === false ? 'ct-fail' : t.ok === true ? 'ct-ok' : ''}`}>{t.name}</span>
-                  {t.args ? <span className="ct-args">{typeof t.args === 'string' ? t.args : JSON.stringify(t.args)}</span> : null}
-                  {t.result != null && (
-                    <pre className="ct-result">{t.result.length > 500 ? t.result.slice(0, 500) + '…' : t.result}</pre>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       ) : null}
     </div>

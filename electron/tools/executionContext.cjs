@@ -224,7 +224,8 @@ function createExecutionContext(source, descriptor, callInfo) {
 
   // ---- 面 3：审批（所有工具都能请求确认；提问属于 ui.interact 能力） ----
   ctx.approval = {
-    confirm: (level, what, detail) => base.confirm(level, what, detail, { toolCallId, attemptId }),
+    confirm: (level, what, detail) => base.confirm(level, what, detail, { toolCallId, attemptId, tool: toolName,
+      ordinaryWrite: toolName === 'write_file' || toolName === 'edit_file' }),
     askUser: (question, options) => (allow('ui.interact') ? base.askUser(question, options, { toolCallId, attemptId }) : Promise.resolve(deny('askUser') || '')),
     // S7：令牌化审批 —— 令牌由 ApprovalService 服务端签发（绑定 capability/scope/toolCallId/有效期，
     // 单次有效）；工具参数里的自填审批字段一律不被采信（注册表在校验前剥离）。
@@ -294,6 +295,10 @@ function createExecutionContext(source, descriptor, callInfo) {
     }
     if (method === 'conversationHistory') {
       ctx.conversationHistory = historyForTool;
+      continue;
+    }
+    if (method === 'confirm') {
+      ctx.confirm = ctx.approval.confirm;
       continue;
     }
     if (typeof base[method] !== 'function') continue;

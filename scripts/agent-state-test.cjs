@@ -240,7 +240,7 @@ function statesOf(root, runId) {
 
   // ---- B2 等待用户：write_file 触发确认 → WAITING_USER，用户应答后回到 WAITING_TOOL ----
   {
-    const root = makeProject('waiting-user');
+    const root = makeProject('waiting-user', ['tools.confirm_writes=true']);
     const h = makeHarness();
     const stub = installScriptedModel([
       { toolCalls: [{ name: 'write_file', args: { path: 'b.txt', content: 'X-USER-WAIT\n' } }] },

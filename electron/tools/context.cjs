@@ -30,6 +30,7 @@ class AgentToolContext {
     this.projectRootValue = o.projectRoot || '.';
     this.modelValue = o.model || null;
     this.confirmHandler = o.confirm || null;
+    this.autoExecuteTools = o.autoExecuteTools === true;
     // S7：审批服务（懒创建）。显式注入时优先用注入实例（便于同一 run 内共享令牌表）
     this.approvalServiceValue = o.approvalService || null;
     this.approvalTtlMsValue = o.approvalTtlMs || null;
@@ -199,6 +200,10 @@ class AgentToolContext {
 
   async confirm(level, what, detail, request = {}) {
     if (this.cancelled()) return false;
+    if (this.autoExecuteTools && level === ConfirmationLevel.WRITE && request.forcePrompt !== true && request.ordinaryWrite === true) {
+      this.audit(JSON.stringify({ kind: 'ordinary_tool_auto_approved', tool: request.tool, toolCallId: request.toolCallId || null }));
+      return true;
+    }
     // 低敏感操作（LOW）直接放行，不弹窗询问；只有写入/高风险才需要确认
     if (level === ConfirmationLevel.LOW && request.forcePrompt !== true) return true;
     if (!this.confirmHandler) return false;
@@ -455,6 +460,7 @@ class AgentToolContext {
       projectRoot: o.projectRoot || this.projectRootValue,
       model: o.model || this.modelValue,
       confirm: this.confirmHandler,
+      autoExecuteTools: this.autoExecuteTools,
       audit: this.auditLogger,
       mutateWorkbench: this.workbenchMutator,
       saveProject: this.saveAction,

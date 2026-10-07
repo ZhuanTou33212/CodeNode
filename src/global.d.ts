@@ -187,6 +187,7 @@ interface CodenodeApi {
     model: string;
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
+    autoExecuteTools?: boolean;
     ragEnabled: boolean;
     editing?: import('./types').EditingSettings;
     rag?: { enabled: boolean; strictValidation: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;hasMilvusToken?:boolean;hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean; bm25K1: number; bm25B: number; vectorWeight: number };
@@ -196,6 +197,7 @@ interface CodenodeApi {
   ragCheck: (root: string | null, settings: { enabled?: boolean; strictValidation?: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;milvusToken?:string;key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
   ragSave: (root: string | null, settings: { enabled?: boolean; strictValidation?: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;milvusToken?:string;key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
+  executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
   modelsDiscover: (provider: string, apiKey: string, options?: { apiBase?: string; modelId?: string }) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; apiKeyPreview?: string; error?: string }>;
   modelsConnect: (ticket: string, selectedId: string) => Promise<{ ok: boolean; error?: string }>;
