@@ -93,7 +93,9 @@ npm run start:prod
 
 [查看可缩放 SVG](docs/architecture/multi-agent-collaboration.svg) · [架构与实现说明](docs/architecture/README.md)
 
-默认有界 FIFO 调度器最多同时运行 **3** 个子任务。安全只读任务可以并行，共享工作区写任务独占；选择 `isolation: "worktree"` 时，写任务在独立 Git 工作树中执行，画布角色不支持该模式。
+默认有界 FIFO 调度器最多同时运行 **4** 个子任务，并与模型请求队列共用一个全局并发值。安全只读任务可以并行，共享工作区写任务独占；选择 `isolation: "worktree"` 时，写任务在独立 Git 工作树中执行，画布角色不支持该模式。
+
+每次运行默认累计最多启动 **24** 个子任务，单批最多 **8** 个；达到 **75%**（18/24）时，主 Agent 会收到剩余额度提示，优先收敛计划、验证和总结。失败或启动后取消仍计入额度，请求级瞬态重试使用独立的共享重试预算。以上选项在 **设置 → 常规 → 全局调度** 集中保存，跨项目、跨重启和昼夜主题共用；桌面与命令行读取同一份用户级 `$CODENODE_HOME/agent-scheduling.json`（默认 `~/.codenode/agent-scheduling.json`）。
 
 | 角色 | 职责 | 边界 |
 | --- | --- | --- |

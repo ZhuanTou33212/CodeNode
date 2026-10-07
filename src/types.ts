@@ -196,3 +196,9 @@ export type SessionCanvas = {
   nodeCount: number;
   summary?: string;
 };
+export interface SchedulingSettings {
+  concurrency: number;
+  maxTasksPerRun: number;
+  maxBatchTasks: number;
+  warningPercent: number;
+}

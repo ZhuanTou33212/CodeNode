@@ -134,6 +134,10 @@ function loadConfig(projectRoot) {
     : {};
   /** @type {Record<string, string>} */
   const cfg = { ...globalCfg, ...projectCfg };
+  // Scheduling is global: project properties cannot give a shared model queue
+  // a different limit from the subagent scheduler.
+  const scheduling = require('./schedulingSettings.cjs').readSettings(globalCfg);
+  require('./requestQueue.cjs').modelQueue.setLimit(scheduling.concurrency);
   return {
     apiBase: (cfg.api_base || 'https://api.deepseek.com').replace(/\/+$/, ''),
     /**
@@ -176,7 +180,10 @@ function loadConfig(projectRoot) {
     scalars: parseScalarsConfig(cfg),
     compression: parseCompressionConfig(cfg),
     observation: observationState.parseConfig(cfg),
-    subagent: parseSubagentConfig(cfg),
+    scheduling,
+    subagent: { ...parseSubagentConfig(cfg), maxConcurrentTasks: scheduling.concurrency,
+      maxTasksPerRun: scheduling.maxTasksPerRun, maxBatchTasks: scheduling.maxBatchTasks,
+      warningPercent: scheduling.warningPercent },
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
     context: parseContextConfig(cfg),
@@ -417,13 +424,15 @@ function parseCompressionConfig(cfg) {
  *   agent.subagent.result_max_chars  回灌主上下文的子代理结果上限（超出截断并提示 get_subagent_task）
  */
 function parseSubagentConfig(cfg) {
+  const scheduling = require('./schedulingSettings.cjs').parseSettings(cfg);
   return {
     maxTotalTokens: configInteger(cfg, 'agent.subagent.max_total_tokens', 120000, 0, 4000000),
     totalTimeoutSeconds: configInteger(cfg, 'agent.subagent.total_timeout_seconds', 600, 10, 3600),
     resultMaxChars: configInteger(cfg, 'agent.subagent.result_max_chars', 8000, 500, 200000),
-    maxTasksPerRun: configInteger(cfg, 'agent.subagent.max_tasks_per_run', 12, 1, 100),
-    maxBatchTasks: configInteger(cfg, 'agent.subagent.max_batch_tasks', 8, 1, 32),
-    maxConcurrentTasks: configInteger(cfg, 'agent.subagent.max_concurrent_tasks', 3, 1, 8),
+    maxTasksPerRun: scheduling.maxTasksPerRun,
+    maxBatchTasks: scheduling.maxBatchTasks,
+    maxConcurrentTasks: scheduling.concurrency,
+    warningPercent: scheduling.warningPercent,
     // 跨 Agent 资源租约（多 Agent 信息完整性 P3）：同一资源同一时刻只允许一个写者
     leases: cfg['agent.subagent.leases'] == null ? true : String(cfg['agent.subagent.leases']).toLowerCase() !== 'false',
     leaseTtlMs: configInteger(cfg, 'agent.subagent.lease_ttl_ms', 120000, 5000, 3600000),
@@ -3246,6 +3255,10 @@ async function runAgentChatInternal({ cfg, messages, onDelta, tools, signal, tim
         }
       }
       /** 所有机器提示都在压缩之后注入；计划提示有独立前缀/替换游标，不受进度提醒配置影响。 */
+      if (typeof cfg.subagentBudgetState === 'function') {
+        const state = cfg.subagentBudgetState(tools && tools.context);
+        require('./schedulingSettings.cjs').updateBudgetNote(messages, state);
+      }
       const planForNote = readRunPlan(traceProjectRoot(), cfg);
       const planStamp = runPlanVersion(planForNote);
       const planChanged = !!planStamp && planStamp !== lastPlanStamp;

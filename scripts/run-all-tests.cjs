@@ -51,6 +51,7 @@ const CORE = [
   'test:atomic-file',
   'test:dep-declaration',
   'test:subagent',
+  'test:scheduling',
   'test:subagent-isolation',
   'test:subagent-role-skill',
   'test:compression-batch',
@@ -210,6 +211,7 @@ const CORE = [
 const DISPLAY = ['test:agent-compact-ui', 'test:smoke', 'test:rag-ui', 'test:coding-slim-ui', 'test:coding-settings-ui', 'test:ime-shortcut-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui', 'test:rag-review-ui'];
 
 DISPLAY.push('test:node-inspector-ui');
+DISPLAY.push('test:scheduling-ui');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const valueOf = (name) => {

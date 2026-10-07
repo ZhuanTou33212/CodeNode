@@ -1,0 +1,9 @@
+{
+  "defaults": { "concurrency": 4, "maxTasksPerRun": 24, "maxBatchTasks": 8, "warningPercent": 75 },
+  "limits": {
+    "concurrency": { "min": 1, "max": 8 },
+    "maxTasksPerRun": { "min": 1, "max": 100 },
+    "maxBatchTasks": { "min": 1, "max": 32 },
+    "warningPercent": { "min": 10, "max": 95 }
+  }
+}

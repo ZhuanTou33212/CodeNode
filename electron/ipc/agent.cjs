@@ -200,6 +200,7 @@ function register(ctx) {
       soul,
       toolsEnabled: cfg.tools.toolsEnabled,
       autoExecuteTools: cfg.tools.toolsConfirmWrites === false,
+      scheduling: cfg.scheduling,
       ragEnabled: cfg.rag.enabled,
       rag: ragSettings.publicSettings(cfg.rag, cfg.grounding),
       editing: cfg.editing,
@@ -230,6 +231,15 @@ function register(ctx) {
       if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请在任务结束后修改执行设置' };
       return { ok: true, settings: require('../agentSettings.cjs').writeSettings(projectRoot, input) };
     } catch (error) { return { ok: false, error: error.message }; }
+  });
+
+  ipcMain.handle('agent:scheduling-save', async (_event, input) => {
+    try {
+      if (activeRequests.size || modelQueue.stats().active || modelQueue.stats().waiting) return { ok: false, error: 'Agent 或模型请求正在运行，请在任务结束后修改全局调度设置' };
+      const settings = require('../schedulingSettings.cjs').writeSettings(input);
+      modelQueue.setLimit(settings.concurrency);
+      return { ok: true, settings };
+    } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
   });
 
   ipcMain.handle('agent:rag-save', async (_event, projectRoot, input) => {

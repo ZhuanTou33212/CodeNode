@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('codenode', {
   ragSave: (root, settings) => ipcRenderer.invoke('agent:rag-save', root, settings),
   editingSave: (root, settings) => ipcRenderer.invoke('agent:editing-save', root, settings),
     executionSave: (root, settings) => ipcRenderer.invoke('agent:execution-save', root, settings),
+  schedulingSave: settings => ipcRenderer.invoke('agent:scheduling-save', settings),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),

@@ -274,7 +274,12 @@ soul_file=config/soul.md
 # 两个 Agent 同时写同一个文件/同一张画布会**静默互相覆盖**（谁最后写完谁赢，另一份工作凭空消失）。
 # 规则：同一个资源，同一时刻只允许一个写者。只在**写类**工具上生效（读不加锁），被占用时**不排队等待**，
 # 直接返回 RESOURCE_LOCKED（可重试，带「谁在持有、多久过期」），让 Agent 自己换顺序/换文件。
-# agent.subagent.max_concurrent_tasks=3          # 同一管理器的共享并发上限（1–8），单独委派与批次共用；写任务独占
+# agent.scheduling.concurrency=4                # 全局联动并发（1–8）：同时控制子任务与模型请求队列；共享写任务独占
+# agent.subagent.max_tasks_per_run=24            # 每次运行累计子任务上限（1–100），已启动后失败/取消仍计入
+# agent.subagent.max_batch_tasks=8               # 单次批量委派上限（1–32）
+# agent.subagent.warning_percent=75              # 配额预警百分比（10–95）；24 个额度在 18 个时提醒收敛
+# 设置 → 常规 → 全局调度保存到用户级 agent-scheduling.json，优先于以上全局属性；项目属性不覆盖这些全局选项
+# agent.subagent.max_concurrent_tasks=4          # 兼容旧键；未设置 agent.scheduling.concurrency 时联动两层并发
 # agent.subagent.max_total_tokens=120000         # 每个子代理的默认独立 Token 上限；delegate_task 可用 tokenBudget 收紧，父 Run 总预算仍生效
 # agent.subagent.total_timeout_seconds=600       # 每个子任务的总时长上限；delegate_task 可用 maxTurns / timeoutSeconds 进一步收紧
 # 租约持有到**任务结束**（子代理完成/取消）或 TTL 到期 —— 写完就放会让另一个 Agent 基于过期的读去覆盖。

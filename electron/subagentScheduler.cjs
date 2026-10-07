@@ -1,4 +1,5 @@
 'use strict';
+const schedulingUi = require('../config/ui.scheduling.json');
 
 /** @type {Record<string, string[]>} */
 const TASK_TRANSITIONS = {
@@ -18,7 +19,7 @@ function transitionTask(task, status) {
 /** 管理器共享 FIFO：只读任务共享槽位，写任务独占；排队可取消。 */
 class SubagentScheduler {
   constructor(limit) {
-    this.limit = Math.max(1, Math.min(8, Math.floor(Number(limit) || 3)));
+    this.limit = Math.max(schedulingUi.limits.concurrency.min, Math.min(schedulingUi.limits.concurrency.max, Math.floor(Number(limit) || schedulingUi.defaults.concurrency)));
     this.active = 0;
     this.writer = false;
     this.queue = [];

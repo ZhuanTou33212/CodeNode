@@ -37,6 +37,8 @@ const { randomUUID } = require('crypto');
 const path = require('path');
 const { atomicWriteFile } = require('./atomicFile.cjs');
 const { SubagentScheduler, transitionTask } = require('./subagentScheduler.cjs');
+const schedulingSettings = require('./schedulingSettings.cjs');
+const schedulingUi = require('../config/ui.scheduling.json');
 
 /**
  * 子代理任务视图的**持久化**（§4.2 的第一件事）。
@@ -72,11 +74,14 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
   const summaryInEnvelope = !!rawSummary && rawSummary === envelopeSummary;
   /** @type {any[]} */
   let list = [];
+  let startedTaskCount = 0;
   try {
     if (fs.existsSync(file)) {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!Array.isArray(parsed.tasks)) throw new Error('任务视图格式无效');
+      if (parsed.startedTaskCount != null && (!Number.isInteger(parsed.startedTaskCount) || parsed.startedTaskCount < 0)) throw new Error('任务配额格式无效');
       list = parsed.tasks;
+      startedTaskCount = Math.max(Number(parsed.startedTaskCount) || 0, list.filter(item => item?.startedAt).length);
     }
   } catch (error) {
     throw new Error('任务视图不可读，拒绝覆盖：' + String(error.message || error));
@@ -116,6 +121,8 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
     worktree: view.worktree || null,
   };
   const index = list.findIndex((item) => item && item.taskId === record.taskId);
+  // Count before retention, independently of the number of task views kept.
+  if (record.startedAt && (index < 0 || !list[index].startedAt)) startedTaskCount++;
   if (index >= 0) list[index] = { ...list[index], ...record };
   else list.push(record);
   const requestedLimit = Number(options.maxTasks);
@@ -125,7 +132,7 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
   const settled = list.filter((item) => !protectedItems.includes(item));
   const settledSlots = Math.max(0, retentionLimit - protectedItems.length);
   list = [...protectedItems, ...(settledSlots ? settled.slice(-settledSlots) : [])];
-  atomicWriteFile(file, JSON.stringify({ runId: String(runId || ''), updatedAt: new Date().toISOString(), tasks: list }, null, 2));
+  atomicWriteFile(file, JSON.stringify({ runId: String(runId || ''), updatedAt: new Date().toISOString(), startedTaskCount, tasks: list }, null, 2));
   return record;
 }
 
@@ -136,10 +143,12 @@ function persistTaskView(projectRoot, runId, view, options = {}) {
 function readTaskViews(projectRoot, runId) {
   const file = subagentViewFile(projectRoot, runId);
   try {
-    if (!fs.existsSync(file)) return { ok: true, runId: String(runId || ''), updatedAt: null, tasks: [] };
+    if (!fs.existsSync(file)) return { ok: true, runId: String(runId || ''), updatedAt: null, startedTaskCount: 0, tasks: [] };
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!Array.isArray(parsed.tasks) || parsed.tasks.some((item) => !item || !item.taskId || !['queued', 'running', 'cancelling', 'done', 'failed', 'blocked', 'cancelled'].includes(item.status))) throw new Error('任务视图格式无效');
-    return { ok: true, runId: String(runId || ''), updatedAt: parsed.updatedAt || null, tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [] };
+    if (parsed.startedTaskCount != null && (!Number.isInteger(parsed.startedTaskCount) || parsed.startedTaskCount < 0)) throw new Error('任务配额格式无效');
+    return { ok: true, runId: String(runId || ''), updatedAt: parsed.updatedAt || null,
+      startedTaskCount: Math.max(Number(parsed.startedTaskCount) || 0, parsed.tasks.filter(item => item?.startedAt).length), tasks: parsed.tasks };
   } catch (error) {
     return { ok: false, runId: String(runId || ''), updatedAt: null, tasks: [], error: '任务视图损坏：' + String((error && error.message) || error) };
   }
@@ -211,12 +220,13 @@ const ROLE_PROMPTS = Object.freeze(
  * `true`、`leaseTtlMs` 收窄成 `120000`，随后 `this.subCfg.leases !== false` 会被 tsc 判成
  * 「number 与 boolean 不可能重叠」（checkJs 实测）。
  * @type {{maxTasksPerRun: number, maxBatchTasks: number, maxConcurrentTasks: number, totalTimeoutSeconds: number,
- *         resultMaxChars: number, leases: boolean, leaseTtlMs: number}}
+ *         resultMaxChars: number, leases: boolean, leaseTtlMs: number, warningPercent: number}}
  */
 const DEFAULTS = Object.freeze({
-  maxTasksPerRun: 12,
-  maxBatchTasks: 8,
-  maxConcurrentTasks: 3,
+  maxTasksPerRun: schedulingUi.defaults.maxTasksPerRun,
+  maxBatchTasks: schedulingUi.defaults.maxBatchTasks,
+  maxConcurrentTasks: schedulingUi.defaults.concurrency,
+  warningPercent: schedulingUi.defaults.warningPercent,
   totalTimeoutSeconds: 600,
   resultMaxChars: 8000,
   /** 跨 Agent 资源租约（P3）：默认开 */
@@ -536,7 +546,7 @@ class SubagentManager {
     const o = options || {};
     this.agent = o.agent;
     this.toolkit = o.toolkit;
-    this.cfg = o.cfg;
+    this.cfg = o.cfg || {};
     this.registry = o.registry;
     this.runId = o.runId || 'run-' + Date.now().toString(36);
     this.onDelta = o.onDelta || null;
@@ -557,6 +567,15 @@ class SubagentManager {
     /** @type {Record<string, number>} 子代理配置（agent.subagent.*），缺项用默认值 */
     this.subCfg = Object.assign({}, DEFAULTS, (o.cfg && o.cfg.subagent) || {});
     this.scheduler = new SubagentScheduler(this.subCfg.maxConcurrentTasks);
+    // The supervisor reads live consumption before each model request; children
+    // must not inherit this supervisor-only convergence instruction.
+    this.cfg.subagentBudgetState = context => {
+      if (context) {
+        const hydrated = this.hydrateTasks(context);
+        if (!hydrated.ok) throw new Error(hydrated.error || '子任务配额无法恢复');
+      }
+      return schedulingSettings.budgetState(this.startedTaskCount, this.subCfg.maxTasksPerRun, this.subCfg.warningPercent);
+    };
     this.reservations = new Map();
     /**
      * 跨 Agent 资源租约：**必须与主代理共享同一个实例**（由 ipc 按 run 建好传进来），
@@ -605,6 +624,7 @@ class SubagentManager {
       });
     }
     this.startedTaskCount = Math.max(this.startedTaskCount,
+      Number(stored.startedTaskCount) || 0,
       stored.tasks.filter((record) => record && record.startedAt).length);
     // 兜底重放撤回/过期状态的依赖失效传播，防止上次落盘在传播中途退出。
     for (const task of this.tasks.values()) {
@@ -1748,6 +1768,7 @@ class SubagentManager {
       const childCfg = {
         ...this.cfg,
         costKind: 'subagent',
+        subagentBudgetState: null,
         modelTaskType: 'subagent',
         traceContext: typeof childContext.traceContext === 'function' ? childContext.traceContext() : this.cfg.traceContext,
         traceProjectRoot: this.cfg.traceProjectRoot || context.projectRoot(),

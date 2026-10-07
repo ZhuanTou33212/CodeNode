@@ -45,6 +45,8 @@
     "test:vector-choice": "node scripts/vector-storage-choice-test.cjs",
     "test:shell-output": "node scripts/shell-output-test.cjs",
     "test:subagent": "node scripts/subagent-test.cjs",
+    "test:scheduling": "node scripts/scheduling-test.cjs",
+    "test:scheduling-ui": "node scripts/run-electron.cjs scripts/scheduling-ui-test.cjs",
     "test:subagent-isolation": "node scripts/subagent-isolation-test.cjs",
     "test:subagent-role-skill": "node scripts/subagent-role-skill-test.cjs",
     "test:compression-batch": "node scripts/compression-batch-test.cjs",
