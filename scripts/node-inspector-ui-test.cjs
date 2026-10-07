@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow } = require('electron');
+app.disableHardwareAcceleration();
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-node-inspector-'));
 const moduleRoot = process.env.CODENODE_PACKAGED_ASAR || path.join(__dirname, '..');
 const output = process.env.CODENODE_NODE_INSPECTOR_OUTPUT || path.join(__dirname, '..', 'release', 'node-inspector');
@@ -45,11 +46,12 @@ app.whenReady().then(async () => {
         const vector = { count: graph.getState().nodes.length, type: graph.getState().nodes.find(n => n.id === graph.getState().selectedId)?.type,
           tab: ui.getState().sideTab, open: ui.getState().sideOpen, panel: !!document.querySelector('.side-panel') };
         input.blur();
+        graph.getState().setSelectedIds([]); await sleep(60);
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'A', code: 'KeyA', shiftKey: true, bubbles: true, cancelable: true }));
         await sleep(70);
         const menu = { exists: !!document.querySelector('.add-menu'), open: ui.getState().sideOpen, tab: ui.getState().sideTab };
         const item = [...document.querySelectorAll('.add-menu-item')].find(el => el.textContent.includes('任务'));
-        if (!item) throw Error('Task template not found'); item.click(); await sleep(150);
+        if (!item) throw Error('Task template not found: ' + JSON.stringify({ menu, focus: document.activeElement.tagName, selected: graph.getState().selectedId })); item.click(); await sleep(150);
         const task = { count: graph.getState().nodes.length, type: graph.getState().nodes.find(n => n.id === graph.getState().selectedId)?.type,
           open: ui.getState().sideOpen, panel: !!document.querySelector('.side-panel') };
         document.querySelector('.toolbar-dropdown').open = true;
@@ -84,7 +86,10 @@ app.whenReady().then(async () => {
       assert.deepEqual(report.closed, { open: false, panel: false, tab: 'node' });
       assert.deepEqual(report.preservedOpen, { open: true, selectedChanged: true });
       assert.deepEqual(report.after, report.before);
-      fs.writeFileSync(path.join(output, 'node-inspector-' + theme + '.png'), (await win.webContents.capturePage()).toPNG());
+      if (process.env.CODENODE_CAPTURE_NODE_INSPECTOR === '1') {
+        fs.writeFileSync(path.join(output, 'node-inspector-' + theme + '.png'),
+          (await win.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+      }
       reports.push(report);
     }
     const settings = await win.webContents.executeJavaScript(`(async () => {
