@@ -25,6 +25,7 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
   next.menuRowHeight = bound(raw.menuRowHeight,28,44,next.menuRowHeight);
   next.visibleActions = Array.isArray(raw.visibleActions) ? [...new Set(raw.visibleActions.filter(id => typeof id === 'string' && CANVAS_ACTIONS.some(action => action.id === id)))] : [...next.visibleActions];
   if(Array.isArray(raw.visibleActions)&&raw.visibleActions.length&&Number(raw.preferenceVersion||0)<2&&!next.visibleActions.includes('workflow'))next.visibleActions.push('workflow');
+  if(Array.isArray(raw.visibleActions)&&raw.visibleActions.length&&Number(raw.preferenceVersion||0)<3&&!next.visibleActions.includes('properties'))next.visibleActions.push('properties');
   return next;
 }
 export function loadUiPreferences(): UiPreferences {

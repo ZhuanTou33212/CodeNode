@@ -9,6 +9,12 @@
   "autoCollapseSidebars": true,
   "menuActions": [
     {
+      "id": "properties",
+      "group": "节点",
+      "label": "节点属性",
+      "requires": "selection"
+    },
+    {
       "id": "workflow",
       "group": "工作流",
       "label": "运行工作流",
@@ -70,5 +76,5 @@
   "activityBarWidth": 48,
   "autoSaveEnabled": true,
   "autoSaveDelayMs": 1200,
-  "preferenceVersion": 2
+  "preferenceVersion": 3
 }

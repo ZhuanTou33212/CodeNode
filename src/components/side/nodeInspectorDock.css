@@ -1,0 +1,25 @@
+/* Node properties occupy layout space instead of covering the canvas. */
+.workspace-main .workspace-content > .node-inspector-dock {
+  position: relative;
+  order: -1;
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-main .node-inspector-dock > .side-panel {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  max-width: 100%;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: auto;
+  flex: 0 1 auto;
+}

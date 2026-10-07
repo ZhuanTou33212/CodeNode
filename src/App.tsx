@@ -8,6 +8,7 @@ import PluginWorkspace from './components/PluginWorkspace';
 import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
+import './components/side/nodeInspectorDock.css';
 import ProjectNavigation from './components/ProjectNavigation';
 import ConversationPanel from './components/ConversationPanel';
 import FileWorkspace from './components/FileWorkspace';
@@ -213,7 +214,6 @@ export default function App() {
 
       if (e.code === 'KeyA' && e.shiftKey && !mod) {
         e.preventDefault();
-        useUiStore.getState().setSideTab('node');
         const m = useUiStore.getState().lastMouse;
         useUiStore.getState().openAddMenu(m.x, m.y);
         return;
@@ -288,7 +288,7 @@ export default function App() {
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
 <div className="workspace-content">
             {(sideTab === 'project' || sideTab === 'preview') && <FileWorkspace />}
-            {sideTab === 'node' && sideOpen && <SidePanel />}
+            {sideTab === 'node' && sideOpen && <div className="node-inspector-dock"><SidePanel /></div>}
             <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>
             <ConversationPanel />
           </div>

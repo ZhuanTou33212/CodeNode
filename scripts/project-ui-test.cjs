@@ -387,7 +387,7 @@ app.whenReady().then(async () => {
       await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(projectFile)})`);
       await waitFor(async()=>await js(`!!document.querySelector('.toolbar-navigation-toggle')`).catch(()=>false),'异常配置恢复');
       const sanitized=await js(`window.__codenodeUi.getState().preferences`);
-      assert.equal(sanitized.menuWidth,360); assert.equal(sanitized.menuRowHeight,34);assert.deepEqual(sanitized.visibleActions,['terminal','workflow']);
+      assert.equal(sanitized.menuWidth,360); assert.equal(sanitized.menuRowHeight,34);assert.deepEqual(sanitized.visibleActions,['terminal','workflow','properties']);
       await js(`window.__codenodeUi.getState().resetPreferences()`);
       console.log('UI PREFERENCES: PASS (settings controls, immediate menu changes, reload persistence, shared themes, defaults, validation)');
     }

@@ -93,6 +93,11 @@ export default function Toolbar() {
             const handlers: Record<string, () => void> = {
               workflow:()=>openDock('runs'),
               duplicate: () => { if (selectedId) duplicateNode(selectedId); },
+              properties: () => {
+                const ui = useUiStore.getState();
+                if (ui.sideTab === 'node' && ui.sideOpen) ui.setSideOpen(false);
+                else ui.setSideTab('node');
+              },
               delete: () => { if (selectedId) deleteNodes([selectedId]); },
               layout: () => { layoutNodes(); setToast('已横向整理：全部节点排在同一行'); },
               arrange: () => { arrangeNodes(); setToast('已自动整理：按依赖分层、分支并列'); },
@@ -116,7 +121,6 @@ export default function Toolbar() {
           title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"
           onClick={() => {
             if (!useSessionStore.getState().current()) useSessionStore.getState().newCanvas();
-            useUiStore.getState().setSideTab('node');
             const template = NODE_TEMPLATES.vector;
             const vd = template.data as VectorData;
             const w = vd.width ?? 1040;
