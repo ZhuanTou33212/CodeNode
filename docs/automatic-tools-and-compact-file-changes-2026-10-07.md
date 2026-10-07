@@ -29,3 +29,9 @@
 日志与截图：`out/agent-compact-ui.log`、`out/agent-compact-ui-final.log`、`out/agent-compact-display.log`、`out/agent-compact-core-final.log`、`out/agent-compact-light.png`、`out/agent-compact-dark.png`。
 
 完整核心 143/143 通过；完整界面首轮 17/17 通过，最终简洁来源显示及校验状态的定向界面 3/3 通过。HIGH 审批底线补充回归 4/4 通过，静态检查及构建通过。旧手动审批测试显式设置 `tools.confirm_writes=true`；未列明 WRITE 工具测试改为断言仍需审批，不放宽安全边界。
+
+## 固定目录与同步
+
+实际 ASAR 的真实 Agent/窗口回归通过，176 个打包文件与源码一致。旧版未运行后，无备份原位更新 `E:\CodeNode\release\win-unpacked`；原路径 EXE 自检 `ok=true`、退出码 0。记录为 `out/agent-compact-packaged-ui.log`、`out/agent-compact-package-check.log`、`out/agent-compact-fixed-selftest.json`、`out/agent-compact-delivery-hashes.json`。
+
+ASAR SHA256：`f9d47714cea71f764b35eb7cab9a72ac8e9ba2b12380bba7ee7f952cf76a5eb2`。本次源码/测试/配置/文档提交到 `origin/yimi-branch`，通过已有本机 Windows 代理完成同步，未修改全局 Git 代理设置。暂存及隔离自检数据清理，评测日志、截图、源码和用户工程保留；UI 用例退出前主动清理自己的临时数据。

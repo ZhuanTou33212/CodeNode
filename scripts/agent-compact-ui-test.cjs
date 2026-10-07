@@ -19,10 +19,16 @@ require(path.join(moduleRoot, 'electron/main.cjs'));
 const { installScriptedModel } = require('./lib/scripted-model.cjs');
 let scripted;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function cleanupFixture() {
+  if (path.dirname(root) === os.tmpdir() && path.basename(root).startsWith('codenode-agent-compact-ui-')) {
+    try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+}
+function finish(code) { scripted?.restore(); scripted = null; cleanupFixture(); app.exit(code); }
 app.whenReady().then(async () => {
   const until = Date.now() + 6000;
   while (!mainWindow && Date.now() < until) await sleep(30);
-  if (!mainWindow) { console.error('Main window unavailable'); app.exit(1); return; }
+  if (!mainWindow) { console.error('Main window unavailable'); finish(1); return; }
   const win = mainWindow;
   win.setSize(1280, 900); win.webContents.setBackgroundThrottling(false);
   const js = code => win.webContents.executeJavaScript(code);
@@ -96,12 +102,8 @@ app.whenReady().then(async () => {
     await Promise.race([js('window.__pendingHigh'), sleep(5000).then(() => { throw new Error('Cancel did not settle HIGH confirmation'); })]);
     assert.equal(await js('window.__codenodeStore.getState().nodes.some(node=>node.id==="compact-node")'), true);
     console.log('COMPACT AGENT UI: PASS (real agent/tools, zero ordinary prompts, distinct files/diffs, hidden internals, both themes/state retention, persisted settings, deletion approval retained)');
-    app.exit(0);
-  } catch (error) { console.error(error); app.exit(1); }
+    finish(0);
+  } catch (error) { console.error(error); finish(1); }
   finally { scripted?.restore(); }
 });
-app.on('will-quit', () => {
-  if (path.dirname(root) === os.tmpdir() && path.basename(root).startsWith('codenode-agent-compact-ui-')) {
-    try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
-  }
-});
+app.on('will-quit', cleanupFixture);
