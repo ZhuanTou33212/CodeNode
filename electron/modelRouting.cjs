@@ -74,7 +74,7 @@ function candidateConfig(cfg, candidate) {
 function selection(cfg, taskType) {
   const routing = cfg.modelRouting || { candidates: {}, routes: {}, fallbacks: [] };
   const task = String(taskType || cfg.modelTaskType || cfg.costKind || 'main');
-  const id = routing.routes[task];
+  const id = routing.routes[task] || (task.startsWith('subagent_') ? routing.routes.subagent : null);
   const entries = [{ id: id || 'primary', cfg: candidateConfig(cfg, id ? routing.candidates[id] : null) }];
   for (const fallback of routing.fallbacks) {
     if (fallback === id) continue;

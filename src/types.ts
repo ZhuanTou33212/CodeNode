@@ -196,6 +196,14 @@ export type SessionCanvas = {
   nodeCount: number;
   summary?: string;
 };
+export interface CostSettings { delegationGate: boolean; roleModels: Record<string, string> }
+export interface TaskCosts {
+  runCount: number; completedRuns: number; verifiedRuns: number; totalCostUsd: number | null;
+  costPerCompletedRun: number | null; costPerVerifiedRun: number | null;
+  tasks: { runId: string; taskId: string; executionId: string | null; role: string; status: string; verified: boolean;
+    models: string[]; kinds: Record<string, number>; requests: number; retries: number; estimated: number;
+    totalTokens: number; promptTokens: number; completionTokens: number; promptCachedTokens: number; costKnown: boolean; costUsd: number }[];
+}
 export interface SchedulingSettings {
   concurrency: number;
   maxTasksPerRun: number;

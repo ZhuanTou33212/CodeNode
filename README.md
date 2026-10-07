@@ -61,6 +61,8 @@ npm run start:prod
 
 单 Agent 是 CodeNode 的基本执行单元。多 Agent 委派出来的每个子任务，内部也使用同一套 ReAct 循环；先理解单 Agent 的状态、工具边界和恢复方式，再看多 Agent 的调度关系。
 
+**设置 → 成本与模型**可为探查、实现、验证、审查和画布角色分别选择已接入模型，默认跟随对话所选主模型。小任务准入规则在本地判断，单步普通操作与明确的单文件读取交回主 Agent，不启动子模型。设置中可查看按任务／角色归属的 token、缓存命中、重试和成本，以及运行完成和局部校验结果；缺失价格时显示未知，不把完成等同于正确。详见[成本控制说明](docs/token-cost-policy-2026-10-07.md)。
+
 ![单 Agent ReAct 运行状态与恢复](docs/architecture/single-agent-react-state.png)
 
 一次 Agent Run 从 `RUNNING` 开始：

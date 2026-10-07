@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('codenode', {
   editingSave: (root, settings) => ipcRenderer.invoke('agent:editing-save', root, settings),
     executionSave: (root, settings) => ipcRenderer.invoke('agent:execution-save', root, settings),
   schedulingSave: settings => ipcRenderer.invoke('agent:scheduling-save', settings),
+    costSettingsSave: (root, settings) => ipcRenderer.invoke('agent:cost-settings-save', root, settings),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),

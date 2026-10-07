@@ -201,6 +201,8 @@ function register(ctx) {
       toolsEnabled: cfg.tools.toolsEnabled,
       autoExecuteTools: cfg.tools.toolsConfirmWrites === false,
       scheduling: cfg.scheduling,
+      costSettings: cfg.costSettings,
+      subagentRoles: require('../tools/roles.cjs').roleCatalog().map(role => ({ name: role.name, label: role.label })),
       ragEnabled: cfg.rag.enabled,
       rag: ragSettings.publicSettings(cfg.rag, cfg.grounding),
       editing: cfg.editing,
@@ -240,6 +242,15 @@ function register(ctx) {
       modelQueue.setLimit(settings.concurrency);
       return { ok: true, settings };
     } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
+  });
+
+  ipcMain.handle('agent:cost-settings-save', async (_event, projectRoot, input) => {
+    try {
+      if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' };
+      if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请在任务结束后修改模型分配' };
+      return { ok: true, settings: require('../costSettings.cjs').writeSettings(projectRoot, input,
+        id => modelStore.findModel(userDataDir(), agent.loadConfig(null), id)) };
+    } catch (error) { return { ok: false, error: error.message }; }
   });
 
   ipcMain.handle('agent:rag-save', async (_event, projectRoot, input) => {
@@ -404,6 +415,8 @@ function register(ctx) {
     let runSpan = null;
     let runTraceStatus = 'error';
     let memoryScopeKey = '';
+    /** @type {CostLedger|null} */
+    let runCostLedger = null;
     /** SessionStop 钩子需要的上下文：run 过程中可能抛异常，catch 里也要能补跑一次（保持外层可见） */
     /** @type {{cfg: any, sandboxPolicy: any, runId: string|null, projectRoot: string|null}|null} */
     let hookSessionCtx = null;
@@ -425,8 +438,11 @@ function register(ctx) {
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
       // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
       const baseCfg = agent.loadConfig(null);
+      cfg.resolveRoleModel = (role, parent) => require('../costSettings.cjs').childConfig(parent, role, cfg.costSettings,
+        id => modelStore.findModel(userDataDir(), baseCfg, id));
       const sel = modelId ? modelStore.findModel(userDataDir(), baseCfg, modelId) : null;
       if (sel) {
+        cfg.costPrices = require('../costSettings.cjs').connectionPrices(cfg, sel);
         if (sel.apiBase) cfg.apiBase = sel.apiBase;
         if (sel.apiKey) cfg.apiKey = sel.apiKey;
         if (sel.model) cfg.model = sel.model;
@@ -510,6 +526,7 @@ function register(ctx) {
 
       // ---- 成本账本 + 副作用幂等账本 + 检查点写入器 ----
       const costLedger = new CostLedger({ projectRoot, runId, prices: cfg.costPrices });
+      runCostLedger = costLedger;
       cfg.costLedger = costLedger;
       cfg.costRunId = runId;
       cfg.planSessionId = String(sessionId || (resumePlan && resumePlan.planSessionId) || '').slice(0, 120);
@@ -1291,6 +1308,8 @@ function register(ctx) {
       // status 取值保持既有语义不变（UI 与续跑判定按它过滤），避免影响既有读取路径
       const terminalOutcome = agentState.describeOutcome({ ...result, state: result.state });
       const terminalState = result.state || terminalOutcome.state;
+      costLedger.recordOutcome({ runId, status: terminalState === 'COMPLETED' ? 'completed' : terminalState.toLowerCase(),
+        role: 'main', verified: result.codeVerification?.verified === true });
       runTraceStatus = terminalState === 'CANCELLED' ? 'cancelled' : terminalState === 'LIMIT_REACHED' ? 'limit'
         : terminalState === 'COMPLETED' ? 'ok' : 'error';
       runSpan.event('run.outcome', { state: terminalState, usage: result.usage, stopReason: result.stopReason || null });
@@ -1335,6 +1354,7 @@ function register(ctx) {
         outcome: terminalOutcome,
       };
       out.cost = costLedger.summary(runId);
+      out.taskCosts = costLedger.taskSummary();
       out.costBudget = cfg.requestBudget.costSnapshot();
       runStore.appendEvent(projectRoot, runId, 'cost_budget', out.costBudget);
       out.alerts = alertDispatcher.recent(5);
@@ -1370,6 +1390,7 @@ function register(ctx) {
       if (runSpan) runSpan.event('run.exception', { message: String(e?.message || e) });
       if (runId) activeRequests.delete(runId);
       if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
+      if (runId && runCostLedger) runCostLedger.recordOutcome({ runId, role: 'main', status: runTraceStatus, verified: false });
       // MCP 会话在 run 结束时统一关闭：会话复用是本轮的优化，但**不能**留下孤儿 server 进程
       try {
         require('../tools/mcpClient.cjs').closeAll();

@@ -6,6 +6,7 @@ import RagSettingsPanel from './RagSettingsPanel';
 import EditingSettingsPanel from './EditingSettingsPanel';
 import AgentExecutionSettings from './AgentExecutionSettings';
 import SchedulingSettingsPanel from './SchedulingSettingsPanel';
+import CostSettingsPanel from './CostSettingsPanel';
 
 
 export default function GlobalSettings() {
@@ -30,7 +31,7 @@ export default function GlobalSettings() {
   if (!open) return null;
   return <div className="settings-mask" onClick={close}><section className="global-settings" role="dialog" aria-modal="true" aria-label="全局设置" onClick={event => event.stopPropagation()}>
     <header><strong>设置</strong><button className="settings-close" aria-label="关闭设置" onClick={close}>×</button></header>
-    <div className="settings-layout"><nav aria-label="设置分类">{([['general','常规'],['rag','检索'],['editing','安全编辑与校验'],['archived','已归档聊天']] as const).map(([id,label]) => <button key={id} aria-pressed={tab === id} onClick={() => openSettings(id)}>{label}</button>)}</nav>
+    <div className="settings-layout"><nav aria-label="设置分类">{([['general','常规'],['costs','成本与模型'],['rag','检索'],['editing','安全编辑与校验'],['archived','已归档聊天']] as const).map(([id,label]) => <button key={id} aria-pressed={tab === id} onClick={() => openSettings(id)}>{label}</button>)}</nav>
     <div className="settings-content">
       {tab === 'general' && <><h2>常规</h2><div className="settings-row"><span>外观</span><button className="settings-theme-toggle" onClick={toggleTheme}>{theme === 'light' ? '日间' : '夜间'} · 切换</button></div><h3>项目保存</h3><label className="settings-row"><span>自动保存画布与会话</span><input aria-label="自动保存项目" type="checkbox" checked={preferences.autoSaveEnabled} onChange={e=>updatePreferences({autoSaveEnabled:e.target.checked})}/></label><label className="settings-row"><span>停止编辑后的保存延迟</span><input aria-label="自动保存延迟" type="range" min="500" max="5000" step="100" value={preferences.autoSaveDelayMs} onChange={e=>updatePreferences({autoSaveDelayMs:Number(e.target.value)})}/><output>{(preferences.autoSaveDelayMs/1000).toFixed(1)}秒</output></label><h3>布局</h3><label className="settings-row"><span>最左侧图标栏宽度</span><input aria-label="主导航图标栏宽度" type="range" min="40" max="64" value={preferences.activityBarWidth} onChange={e=>updatePreferences({activityBarWidth:Number(e.target.value)})}/><output>{preferences.activityBarWidth}px</output></label>
       <label className="settings-row"><span>左侧栏宽度</span><input aria-label="左侧栏宽度" type="range" min="180" max="400" value={navigationWidth} onChange={e => setNavigationWidth(Number(e.target.value))}/><output>{navigationWidth}px</output></label>
@@ -47,6 +48,7 @@ export default function GlobalSettings() {
       <div className="settings-row"><span>模型连接</span><button onClick={() => useUiStore.getState().openModelManager()}>管理模型</button></div></>}
       {tab === 'rag' && <><h2>检索</h2><p className="settings-scope">应用于当前项目</p><RagSettingsPanel /></>}
       {tab === 'editing' && <><h2>安全编辑与校验</h2><EditingSettingsPanel /></>}
+      {tab === 'costs' && <><h2>成本与模型</h2><CostSettingsPanel /></>}
       {tab === 'archived' && <ArchivedChatsSettings/>}
     </div></div>
   </section></div>;

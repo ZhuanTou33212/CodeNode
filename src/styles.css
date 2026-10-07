@@ -4262,6 +4262,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 24px; }
 .settings-content h2 { margin: 0 0 20px; font-size: 22px; }
 .settings-scope { color: var(--glass-muted); font-size: 12px; }
+.task-cost-list details { padding: 12px 0; border-bottom: 1px solid var(--glass-border); }
+.task-cost-list summary { cursor: pointer; overflow-wrap: anywhere; }
+.task-cost-list p { overflow-wrap: anywhere; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--glass-border); }
 .settings-content .dock-rag-settings { max-width: none; }
 .settings-content .dock-extensions { min-width: 0; }

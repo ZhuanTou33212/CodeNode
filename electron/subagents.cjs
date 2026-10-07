@@ -979,6 +979,7 @@ class SubagentManager {
           taskId: { type: 'string' },
           role: { type: 'string', enum: roles.ROLE_NAMES },
           objective: { type: 'string' },
+          taskSize: { type: 'string', enum: ['single_step', 'multi_step'], description: '单步读写文件请选 single_step，由主 Agent 直接完成；独立多步骤任务选 multi_step。' },
           inputs: { type: 'object' },
           dependsOnTaskIds: {
             type: 'array', items: { type: 'string' },
@@ -1319,6 +1320,7 @@ class SubagentManager {
                 taskId: { type: 'string' },
                 role: { type: 'string', enum: roles.ROLE_NAMES },
                 objective: { type: 'string' },
+                taskSize: { type: 'string', enum: ['single_step', 'multi_step'], description: '单步工具操作由主 Agent 完成。' },
                 inputs: { type: 'object' },
                 acceptanceCriteria: { type: 'array', items: { type: 'string' } },
                 stageNodeId: { type: 'string' },
@@ -1511,6 +1513,12 @@ class SubagentManager {
 
   async delegate(context, args) {
     if (typeof context.cancelled === 'function' && context.cancelled()) return AgentToolResult.error('主 Agent 已取消，未启动子代理');
+    const decision = require('./costSettings.cjs').delegationDecision(args,
+      this.cfg.costSettings || require('./costSettings.cjs').parseSettings());
+    if (!decision.delegate) {
+      return AgentToolResult.error('该任务是单步操作，请由主 Agent 直接调用工具完成；未启动子 Agent。不要原样重复委派。',
+        { code: 'DELEGATION_NOT_NEEDED', status: 'not_started', reason: decision.reason, nextAction: 'execute_in_main' });
+    }
     this.hydrateTasks(context);
     const taskId = String(args.taskId || '').trim() || makeTaskId();
     if (this.tasks.has(taskId) || this.reservations.has(taskId)) return AgentToolResult.error('taskId 已被占用：' + taskId);
@@ -1602,6 +1610,8 @@ class SubagentManager {
         if (release) release();
       }
       if (result) result.data = { ...(result.data || {}), ...taskView(task) };
+      this.cfg.costLedger?.recordOutcome?.({ runId: this.runId, taskId, executionId: task.executionId,
+        role: task.role, status: task.status === 'done' ? 'completed' : task.status, verified: false });
       try { context.audit(JSON.stringify({ kind: 'subagent_end', runId: this.runId, taskId, role: task.role, status: task.status })); } catch {}
       if (this.onDelta) {
         try { this.onDelta({ kind: 'subagent_state', taskId, role: task.role, status: task.status, summary: String(task.error || task.summary || '').slice(0, 200) }); } catch {}
@@ -1766,10 +1776,13 @@ class SubagentManager {
        * 又会把同一笔用量记第二遍 —— 账本 `summary()/today()/byKind` 与 run 成本告警约 2 倍失真。
        */
       const childCfg = {
-        ...this.cfg,
+        ...(typeof this.cfg.resolveRoleModel === 'function' ? this.cfg.resolveRoleModel(role, this.cfg) : this.cfg),
         costKind: 'subagent',
         subagentBudgetState: null,
-        modelTaskType: 'subagent',
+        modelTaskType: 'subagent_' + role,
+        costTaskId: task.taskId,
+        costRole: role,
+        costExecutionId: task.executionId,
         traceContext: typeof childContext.traceContext === 'function' ? childContext.traceContext() : this.cfg.traceContext,
         traceProjectRoot: this.cfg.traceProjectRoot || context.projectRoot(),
         limits: { ...(this.cfg.limits || {}), maxToolIterations: task.maxTurns },

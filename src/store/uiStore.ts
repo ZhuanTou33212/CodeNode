@@ -24,7 +24,7 @@ interface UiState {
   updatePreferences: (patch: Partial<UiPreferences>) => void;
   resetPreferences: () => void;
   settingsOpen: boolean;
-  settingsTab: 'general' | 'rag' | 'editing' | 'extensions' | 'archived';
+  settingsTab: 'general' | 'costs' | 'rag' | 'editing' | 'extensions' | 'archived';
   openSettings: (tab?: UiState['settingsTab']) => void;
   closeSettings: () => void;
   conversationOpen: boolean;

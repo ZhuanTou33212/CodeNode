@@ -314,6 +314,10 @@ soul_file=config/soul.md
 #   「工具层静态审计（shellGuard）+ 路径校验（writeRoots）+ 一或两次用户确认」。静态审计判不出的写目标
 #   （变量/通配，如 `> $OUT`）**不再静默放行**：默认模式要求确认，strict 模式直接拒绝。
 
+# 成本与角色模型（设置 → 成本与模型；按项目保存）
+# agent.subagent.delegation_gate=true            # 单步普通工具操作留给主 Agent，本地判断，不调用规划模型
+# agent.subagent.model.explorer=<已接入模型 ID>    # 留空跟随主 Agent；builder/verifier/reviewer/canvas 同样支持
+# 角色模型 ID 来自模型管理的连接，独立使用该连接的凭据、上下文与价格。
 # 人格成长：默认开启；每 5 轮成功对话反思，保存到 CodeNode 的 config/soul.md。
 # false 停止学习及注入成长人格。
 soul.evolution.enabled=true

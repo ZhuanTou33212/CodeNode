@@ -26,6 +26,7 @@ const EXPECTED = {
   'agent.cjs': [
     'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:editing-save', 'agent:execution-save', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:scheduling-save',
+    'agent:cost-settings-save',
     'agent:resume-plan', 'agent:resume-start', 'agent:chat', 'agent:stop',
     'agent:events',
     'agent:plan-read',

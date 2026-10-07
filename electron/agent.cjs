@@ -184,6 +184,7 @@ function loadConfig(projectRoot) {
     subagent: { ...parseSubagentConfig(cfg), maxConcurrentTasks: scheduling.concurrency,
       maxTasksPerRun: scheduling.maxTasksPerRun, maxBatchTasks: scheduling.maxBatchTasks,
       warningPercent: scheduling.warningPercent },
+    costSettings: require('./costSettings.cjs').parseSettings(cfg),
     reliability: parseReliabilityConfig(cfg),
     limits: parseLimitsConfig(cfg),
     context: parseContextConfig(cfg),
@@ -486,7 +487,10 @@ function recordCost(cfg, entry) {
   const ledger = cfg && cfg.costLedger;
   if (!ledger || typeof ledger.record !== 'function') return null;
   try {
-    return ledger.record(entry);
+    const model = entry.model || cfg.model;
+    return ledger.record({ ...entry, taskId: cfg.costTaskId || entry.taskId || null,
+      role: cfg.costRole || entry.role || 'main', executionId: cfg.costExecutionId || entry.executionId || null,
+      prices: cfg.costPrices, model });
   } catch {
     return null;
   }

@@ -1,0 +1,6 @@
+{
+  "defaults": {
+    "delegationGate": true,
+    "roleModels": { "explorer": "", "builder": "", "verifier": "", "reviewer": "", "canvas": "" }
+  }
+}

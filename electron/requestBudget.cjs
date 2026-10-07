@@ -301,6 +301,10 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
           cfg.costLedger.record({
             kind: details.failed ? 'failed-attempt' : 'usage-unknown',
             model: cfg.model,
+            taskId: cfg.costTaskId || null,
+            role: cfg.costRole || 'main',
+            executionId: cfg.costExecutionId || null,
+            prices: cfg.costPrices,
             usage: estimate,
             ok: details.failed !== true,
             estimated: !known,

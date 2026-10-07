@@ -189,6 +189,8 @@ interface CodenodeApi {
     toolsEnabled: boolean;
     autoExecuteTools?: boolean;
     scheduling?: import('./types').SchedulingSettings;
+    costSettings?: import('./types').CostSettings;
+    subagentRoles?: { name: string; label: string }[];
     ragEnabled: boolean;
     editing?: import('./types').EditingSettings;
     rag?: { enabled: boolean; strictValidation: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;hasMilvusToken?:boolean;hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean; bm25K1: number; bm25B: number; vectorWeight: number };
@@ -200,6 +202,7 @@ interface CodenodeApi {
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;
+  costSettingsSave: (root: string, settings: import('./types').CostSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').CostSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
   modelsDiscover: (provider: string, apiKey: string, options?: { apiBase?: string; modelId?: string }) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; apiKeyPreview?: string; error?: string }>;
   modelsConnect: (ticket: string, selectedId: string) => Promise<{ ok: boolean; error?: string }>;
@@ -259,6 +262,7 @@ interface CodenodeApi {
   }>;
   agentMetrics: (root: string | null) => Promise<{
     ok: boolean;
+    taskCosts?: import('./types').TaskCosts;
     cost?: {
       run: CostCountersDto;
       today: CostCountersDto;

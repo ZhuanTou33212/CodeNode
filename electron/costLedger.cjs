@@ -137,6 +137,7 @@ class CostLedger {
     this.file = options.file || (this.projectRoot ? path.join(path.resolve(this.projectRoot), '.codenode', 'metrics', 'cost.jsonl') : null);
     this.maxBytes = Math.max(64 * 1024, Number(options.maxBytes) || DEFAULT_MAX_BYTES);
     this.entries = [];
+    this.outcomes = [];
     this.totals = emptyCounters();
     this.byRun = new Map();
     this.byKind = {};
@@ -160,6 +161,9 @@ class CostLedger {
       runId: entry.runId ? runStore.normalizeRunId(entry.runId) : this.runId,
       kind,
       model,
+      taskId: entry.taskId || null,
+      role: entry.role || null,
+      executionId: entry.executionId || null,
       tokens,
       usage: usage || null,
       ok: entry.ok !== false,
@@ -177,7 +181,7 @@ class CostLedger {
     };
     // Failed streams may have consumed tokens without a final provider usage frame.
     // Show the estimate, but never present a guessed charge as a known USD amount.
-    record.costUsd = record.billingUnknown ? null : costOf(model, usage, this.prices);
+    record.costUsd = record.billingUnknown ? null : costOf(model, usage, entry.prices || this.prices);
     this.entries.push(record);
     if (this.entries.length > MAX_IN_MEMORY) this.entries.splice(0, this.entries.length - MAX_IN_MEMORY);
     addCounters(this.totals, record, record.costUsd);
@@ -221,6 +225,25 @@ class CostLedger {
   summary(runId) {
     const key = runId ? runStore.normalizeRunId(runId) : this.runId;
     return withCacheRate(this.byRun.get(key) || emptyCounters());
+  }
+
+  recordOutcome(entry) {
+    const record = { type: 'task_outcome', recordId: randomUUID(), ts: new Date().toISOString(),
+      runId: entry.runId || this.runId, taskId: entry.taskId || null, executionId: entry.executionId || null,
+      role: entry.role || 'main', status: entry.status, verified: entry.verified === true };
+    this.outcomes.push(record);
+    if (this.file) try { runStore.appendJsonl(this.file, record, this.maxBytes); } catch {}
+    return record;
+  }
+
+  taskSummary() {
+    const outcomes = new Map(this.outcomes.map(entry => [entry.recordId, entry]));
+    if (this.file) try {
+      for (const line of fs.readFileSync(this.file, 'utf8').split(/\r?\n/)) {
+        try { const entry = JSON.parse(line); if (entry.type === 'task_outcome') outcomes.set(entry.recordId, entry); } catch {}
+      }
+    } catch {}
+    return require('./taskCosts.cjs').summarize(this.records(), [...outcomes.values()].sort((a, b) => a.ts.localeCompare(b.ts)));
   }
 
   /** 当日（本地时区）聚合：内存账本 + 文件中的历史行（只读，不写）。 */
