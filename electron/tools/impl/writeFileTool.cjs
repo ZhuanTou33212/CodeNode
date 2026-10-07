@@ -10,6 +10,8 @@ const { ConfirmationLevel } = require('../context.cjs');
 const { resolveInRoot, checkExpectedHash, sha256OfFile, summarizeContentForConfirm } = require('./shared.cjs');
 const { atomicWriteFile } = require('../../atomicFile.cjs');
 const { fileChangeReview } = require('../fileChangeReview.cjs');
+const editing = require('../../safeEditing.cjs');
+const { config } = require('../../editingSettings.cjs');
 
 function register(registry) {
   registry.register(
@@ -49,6 +51,12 @@ function register(registry) {
         }
       }
       const existed = fs.existsSync(target);
+      let initial;
+      let syntax;
+      try {
+        initial = editing.snapshot(target);
+        syntax = editing.validateCandidate(relative, initial.text, content, context.editingConfig ? context.editingConfig() : config.defaults, initial.existed);
+      } catch (error) { return AgentToolResult.failure('ARG_SCHEMA', error.message, { path: relative, syntax: error.syntax }); }
       const what = '写入文件 ' + relative + (existed ? '（覆盖已有文件）' : '（新建文件）');
       // #10：确认框必须给出**内容摘要**（只给字节数等于让「确认」退化成无条件放行）
       const ok = await context.confirm(
@@ -57,6 +65,8 @@ function register(registry) {
         '将 ' + content.length + ' 字节内容写入 ' + relative + '。\n' + summarizeContentForConfirm(content)
       );
       if (!ok) return AgentToolResult.error('已取消写入');
+      const implicitGuard = checkExpectedHash(target, initial.sha256);
+      if (!implicitGuard.ok) return AgentToolResult.failure('CONFLICT_STALE', '确认期间文件版本已变化，请重新读取', { path: relative, actual: implicitGuard.actual });
       // #9：确认框挂着的时候目标文件可能被外部改动（TOCTOU）。确认前那次校验只是「注定失败的写
       // 别打扰用户」，**关掉 TOCTOU 窗口的是这一次**：确认已过、写入之前再校验一遍，不一致就拒写。
       if (args.expectedSha256 != null && String(args.expectedSha256).trim()) {
@@ -89,7 +99,7 @@ function register(registry) {
           fs.copyFileSync(target, target + '.bak');
         }
         if (path.dirname(target)) fs.mkdirSync(path.dirname(target), { recursive: true });
-        atomicWriteFile(target, content, 'utf-8');
+        atomicWriteFile(target, content, 'utf-8', { expectedSha256: initial.sha256 });
         context.audit('write_file ' + relative + ' bytes=' + content.length);
         context.notifyFileChange(relative, existedNow ? 'modify' : 'create', content.length + ' 字节');
         return AgentToolResult.ok('已写入 ' + relative + '（' + content.length + ' 字节）', {
@@ -99,8 +109,10 @@ function register(registry) {
           reviewUnavailable,
           // 回传写入后的哈希：下一个写者可以拿它当 expectedSha256（乐观并发的交接棒）
           sha256: sha256OfFile(target),
+          syntax,
         });
       } catch (e) {
+        if (e.code === 'CONFLICT_STALE') return AgentToolResult.failure('CONFLICT_STALE', e.message, { path: relative });
         return AgentToolResult.error('写入失败：' + ((e && e.message) || e));
       }
     }

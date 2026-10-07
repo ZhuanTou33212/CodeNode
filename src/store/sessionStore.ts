@@ -78,6 +78,8 @@ interface SessionState {
   startOnCurrent: (prompt: string) => void;
   switchSession: (id: string) => void;
   setArchived: (id: string, archived: boolean) => void;
+  deleteArchivedSession: (id:string)=>boolean;
+  deleteArchivedSessions: (ids:string[])=>boolean;
   syncActiveGraph: () => void;
   restoreSessions: (list: SessionCanvas[], messages?: SessionMsg[], activeId?: string | null, memoryConversationId?: string, memoryTaskEpoch?: number) => void;
 
@@ -85,6 +87,7 @@ interface SessionState {
   pushUser: (content: string, attachments?: SessionMsg['attachments']) => void;
   beginTurn: () => void;
   streamDelta: (d: {
+    codeVerification?: import('../types').CodeVerificationReport;
     kind?: string;
     text?: string;
     toolCalls?: unknown;
@@ -281,6 +284,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } else if (!archived && !s.activeId) get().switchSession(id);
   },
 
+  deleteArchivedSession: id => get().deleteArchivedSessions([id]),
+  deleteArchivedSessions: input => {
+    const ids=[...new Set(input)],state=get();
+    if(!ids.length||state.streaming||ids.some(id=>!state.sessions[id]?.archived||state.activeId===id))return false;
+    const deleted=new Set(ids),sessions={...state.sessions},plansBySessionId={...state.plansBySessionId};
+    for(const id of ids){delete sessions[id];delete plansBySessionId[id];}
+    set({sessions,order:state.order.filter(id=>!deleted.has(id)),plansBySessionId,...(!state.activeId?{messages:[],memoryConversationId:uid('memory'),memoryTaskEpoch:0}:{}),...(state.activePlanSessionId&&deleted.has(state.activePlanSessionId)?{activePlanSessionId:null,plan:null,planUpdatedAt:null,planRunId:null}: {})});
+    return true;
+  },
   switchSession: (id) => {
     const s = get();
     if (id === s.activeId || !s.sessions[id]) return;
@@ -400,6 +412,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    if (d.kind === 'code_verification' && d.codeVerification) {
+      const messages = s.messages.slice();
+      const at = messages.map(message=>message.role).lastIndexOf('assistant');
+      if (at >= 0) messages[at] = { ...messages[at], codeVerification: d.codeVerification };
+      set({messages}); return;
+    }
     if (d.kind === 'plan_warning') {
       useUiStore.getState().setToast(String(d.message || '任务计划持久化未完整，请核对运行记录'));
       return;

@@ -200,16 +200,26 @@ function register(ctx) {
       soul,
       toolsEnabled: cfg.tools.toolsEnabled,
       ragEnabled: cfg.rag.enabled,
-      rag: ragSettings.publicSettings(cfg.rag),
+      rag: ragSettings.publicSettings(cfg.rag, cfg.grounding),
+      editing: cfg.editing,
       models: modelStore.toPublicModels(store.models),
       activeModelId: store.activeId,
     };
   });
 
+  ipcMain.handle('agent:editing-save', async (_event, projectRoot, input) => {
+    try {
+      if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' };
+      if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请在任务结束后修改校验设置' };
+      const settings = require('../editingSettings.cjs').writeSettings(projectRoot, input);
+      return { ok: true, settings };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
   ipcMain.handle('agent:rag-check', async (_event, projectRoot, input) => {
     try {
       if (!projectRoot) return { ok: false, error: '请先选择项目' };
-      const settings = ragSettings.normalizedSettings(input, agent.loadConfig(projectRoot).rag);
+      const cfg = agent.loadConfig(projectRoot);
+      const settings = ragSettings.normalizedSettings(input, cfg.rag, cfg.grounding);
       return await ragSettings.checkSettings(settings);
     } catch (error) { return { ok: false, error: String(error && error.message || error) }; }
   });
@@ -218,8 +228,9 @@ function register(ctx) {
     try {
       if (!projectRoot) return { ok: false, error: '请先选择项目' };
       if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请在任务结束后切换检索配置' };
-      const previous = agent.loadConfig(projectRoot).rag;
-      const settings = ragSettings.normalizedSettings(input, previous);
+      const cfg = agent.loadConfig(projectRoot);
+      const previous = cfg.rag;
+      const settings = ragSettings.normalizedSettings(input, previous, cfg.grounding);
       const checked = await ragSettings.checkSettings(settings);
       if (!checked.ok) return checked;
       return ragSettings.writeSettings(projectRoot, settings, previous);
@@ -1172,6 +1183,7 @@ function register(ctx) {
             sendDelta({ kind: 'file_change', fileChange: { path: rel, kind, detail } });
           },
           ragConfig: cfg.rag,
+          editingConfig: cfg.editing,
           modelRuntime: { budget: cfg.requestBudget, queue: modelQueue, prices: cfg.costPrices,
             traceContext: cfg.traceContext, traceProjectRoot: projectRoot,
             onUsage: (entry) => agent.recordCost(cfg, entry) },
@@ -1295,6 +1307,7 @@ function register(ctx) {
       const out = {
         ok: !result.error,
         reply: result.content,
+        codeVerification: result.codeVerification || null,
         reasoning: result.reasoning,
         toolCalls: result.toolCalls,
         usage: result.usage,

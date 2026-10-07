@@ -100,6 +100,7 @@ const useEffectCalls = [];
 function stubZustand() {
   return {
     create: (initializer) => {
+      if (!initializer) return stubZustand().create;
       let state = initializer(
         (partial) => {
           const patch = typeof partial === 'function' ? partial(state) : partial;

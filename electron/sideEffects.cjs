@@ -23,6 +23,7 @@ const { redact } = require('./redaction.cjs');
 /** 只读工具：可安全重复执行（结果相同，不产生副作用） */
 const READ_TOOLS = new Set([
   'read_file', 'list_directory', 'find_files', 'search_files', 'scan_project', 'analyze_project',
+  'find_definition', 'find_references', 'get_callers', 'get_callees',
   'get_workbench_model', 'query_scalars', 'project_info', 'code_review', 'retrieve_context',
   'read_project', 'read_run', 'poll_job', 'ask_user', 'user_memory_read',
 ]);

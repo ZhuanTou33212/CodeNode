@@ -7,7 +7,7 @@
  *   #9  `edit_file` / `write_file` 的 `expectedSha256` 校验此前只在 `context.confirm` **之前**做 ——
  *       确认框挂着时文件被外部改动，仍会被静默覆盖（TOCTOU 未收口）。判据：在 confirm 与 write
  *       之间改动文件 → 必须拒写（CONFLICT_STALE）且磁盘保持外部改动后的内容；无外部改动时照常写入（反向锁）。
- *       另一面：`edit_file` 不带 expectedSha256 时，确认期间新增的出现次数必须在写盘前重算。
+ *       未显式提供 expectedSha256 时也绑定初始版本；确认期间有外部修改必须拒写，重新读取后才可明确替换全部。
  *   #23 `bulk_edit.create_files` 与 `write_analysis_md` 用裸 `fs.writeFileSync`（不 fsync / 不 rename /
  *       无备份），与 write_file / edit_file 的原子替换口径不一致。判据：静态门禁（不存在绕过
  *       atomicWriteFile 的写路径）+ 功能判据（落盘内容正确、无 .tmp 残留）。
@@ -122,14 +122,19 @@ function makeContext(onConfirm, approved) {
       JSON.stringify(fs.readFileSync(target, 'utf8')));
   }
   {
-    // 不带 expectedSha256 时：确认期间新增的出现次数必须在写盘前重算（文案里的「替换 N 处」不能是旧快照）
+    // 自动版本保护：不带 expectedSha256 也不能扩大已经确认过的修改范围。
     const target = path.join(root, 'count-recompute.txt');
     fs.writeFileSync(target, 'X\n', 'utf8');
     const run = makeContext(() => fs.writeFileSync(target, 'X\nX\n', 'utf8'));
     const res = await registry.execute('edit_file', { path: 'count-recompute.txt', oldText: 'X', newText: 'Y' }, run.context);
-    check('#9 edit_file：写盘前重算替换处数（确认期间新增的第 2 处也被替换）',
-      res.ok === true && res.data.replaced === 2 && fs.readFileSync(target, 'utf8') === 'Y\nY\n',
-      JSON.stringify({ ok: res.ok, replaced: res.data && res.data.replaced, disk: JSON.stringify(fs.readFileSync(target, 'utf8')) }));
+    check('#9 edit_file：未显式传哈希，确认期间新增的内容仍受保护',
+      res.ok === false && res.data.code === 'CONFLICT_STALE' && fs.readFileSync(target, 'utf8') === 'X\nX\n',
+      JSON.stringify({ ok: res.ok, code: res.data && res.data.code, disk: JSON.stringify(fs.readFileSync(target, 'utf8')) }));
+    const fresh = makeContext(null);
+    const retried = await registry.execute('edit_file', { path: 'count-recompute.txt', oldText: 'X', newText: 'Y', occurrence: 0, expectedSha256: sha256OfFile(target) }, fresh.context);
+    check('#9 edit_file：重读新版本并明确替换全部后，正确替换两处',
+      retried.ok === true && retried.data.replaced === 2 && fs.readFileSync(target, 'utf8') === 'Y\nY\n',
+      JSON.stringify({ ok: retried.ok, replaced: retried.data && retried.data.replaced }));
   }
   {
     // 反向锁：无外部改动时 edit_file 照常工作

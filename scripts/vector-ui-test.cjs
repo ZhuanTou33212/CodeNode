@@ -1,6 +1,6 @@
 /**
  * 画布节点（矢量画布）—— 端到端 UI 验收脚本
- * 用法：先启动 vite dev server（例如 npx vite --port 5199），再执行 node scripts/vector-ui-test.cjs
+ * 用法：node scripts/vector-ui-test.cjs；默认自动准备独立的静态构建快照。
  * 驱动无头 Edge 通过 CDP 操作真实 DOM / React 事件，验证关键验收项。
  *
  * 重构后矢量画布不再单独占一栏，而是嵌在 Agent 画布上的「画布节点」里：
@@ -9,74 +9,62 @@
  *  - 保持 Blender 风格节点外观与左右端口
  */
 /* eslint-disable no-console */
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const BASE = process.env.VECTOR_TEST_URL || 'http://localhost:5199';
-const BASE_PORT = Number(new URL(BASE).port || 80);
-// 调试端口每次随机，避免上一次残留的 Edge 进程占用固定端口导致连不上
-const PORT = Number(process.env.VECTOR_TEST_PORT) || 9500 + Math.floor(Math.random() * 400);
+let BASE = process.env.VECTOR_TEST_URL || '';
+// 默认由操作系统分配空闲端口，避免并发回归撞上旧调试进程。
+let PORT = Number(process.env.VECTOR_TEST_PORT) || 0;
 const EDGE = process.env.VECTOR_TEST_EDGE || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-vec-'));
 const ROOT_DIR = path.join(__dirname, '..');
 
-let devServer = null;
-
-function portOpen(port) {
-  const net = require('node:net');
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: '127.0.0.1', port }, () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.on('error', () => resolve(false));
-    socket.setTimeout(500, () => {
-      socket.destroy();
-      resolve(false);
-    });
-  });
-}
+let rendererServer = null;
 
 /**
- * 保证被测页面可用：已有 dev server 就复用，否则自己拉起 vite（--strictPort）。
- * 之前这里要求"先手动起 vite"，于是 npm run test:vector 单独跑必然超时——
- * 测试脚本应当自己能准备好被测环境。
+ * 静态快照不接收 HMR：并发修改源码不能重置正在测试的会话/画布。
+ * 显式 VECTOR_TEST_URL 仍可选择外部被测页面。
  */
-async function ensureDevServer() {
-  if (await portOpen(BASE_PORT)) {
-    out(`▶ 复用已在运行的 dev server（${BASE}）`);
-    return;
+async function ensureRendererServer() {
+  if (BASE) return;
+  const dist = path.join(ROOT_DIR, 'dist');
+  if (!fs.existsSync(path.join(dist, 'index.html'))) {
+    const build = spawnSync(process.execPath, [path.join(ROOT_DIR, 'node_modules/vite/bin/vite.js'), 'build'],
+      { cwd: ROOT_DIR, encoding: 'utf8', timeout: 60000, windowsHide: true });
+    if (build.status !== 0) throw new Error('无法准备被测构建：' + String(build.stderr || build.error || build.stdout).slice(-3000));
   }
-  const isWindows = process.platform === 'win32';
-  out(`▶ 未发现 dev server，自行启动 vite（端口 ${BASE_PORT}）…`);
-  devServer = spawn(isWindows ? 'npx.cmd' : 'npx', ['vite', '--port', String(BASE_PORT), '--strictPort'], {
-    cwd: ROOT_DIR,
-    stdio: 'ignore',
-    shell: isWindows,
-    windowsHide: true,
+  const snapshot = path.join(PROFILE, 'renderer');
+  fs.cpSync(dist, snapshot, { recursive: true });
+  const http = require('node:http');
+  const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+  rendererServer = http.createServer((request, response) => {
+    try {
+      const relative = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname).replace(/^\/+/, '') || 'index.html';
+      const file = path.resolve(snapshot, relative);
+      if (!file.startsWith(snapshot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        response.writeHead(404); response.end(); return;
+      }
+      response.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      response.end(fs.readFileSync(file));
+    } catch { response.writeHead(400); response.end(); }
   });
-  const deadline = Date.now() + 60000;
-  while (Date.now() < deadline) {
-    if (await portOpen(BASE_PORT)) {
-      out('  ✓ dev server 就绪');
-      return;
-    }
-    await sleep(300);
-  }
-  throw new Error('dev server 启动超时（' + BASE + '）；可设 VECTOR_TEST_URL 指向已有服务');
+  await new Promise((resolve, reject) => {
+    rendererServer.once('error', reject);
+    rendererServer.listen(0, '127.0.0.1', resolve);
+  });
+  const address = rendererServer.address();
+  if (!address || typeof address === 'string') throw new Error('无法启动被测页面服务器');
+  BASE = 'http://127.0.0.1:' + address.port;
+  out('▶ 已准备隔离构建快照：' + BASE);
 }
 
-function stopDevServer() {
-  if (!devServer) return;
-  try {
-    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(devServer.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
-    else devServer.kill('SIGTERM');
-  } catch {}
-  devServer = null;
+function stopRendererServer() {
+  rendererServer?.close();
+  rendererServer = null;
 }
-process.on('exit', stopDevServer);
+process.on('exit', stopRendererServer);
 
 /** 画布节点根选择器 */
 const NODE = '[data-testid="vector-node"]';
@@ -119,6 +107,21 @@ function sleep(ms) {
 }
 
 async function startBrowser() {
+  if (!fs.existsSync(EDGE)) throw new Error('Edge 可执行文件不存在：' + EDGE);
+  if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error('VECTOR_TEST_PORT 必须是有效端口');
+  if (!PORT) {
+    const net = require('node:net');
+    PORT = await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (!address || typeof address === 'string') { server.close(); reject(new Error('无法分配调试端口')); return; }
+        server.close(error => error ? reject(error) : resolve(address.port));
+      });
+    });
+  }
+  let startupError = null, exited = false, exitCode = null, diagnostics = '';
   browser = spawn(EDGE, [
     '--headless=new',
     '--disable-gpu',
@@ -129,18 +132,31 @@ async function startBrowser() {
     `--user-data-dir=${PROFILE}`,
     `--remote-debugging-port=${PORT}`,
     BASE,
-  ], { stdio: 'ignore' });
-  for (let i = 0; i < 60; i += 1) {
+  ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  browser.once('error', error => { startupError = error; });
+  browser.once('exit', code => { exited = true; exitCode = code; });
+  const collect = data => { diagnostics = (diagnostics + String(data)).slice(-4096); };
+  browser.stdout.on('data', collect);
+  browser.stderr.on('data', collect);
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const spawnFailure = /** @type {Error|null} */ (startupError);
+    if (spawnFailure) throw new Error('Edge 启动失败：' + spawnFailure.message);
+    if (exited) throw new Error('Edge 在调试端口就绪前退出（exit=' + exitCode + '）：' + diagnostics.trim());
     try {
-      const res = await fetch(`http://127.0.0.1:${PORT}/json`);
-      if (res.ok) return;
+      const res = await fetch(`http://127.0.0.1:${PORT}/json`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        const targets = await res.json();
+        if (Array.isArray(targets) && targets.some(target => target.type === 'page' && String(target.url || '').startsWith(BASE))) return;
+      }
     } catch { /* retry */ }
     await sleep(300);
   }
-  throw new Error('Edge CDP 未就绪');
+  throw new Error('Edge CDP 未就绪（port=' + PORT + '，profile=' + PROFILE + '）：' + diagnostics.trim());
 }
 
 async function stopBrowser() {
+  stopRendererServer();
   if (browser) {
     // Windows 上 kill 主进程会留下子进程，用 taskkill /T 结束整棵进程树
     try {
@@ -153,6 +169,7 @@ async function stopBrowser() {
     await sleep(600);
   }
   try {
+    if (path.dirname(PROFILE) !== path.resolve(os.tmpdir()) || !path.basename(PROFILE).startsWith('edge-vec-')) throw new Error('Unexpected profile cleanup path');
     fs.rmSync(PROFILE, { recursive: true, force: true });
   } catch { /* ignore */ }
 }
@@ -368,7 +385,7 @@ async function keyOnWindow(cdp, key, ctrl = false, shift = false) {
 }
 
 async function main() {
-  await ensureDevServer();
+  await ensureRendererServer();
   out('▶ 启动无头 Edge…');
   await startBrowser();
   const targets = /** @type {any[]} */ (await fetch(`http://127.0.0.1:${PORT}/json`).then((r) => r.json()));
@@ -537,6 +554,9 @@ async function main() {
     // 真实点一下图形：既选中它，也让焦点落进画布节点（画布内快捷键的守卫要求焦点在 .vs-scope 内，
     // 见 VectorNode.tsx 的 focusBodyOnPointerDown）；此前这里直接程序化 selectIds + 派发 Delete，
     // 走的不是用户真实路径，Delete 会落到工作台的「删除选中节点」上，把整个画布节点删掉。
+    // The node inspector floats over this part of the canvas. Close it using
+    // its user control so elementFromPoint can hit the object itself.
+    await clickEl(cdp, '.side-panel .sp-close');
     const firstObj = await vs(`(() => { const o = s.objects[0]; return { x: o.x + o.width / 2, y: o.y + o.height / 2 }; })()`);
     await clickWorld(cdp, firstObj);
     await waitFor(

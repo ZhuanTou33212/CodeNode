@@ -1,6 +1,8 @@
 import { useSessionStore } from '../store/sessionStore';
 import { useReactFlow } from '@xyflow/react';
-import { useEffect, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, type CSSProperties } from 'react';
+import { useProjectSaveStore } from '../store/projectSaveStore';
+import { workflowReadiness } from '../lib/workflowRunState';
 import { CANVAS_ACTIONS } from '../lib/uiPreferences';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
@@ -8,7 +10,15 @@ import { saveProject } from '../lib/projectActions';
 import { NODE_TEMPLATES } from '../nodes';
 import type { VectorData } from '../types';
 
+function positionToolbarMenus() {
+  document.querySelectorAll<HTMLDetailsElement>('.toolbar-dropdown[open]').forEach(dropdown=>{
+    const menu=dropdown.querySelector<HTMLElement>('.toolbar-menu');if(!menu)return;
+    menu.style.left='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.min(0,window.innerWidth-bounds.right-12)}px`;
+  });
+}
 export default function Toolbar() {
+  useLayoutEffect(()=>positionToolbarMenus());
+  useEffect(()=>{window.addEventListener('resize',positionToolbarMenus);return()=>window.removeEventListener('resize',positionToolbarMenus)},[]);
   useEffect(() => {
     const closeMenus = (event: Event) => {
       document.querySelectorAll<HTMLDetailsElement>('.toolbar-dropdown[open]').forEach((menu) => {
@@ -35,6 +45,11 @@ export default function Toolbar() {
   const nodeCount = useGraphStore((s) => s.nodes.length);
   const conversationOpen=useUiStore(s=>s.conversationOpen);
   const toggleConversation=useUiStore(s=>s.toggleConversation);
+  const saveState=useProjectSaveStore();
+  const autoSave=useUiStore(s=>s.preferences.autoSaveEnabled);
+  const nodes=useGraphStore(s=>s.nodes),edges=useGraphStore(s=>s.edges);
+  const workflow=workflowReadiness(nodes,edges);
+  const disabled=(action:typeof CANVAS_ACTIONS[number])=>action.requires==='workflow'?!workflow.ready:action.requires==='selection'?!selectedId:action.requires==='nodes'?!nodeCount:false;
   const preferences = useUiStore(s => s.preferences);
   const setToast = useUiStore((s) => s.setToast);
   const openDock = useUiStore((s) => s.openDock);
@@ -42,7 +57,7 @@ export default function Toolbar() {
 
   return (
     <header className="toolbar">
-      <button className="toolbar-save" title="保存项目 (Ctrl+S)" onClick={() => void saveProject()}>保存</button>
+      <span className={'toolbar-save-state state-'+saveState.status} role="status" title={saveState.error || (autoSave?'项目自动保存已开启；Ctrl+S 可手动保存':'自动保存已关闭；Ctrl+S 可手动保存')}>{saveState.status==='saving'?'保存中…':saveState.status==='error'?'保存失败':saveState.status==='dirty'?'未保存':saveState.status==='idle'?'未保存项目':'已保存'}</span>
 
       <div className="toolbar-group">
         <button title="撤销 (Ctrl+Z)" disabled={!canUndo} onClick={undo}>
@@ -53,17 +68,7 @@ export default function Toolbar() {
         </button>
       </div>
 
-      <div className="toolbar-group toolbar-primary-actions">
-        <button
-          className="toolbar-run"
-          title="按连线拓扑连续执行工作流"
-          disabled={nodeCount === 0}
-          onClick={() => openDock('runs')}
-        >
-          运行
-        </button>
-      </div>
-      <details className="toolbar-group toolbar-dropdown" onToggle={(event) => {
+<details className="toolbar-group toolbar-dropdown" onToggle={(event) => {
         const dropdown = event.currentTarget;
         const menu = dropdown.querySelector<HTMLElement>('.toolbar-menu');
         if (!dropdown.open || !menu) return;
@@ -80,15 +85,13 @@ export default function Toolbar() {
             menu.querySelector('summary')?.focus();
           }
         }}>
-          <div className="toolbar-menu-section toolbar-overflow-small">
-            <button onClick={() => void saveProject()}><span>保存项目</span>{preferences.showShortcuts && <kbd>Ctrl+S</kbd>}</button>
-            <button disabled={!nodeCount} onClick={() => openDock('runs')}><span>运行工作流</span></button>
-          </div>
-          {[...new Set(CANVAS_ACTIONS.map(action => action.group))].map(group => {
+          <div className="toolbar-menu-section"><button onClick={()=>void saveProject()}><span>保存项目</span>{preferences.showShortcuts&&<kbd>Ctrl+S</kbd>}</button></div>
+{[...new Set(CANVAS_ACTIONS.map(action => action.group))].map(group => {
             const actions = CANVAS_ACTIONS.filter(action => action.group === group && preferences.visibleActions.includes(action.id))
-              .filter(action => !preferences.hideDisabledActions || !(action.requires === 'selection' ? !selectedId : action.requires === 'nodes' ? !nodeCount : false));
+              .filter(action => !preferences.hideDisabledActions || !disabled(action));
             if (!actions.length) return null;
             const handlers: Record<string, () => void> = {
+              workflow:()=>openDock('runs'),
               duplicate: () => { if (selectedId) duplicateNode(selectedId); },
               delete: () => { if (selectedId) deleteNodes([selectedId]); },
               layout: () => { layoutNodes(); setToast('已横向整理：全部节点排在同一行'); },
@@ -99,7 +102,7 @@ export default function Toolbar() {
             };
             return <div className="toolbar-menu-section" role="group" aria-label={group} key={group}>
               {preferences.showGroupLabels && <div className="toolbar-menu-label">{group}</div>}
-              {actions.map(action => <button key={action.id} data-action={action.id} className={action.danger ? 'toolbar-menu-danger' : undefined} disabled={action.requires === 'selection' ? !selectedId : action.requires === 'nodes' ? !nodeCount : false} onClick={handlers[action.id]}>
+              {actions.map(action => <button key={action.id} data-action={action.id} className={action.danger ? 'toolbar-menu-danger' : undefined} disabled={disabled(action)} title={action.id==='workflow'?workflow.reason||'查看执行范围，再开始工作流':undefined} onClick={handlers[action.id]}>
                 <span>{action.label}</span>{preferences.showShortcuts && action.shortcut && <kbd>{action.shortcut}</kbd>}
               </button>)}
             </div>;

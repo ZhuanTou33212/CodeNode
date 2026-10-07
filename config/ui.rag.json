@@ -1,0 +1,22 @@
+{
+  "defaults": {
+    "enabled": true,
+    "provider": "none",
+    "backend": "memory",
+    "strictValidation": false
+  },
+  "backends": [
+    {
+      "id": "memory",
+      "label": "内存 · 小工程"
+    },
+    {
+      "id": "sqlite",
+      "label": "SQLite · 本地持久化"
+    },
+    {
+      "id": "milvus",
+      "label": "Milvus · 外部向量服务"
+    }
+  ]
+}

@@ -9,6 +9,12 @@
   "autoCollapseSidebars": true,
   "menuActions": [
     {
+      "id": "workflow",
+      "group": "工作流",
+      "label": "运行工作流",
+      "requires": "workflow"
+    },
+    {
       "id": "duplicate",
       "group": "节点",
       "label": "复制节点",
@@ -61,5 +67,8 @@
       "label": "检查点与恢复"
     }
   ],
-  "activityBarWidth": 48
+  "activityBarWidth": 48,
+  "autoSaveEnabled": true,
+  "autoSaveDelayMs": 1200,
+  "preferenceVersion": 2
 }

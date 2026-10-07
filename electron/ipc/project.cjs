@@ -216,7 +216,7 @@ function register(ctx) {
     });
     if (canceled || !filePath) return { ok: false };
     try {
-      fs.writeFileSync(filePath, cnode.encodeCnode(payload));
+      require('../atomicFile.cjs').atomicWriteFile(filePath, cnode.encodeCnode(payload));
       return { ok: true, filePath };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };

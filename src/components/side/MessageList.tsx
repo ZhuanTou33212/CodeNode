@@ -1,6 +1,7 @@
 import { memo, useState } from 'react';
 import type { SessionMsg } from '../../types';
 import TaskTrace from './TaskTrace';
+import CodeVerificationCard from './CodeVerificationCard';
 import { useProjectStore } from '../../store/projectStore';
 import { useSessionStore } from '../../store/sessionStore';
 
@@ -80,6 +81,7 @@ export function MessageView({ msg }: { msg: SessionMsg }) {
       {msg.status === 'truncated' ? <div className="cs-msg-state cs-msg-state-warn" role="status">已截断（触到模型长度上限，回复「继续」可接着写）</div> : null}
       {msg.status === 'failed' ? <div className="cs-msg-state cs-msg-state-error" role="status">本轮失败（详见下方错误说明）</div> : null}
       <div className="cs-msg-text">{msg.content || (msg.status === 'running' ? '…' : '')}</div>
+      {msg.codeVerification && <CodeVerificationCard report={msg.codeVerification}/>}
       {msg.content && msg.status !== 'running' ? (
         <div className="cs-msg-feedback" aria-label="回答反馈">
           <button type="button" className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>

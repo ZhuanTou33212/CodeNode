@@ -3,6 +3,7 @@ import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { useSessionStore } from '../store/sessionStore';
 import { useCheckpointStore, type Checkpoint } from '../store/checkpointStore';
+import { useProjectSaveStore } from '../store/projectSaveStore';
 import { readRecentProjects, rememberRecentProject } from './recentProjects';
 import type { Graph, SessionCanvas, SessionDoc, SessionMsg } from '../types';
 
@@ -33,9 +34,9 @@ function nameOf(filePath: string): string {
 }
 
 function buildPayload() {
-  useSessionStore.getState().syncActiveGraph();
   const ss = useSessionStore.getState();
   const active = ss.current();
+  const liveGraph=useGraphStore.getState().getDocument();
   const sessions = ss.order
     .map((id) => ss.sessions[id])
     .filter(Boolean)
@@ -45,15 +46,15 @@ function buildPayload() {
       prompt: s.prompt,
       status: s.status,
       createdAt: s.createdAt,
-      nodeCount: s.nodeCount,
+      nodeCount: s.id===ss.activeId?liveGraph.nodes.length:s.nodeCount,
       archived: !!s.archived,
-      messages: s.messages,
+      messages: s.id===ss.activeId?ss.messages:s.messages,
       memoryConversationId: s.memoryConversationId,
       summary: s.summary || '',
-      root: s.doc.root,
+      root: s.id===ss.activeId?liveGraph:s.doc.root,
     }));
   return {
-    graph: active ? active.doc.root : { nodes: [], edges: [] },
+    graph: active ? liveGraph : { nodes: [], edges: [] },
     canvases: {
       sessions,
       messages: ss.messages,
@@ -262,59 +263,51 @@ export async function openProjectFile(): Promise<void> {
   useUiStore.getState().setToast('已打开工程文件：' + res.filePath + warn);
 }
 
-export async function saveProject(): Promise<void> {
-  const api = window.codenode;
-  if (!api) {
-    useUiStore.getState().setToast('需要 Electron 环境');
-    return;
-  }
-  const projectFile = useProjectStore.getState().projectFile;
-  const root = useProjectStore.getState().root;
-  let payload;
-  try {
-    payload = buildPayload();
-  } catch (e) {
-    useUiStore.getState().setToast('保存失败（序列化错误）：' + String(e));
-    return;
-  }
-
-  const target = projectFile || root;
-  if (target) {
-    let res;
+export function captureProjectSnapshot() {
+  const project=useProjectStore.getState();
+  const fingerprint=JSON.stringify(buildPayload());
+  const payload=JSON.parse(fingerprint) as ReturnType<typeof buildPayload>;
+  return {root:project.root,file:project.projectFile,target:project.projectFile||project.root,key:project.root+'|'+project.projectFile,payload,fingerprint};
+}
+export type ProjectSnapshot=ReturnType<typeof captureProjectSnapshot>;
+const saveQueues=new Map<string,Promise<boolean>>();
+export function persistProjectSnapshot(snapshot:ProjectSnapshot,automatic=false):Promise<boolean> {
+  const previous=saveQueues.get(snapshot.key)||Promise.resolve(true);
+  const run=previous.catch(()=>false).then(async()=>{
+    const store=useProjectSaveStore;
+    const current=()=>snapshot.key===useProjectStore.getState().root+'|'+useProjectStore.getState().projectFile;
+    if(automatic&&current()&&captureProjectSnapshot().fingerprint!==snapshot.fingerprint)return false;
+    if(current()) store.setState({key:snapshot.key,status:'saving',error:''});
     try {
-      res = await api.saveProject(target, payload);
-    } catch (e) {
-      useUiStore.getState().setToast('保存失败（IPC 异常）：' + String(e));
-      return;
+      const api=window.codenode;if(!api)throw Error('需要 Electron 环境');
+      if(automatic&&!snapshot.file) return false;
+      const result=snapshot.target?await api.saveProject(snapshot.target,snapshot.payload):await api.saveGraph(snapshot.payload);
+      if(!result.ok||!result.filePath)throw Error(result.error||'已取消保存');
+      if(current()) {
+        if(snapshot.file!==result.filePath)useProjectStore.getState().setProjectFile(result.filePath);
+        try {localStorage.setItem(LAST_FILE_KEY,result.filePath);localStorage.setItem(LAST_ROOT_KEY,dirOf(result.filePath));rememberRecentProject({root:dirOf(result.filePath),file:result.filePath});}catch{}
+        if(!snapshot.target) await useProjectStore.getState().loadRoot(dirOf(result.filePath));
+        const latest=captureProjectSnapshot();
+        store.setState({key:latest.key,savedFingerprint:snapshot.fingerprint,status:latest.fingerprint===snapshot.fingerprint?'saved':'dirty',error:''});
+        if(!automatic)useUiStore.getState().setToast('项目已保存');
+      }
+      return true;
+    }catch(error) {
+      if(current()) {
+        const message=error instanceof Error?error.message:String(error);
+        store.setState({key:snapshot.key,status:'error',error:message});
+        if(!automatic)useUiStore.getState().setToast('保存失败：'+message);
+      }
+      return false;
     }
-    if (res.ok && res.filePath) {
-      useProjectStore.getState().setProjectFile(res.filePath);
-      localStorage.setItem(LAST_FILE_KEY, res.filePath);
-      localStorage.setItem(LAST_ROOT_KEY, dirOf(res.filePath));
-      rememberRecentProject({ root: dirOf(res.filePath), file: res.filePath });
-      useUiStore.getState().setToast('已保存：' + res.filePath);
-    } else {
-      useUiStore.getState().setToast('保存失败：' + (res.error || '未知错误'));
-    }
-    return;
-  }
-
-  let res;
-  try {
-    res = await api.saveGraph(payload);
-  } catch (e) {
-    useUiStore.getState().setToast('保存失败（IPC 异常）：' + String(e));
-    return;
-  }
-  if (res.ok && res.filePath) {
-    localStorage.setItem(LAST_FILE_KEY, res.filePath);
-    localStorage.setItem(LAST_ROOT_KEY, dirOf(res.filePath));
-    useProjectStore.getState().setProjectFile(res.filePath);
-    await useProjectStore.getState().loadRoot(dirOf(res.filePath));
-    useUiStore.getState().setToast('已保存：' + res.filePath);
-  } else {
-    useUiStore.getState().setToast(res.error ? '保存失败：' + res.error : '已取消保存');
-  }
+  });
+  saveQueues.set(snapshot.key,run);
+  void run.finally(()=>{if(saveQueues.get(snapshot.key)===run)saveQueues.delete(snapshot.key)});
+  return run;
+}
+export async function saveProject():Promise<boolean> {
+  try{return await persistProjectSnapshot(captureProjectSnapshot());}
+  catch(error){useProjectSaveStore.setState({status:'error',error:String(error)});useUiStore.getState().setToast('保存失败：'+String(error));return false;}
 }
 
 /**

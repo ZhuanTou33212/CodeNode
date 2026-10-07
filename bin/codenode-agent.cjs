@@ -251,6 +251,7 @@ async function main() {
     },
     sandbox: sandboxPolicy,
     ragConfig: cfg.rag,
+    editingConfig: cfg.editing,
     modelRuntime: { budget: cfg.requestBudget, queue: require('../electron/requestQueue.cjs').modelQueue,
       traceContext: cfg.traceContext, traceProjectRoot: projectRoot,
       prices: cfg.costPrices, onUsage: (entry) => agent.recordCost(cfg, entry) },

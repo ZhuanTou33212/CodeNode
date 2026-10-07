@@ -127,6 +127,7 @@ function makeProject(name, overrides) {
     'model=scripted-model',
     'tools.allowed=read_file,write_file',
     'rag.enabled=false',
+    'soul.evolution.enabled=false',
     'agent.compression.enabled=false',
     'agent.request_max_attempts=1',
     ...(overrides || []),

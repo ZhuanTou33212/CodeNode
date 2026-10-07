@@ -4,8 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const { atomicWriteFile } = require('./atomicFile.cjs');
 const { DEFAULTS, clearIndexCache } = require('./rag/index.cjs');
+const uiConfig = require('../config/ui.rag.json');
 
 const KEYS = {
+  enabled: 'rag.enabled',
+  groundingMode: 'agent.grounding.mode',
+  semanticMode: 'agent.grounding.semantic_mode',
   provider: 'rag.embed_provider',
   model: 'rag.embed_model',
   base: 'rag.embed_base',
@@ -13,19 +17,23 @@ const KEYS = {
   dimensions: 'rag.embed_dimensions',
   backend: 'rag.vector_store',
   key: 'rag.embed_key',
+  milvusAddress:'rag.milvus_address',milvusCollection:'rag.milvus_collection',milvusToken:'rag.milvus_token',
   bm25K1: 'rag.bm25_k1',
   bm25B: 'rag.bm25_b',
   vectorWeight: 'rag.vector_weight',
 };
 
-function publicSettings(rag) {
+function publicSettings(rag, grounding = {}) {
   return {
+    enabled: rag.enabled !== false,
+    strictValidation: grounding.mode === 'enforce' || grounding.semanticMode === 'enforce',
     provider: rag.embedProvider,
     model: rag.embedModel,
     base: rag.embedBase,
     dim: rag.embedDim,
     dimensions: rag.embedDimensions,
     backend: rag.vectorStore,
+    milvusAddress:rag.milvusAddress||'',milvusCollection:rag.milvusCollection||'',hasMilvusToken:!!rag.milvusToken,
     bm25K1: rag.bm25K1,
     bm25B: rag.bm25B,
     vectorWeight: rag.vectorWeight,
@@ -35,12 +43,17 @@ function publicSettings(rag) {
   };
 }
 
-function normalizedSettings(raw, existing) {
+function normalizedSettings(raw, existing, grounding = {}) {
   const input = raw && typeof raw === 'object' ? raw : {};
+  for (const name of ['enabled', 'strictValidation']) {
+    if (input[name] != null && typeof input[name] !== 'boolean') throw new Error('扩展开关必须是布尔值');
+  }
+  const enabled = input.enabled ?? existing.enabled ?? uiConfig.defaults.enabled;
+  const strictValidation = input.strictValidation ?? (grounding.mode === 'enforce' || grounding.semanticMode === 'enforce');
   const provider = String(input.provider || '').trim().toLowerCase();
   if (!['none', 'local', 'ollama', 'openai'].includes(provider)) throw new Error('嵌入提供方必须是 none、local、ollama 或 openai');
   const backend = String(input.backend || '').trim().toLowerCase();
-  if (!['memory', 'sqlite'].includes(backend)) throw new Error('设置页仅支持 memory 或 sqlite；Milvus 请在配置文件中单独配置');
+  if (!['memory','sqlite','milvus'].includes(backend)) throw new Error('请选择 memory、sqlite 或 milvus 向量存储');
   const dim = Number(input.dim);
   if (!Number.isInteger(dim) || dim < 256 || dim > 8192) throw new Error('向量维度必须在 256–8192 之间');
   const bm25K1 = Number(input.bm25K1 == null ? existing.bm25K1 ?? DEFAULTS.bm25K1 : input.bm25K1);
@@ -62,12 +75,21 @@ function normalizedSettings(raw, existing) {
     if (provider === 'openai' && !key) throw new Error('OpenAI 兼容嵌入服务需要 API Key');
   }
   for (const value of [model, base, key]) if (/[\r\n]/.test(value)) throw new Error('配置值不能包含换行');
-  return { provider, backend: provider === 'none' ? 'memory' : backend, dim, dimensions: provider === 'openai' ? dimensions : '', model: provider === 'ollama' || provider === 'openai' ? model : '', base: provider === 'ollama' || provider === 'openai' ? base : '', key, bm25K1, bm25B, vectorWeight };
+  const milvusAddress=String(input.milvusAddress??existing.milvusAddress??'').trim();
+  const milvusCollection=String(input.milvusCollection??existing.milvusCollection??'').trim();
+  const milvusToken=String(input.milvusToken||existing.milvusToken||'').trim();
+  for(const value of [milvusAddress,milvusCollection,milvusToken])if(/[\r\n]/.test(value))throw Error('Milvus 配置不能包含换行');
+  if(backend==='milvus'&&provider!=='none'&&!milvusAddress)throw Error('请填写 Milvus 服务地址');
+  if(milvusCollection&&!/^[A-Za-z_][A-Za-z0-9_]*$/.test(milvusCollection))throw Error('Milvus 集合名称只能使用字母、数字和下划线，且不能以数字开头');
+  return { enabled, strictValidation, provider, backend,milvusAddress,milvusCollection,milvusToken, dim, dimensions: provider === 'openai' ? dimensions : '', model: provider === 'ollama' || provider === 'openai' ? model : '', base: provider === 'ollama' || provider === 'openai' ? base : '', key, bm25K1, bm25B, vectorWeight };
 }
 
 async function checkSettings(settings) {
+  if(settings.enabled === false || settings.provider==='none')return {ok:true,dimension:settings.dim,mode:'none'};
+  if(settings.backend==='milvus'){try{require.resolve('@zilliz/milvus2-sdk-node')}catch{return {ok:false,error:'当前版本未包含 Milvus SDK，启用 Milvus 需要安装服务支持并重新打包；可选择内存或 SQLite'}}}
   if (settings.backend === 'sqlite') {
-    try { require('node:sqlite'); require('sqlite-vec'); }
+    const extension = 'sqlite-vec';
+    try { require('node:sqlite'); require(extension); }
     catch (error) { return { ok: false, error: 'SQLite 向量后端不可用：' + String(error && error.message || error).slice(0, 180) }; }
   }
   if (settings.provider === 'local' || settings.provider === 'none') return { ok: true, dimension: settings.dim, mode: settings.provider };
@@ -102,18 +124,22 @@ function writeSettings(projectRoot, settings, previous) {
   const file = path.join(root, '.codenode', 'agent.properties');
   const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const entries = new Map([
+    [KEYS.enabled, String(settings.enabled)],
+    [KEYS.groundingMode, settings.strictValidation ? 'enforce' : 'warn'],
+    [KEYS.semanticMode, settings.strictValidation ? 'enforce' : 'off'],
     [KEYS.provider, settings.provider], [KEYS.model, settings.model], [KEYS.base, settings.base],
     [KEYS.dim, String(settings.dim)], [KEYS.dimensions, settings.dimensions], [KEYS.backend, settings.backend],
     [KEYS.bm25K1, String(settings.bm25K1)], [KEYS.bm25B, String(settings.bm25B)],
     [KEYS.vectorWeight, String(settings.vectorWeight)],
   ]);
+  if(settings.backend==='milvus'){entries.set(KEYS.milvusAddress,settings.milvusAddress);entries.set(KEYS.milvusCollection,settings.milvusCollection);if(settings.milvusToken&&settings.milvusToken!==previous.milvusToken)entries.set(KEYS.milvusToken,settings.milvusToken);}
   if (settings.key && settings.key !== previous.embedKey) entries.set(KEYS.key, settings.key);
   const lines = before.split(/\r?\n/).filter((line) => {
     const match = /^\s*([^#!\s][^=]*)=/.exec(line);
     return !match || !entries.has(match[1].trim());
   });
   while (lines.length && !lines[lines.length - 1]) lines.pop();
-  lines.push('# CodeNode RAG 设置', ...[...entries].map(([key, value]) => key + '=' + value));
+  lines.push('# CodeNode 可选检索与答案校验', ...[...entries].map(([key, value]) => key + '=' + value));
   atomicWriteFile(file, lines.join('\n') + '\n');
   clearIndexCache();
   return { ok: true, rebuildRequired: true };

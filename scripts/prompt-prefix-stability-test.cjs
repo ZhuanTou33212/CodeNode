@@ -143,10 +143,10 @@ console.log('\n== B. 规则块拆两段：只搬整行、正文零改字 ==');
     exposedTools: ['read_file', 'search_files', 'execute_shell', 'discover_tools'],
   });
   const trimmedNums = [...new Set(promptRuleNumbers(trimmed))].sort((a, b) => a - b);
-  // 这次给的暴露面是 core 子集（没有 workbench_edit / query_scalars / retrieve_context）→ 对应规则被门控摘掉，
+  // 直接编码规则 8 始终保留；可选检索和画布规则按暴露工具门控。
   // 并追加规则 21（告诉模型用 discover_tools 把能力找回来）。
-  check('[B] 裁剪时：点名未暴露工具的规则（2/6/8/11/12/19/20）消失、并追加规则 21（取回入口）',
-    JSON.stringify(trimmedNums) === JSON.stringify([1, 3, 4, 5, 7, 9, 10, 13, 14, 15, 16, 17, 18, 21]), JSON.stringify(trimmedNums));
+  check('[B] 裁剪时：未暴露工具的规则消失，保留编码规则 8 并追加发现规则 21',
+    JSON.stringify(trimmedNums) === JSON.stringify([1, 3, 4, 5, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 21]), JSON.stringify(trimmedNums));
   const taskNumsReal = ruleNumbers(agent.splitPromptSections(trimmed).find((s) => s.id === 'task-rules').text);
   check('[B] 真 prompt 上任务段只收「按面变化」的那几条（7 的剩余部分 / 14 画布块 / 20）',
     JSON.stringify(taskNumsReal) === JSON.stringify([7, 14, 21]), JSON.stringify(taskNumsReal));

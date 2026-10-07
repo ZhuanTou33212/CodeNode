@@ -73,6 +73,149 @@ app.whenReady().then(async () => {
 
     assert.ok(!agentView.crash, agentView.crash);
     assert.ok(agentView.panel?.width >= 260 && agentView.input?.height > 0, 'Agent panel and composer must be visible');
+    if(process.env.CODENODE_BATCH_ARCHIVE_TEST==='1'){
+      const js=code=>win.webContents.executeJavaScript(code);win.showInactive();win.setSize(1300,850);
+      await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false})`);
+      const archivedIds=await js(`(()=>{const ids=[];for(let i=0;i<3;i++){const ss=window.__codenodeSession.getState();ss.newCanvas();const id=window.__codenodeSession.getState().activeId;window.__codenodeSession.setState(s=>({sessions:{...s.sessions,[id]:{...s.sessions[id],label:'已归档聊天 '+(i+1)}}}));window.__codenodeSession.getState().pushUser('旧消息 '+i);window.__codenodeSession.getState().setArchived(id,true);ids.push(id)}return ids})()`);
+      const activeId=await js(`window.__codenodeSession.getState().activeId`);
+      assert.equal(await js(`window.__codenodeSession.getState().deleteArchivedSessions([${JSON.stringify(archivedIds[0])},${JSON.stringify(activeId)}])`),false);
+      assert.equal(await js(`Object.values(window.__codenodeSession.getState().sessions).filter(session=>session.archived).length`),3);
+      await js(`window.__codenodeUi.getState().openSettings('archived')`);await sleep(100);
+      await js(`document.querySelector('[aria-label="全选归档聊天"]').click()`);await sleep(80);
+      assert.equal(await js(`document.querySelectorAll('.archived-chat-choice input:checked').length`),3);
+      await js(`document.querySelector('[aria-label="删除选中的归档聊天"]').click()`);await sleep(60);
+      assert.ok(await js(`document.querySelector('.archive-delete-dialog h3').textContent.includes('3 个聊天')`));
+      await js(`document.querySelector('.archive-delete-dialog button').click()`);await sleep(60);
+      assert.equal(await js(`Object.values(window.__codenodeSession.getState().sessions).filter(session=>session.archived).length`),3);
+      await js(`document.querySelectorAll('.archived-chat-choice input')[2].click()`);await sleep(60);
+      assert.equal(await js(`document.querySelector('[aria-label="全选归档聊天"]').indeterminate`),true);
+      ipcMain.removeHandler('project:save');let fail=true;
+      ipcMain.handle('project:save',async(_event,target,payload)=>{if(fail)return {ok:false,error:'批量删除保存失败'};fs.writeFileSync(target,cnode.encodeCnode(payload));return {ok:true,filePath:target}});
+      await js(`document.querySelector('[aria-label="删除选中的归档聊天"]').click()`);await sleep(60);
+      await js(`document.querySelector('.archive-delete-dialog .archive-delete').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.archive-delete-error')`),'批量删除失败回退');
+      assert.equal(await js(`Object.values(window.__codenodeSession.getState().sessions).filter(session=>session.archived).length`),3);
+      assert.equal(await js(`document.querySelectorAll('.archived-chat-choice input:checked').length`),2);
+      fail=false;await js(`document.querySelector('.archive-delete-dialog .archive-delete').click()`);
+      await waitFor(async()=>await js(`!document.querySelector('.archive-delete-dialog')`),'批量删除成功');
+      const remaining=await js(`window.__codenodeSession.getState().order`);
+      assert.ok(!remaining.includes(archivedIds[0])&&!remaining.includes(archivedIds[1]));assert.ok(remaining.includes(archivedIds[2])&&remaining.includes(activeId));
+      for(const theme of ['light','dark']){await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(350);assert.ok(await js(`document.querySelector('.archive-bulk-toolbar')!==null`));}
+      await js(`window.__codenodeUi.getState().closeSettings()`);win.webContents.reload();await sleep(350);await js(`document.querySelector('.gate-recent-item').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.activity-bar')`),'批量删除后重开项目');
+      const saved=cnode.decodeCnode(fs.readFileSync(projectFile));assert.ok(!saved.canvases.sessions.some(session=>archivedIds.slice(0,2).includes(session.id)));assert.ok(saved.canvases.sessions.some(session=>session.id===archivedIds[2]));
+      console.log('BATCH ARCHIVE UI: PASS (select/all/partial, count confirmation, cancel, all-or-nothing guard, failure rollback, preserve unselected/active, reload persistence, both themes)');
+    }
+    if (process.env.CODENODE_VECTOR_ARCHIVE_TEST === '1') {
+      const js=code=>win.webContents.executeJavaScript(code);
+      win.showInactive();win.setSize(1300,850);await sleep(100);
+      await js(`window.__codenodeUi.getState().openSettings('rag')`);
+      await waitFor(async()=>await js(`!!document.querySelector('[aria-label="向量存储"]')`),'向量存储设置');await sleep(100);
+      assert.equal(await js(`document.querySelector('[aria-label="向量存储"]').disabled`),false);
+      assert.deepEqual(await js(`[...document.querySelector('[aria-label="向量存储"]').options].map(option=>option.value)`),['memory','sqlite','milvus']);
+      await js(`const select=document.querySelector('[aria-label="向量存储"]');select.value='sqlite';select.dispatchEvent(new Event('change',{bubbles:true}))`);await sleep(80);
+      await js(`document.querySelector('.dock-rag-actions .dock-primary').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.dock-rag-success')`),'保存 SQLite 选择');
+      assert.match(fs.readFileSync(path.join(root,'.codenode','agent.properties'),'utf8'),/rag.vector_store=sqlite/);
+      await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openSettings('rag')`);await sleep(150);
+      assert.equal(await js(`document.querySelector('[aria-label="向量存储"]').value`),'sqlite');
+      await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false});window.__codenodeUi.getState().closeSettings();window.__codenodeSession.getState().pushUser('要删除的旧聊天');window.__codenodeSession.getState().beginTurn();window.__codenodeSession.getState().finishTurn('归档示例','',[])`);
+      const archivedId=await js(`window.__codenodeSession.getState().activeId`);
+      await js(`window.__codenodeSession.getState().setArchived(${JSON.stringify(archivedId)},true);window.__codenodeSession.getState().newCanvas();window.__codenodeSession.getState().pushUser('必须保留的聊天')`);await sleep(100);
+      const activeId=await js(`window.__codenodeSession.getState().activeId`);
+      assert.notEqual(activeId,archivedId);
+      assert.equal(await js(`window.__codenodeSession.getState().deleteArchivedSession(${JSON.stringify(activeId)})`),false);
+      await js(`window.__codenodeUi.getState().openSettings('archived')`);await sleep(100);
+      await js(`document.querySelector('.archived-chat-row .archive-delete').click()`);await sleep(80);
+      assert.ok(await js(`document.querySelector('[role="alertdialog"]').textContent.includes('永久删除')`));
+      await js(`document.querySelector('.archive-delete-dialog button').click()`);await sleep(60);
+      assert.equal(await js(`!!window.__codenodeSession.getState().sessions[${JSON.stringify(archivedId)}]`),true);
+      await js(`document.querySelector('.archived-chat-row .archive-delete').click()`);await sleep(60);
+      fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});fs.writeFileSync(path.join(__dirname,'..','out','archive-delete-confirm.png'),(await win.webContents.capturePage()).toPNG());
+      await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:true,autoSaveDelayMs:500})`);await sleep(80);
+      ipcMain.removeHandler('project:save');let writeFails=true;
+      ipcMain.handle('project:save',async(_event,target,payload)=>{if(writeFails)return {ok:false,error:'模拟保存失败'};fs.writeFileSync(target,cnode.encodeCnode(payload));return {ok:true,filePath:target};});
+      await js(`document.querySelector('.archive-delete-dialog .archive-delete').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.archive-delete-error')`),'删除失败保留聊天');
+      assert.equal(await js(`!!window.__codenodeSession.getState().sessions[${JSON.stringify(archivedId)}]`),true);
+      await sleep(650);assert.equal(await js(`!!window.__codenodeSession.getState().sessions[${JSON.stringify(archivedId)}]`),true);
+      writeFails=false;
+      await js(`document.querySelector('.archive-delete-dialog .archive-delete').click()`);
+      await waitFor(async()=>await js(`!document.querySelector('.archive-delete-dialog')`),'永久删除成功');
+      const saved=cnode.decodeCnode(fs.readFileSync(projectFile));
+      assert.ok(!saved.canvases.sessions.some(session=>session.id===archivedId));
+      assert.ok(saved.canvases.sessions.some(session=>session.id===activeId));
+      assert.equal(await js(`window.__codenodeSession.getState().messages.some(message=>message.content==='必须保留的聊天')`),true);
+      await js(`window.__codenodeUi.getState().closeSettings()`);
+      win.webContents.reload();await sleep(350);
+      await js(`document.querySelector('.gate-recent-item').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.activity-bar')`),'重新打开项目');
+      assert.equal(await js(`!!window.__codenodeSession.getState().sessions[${JSON.stringify(archivedId)}]`),false);
+      await js(`window.__codenodeUi.getState().openSettings('rag')`);await sleep(120);
+      assert.equal(await js(`document.querySelector('[aria-label="向量存储"]').value`),'sqlite');
+      await js(`window.__codenodeUi.getState().closeSettings()`);
+      await js(`window.__codenodeSession.setState({streaming:true})`);
+      assert.equal(await js(`window.__codenodeSession.getState().deleteArchivedSession(${JSON.stringify(activeId)})`),false);
+      await js(`window.__codenodeSession.setState({streaming:false});window.__codenodeSession.getState().setArchived(${JSON.stringify(activeId)},true);window.__codenodeUi.getState().openSettings('archived')`);await sleep(80);
+      await js(`document.querySelector('.archived-chat-row .archive-delete').click()`);await sleep(50);await js(`document.querySelector('.archive-delete-dialog .archive-delete').click()`);
+      await waitFor(async()=>await js(`window.__codenodeSession.getState().order.length===0&&!document.querySelector('.archive-delete-dialog')`),'删除最后一条归档聊天');
+      assert.deepEqual(cnode.decodeCnode(fs.readFileSync(projectFile)).canvases.messages,[]);
+      await js(`window.__codenodeUi.getState().closeSettings()`);
+      console.log('VECTOR AND ARCHIVE UI: PASS (all backend choices, BM25 preserves SQLite, reload persistence, delete confirmation/cancel, failed-save rollback, active chat guard, permanent deletion persisted)');
+    }
+    if (process.env.CODENODE_SIMPLIFIED_WORKBENCH_TEST === '1') {
+      const js=code=>win.webContents.executeJavaScript(code);
+      win.showInactive();win.setSize(1300,850);await sleep(100);
+      await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:true,autoSaveDelayMs:500});window.__codenodeUi.setState({theme:'light'})`);await sleep(80);
+      assert.equal(await js(`!!document.querySelector('.toolbar-save') || !!document.querySelector('.toolbar-run')`),false);
+      await js(`window.__codenodeSession.setState({intentVerdict:{intent:'chat',risk:'low',authorization:'high',confidence:.95,reason:'普通问候',source:'model',tighten:false}})`);
+      assert.equal(await js(`!!document.querySelector('.conversation-right .ap-intent')`),false);
+      await js(`document.querySelector('.toolbar-dropdown summary').click()`);await sleep(60);
+      assert.equal(await js(`document.querySelector('[data-action="workflow"]').disabled`),true);
+      await js(`document.querySelector('.toolbar-dropdown summary').click();window.__codenodeStore.getState().addNode({id:'auto-task',type:'task',position:{x:40,y:50},data:{label:'自动保存测试',prompt:'整理当前项目结构'}});window.__codenodeStore.getState().setSelectedIds([])`);
+      await waitFor(async()=>cnode.decodeCnode(fs.readFileSync(projectFile)).graph.nodes.some(node=>node.id==='auto-task'),'画布自动保存');
+      await waitFor(async()=>await js(`document.querySelector('.toolbar-save-state').textContent==='已保存'`),'已保存状态');
+      await js(`window.__codenodeSession.getState().pushUser('自动保存对话测试');window.__codenodeSession.getState().beginTurn();window.__codenodeSession.getState().finishTurn('已收到。','',[])`);
+      await waitFor(async()=>cnode.decodeCnode(fs.readFileSync(projectFile)).canvases.messages.some(message=>message.content==='已收到。'),'会话自动保存');
+      for(const theme of ['light','dark']) {
+        await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(350);
+        fs.mkdirSync(path.join(__dirname,'..','out'),{recursive:true});fs.writeFileSync(path.join(__dirname,'..','out','simplified-workbench-'+theme+'.png'),(await win.webContents.capturePage()).toPNG());
+      }
+      let executions=0;ipcMain.removeHandler('project:workflow-execute');ipcMain.handle('project:workflow-execute',()=>{executions++;return {ok:false,error:'不应自动执行'}});
+      await js(`document.querySelector('.toolbar-dropdown summary').click();document.querySelector('[data-action="workflow"]').click()`);
+      await waitFor(async()=>await js(`!!document.querySelector('.workflow-scope')`),'执行范围预览');
+      assert.equal(executions,0);assert.ok(await js(`document.querySelector('.workflow-scope').textContent.includes('自动保存测试')`));
+      assert.equal(await js(`document.querySelector('.run-diagnostics').open`),false);
+      assert.equal(await js(`document.querySelector('.dock-run-toolbar .dock-primary').textContent`),'开始执行');
+      await js(`window.__codenodeUi.getState().closeDock();window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false})`);await sleep(100);
+      const prior=fs.readFileSync(projectFile,'utf8');
+      await js(`window.__codenodeStore.getState().updateNodeData('auto-task',{label:'关闭自动保存后修改'})`);await sleep(750);
+      assert.equal(fs.readFileSync(projectFile,'utf8'),prior);
+      assert.equal(await js(`document.querySelector('.toolbar-save-state').textContent`),'未保存');
+      await js(`document.querySelector('.toolbar-dropdown summary').click();[...document.querySelectorAll('.toolbar-menu button')].find(button=>button.textContent.includes('保存项目')).click()`);
+      await waitFor(async()=>cnode.decodeCnode(fs.readFileSync(projectFile)).graph.nodes.some(node=>node.data.label==='关闭自动保存后修改'),'手动保存仍可用');
+      await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:true})`);await sleep(80);
+      ipcMain.removeHandler('project:save');let saveFails=true;const writeScopes=[];
+      ipcMain.handle('project:save',async(_event,target,payload)=>{
+        if(saveFails)return {ok:false,error:'模拟磁盘写入失败'};
+        await sleep(250);fs.writeFileSync(target,cnode.encodeCnode(payload));writeScopes.push({target,label:payload.graph.nodes[0]?.data?.label});return {ok:true,filePath:target};
+      });
+      await js(`window.__codenodeStore.getState().updateNodeData('auto-task',{label:'失败必须显示'})`);
+      await waitFor(async()=>await js(`document.querySelector('.toolbar-save-state').textContent==='保存失败'`),'写入失败状态');
+      assert.ok(await js(`document.querySelector('.toolbar-save-state').title.includes('模拟磁盘写入失败')`));
+      saveFails=false;
+      await js(`document.querySelector('.toolbar-dropdown summary').click();[...document.querySelectorAll('.toolbar-menu button')].find(button=>button.textContent.includes('保存项目')).click()`);
+      await waitFor(async()=>await js(`document.querySelector('.toolbar-save-state').textContent==='已保存'`),'失败后重试');
+      await js(`window.__codenodeStore.getState().updateNodeData('auto-task',{label:'旧项目最后一份修改'})`);await sleep(50);
+      await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(alternateRoot)})`);
+      await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(alternateFile)});window.__codenodeStore.getState().clear()`);
+      await waitFor(async()=>writeScopes.some(write=>write.target===projectFile&&write.label==='旧项目最后一份修改'),'切换项目前保留待保存快照');
+      assert.equal(await js(`window.__codenodeProject.getState().projectFile`),alternateFile);
+      assert.ok(!writeScopes.some(write=>write.target===alternateFile&&write.label==='旧项目最后一份修改'));
+      await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false});window.__codenodeProject.getState().loadRoot(${JSON.stringify(root)})`);
+      await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(projectFile)})`);await sleep(80);
+      console.log('SIMPLIFIED WORKBENCH: PASS (autosave graph/conversation, disabled setting, manual save, failure/retry, project-switch isolation, workflow preview only, hidden intent, both themes)');
+    }
     if (process.env.CODENODE_PLUGIN_RAIL_UI_TEST === '1') {
       const js=code=>win.webContents.executeJavaScript(code);
       win.setSize(1300,850);win.showInactive();await sleep(100);
@@ -244,7 +387,7 @@ app.whenReady().then(async () => {
       await js(`window.__codenodeProject.getState().setProjectFile(${JSON.stringify(projectFile)})`);
       await waitFor(async()=>await js(`!!document.querySelector('.toolbar-navigation-toggle')`).catch(()=>false),'异常配置恢复');
       const sanitized=await js(`window.__codenodeUi.getState().preferences`);
-      assert.equal(sanitized.menuWidth,360); assert.equal(sanitized.menuRowHeight,34);assert.deepEqual(sanitized.visibleActions,['terminal']);
+      assert.equal(sanitized.menuWidth,360); assert.equal(sanitized.menuRowHeight,34);assert.deepEqual(sanitized.visibleActions,['terminal','workflow']);
       await js(`window.__codenodeUi.getState().resetPreferences()`);
       console.log('UI PREFERENCES: PASS (settings controls, immediate menu changes, reload persistence, shared themes, defaults, validation)');
     }
@@ -318,15 +461,15 @@ app.whenReady().then(async () => {
             return {left:r.left,right:r.right,bottom:r.bottom,width:r.width,background:s.backgroundColor,
               rows:buttons.map(b=>b.getBoundingClientRect().height),labels:[...el.querySelectorAll('.toolbar-menu-label')].map(b=>b.textContent),
               copyDisabled:buttons.find(b=>b.textContent.includes('复制节点')).disabled,
-              overflowVisible:el.querySelector('.toolbar-overflow-small').getBoundingClientRect().height>0};
+              manualSaveVisible:[...el.querySelectorAll('button')].some(button=>button.textContent.includes('保存项目')&&button.getBoundingClientRect().height>0)};
           })()`);
           assert.equal(menu.width, 220);
           assert.ok(menu.left>=0 && menu.right<=width && menu.bottom<=800, JSON.stringify(menu));
           assert.ok(!menu.background.startsWith('rgba'), 'menu surface must be opaque');
           assert.ok(menu.rows.every(height=>height===34), JSON.stringify(menu.rows));
-          assert.deepEqual(menu.labels, ['节点','布局','视图','工具与历史']);
+          assert.deepEqual(menu.labels, ['工作流','节点','布局','视图','工具与历史']);
           assert.equal(menu.copyDisabled,true);
-          assert.equal(menu.overflowVisible,width<=780, JSON.stringify({width,menu}));
+          assert.equal(menu.manualSaveVisible,true, JSON.stringify({width,menu}));
           if (width===1300) {
             win.showInactive(); await sleep(150);
             const bounds=await js(`(() => { const r=document.querySelector('.toolbar-menu').getBoundingClientRect();return {x:Math.floor(r.x)-8,y:Math.floor(r.y)-8,width:Math.ceil(r.width)+16,height:Math.ceil(r.height)+16};})()`);
@@ -348,7 +491,7 @@ app.whenReady().then(async () => {
       await js(`document.querySelector('.toolbar-menu button[data-action="duplicate"]').click()`);
       assert.equal(await js(`window.__codenodeStore.getState().nodes.length`),2);
       assert.equal(await js(`document.querySelector('.toolbar-dropdown').open`),false);
-      await js(`document.querySelector('.toolbar-dropdown summary').click();document.querySelector('.toolbar-save').dispatchEvent(new Event('pointerdown',{bubbles:true}))`);
+      await js(`document.querySelector('.toolbar-dropdown summary').click();document.querySelector('.toolbar-save-state').dispatchEvent(new Event('pointerdown',{bubbles:true}))`);
       assert.equal(await js(`document.querySelector('.toolbar-dropdown').open`),false);
       await js(`window.__codenodeStore.getState().clear()`);
       console.log('CANVAS MENU UI: PASS (both themes, three widths, disabled state, copy, dismissal, keyboard focus)');

@@ -32,6 +32,7 @@ export interface AssistantBubbleLike {
 
 /** 由 streamDelta 自己处理（不走气泡）的 kind：压缩 / 超窗 / 合并 / 预算 / 已保存 */
 export const CONTROL_DELTA_KINDS = [
+  'code_verification',
   'compacted',
   'context_overflow',
   'subagent_merge',

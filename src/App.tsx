@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect } from 'react';
 import { themeTokens } from './lib/themeTokens';
 import { useReactFlow } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
+import { useProjectAutoSave } from './lib/useProjectAutoSave';
 import ActivityBar from './components/ActivityBar';
 import PluginWorkspace from './components/PluginWorkspace';
 import Canvas from './components/Canvas';
@@ -66,6 +67,7 @@ export default function App() {
   const layoutNodes = useGraphStore((s) => s.layoutNodes);
   const arrangeNodes = useGraphStore((s) => s.arrangeNodes);
   const createScopeFromSelection = useGraphStore((s) => s.createScopeFromSelection);
+  useProjectAutoSave();
   const appPage = useUiStore(s => s.appPage);
   const sideOpen = useUiStore((s) => s.sideOpen);
   const sideTab = useUiStore(s => s.sideTab);

@@ -42,13 +42,17 @@ const PROFILE_TOOLS = Object.freeze({
     'read_file', 'write_file', 'edit_file',
     'find_files', 'search_files', 'list_directory',
     'execute_shell', 'poll_job',
-    'retrieve_context', 'read_skill',
+    'read_skill',
     'update_plan', 'ask_user', 'remember',
     'discover_tools',
   ]),
   /** 代码面：项目级只读分析 + 看图（规则 17/18 点名的 scan_project / analyze_project 在这里） */
   code: Object.freeze([
     'scan_project', 'project_info', 'analyze_project', 'code_review', 'view_image',
+  ]),
+  /** 符号导航按需加载；日常代码任务不额外携带四份工具 schema。 */
+  symbols: Object.freeze([
+    'find_definition', 'find_references', 'get_callers', 'get_callees',
   ]),
   /** 画布面：工作台模型的读写与界面动作（含标量库大字段免回灌的那几个） */
   canvas: Object.freeze([
@@ -88,6 +92,7 @@ function profilesForTool(name) {
  */
 const RESEARCH_RE = /联网|搜索|搜一下|查一下|查资料|调研|最新的?资料|网上|浏览器|抓取|爬取|文档站|web|http|dify/i;
 const ORCHESTRATION_RE = /子代理|子任务|并行|分工|多个\s*(agent|代理)|delegate|工作树|worktree/i;
+const SYMBOL_RE = /符号|跳转.*定义|查找.*定义|谁调用|谁引用|调用链|引用链|\b(find_definition|find_references|get_callers|get_callees|callers?|callees?)\b/i;
 const SIMPLE_EDIT_ACTION_RE = /修改|改(?:一下|动|成)|替换|更新|修复|编辑|新增|添加|插入|删除|移除|去掉|\b(rename|change|edit|replace|update|fix|add|remove|delete)\b/i;
 const BROAD_EDIT_RE = /重构|批量|所有|每个|全局|整个项目|多个文件|跨文件|项目整体|架构|报错|错误|异常|堆栈|问题|故障|\b(bug|error|debug|issue|test|tests)\b|分析|审查|调研|联网|搜索|查找|部署|发布/i;
 const FILE_TARGET_RE = /[\w@.-]+(?:[\\/][\w@.-]+)*\.(?:js|cjs|mjs|ts|tsx|jsx|java|py|go|rs|json|md|css|scss|html|yml|yaml|toml|properties|txt|xml|sql|sh|ps1)\b/gi;
@@ -161,6 +166,10 @@ function resolveToolProfiles(input) {
   if (RESEARCH_RE.test(prompt)) {
     profiles.push('research');
     reasons.push('prompt-mentions-research');
+  }
+  if (SYMBOL_RE.test(prompt)) {
+    profiles.push('symbols');
+    reasons.push('prompt-mentions-symbols');
   }
   if (ORCHESTRATION_RE.test(prompt)) {
     profiles.push('orchestration');

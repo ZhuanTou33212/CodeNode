@@ -188,12 +188,14 @@ interface CodenodeApi {
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
     ragEnabled: boolean;
-    rag?: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean; bm25K1: number; bm25B: number; vectorWeight: number };
+    editing?: import('./types').EditingSettings;
+    rag?: { enabled: boolean; strictValidation: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;hasMilvusToken?:boolean;hasKey: boolean; rerankEnabled: boolean; rerankExternal: boolean; bm25K1: number; bm25B: number; vectorWeight: number };
     models?: ModelSpecDto[];
     activeModelId?: string | null;
   }>;
-  ragCheck: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
-  ragSave: (root: string | null, settings: { provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
+  ragCheck: (root: string | null, settings: { enabled?: boolean; strictValidation?: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;milvusToken?:string;key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; dimension?: number; mode?: string }>;
+  ragSave: (root: string | null, settings: { enabled?: boolean; strictValidation?: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;milvusToken?:string;key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
+  editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
   modelsDiscover: (provider: string, apiKey: string, options?: { apiBase?: string; modelId?: string }) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; apiKeyPreview?: string; error?: string }>;
   modelsConnect: (ticket: string, selectedId: string) => Promise<{ ok: boolean; error?: string }>;
@@ -478,6 +480,7 @@ interface CodenodeApi {
   }>;
   stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {
+    codeVerification?: import('./types').CodeVerificationReport;
     requestId?: string;
     kind?: string;
     text?: string;

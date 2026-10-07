@@ -720,6 +720,7 @@ class LocalRagIndex {
         sourceSha256: read.sourceSha256,
         chunks,
         imports: structure ? structure.imports : [],
+        navigation: structure ? structure.navigation : null,
       });
       // 只有「本次重新分块」的文件才需要写入外部向量后端（未变文件复用已有向量）
       const freshChunks = this.fileCache.get(item.relative).chunks;
@@ -925,15 +926,8 @@ class LocalRagIndex {
     const vectorChange = await this.syncVectorStore();
     const vectorSyncError = hadVectorChanges ? this.lastVectorError : null;
     const mode = String(opts.mode || 'auto').toLowerCase();
-    const runtimeJudge = retrievalRuntime.getStore()?.queryPlanner || retrievalRuntime.getStore()?.answerabilityJudge;
-    let questionPlan = null;
-    let queryPlanningError = null;
-    if (runtimeJudge && this.chunks.length && String(query || '').trim()) {
-      try { questionPlan = await require('./answerability.cjs').prepareQuestion(query, runtimeJudge); }
-      catch (error) { queryPlanningError = error.code || 'JUDGE_REQUEST_FAILED'; }
-    }
-    const queries = normalizeQueries(query, [...(Array.isArray(opts.queries) ? opts.queries : []),
-      ...(questionPlan?.searchQueries || [])], this.options.maxQueries);
+    // 查询由主 Agent 提供；本地检索不调用模型规划、改写或裁决。
+    const queries = normalizeQueries(query, Array.isArray(opts.queries) ? opts.queries : [], this.options.maxQueries);
     if (!queries.length || this.chunks.length === 0) {
       return { query: String(query || '').trim(), queries, results: [], quality: confidenceFor([], queries.map((item) => ({ query: item, ranked: [] })), this.options.minCoverage), stats };
     }
@@ -1248,7 +1242,7 @@ class LocalRagIndex {
         ...stats,
         candidateChunks: candidates.length,
         lexicalScoringMs,
-        queryPlanning: { applied: !!questionPlan?.searchQueries?.length, error: queryPlanningError || undefined },
+        queryPlanning: { applied: false },
         pureVector: !!opts.pureVector,
         fusedCandidates: ranked.length,
         graph: { ...(graph ? graph.stats : {}), expanded: graphExpanded, hops: expandGraph ? requestedHops : 0 },

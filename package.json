@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "author": "yimi528 <148250049+yimi528@users.noreply.github.com>",
-  "description": "CodeNode Agent 工作台：画布、工具循环与本地 Agentic RAG",
+  "description": "CodeNode Coding Agent 工作台：代码工具循环、画布与可选检索扩展",
   "main": "electron/main.cjs",
   "bin": {
     "codenode-agent": "bin/codenode-agent.cjs"
@@ -19,6 +19,10 @@
     "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/run-electron.cjs .",
     "build": "tsc --noEmit && vite build",
     "test:rag": "node scripts/rag-test.cjs && node scripts/rag-grounding-test.cjs",
+    "test:symbol-navigation": "node scripts/symbol-navigation-test.cjs",
+    "test:coding-safety": "node scripts/coding-safety-test.cjs",
+    "test:coding-loop": "node scripts/coding-loop-test.cjs",
+    "test:coding-settings-ui": "node scripts/run-electron.cjs scripts/coding-settings-ui-test.cjs",
     "test:rag-document": "node scripts/rag-document-test.cjs",
     "test:scalar": "node scripts/scalar-vector-test.cjs",
     "test:vector-store": "node scripts/vector-store-test.cjs",
@@ -32,6 +36,8 @@
     "test:bg": "node scripts/background-job-test.cjs",
     "test:smoke": "node scripts/smoke-runner.cjs",
     "test:rag-ui": "node scripts/run-electron.cjs scripts/rag-ui-test.cjs",
+    "test:coding-slim-ui": "node scripts/run-electron.cjs scripts/coding-slim-settings-ui-test.cjs",
+    "test:vector-choice": "node scripts/vector-storage-choice-test.cjs",
     "test:shell-output": "node scripts/shell-output-test.cjs",
     "test:subagent": "node scripts/subagent-test.cjs",
     "test:subagent-isolation": "node scripts/subagent-isolation-test.cjs",
@@ -284,8 +290,5 @@
     "electron-builder": "^24.13.3",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
-  },
-  "optionalDependencies": {
-    "sqlite-vec": "^0.1.9"
   }
 }

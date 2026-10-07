@@ -5,6 +5,9 @@ export interface UiPreferences {
   hideDisabledActions: boolean; navigationOpen: boolean; conversationOpen: boolean; autoCollapseSidebars: boolean;
   visibleActions: string[];
   activityBarWidth: number;
+  autoSaveEnabled: boolean;
+  autoSaveDelayMs: number;
+  preferenceVersion: number;
 }
 export const UI_PREFERENCES_KEY = 'codenode.uiPreferences';
 const { menuActions: _menuActions, ...defaultPreferences } = defaults;
@@ -12,14 +15,16 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = { ...defaultPreferences, vi
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   const raw = value && typeof value === 'object' ? value as Partial<UiPreferences> : {};
   const next = { ...DEFAULT_UI_PREFERENCES };
-  for (const key of ['showShortcuts','showGroupLabels','hideDisabledActions','navigationOpen','conversationOpen','autoCollapseSidebars'] as const) {
+  for (const key of ['showShortcuts','showGroupLabels','hideDisabledActions','navigationOpen','conversationOpen','autoCollapseSidebars','autoSaveEnabled'] as const) {
     if (typeof raw[key] === 'boolean') next[key] = raw[key];
   }
   const bound = (value: unknown, min: number, max: number, fallback: number) => typeof value === 'number' && Number.isFinite(value) ? Math.min(max,Math.max(min,Math.round(value))) : fallback;
   next.activityBarWidth = bound(raw.activityBarWidth,40,64,next.activityBarWidth);
+  next.autoSaveDelayMs = bound(raw.autoSaveDelayMs,500,5000,next.autoSaveDelayMs);
   next.menuWidth = bound(raw.menuWidth,200,360,next.menuWidth);
   next.menuRowHeight = bound(raw.menuRowHeight,28,44,next.menuRowHeight);
   next.visibleActions = Array.isArray(raw.visibleActions) ? [...new Set(raw.visibleActions.filter(id => typeof id === 'string' && CANVAS_ACTIONS.some(action => action.id === id)))] : [...next.visibleActions];
+  if(Array.isArray(raw.visibleActions)&&raw.visibleActions.length&&Number(raw.preferenceVersion||0)<2&&!next.visibleActions.includes('workflow'))next.visibleActions.push('workflow');
   return next;
 }
 export function loadUiPreferences(): UiPreferences {

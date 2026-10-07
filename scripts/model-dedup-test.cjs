@@ -11,7 +11,7 @@ const root=fs.mkdtempSync(path.join(os.tmpdir(),'model-dedup-'));
 try {
  const locked={...old,apiKey:'safe:v1:invalid-cipher'}; delete locked.apiKeyError;
  const raw={models:[locked,live],activeId:old.id};fs.writeFileSync(path.join(root,'models.json'),JSON.stringify(raw));
- result=store.readUsableModels(root,{});assert.equal(result.models.length,1);assert.equal(result.activeId,live.id);
+ const stored=store.readUsableModels(root,{});assert.equal(stored.models.length,1);assert.equal(stored.activeId,live.id);
  assert.equal(store.findModel(root,{},old.id).id,live.id);
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'models.json'),'utf8')),raw,'display dedup must preserve stored credentials');
  console.log('MODEL DEDUP: PASS (alias migration, valid connection priority, endpoint isolation, raw data preservation)');

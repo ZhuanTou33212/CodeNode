@@ -32,7 +32,8 @@ async function main() {
     const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, 'fixtures', file))).digest('hex');
     assert.equal(actual, expected, 'Frozen development corpus changed; create a new version');
   }
-  assert.equal(parseGroundingConfig({}).answerability, true);
+  assert.equal(parseGroundingConfig({}).answerability, false);
+  assert.equal(parseGroundingConfig({ 'agent.rag.answerability': 'verify' }).answerability, false);
   assert.equal(parseGroundingConfig({ 'agent.rag.answerability': 'off' }).answerability, false);
   const positive = await assessAnswerability('What is the threshold and stop condition?', evidence, judge(['supported', 'supported']));
   assert.equal(positive.answerable, true); assert.equal(positive.evidenceVerified, true);
@@ -85,16 +86,17 @@ async function main() {
       const source = payload.sources.find((item) => item.text.includes('export const maxAttempts = 5'));
       return JSON.stringify({ facts: [{ id: 1, verdict: 'supported', evidence: [{ citation: source.citation, quote: 'export const maxAttempts = 5' }] }] });
     } } });
-    assert.ok(rewritten.queries.includes('maxAttempts retry limit'));
-    assert.equal(rewritten.admission.admitted, true);
-    assert.equal(rewriteCalls, 1, 'Retrieval must only plan queries, never adjudicate final evidence');
+    assert.ok(!rewritten.queries.includes('maxAttempts retry limit'));
+    assert.equal(rewriteCalls, 0, 'Local retrieval must never invoke a legacy model planner');
+    const explicitRewrite = await index.retrieve('短暂错误可以反复尝试多少次？', { queries: ['maxAttempts retry limit'] });
+    assert.ok(explicitRewrite.queries.includes('maxAttempts retry limit'));
+    assert.equal(explicitRewrite.admission.admitted, true);
     const noLeak = await index.retrieve('短暂错误可以反复尝试多少次？');
     assert.ok(!noLeak.queries.includes('maxAttempts retry limit'));
     const context = new AgentToolContext({ projectRoot: root, confirm: async () => true, audit: () => {} });
     const registry = buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: true, toolsAllowed: ['retrieve_context'] });
     const scripted = installScriptedModel([
       { toolCalls: [{ name: 'retrieve_context', args: { query: 'maxAttempts retry limit', mode: 'file' } }] },
-      { content: JSON.stringify({ facts: [{ id: 1, requirement: 'Attempt limit' }] }) },
       { content: '尚需确认限制值，不能仅据相关代码下结论。' },
     ], { loopLast: false });
     try {
@@ -102,7 +104,7 @@ async function main() {
         maxTokens: 512, limits: {}, compression: { enabled: false }, reliability: { maxAttempts: 1 },
         grounding: { answerability: true, semanticMode: 'off', mode: 'warn' } },
         messages: [{ role: 'user', content: 'maxAttempts retry limit' }], tools: { registry, context } });
-      assert.equal(scripted.calls, 3, 'Run only plans retrieval before generating');
+      assert.equal(scripted.calls, 2, 'One tool round and one answer, without hidden planner requests');
       const retrieval = run.toolCalls.find((call) => call.name === 'retrieve_context');
       assert.equal(retrieval.data.quality.answerable, undefined);
       assert.equal(retrieval.data.admission.admitted, true);
@@ -131,7 +133,7 @@ async function main() {
         async () => JSON.stringify({ claims: [{ id: 1, verdict: 'contradicted', evidence: [], reason: 'Source value is 5' }] }));
       assert.equal(verdict.supported, false, 'Admission must never bypass final entailment');
     }
-    assert.equal(plannerCalls, 2, 'Scalar-only has no planner; file and mixed use planner once and recover from error');
+    assert.equal(plannerCalls, 0, 'Scalar, file and mixed retrieval are all free of model planning');
     const empty = await registry.execute('retrieve_context', { query: 'not-present', mode: 'scalar' }, stagesContext);
     assert.equal(empty.data.admission.status, 'empty');
     assert.equal(empty.data.quality.answerable, undefined, 'Empty retrieval is not a no-answer judgment');

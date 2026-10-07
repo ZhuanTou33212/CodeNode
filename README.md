@@ -19,7 +19,7 @@ CodeNode 是一个基于 Electron、React 和 React Flow 的本地开发工作�
 | 可恢复的运行记录 | 保存事件、检查点和副作用账本；中断后区分可续跑步骤与需要复核的外部操作。 |
 | 可视化工作流 | 用 `start`、`task`、`stage`、`tool`、`scope` 等节点组织任务和依赖。 |
 | 多 Agent 分工 | 主 Agent 可委派探查、实现、验证和审查任务；结果经核对后才能传给下游。 |
-| 项目上下文与 RAG | 检索源码、UTF-8 文本、PDF 文字层及 DOCX/XLSX/PPTX 正文；可按配置启用向量检索和重排。 |
+| 可选项目检索 | 本地词法与结构检索源码和文档；向量检索、重排与严格答案校验按场景显式启用。 |
 | 多模型接入 | 支持 OpenAI 兼容、Anthropic、Gemini、Azure 等端点及本地服务。 |
 
 ## 快速开始
@@ -52,6 +52,10 @@ npm run start:prod
 更完整的按钮路径和示例见[操作指南](docs/usage-guide.md)。
 
 ## 单 Agent 架构
+
+默认编码流程为搜索符号或错误、读文件、修改、运行测试。`retrieve_context` 不常驻编码工具组，可通过 `discover_tools` 按需启用；本地检索不调用模型拆解 Query。`query_scalars` 是独立画布属性读取工具，不受 `rag.enabled` 影响。
+
+在设置的「检索」页可按项目开关本地检索、向量扩展和严格答案校验。向量与严格校验默认关闭；SQLite 向量支持和 Milvus SDK 不随默认依赖安装，需要时自行安装扩展并重新打包。显式启用的模型服务仍会产生额外请求与耗时。
 
 单 Agent 是 CodeNode 的基本执行单元。多 Agent 委派出来的每个子任务，内部也使用同一套 ReAct 循环；先理解单 Agent 的状态、工具边界和恢复方式，再看多 Agent 的调度关系。
 

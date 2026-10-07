@@ -15,6 +15,7 @@ const NOTE_PREFIX = '【工具观察汇总】';
 const DOMAIN_BY_TOOL = Object.freeze({
   scan_project: 'files', analyze_project: 'files', project_info: 'files', read_file: 'files',
   find_files: 'files', search_files: 'files', list_directory: 'files', code_review: 'files',
+  find_definition: 'files', find_references: 'files', get_callers: 'files', get_callees: 'files',
   write_file: 'files', edit_file: 'files', bulk_edit: 'files', write_analysis_md: 'files', view_image: 'files',
   get_workbench_model: 'canvas', workbench_edit: 'canvas', query_scalars: 'canvas', save_project: 'canvas',
   retrieve_context: 'context', recall: 'context', remember: 'context', read_skill: 'context',

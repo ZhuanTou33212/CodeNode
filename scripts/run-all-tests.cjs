@@ -16,6 +16,8 @@
 
 const { spawnSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 // 核心套件：全部为纯 Node 断言，不弹窗、不联网、可在三平台无显示环境运行。
 const CORE = [
@@ -28,6 +30,7 @@ const CORE = [
   'test:scope-frame',
   'test:undo',
   'test:scalar',
+  'test:vector-choice',
   'test:vector-store',
   'test:agent-reliability',
   'test:agent-boundary',
@@ -98,6 +101,9 @@ const CORE = [
   'test:rag',
   'test:rag-benchmark',
   'test:rag-ast-mapping',
+  'test:symbol-navigation',
+  'test:coding-safety',
+  'test:coding-loop',
   'test:rag-faithfulness',
   'test:rag-delivery-repair',
   'test:rag-answerability',
@@ -199,7 +205,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui', 'test:rag-review-ui'];
+const DISPLAY = ['test:smoke', 'test:rag-ui', 'test:coding-slim-ui', 'test:coding-settings-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui', 'test:rag-review-ui'];
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -229,6 +235,16 @@ if (flag('--list')) {
 
 const isWindows = process.platform === 'win32';
 const cwd = path.join(__dirname, '..');
+// 模拟模型回归不应向应用的全局成长记录写入假对话。
+const suiteData = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-suite-soul-'));
+const suiteSoul = path.join(suiteData, 'soul.md');
+fs.copyFileSync(path.join(cwd, 'config/soul.md'), suiteSoul);
+const testEnv = { ...process.env, CODENODE_SOUL_FILE: suiteSoul };
+process.on('exit', () => {
+  if (path.dirname(suiteData) === os.tmpdir() && path.basename(suiteData).startsWith('codenode-suite-soul-')) {
+    try { fs.rmSync(suiteData, { recursive: true, force: true }); } catch {}
+  }
+});
 // A broken child test must fail the gate, never hold CI/Desktop verification
 // forever.  Individual suites have their own shorter budgets where needed;
 // this is only the outer process-lifecycle guard.
@@ -245,8 +261,8 @@ function runScript(name) {
   // Windows 上直接 spawn npm.cmd 会 EINVAL，必须走 shell；POSIX 上必须用参数数组（把整条命令
   // 当字符串交给 execve 会 ENOENT → status=null，CI 上表现为"25 项全部 0.00s 失败"）。
   const result = isWindows
-    ? spawnSync('npm.cmd run --silent ' + name, { cwd, stdio: 'inherit', shell: true, timeout: TEST_PROCESS_TIMEOUT_MS })
-    : spawnSync('npm', ['run', '--silent', name], { cwd, stdio: 'inherit', timeout: TEST_PROCESS_TIMEOUT_MS });
+    ? spawnSync('npm.cmd run --silent ' + name, { cwd, env: testEnv, stdio: 'inherit', shell: true, timeout: TEST_PROCESS_TIMEOUT_MS })
+    : spawnSync('npm', ['run', '--silent', name], { cwd, env: testEnv, stdio: 'inherit', timeout: TEST_PROCESS_TIMEOUT_MS });
   const ms = Date.now() - started;
   const ok = result.status === 0;
   // spawn 本身失败（ENOENT/EINVAL）时 status 为 null、error 有值：必须显式带出来，

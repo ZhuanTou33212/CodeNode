@@ -1,0 +1,24 @@
+{
+  "defaults": {
+    "checkSyntax": true,
+    "protectLongFiles": true,
+    "longFileLines": 400,
+    "maxDeletedRatio": 0.35,
+    "autoVerify": true,
+    "blockOnFailure": true,
+    "lintCommand": "",
+    "testCommand": "",
+    "timeoutSeconds": 60,
+    "maxVerificationRuns": 3
+  },
+  "limits": {
+    "longFileLines": [100, 5000],
+    "maxDeletedRatio": [0.05, 0.9],
+    "timeoutSeconds": [1, 600],
+    "maxVerificationRuns": [1, 10],
+    "maxFileBytes": 8388608,
+    "snapshotFiles": 10000,
+    "snapshotBytes": 67108864,
+    "maxRelatedTests": 50
+  }
+}

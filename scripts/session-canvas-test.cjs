@@ -39,7 +39,7 @@ function compile() {
   ];
   const res = childProcess.spawnSync(
     'npx',
-    ['tsc', ...src, '--outDir', OUT, '--module', 'commonjs', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'node'],
+    ['tsc', ...src, '--outDir', OUT, '--rootDir', PROJECT, '--resolveJsonModule', '--module', 'commonjs', '--target', 'es2020', '--esModuleInterop', '--skipLibCheck', '--jsx', 'react-jsx', '--moduleResolution', 'node'],
     { cwd: PROJECT, encoding: 'utf-8', shell: process.platform === 'win32' }
   );
   if (res.status !== 0) {
@@ -51,12 +51,12 @@ compile();
 process.env.NODE_PATH = path.join(PROJECT, 'node_modules');
 /** @type {any} */ (require('module').Module)._initPaths();
 
-const { useGraphStore } = require(path.join(OUT, 'store', 'graphStore.js'));
-const { useSessionStore } = require(path.join(OUT, 'store', 'sessionStore.js'));
-const { useChatStore } = require(path.join(OUT, 'store', 'chatStore.js'));
-const { useUiStore } = require(path.join(OUT, 'store', 'uiStore.js'));
-const { useProjectStore } = require(path.join(OUT, 'store', 'projectStore.js'));
-const projectActions = require(path.join(OUT, 'lib', 'projectActions.js'));
+const { useGraphStore } = require(path.join(OUT, 'src', 'store', 'graphStore.js'));
+const { useSessionStore } = require(path.join(OUT, 'src', 'store', 'sessionStore.js'));
+const { useChatStore } = require(path.join(OUT, 'src', 'store', 'chatStore.js'));
+const { useUiStore } = require(path.join(OUT, 'src', 'store', 'uiStore.js'));
+const { useProjectStore } = require(path.join(OUT, 'src', 'store', 'projectStore.js'));
+const projectActions = require(path.join(OUT, 'src', 'lib', 'projectActions.js'));
 const cnode = require(path.join(PROJECT, 'electron', 'cnode.cjs'));
 
 const savedLocal = new Map();

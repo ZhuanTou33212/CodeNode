@@ -1,0 +1,11 @@
+{
+  "executionNodeTypes": [
+    "task",
+    "tool",
+    "stage"
+  ],
+  "instructionFields": [
+    "prompt",
+    "goal"
+  ]
+}

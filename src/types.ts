@@ -145,6 +145,7 @@ export type SessionMsg = {
   tools?: ToolRecord[];
   status?: string;
   grounding?: RagGrounding;
+  codeVerification?: CodeVerificationReport;
   /** 用户消息携带的图片（仅用户消息会有） */
   attachments?: AgentAttachment[];
   /**
@@ -162,6 +163,16 @@ export type SessionMsg = {
     /** 摘要正文（界面折叠区里给人看；发给模型的是 content 里的信封） */
     summary?: string;
   };
+};
+
+export type EditingSettings = {
+  checkSyntax: boolean; protectLongFiles: boolean; longFileLines: number; maxDeletedRatio: number;
+  autoVerify: boolean; blockOnFailure: boolean; lintCommand: string; testCommand: string;
+  timeoutSeconds: number; maxVerificationRuns: number;
+};
+export type CodeVerificationReport = {
+  status: string; verified: boolean; files: string[]; reason?: string; fingerprint?: string; checkedAt?: string; scope?: string;
+  checks: { kind: string; status: string; path?: string; command?: string; exitCode?: number | null; reason?: string; output?: string; truncated?: boolean }[];
 };
 
 /** 单个画布的文档快照（仅根图，无组嵌套） */

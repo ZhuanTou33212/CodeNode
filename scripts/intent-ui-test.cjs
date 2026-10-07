@@ -46,7 +46,7 @@ app.whenReady().then(async () => {
 
         step = 'loadRoot';
         await project.getState().loadRoot(${JSON.stringify(projectRoot)});
-        await waitFor(() => document.querySelector('.side-panel'), 5000);
+        await waitFor(() => document.querySelector('.conversation-right'), 5000);
         if (ui) {
           ui.getState().setSideOpen(true);
           ui.getState().setSideTab('agent');
@@ -73,6 +73,7 @@ app.whenReady().then(async () => {
           tighten: false,
           reason: '用户明确要求改本地源码并跑测试',
         });
+        ui.getState().openDock('runs');
         const badge = await waitFor(() => document.querySelector('.ap-intent'), 3000);
         out.hasBadge = !!badge;
         out.valueText = badge ? (badge.querySelector('.ap-intent-value') || {}).textContent : '';
@@ -82,8 +83,8 @@ app.whenReady().then(async () => {
         out.tightenText = badge ? (badge.querySelector('.ap-intent-tighten') || {}).textContent || '' : '';
         out.title = badge ? badge.getAttribute('title') : '';
         out.ariaLabel = badge ? badge.getAttribute('aria-label') : null;
-        out.inAgentPane = !!document.querySelector('.sp-pane-agent .ap-intent');
-        out.beforeBody = !!(badge && badge.nextElementSibling && badge.nextElementSibling.classList.contains('ap-body'));
+        out.inAgentPane = !document.querySelector('.sp-pane-agent .ap-intent') && !!document.querySelector('.run-diagnostics .ap-intent');
+        out.beforeBody = !!document.querySelector('.run-diagnostics') && !document.querySelector('.run-diagnostics').open;
         const style = badge ? getComputedStyle(badge) : null;
         out.hasBorder = style ? style.borderTopWidth !== '0px' && style.borderTopStyle === 'solid' : false;
         out.radius = style ? style.borderTopLeftRadius : '';
@@ -181,7 +182,7 @@ app.whenReady().then(async () => {
     check('[UI] 风险/授权各自成徽标且可读', JSON.stringify(result.chipTexts) === JSON.stringify(['低风险', '已获授权']), JSON.stringify(result.chipTexts));
     check('[UI] 置信度按百分比显示', String(result.confText).indexOf('95%') >= 0, String(result.confText));
     check('[UI] 不收紧时不显示「审批收紧」', result.tightenClass === false && result.tightenText === '', JSON.stringify({ cls: result.tightenClass, text: result.tightenText }));
-    check('[UI] 标在对话面板内、在消息列表之上', result.inAgentPane === true && result.beforeBody === true, JSON.stringify({ inPane: result.inAgentPane, beforeBody: result.beforeBody }));
+    check('[UI] 标只在默认折叠的运行详情中，对话区不显示', result.inAgentPane === true && result.beforeBody === true, JSON.stringify({ inPane: result.inAgentPane, beforeBody: result.beforeBody }));
     check('[UI] 样式真的生效（边框 + 圆角 + 11px 密度）', result.hasBorder === true && parseFloat(String(result.radius)) > 0 && String(result.fontSize) === '11px', JSON.stringify({ border: result.hasBorder, radius: result.radius, fontSize: result.fontSize }));
     check('[UI] 无障碍标注 + 判据进 tooltip（用户能追「凭什么这么判」）', result.ariaLabel === '意图识别' && String(result.title).indexOf('判据：用户明确要求改本地源码并跑测试') >= 0, String(result.title).slice(0, 60));
 

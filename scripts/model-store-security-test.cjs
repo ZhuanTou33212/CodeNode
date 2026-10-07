@@ -4,12 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const vm = require('vm');
+const modelRequire = require('module').createRequire(path.join(__dirname, '../electron/modelStore.cjs'));
 const source = fs.readFileSync(path.join(__dirname, '../electron/modelStore.cjs'), 'utf8');
 function load(storage) {
   const module = { exports: {} };
   vm.runInNewContext(source, {
     module, Buffer,
-    require: (name) => name === 'electron' ? { safeStorage: storage } : require(name),
+    require: (name) => name === 'electron' ? { safeStorage: storage } : modelRequire(name),
   });
   return module.exports;
 }

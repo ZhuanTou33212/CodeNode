@@ -47,6 +47,7 @@ class AgentToolContext {
     this.conversationSupplier = o.conversationHistory || null;
     this.fileChangeNotifier = o.notifyFileChange || null;
     this.ragConfigValue = o.ragConfig || {};
+    this.editingConfigValue = o.editingConfig || null;
     this.modelRuntimeValue = o.modelRuntime || null;
     this.scalarStoreValue = o.scalarStore || null;
     this.undoAction = o.undo || null;
@@ -338,6 +339,7 @@ class AgentToolContext {
   ragConfig() {
     return this.ragConfigValue || {};
   }
+  editingConfig() { return this.editingConfigValue || require('../../config/ui.editing.json').defaults; }
 
   modelRuntime() { return this.modelRuntimeValue ? { ...this.modelRuntimeValue, signal: this.signalValue } : null; }
   setQueryPlanner(planner) {
@@ -461,6 +463,7 @@ class AgentToolContext {
       conversationHistory: this.conversationSupplier,
       notifyFileChange: this.fileChangeNotifier,
       ragConfig: this.ragConfigValue,
+      editingConfig: this.editingConfigValue,
       modelRuntime: o.modelRuntime || this.modelRuntimeValue,
       scalarStore: this.scalarStoreValue,
       undo: this.undoAction,

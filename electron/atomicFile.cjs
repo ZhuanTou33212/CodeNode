@@ -7,8 +7,10 @@ const { randomUUID } = require('crypto');
  * @param {string} file
  * @param {string|Buffer} data
  * @param {BufferEncoding} [encoding]
+ * @param {{expectedSha256: string}|null} [guard]
+ * @param {{expectedSha256?: string}|null} [guard]
  */
-function atomicWriteFile(file, data, encoding = 'utf8') {
+function atomicWriteFile(file, data, encoding = 'utf8', guard = null) {
   const target = path.resolve(file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporary = target + '.' + randomUUID() + '.tmp';
@@ -19,6 +21,11 @@ function atomicWriteFile(file, data, encoding = 'utf8') {
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = null;
+    if (guard && guard.expectedSha256) {
+      const actual = fs.existsSync(target) ? require('crypto').createHash('sha256').update(fs.readFileSync(target)).digest('hex') : 'absent';
+      const expected = String(guard.expectedSha256).replace(/^sha256:/, '');
+      if (actual !== expected) throw Object.assign(new Error('提交前文件版本已变化'), { code: 'CONFLICT_STALE', actual });
+    }
     fs.renameSync(temporary, target);
   } finally {
     if (fd != null) try { fs.closeSync(fd); } catch {}

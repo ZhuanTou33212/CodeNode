@@ -123,6 +123,12 @@ try {
   // ============================ D. 开销门禁 ============================
   console.log('\n== D. 每轮固定开销的量测与上界 ==');
   const registry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: ROOT, ragEnabled: false });
+  // The automatic face is the actual per-turn budget; full/off exposure is
+  // independently bounded in token-overhead-test, including new symbol tools.
+  toolkit.registerDiscoverTool(registry);
+  registry.setExposure(toolkit.profiles.namesForProfiles(
+    toolkit.profiles.resolveToolProfiles({ prompt: '把 add 改成加法' }).profiles,
+    registry.listTools().map((tool) => tool.name)));
   const tools = registry.toOpenAiTools();
   const schemaChars = JSON.stringify(tools).length;
   const systemPure = build({ canvasMode: 'auto', prompt: '把 add 改成加法' });

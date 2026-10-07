@@ -14,7 +14,6 @@ import type { AgentAttachment } from '../../types';
 import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
 import { PlanCard } from '../PlanCard';
-import { IntentBadge } from '../IntentBadge';
 import ResumePlanNotice from './ResumePlanNotice';
 import HoverPopover from './HoverPopover';
 import ModelPicker from './ModelPicker';
@@ -425,11 +424,7 @@ export default function AgentPanel() {
       {streaming && <div className="agent-run-status" role="status">正在回复…</div>}
       <PlanCard />
 
-      {/* 意图识别标：每轮由主进程的 kind:'intent' 增量更新（高风险/授权不明时审批会收紧）。
-          没有信号（未启用/超时/失败）时它自己返回 null —— 不占位、不假装有结论。 */}
-      <IntentBadge />
-
-      {/* #25(b)：流式正文 / 「思考中」 / 已停止 / 失败原因都发生在这里，必须是 live region，
+{/* #25(b)：流式正文 / 「思考中」 / 已停止 / 失败原因都发生在这里，必须是 live region，
           否则键盘/读屏用户完全得不到「正在生成 / 已中断」的播报。 */}
       <div
         className="ap-body"

@@ -4,6 +4,8 @@ logs/
 .cache/
 release/
 release-backups/
+# 独立打包暂存目录：验收并覆盖固定交付路径后清理
+.stage-*/
 .hermes/
 *.log
 .DS_Store

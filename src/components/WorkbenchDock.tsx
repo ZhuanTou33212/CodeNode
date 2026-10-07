@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { IntentBadge } from './IntentBadge';
+import { workflowReadiness } from '../lib/workflowRunState';
 import { useGraphStore } from '../store/graphStore';
 import { useProjectStore } from '../store/projectStore';
 import { useCheckpointStore } from '../store/checkpointStore';
@@ -345,6 +347,8 @@ function RunsPanel() {
   const createCheckpoint = useCheckpointStore((s) => s.create);
   const [items, setItems] = useState<RunItem[]>([]);
   const [running, setRunning] = useState(false);
+  const readiness=workflowReadiness(nodes,edges);
+  const intent=useSessionStore(s=>s.intentVerdict);
   const workflowRunning = useRef(false);
   const cancel = useRef(false);
   const workflowId = useSessionStore((s) => s.activeId) || 'canvas';
@@ -613,7 +617,7 @@ function RunsPanel() {
   };
 
   const start = async () => {
-    if (workflowRunning.current || !nodes.length) return;
+    if (workflowRunning.current || !readiness.ready) return;
     cancel.current = false;
     const orphan = nodes.find((node) => node.data?.requiresInput && !edges.some((edge) => edge.target === node.id));
     if (orphan) {
@@ -695,13 +699,15 @@ function RunsPanel() {
       <button className="dock-danger" onClick={stopEverything} disabled={!sending}>全部停止 Agent</button>
       <button onClick={() => void inspectTemplate()} disabled={running || !root}>导入模板</button>
       <button onClick={() => void exportTemplate()} disabled={running || !nodes.length}>导出模板</button>
-      <button className="dock-primary" onClick={() => void start()} disabled={running || !nodes.length}>{running ? '执行中…' : resumeAvailable ? '继续运行' : '运行工作流'}</button></div></div>
+      <button className="dock-primary" onClick={() => void start()} disabled={running || !readiness.ready}>{running ? '执行中…' : resumeAvailable ? '继续执行' : '开始执行'}</button></div></div>
       {templatePreview && <div className="dock-recovery-plan" role="dialog" aria-label="模板依赖检查">
         <strong>导入检查：{templatePreview.filePath}</strong>
         <div className="dock-recovery-meta">{templatePreview.graph.nodes.length} 个节点 · 来源项目 {templatePreview.deps.sourceProject || '未知'} · 声明工具 {templatePreview.deps.tools.length} / 模型 {templatePreview.deps.models.length} / 路径 {templatePreview.deps.paths.length}</div>
         {templatePreview.missing.length ? <div className="task-trace-warning">需要补齐：{templatePreview.missing.join('；')}</div> : <div className="dock-recovery-meta">已声明的依赖均可用；未声明在 Prompt 中的依赖仍需运行前核对。</div>}
         <div className="dock-recovery-actions"><button className="dock-primary" onClick={importTemplate}>替换当前画布并导入</button><button onClick={() => setTemplatePreview(null)}>取消</button></div>
       </div>}
+      <section className="workflow-scope" aria-label="工作流执行范围"><strong>执行范围</strong><p>当前项目：{root} · {readiness.tasks.length} 个任务节点 · {edges.length} 条连线。将按连线依赖执行，节点涉及的写入仍会按现有规则确认。</p>{!readiness.ready&&<p>{readiness.reason}</p>}<ul>{readiness.tasks.map(node=><li key={node.id}><strong>{String(node.data.label||node.id)}</strong><span>{String(node.data.prompt||node.data.goal||'')}</span></li>)}</ul></section>
+      {intent&&<details className="run-diagnostics"><summary>最近一轮 Agent 运行详情</summary><IntentBadge/></details>}
       {!nodes.length && <div className="dock-empty">画布为空，先添加节点。</div>}
       {agentRuns.length > 0 && <div className="dock-agent-recovery">
         <strong>可恢复的 Agent 运行（中断 / 达到上限 / 失败）</strong>

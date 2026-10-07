@@ -30,6 +30,7 @@ const BUILTINS = [
   require('./impl/editFileTool.cjs'),
   require('./impl/findFilesTool.cjs'),
   require('./impl/searchFilesTool.cjs'),
+  require('./impl/symbolNavigationTool.cjs'),
   require('./impl/listDirectoryTool.cjs'),
   require('./impl/executeShellTool.cjs'),
   require('./impl/codeReviewTool.cjs'),
@@ -113,7 +114,7 @@ function filterByConfig(registry, config) {
   const allowed = cfg.toolsAllowed || null; // null 或空 = 全部允许
   const deny = cfg.toolsDeny || [];
   for (const spec of registry.listTools()) {
-    if ((spec.name === 'retrieve_context' || spec.name === 'query_scalars') && cfg.ragEnabled === false) {
+    if (spec.name === 'retrieve_context' && cfg.ragEnabled === false) {
       registry.unregister(spec.name);
       continue;
     }

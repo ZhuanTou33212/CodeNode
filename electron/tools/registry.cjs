@@ -67,6 +67,7 @@ function typeMatches(value, type) {
 /** 统一校验模型生成的工具参数；工具自身仍负责业务约束和路径安全。 */
 function validateInput(value, schema, path = '$') {
   if (!schema || typeof schema !== 'object') return null;
+  if (schema.anyOf && !schema.anyOf.some((candidate) => validateInput(value, candidate, path) === null)) return path + ' 不满足任一允许的参数形式（缺少必填参数或类型错误）';
   if (schema.enum && !schema.enum.some((item) => Object.is(item, value))) {
     return `${path} 必须是 ${schema.enum.join(', ')} 之一`;
   }

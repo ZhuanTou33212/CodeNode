@@ -84,7 +84,7 @@ app.whenReady().then(async () => {
         {id:'consumer',type:'task',position:{x:400,y:100},data:{label:'consumer',prompt:'run: node consumer.cjs',requiresInput:true}}
       ],edges:[{id:'edge',source:'source',target:'consumer'}]});
       ui.getState().openDock('runs');
-      const runButton=()=>Array.from(document.querySelectorAll('.dock-runs button')).find(b=>/^(运行工作流|继续运行|执行中…)$/.test(b.textContent));
+      const runButton=()=>Array.from(document.querySelectorAll('.dock-runs button')).find(b=>/^(开始执行|继续执行|执行中…)$/.test(b.textContent));
       const clickRun=async()=>{ const button=await wait(runButton); button.click(); await new Promise(r=>setTimeout(r,100)); await wait(()=>runButton()&&!runButton().disabled); };
       await clickRun();
       const failedPrepare=document.querySelector('.dock-run-item.blocked')?.textContent||'';

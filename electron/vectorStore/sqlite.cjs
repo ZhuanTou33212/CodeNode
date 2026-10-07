@@ -55,7 +55,8 @@ class SqliteVectorStore {
     let sqliteVec;
     try {
       ({ DatabaseSync } = require('node:sqlite'));
-      sqliteVec = require('sqlite-vec');
+      const extension = 'sqlite-vec';
+      sqliteVec = require(extension);
     } catch (error) {
       throw new Error('SQLite 向量后端需要 Node/Electron 的 node:sqlite 与 sqlite-vec 0.1.9；安装：npm i sqlite-vec@0.1.9（' +
         ((error && error.message) || error) + '）');

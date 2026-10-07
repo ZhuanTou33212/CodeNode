@@ -1378,6 +1378,13 @@ button:disabled {
 /* ---------- 上下文压缩卡（照 Codex CLI 的「Context compacted」标记）---------- */
 /* 视觉层级：比对话气泡低一档（左侧一道分隔线 + 更暗的文字），因为它是「分界标记」而不是内容；
    摘要本身折叠收起，需要时才展开看。 */
+.code-verification { margin: 10px 0; padding: 10px; border: 1px solid var(--glass-border); border-radius: 6px; color: var(--glass-text); background: var(--glass-sheet); font-size: 12px; overflow-wrap: anywhere; }
+.code-verification details { margin-top: 6px; }
+.code-verification summary { cursor: pointer; }
+.code-verification-check { margin: 8px 0; }
+.editing-settings > .editing-toggle { flex-direction: row; align-items: center; justify-content: space-between; }
+.editing-settings .editing-toggle input { width: auto; min-height: auto; }
+.code-verification pre { white-space: pre-wrap; max-height: 200px; overflow: auto; }
 .cs-msg-compaction {
   margin: 14px 0;
   padding: 7px 10px;
@@ -4571,3 +4578,35 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 
 .glass-theme.ui-clean .toolbar .conversation-toggle { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; }
 .glass-theme.ui-clean .toolbar .conversation-toggle[aria-expanded="true"] { background: var(--glass-selected); }
+
+.toolbar-save-state { font-size: 11px; color: var(--glass-muted); padding: 0 6px; min-width: 54px; }
+.toolbar-save-state.state-error { color: var(--menu-danger); }
+.workflow-scope { margin: 10px 14px; padding: 12px 14px; background: var(--glass-control); border: 1px solid var(--glass-border); border-radius: 9px; color: var(--glass-text); }
+.workflow-scope p { color: var(--glass-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.workflow-scope ul { margin: 8px 0 0; padding-left: 18px; }
+.workflow-scope li { margin: 8px 0; font-size: 12px; }
+.workflow-scope li span { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 3px; color: var(--glass-muted); }
+.run-diagnostics { margin: 8px 14px; font-size: 12px; color: var(--glass-muted); }
+.run-diagnostics summary { cursor: pointer; }
+
+.workflow-scope { max-height: 170px; overflow-y: auto; flex: none; }
+
+@media(max-width:780px) { .toolbar-save-state { font-size: 0; min-width: 12px; padding: 0; } .toolbar-save-state::before { content: '●'; font-size: 7px; } }
+
+.archived-chat-actions { display: flex; gap: 8px; flex: none; }
+.archived-chat-row > span { min-width: 0; overflow-wrap: anywhere; }
+.glass-theme .global-settings button.archive-delete { color: var(--menu-danger); }
+.archive-delete-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--glass-scrim); backdrop-filter: blur(8px); padding: 20px; z-index: 10; }
+.global-settings { position: relative; }
+.archive-delete-dialog { width: min(420px,100%); border: 1px solid var(--glass-border); border-radius: 14px; background: var(--glass-sheet); color: var(--glass-text); padding: 24px; box-shadow: var(--glass-shadow); }
+.archive-delete-dialog h3 { margin: 0 0 12px; font-size: 18px; }
+.archive-delete-dialog p { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; color: var(--glass-muted); }
+.archive-delete-dialog > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.archive-delete-dialog .archive-delete-error { color: var(--menu-danger); }
+
+.archive-bulk-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px; background: var(--glass-control); border: 1px solid var(--glass-border); border-radius: 9px; font-size: 12px; }
+.archive-bulk-toolbar > label,.archived-chat-choice { display: flex; align-items: center; gap: 10px; }
+.archive-bulk-toolbar > span { color: var(--glass-muted); margin-right: auto; }
+.archived-chat-choice { min-width: 0; flex: 1; font-size: 13px; }
+.archived-chat-choice input { flex: none; }
+.archived-chat-choice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

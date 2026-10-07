@@ -14,6 +14,9 @@ const path = require('path');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-compact-ui-'));
+const rendererRoot = process.env.CODENODE_UI_TEST_PACKAGE
+  ? path.join(path.resolve(process.env.CODENODE_UI_TEST_PACKAGE), 'resources/app.asar')
+  : path.join(__dirname, '..');
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
@@ -23,7 +26,7 @@ app.whenReady().then(async () => {
     webPreferences: { sandbox: true },
   });
   try {
-    await win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    await win.loadFile(path.join(rendererRoot, 'dist', 'index.html'));
     await sleep(600);
     const result = await win.webContents.executeJavaScript(`(async () => {
      let step = 'start';
@@ -32,7 +35,7 @@ app.whenReady().then(async () => {
       const chat = window.__codenodeChat;
       const project = window.__codenodeProject;
       const ui = window.__codenodeUi;
-      if (!session || !chat || !project) return { error: 'stores unavailable' };
+      if (!session || !chat || !project || !ui) return { error: 'stores unavailable' };
       const waitFor = async (fn, ms) => {
         const deadline = Date.now() + (ms || 3000);
         while (Date.now() < deadline) {
@@ -80,6 +83,34 @@ app.whenReady().then(async () => {
       const compactedCount = stateAfter.filter((m) => m.compacted).length;
       const cardCount = document.querySelectorAll('.cs-msg-compaction').length;
       const bubblesAfter = document.querySelectorAll('.cs-msg').length;
+      // 检查当前主题的真实交互与状态，不把历史主题的 2px 装饰线当成功能契约。
+      const draft = document.querySelector('.pp-input');
+      if (!draft) return { error: 'composer unavailable', step };
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(draft, '下一轮输入草稿');
+      draft.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const snapshot = () => JSON.stringify({ messages: session.getState().messages, activeId: session.getState().activeId,
+        draft: document.querySelector('.pp-input')?.value, model: document.querySelector('.pp-model')?.textContent,
+        sideOpen: ui.getState().sideOpen, sideTab: ui.getState().sideTab });
+      const beforeTheme = snapshot();
+      const themeChecks = [];
+      for (const theme of ['light', 'dark']) {
+        ui.setState({ theme });
+        await waitFor(() => document.documentElement.dataset.theme === theme);
+        const current = document.querySelector('.cs-msg-compaction');
+        const currentDetail = current && current.querySelector('.cs-msg-compaction-detail');
+        const summary = currentDetail && currentDetail.querySelector('summary');
+        const initiallyClosed = currentDetail && !currentDetail.open;
+        if (summary) summary.click();
+        const expanded = await waitFor(() => currentDetail && currentDetail.open);
+        const body = currentDetail && currentDetail.querySelector('.cs-msg-text');
+        const readable = !!(body && body.textContent.includes('已完成 a.txt 的检查') && body.getBoundingClientRect().height > 0 && getComputedStyle(body).visibility !== 'hidden');
+        if (summary) summary.click();
+        const closed = await waitFor(() => currentDetail && !currentDetail.open);
+        themeChecks.push({ theme, visible: !!(current && current.getBoundingClientRect().height > 0 && getComputedStyle(current).display !== 'none'),
+          initiallyClosed: !!initiallyClosed, expanded: !!expanded, readable, closed: !!closed,
+          statePreserved: snapshot() === beforeTheme, structure: current ? current.innerHTML : '' });
+      }
       // 下一回合：桩掉 agentChat，捕获真正发出去的 history
       const sent = {};
       const calls = [];
@@ -102,10 +133,11 @@ app.whenReady().then(async () => {
       const histEnvelopeRole = history ? (history.find((h) => String(h.content).startsWith('<compaction>')) || {}).role : null;
       step = 'done';
       return {
-        bubblesBefore, bubblesAfter, compactedCount, cardCount,
+        bubblesBefore, bubblesAfter, compactedCount, cardCount, themeChecks,
         cardText: cardText.slice(0, 120),
         borderLeftWidth: cardStyle ? cardStyle.borderLeftWidth : null,
         borderLeftColor: cardStyle ? cardStyle.borderLeftColor : null,
+        cardVisible: !!(card && card.getBoundingClientRect().height > 0 && cardStyle && cardStyle.display !== 'none'),
         detailOpenByDefault: detail ? detail.hasAttribute('open') : null,
         prompt: sent.payload ? sent.payload.prompt : null,
         histRoles,
@@ -123,7 +155,10 @@ app.whenReady().then(async () => {
       result.cardCount === 1 &&
       /上下文已压缩/.test(result.cardText) &&
       result.compactedCount === 4 &&
-      result.borderLeftWidth === '2px' &&
+      result.cardVisible === true &&
+      result.themeChecks.length === 2 &&
+      result.themeChecks.every(check => check.visible && check.initiallyClosed && check.expanded && check.readable && check.closed && check.statePreserved) &&
+      result.themeChecks[0].structure === result.themeChecks[1].structure &&
       result.detailOpenByDefault === false &&
       result.prompt === '第三轮：请写 b.txt' &&
       result.histHasOldText === false &&

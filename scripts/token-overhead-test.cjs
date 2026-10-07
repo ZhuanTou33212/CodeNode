@@ -138,10 +138,19 @@ async function runTurn(registry, script) {
     '   基线：工具 ' + baseTools.length + '，schema ' + baseSchemaTokens + ' tokens/' + JSON.stringify(baseTools).length +
     ' 字符；固定输入 纯代码 ' + basePureFixed + ' / 画布 ' + baseCanvasFixed,
   );
-  check('[A] 基线装配得到 34 个工具（含新增的子代理结果复核）', baseTools.length === 34, 'tools=' + baseTools.length);
+  const navigationNames = new Set(['find_definition', 'find_references', 'get_callers', 'get_callees']);
+  const legacyTools = baseTools.filter((tool) => !navigationNames.has(tool.function.name));
+  const legacyGuide = agent.buildToolGuide(base.listTools().filter((tool) => !navigationNames.has(tool.name)));
+  const legacyPure = agent.buildSystemPrompt(soul, '', legacyGuide, '', '', { prompt: '把 add 改成加法', canvasMode: 'auto' });
+  const legacyCanvas = agent.buildSystemPrompt(soul, '[{"id":"n1"}]', legacyGuide, '', '', { prompt: '画布上建一条链路', canvasMode: 'always' });
+  const legacyPureFixed = compaction.estimateTokens([{ role: 'system', content: legacyPure }], legacyTools);
+  const legacyCanvasFixed = compaction.estimateTokens([{ role: 'system', content: legacyCanvas }], legacyTools);
+  check('[A] 完整装配新增四个按需符号工具，原 34 个工具保持完整', baseTools.length === 38 && legacyTools.length === 34, 'tools=' + baseTools.length);
   check('[A] 基线固定输入仍在有界范围（新增复核工具和文件分页 schema）',
-    basePureFixed > 10000 && basePureFixed < 11000 && baseCanvasFixed > 11000 && baseCanvasFixed < 12000,
-    'pure=' + basePureFixed + ' canvas=' + baseCanvasFixed);
+    legacyPureFixed > 10000 && legacyPureFixed < 11000 && legacyCanvasFixed > 11000 && legacyCanvasFixed < 12000,
+    'legacyPure=' + legacyPureFixed + ' legacyCanvas=' + legacyCanvasFixed);
+  check('[A] 四个新增符号工具的完整 schema 与引导增量 ≤ 2,000 tokens；默认任务按需隐藏',
+    basePureFixed - legacyPureFixed <= 2000, 'navigationIncrement=' + (basePureFixed - legacyPureFixed));
 
   // ============================ B. 裁剪后的面（棘轮） ============================
   console.log('\n== B. 按任务裁剪后的固定输入（棘轮：只允许降） ==');

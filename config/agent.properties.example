@@ -4,7 +4,7 @@
 # agent.pii.categories=email,phone   # 另可选 card,national_id_cn,ssn_us
 # agent.grounding.semantic_mode=off  # off（默认）| warn | enforce；启用后额外调用模型逐条判定断言支持性，共用 Run 预算
 # agent.grounding.mode=enforce      # 与 semantic_mode=enforce 配合时阻断证据不足/判定失败的交付
-# agent.rag.answerability=verify   # 兼容配置名：默认 verify 仅在检索前规划核心需求与查询；off 禁用规划。检索准入不裁决最终可回答性，结论校验由 grounding.semantic_mode 控制
+# agent.rag.answerability=off      # 旧键已停用；检索不再额外调用模型。主 Agent 可直接提供 queries
 api_base=https://api.deepseek.com
 api_key=
 model=deepseek-v4-flash

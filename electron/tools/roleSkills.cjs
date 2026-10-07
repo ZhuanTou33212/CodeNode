@@ -21,6 +21,7 @@ const ROLE_SKILLS = Object.freeze({
     title: '先结构后细节',
     instructions: Object.freeze([
       '先用 project_info / scan_project 拿到项目结构与形态，再按需 read_file / search_files。',
+      'TS/JS 符号定位可用 find_definition / find_references / get_callers / get_callees；工具未暴露时先 discover_tools 取回。同名时用 path/line 限定，再 read_file 核实。静态候选和未命中都不能作为实际调用关系或不存在的证明。',
       '不要凭文件名或经验描述未读到的代码；没读到就写「未确认」。',
     ]),
   }),

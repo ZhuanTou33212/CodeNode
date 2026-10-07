@@ -214,7 +214,6 @@ function analyzeCode(relative, text) {
       units.push(segmentFor(sourceFile, node, kind, '', null));
     }
   }
-  if (!units.length) return null;
   units.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
   const segments = [];
   let nextLine = 1;
@@ -231,7 +230,8 @@ function analyzeCode(relative, text) {
     segments.push({ startLine: nextLine, endLine: lines.length, kind: 'module',
       symbol: '', qualifiedSymbol: '', parentSymbol: '', aliases: [], parentContext: null, calls: [], references: [], exported: false });
   }
-  return { segments, imports: importsOf(sourceFile) };
+  return { segments, imports: importsOf(sourceFile),
+    navigation: require('./symbolNavigation.cjs').extractNavigation(sourceFile) };
 }
 
 module.exports = { analyzeCode, CODE_EXTENSIONS };

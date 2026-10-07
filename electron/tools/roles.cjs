@@ -35,6 +35,7 @@ const ROLE_DEFINITIONS = Object.freeze({
     tools: Object.freeze([
       'get_workbench_model', 'project_info', 'scan_project', 'read_file',
       'find_files', 'search_files', 'list_directory', 'retrieve_context', 'query_scalars',
+      'find_definition', 'find_references', 'get_callers', 'get_callees',
     ]),
     work: Object.freeze([
       '回答「在哪里 / 怎么实现的 / 依赖谁」这类定位问题',
@@ -55,6 +56,7 @@ const ROLE_DEFINITIONS = Object.freeze({
     capabilities: Object.freeze(['workspace.read', 'workspace.write']),
     tools: Object.freeze([
       'get_workbench_model', 'project_info', 'read_file', 'find_files', 'search_files',
+      'find_definition', 'find_references', 'get_callers', 'get_callees',
       'list_directory', 'retrieve_context', 'query_scalars', 'write_file', 'edit_file', 'workbench_edit',
     ]),
     work: Object.freeze([
@@ -76,6 +78,7 @@ const ROLE_DEFINITIONS = Object.freeze({
     capabilities: Object.freeze(['workspace.read', 'shell.execute']),
     tools: Object.freeze([
       'project_info', 'read_file', 'find_files', 'search_files', 'list_directory',
+      'find_definition', 'find_references', 'get_callers', 'get_callees',
       'retrieve_context', 'query_scalars', 'execute_shell', 'poll_job', 'code_review',
     ]),
     work: Object.freeze([
@@ -103,6 +106,7 @@ const ROLE_DEFINITIONS = Object.freeze({
     capabilities: Object.freeze(['workspace.read']),
     tools: Object.freeze([
       'get_workbench_model', 'project_info', 'read_file', 'find_files', 'search_files',
+      'find_definition', 'find_references', 'get_callers', 'get_callees',
       'retrieve_context', 'query_scalars', 'code_review',
     ]),
     work: Object.freeze([

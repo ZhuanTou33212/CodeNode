@@ -191,6 +191,35 @@ minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/mini
 
 ## 3. 数据流（一次典型问答）
 
+### Agent 主动符号导航（TS/JS）
+
+符号导航工具面提供四个只读工具，复用本地索引的 TypeScript AST 与增量 worker。提到符号、调用链或“谁调用”等任务时自动加载；其他任务可用 `discover_tools` 按需取回：
+
+| 工具 | 用途 |
+| --- | --- |
+| `find_definition` | 按区分大小写的符号名或 `Class.method` 限定名定位定义 |
+| `find_references` | 查目标定义的静态引用位置 |
+| `get_callers` | 查调用目标定义的位置及所属函数 |
+| `get_callees` | 查目标函数中的调用，保留无法解析的外部调用 |
+
+例如先调用 `find_definition {symbol:"refreshAsync"}`，用返回的 `path` 和可选 `line` 消除歧义，再调用 `get_callers` / `get_callees`，最后 `read_file` 核实原文。`path` 限定目标定义，引用和调用方仍在整个已索引项目内查找。`maxResults`（默认 40，最多 100）与 `offset` 支持分页，按返回的 `nextOffset` 继续；输出大小受限时也会分页。定义摘要和单个调用的候选列表有界，分别通过 `definitionCount/definitionsTruncated` 和 `candidateCount` 报告完整数量。
+
+位置来自 AST 原始源码，包含行号、列号及文件哈希，不使用 RAG 分块边界。支持相对命名／默认／命名空间导入，以及简单 CommonJS 解构／命名空间 require 和同名导出；局部参数遮蔽导入别名，匿名回调单独记录所属符号。`resolution` 区分 `lexical`、`import`、`member-candidate`、`name-only` 与 `unresolved`；未知接收者的同名方法只作为候选，不能视为确定绑定。
+
+所有结果标记 `approximate:true`：这不是类型检查或完整调用图，重导出、动态分派、复杂 require 与其他语言需要继续搜索和深读。索引截断、跳过文件和语法错误文件数随结果返回；未命中不能证明功能不存在。导航结果只用于定位，不替代原文证据。工具不使用 Run 结果缓存，查询时刷新索引；工程写入失效后重新解析，删除文件移除符号。符号工具与 `query_scalars` 独立于 `rag.enabled`；索引范围和资源限制沿用项目配置，但不启用向量或模型规划。
+
+### 安全编辑与修改后校验
+
+设置入口为“设置 → 安全编辑与校验”，默认值和范围集中于 `config/ui.editing.json`，按项目保存到 `.codenode/agent.properties` 的 `editing.*` 键，昼夜主题共用。运行期间禁止从设置界面修改策略，保存后在下一次任务生效。
+
+`edit_file` 默认要求 `oldText` 唯一匹配且必须明确提供 `newText`（空字符串表示删除）；`occurrence=0` 显式替换全部，正整数选择指定匹配。可提供 `replacements:[{oldText,newText,occurrence?},...]`：顺序计算全部候选，只检查最终语法，随后一次原子落盘。替换失败或最终语法错误时整批不写。编辑自动锁定确认前的内容哈希，提交前重查版本；传入 `expectedSha256` 可额外锁定模型读取的版本。并发冲突返回 `CONFLICT_STALE`，保留外部改动。
+
+默认对 TS/JS/JSON 做语法预检；其他语言明确标记未支持，不将语法检查当成类型或功能测试。已有长文件禁止 `write_file` 或 `bulk_edit create_files` 整体覆盖，局部替换的删除比例受配置限制。语法合法不能证明文件完整，此保护也不替代语义审查。文件超过编辑大小上限或不是有效 UTF-8 时拒绝文本编辑。
+
+每轮工具修改结束后合并进行局部校验，Shell 或钩子的代码变化也进入同一批次。优先采用配置的 lint/test 命令，`{files}` 安全展开为修改路径；否则使用已有本地 ESLint、Vitest/Jest 或按静态相对导入关系选择 Node 测试，不下载运行器。选测是静态近似，记录限定于实际执行的范围；无相关测试、未支持、跳过、超时或取消都不能表示已验证。
+
+校验前后以及最终交付前重新计算代码、依赖清单、配置和环境文件的内容哈希。敏感配置只参与哈希，不提供正文。文件、依赖或配置变化会使旧记录失效；快照截断、无法读取或未跟踪的链接同样不能签发通过记录。超时与执行轮数有界，失败可反馈给 Agent 修复；启用“失败或结果失效时阻止完成”时，未解决的失败不能交付为成功。结果写入运行事件和会话校验卡，显示所选范围、检查状态、命令、退出码和记录时间，历史记录不作为下一次任务的校验缓存。
+
 ```
 1. Agent 需要画布节点详情
    └─► query_scalars key=node:n1:prompt      → 本地精确值（scalar:n1:prompt）

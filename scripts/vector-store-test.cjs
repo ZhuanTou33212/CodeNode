@@ -261,7 +261,8 @@ async function main() {
 
   // ---- 2b. 可选 SQLite 后端：文件持久化、范围过滤、重启复用与旧块清理 ----
   let sqliteAvailable = false;
-  try { require.resolve('sqlite-vec'); sqliteAvailable = true; } catch {}
+  const extension = 'sqlite-vec';
+  try { require.resolve(extension); sqliteAvailable = true; } catch {}
   if (sqliteAvailable) {
     fs.writeFileSync(path.join(sqliteRoot, 'target.txt'), 'export const nonce = 1;\n', 'utf8');
     fs.writeFileSync(path.join(sqliteRoot, 'other.txt'), 'ordinary unrelated text\n', 'utf8');

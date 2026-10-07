@@ -23,6 +23,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-project-create-'));
 const originalMkdir = fs.mkdirSync;
 const originalWrite = fs.writeFileSync;
 const originalRead = fs.readFileSync;
+const originalRename = fs.renameSync;
 
 async function main() {
   chosenPath = path.join(root, 'new.cnode');
@@ -39,8 +40,13 @@ async function main() {
   assert.deepEqual(saved, { ok: true, filePath: chosenPath });
 
   fs.writeFileSync = (target, data) => {
-    if (target === chosenPath) throw new Error('EPERM: write denied');
+    if (target === chosenPath || typeof target === 'number') throw new Error('EPERM: write denied');
     return originalWrite(target, data);
+  };
+  fs.mkdirSync = originalMkdir;
+  fs.renameSync = (source, target) => {
+    if (target === chosenPath) throw new Error('EPERM: write denied');
+    return originalRename(source, target);
   };
   const failed = await handlers.get('project:create')();
   assert.equal(failed.ok, false);
@@ -50,6 +56,7 @@ async function main() {
   assert.equal(saveFailed.ok, false);
   assert.match(saveFailed.error, /EPERM: write denied/);
   fs.writeFileSync = originalWrite;
+  fs.renameSync = originalRename;
 
   originalWrite(chosenPath, Buffer.from('invalid cnode file'));
   const invalid = await handlers.get('graph:open')();
@@ -73,5 +80,6 @@ main().catch((error) => {
   fs.mkdirSync = originalMkdir;
   fs.writeFileSync = originalWrite;
   fs.readFileSync = originalRead;
+  fs.renameSync = originalRename;
   fs.rmSync(root, { recursive: true, force: true });
 });

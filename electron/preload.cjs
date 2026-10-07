@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('codenode', {
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
   ragCheck: (root, settings) => ipcRenderer.invoke('agent:rag-check', root, settings),
   ragSave: (root, settings) => ipcRenderer.invoke('agent:rag-save', root, settings),
+  editingSave: (root, settings) => ipcRenderer.invoke('agent:editing-save', root, settings),
   agentGreeting: (root) => ipcRenderer.invoke('agent:greeting', root),
   agentTools: (root) => ipcRenderer.invoke('agent:tools', root),
   agentRuns: (root) => ipcRenderer.invoke('agent:runs', root),

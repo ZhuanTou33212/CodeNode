@@ -120,13 +120,31 @@ const planItem = object({ id: nonempty, step: nonempty, acceptanceCriteria: none
   status: { enum: ['pending', 'in_progress', 'blocked', 'completed', 'cancelled'] },
   evidenceCallIds: strings, dependsOn: strings, ownerTaskId: str, reason: str }, ['id', 'step', 'acceptanceCriteria', 'status'], true);
 const fileVersion = object({ sha256: nonempty, ranges: dict(nonempty) });
+const symbolDefinition = object({ id: nonempty, path: nonempty, symbol: nonempty, qualifiedSymbol: nonempty,
+  kind: nonempty, startLine: { type: 'integer', minimum: 1 }, endLine: { type: 'integer', minimum: 1 },
+  column: { type: 'integer', minimum: 1 }, sourceSha256: nonempty });
+const symbolSite = object({ path: nonempty, symbol: nonempty, startLine: { type: 'integer', minimum: 1 },
+  endLine: { type: 'integer', minimum: 1 }, column: { type: 'integer', minimum: 1 }, kind: nonempty,
+  receiver: str, sourceSha256: nonempty, owner: nullable(symbolDefinition), candidates: list(symbolDefinition),
+  candidateCount: nat, resolution: { enum: ['lexical', 'import', 'member-candidate', 'name-only', 'unresolved'] }, ambiguous: bool });
+const symbolNavigation = object({ operation: { enum: ['find_definition', 'find_references', 'get_callers', 'get_callees'] },
+  symbol: nonempty, definitions: list(symbolDefinition), definitionCount: nat, definitionsTruncated: bool,
+  results: list(choice(symbolDefinition, symbolSite)), count: nat, offset: nat, nextOffset: nullable(nat),
+  ambiguous: bool, approximate: { const: true }, sourceVersions: dict(nonempty), limitations: nonempty,
+  index: object({ indexedFiles: nat, skippedFiles: nat, truncated: bool, parseErrorFiles: nat }) });
 const workbenchModel = object({ ...graphStats, view: str, nodes: list(graphNode),
   edges: list(object({ id: nonempty, source: nonempty, sourceHandle: str, target: nonempty, targetHandle: str })) }, [...Object.keys(graphStats), 'view']);
 workbenchModel.allOf = [{ if: { properties: { view: { const: 'full' } } }, then: { required: ['nodes', 'edges'] } }];
 
 const schemas = {
-  write_file: object({ path: nonempty, bytes: nat, sha256: nullable(str), review: nullable(reviewFile), reviewUnavailable: nullable(str) }),
-  edit_file: object({ path: nonempty, replaced: { type: 'integer', minimum: 1 }, sha256: nullable(str), review: reviewFile }),
+  find_definition: symbolNavigation,
+  find_references: symbolNavigation,
+  get_callers: symbolNavigation,
+  get_callees: symbolNavigation,
+  write_file: object({ path: nonempty, bytes: nat, sha256: nullable(str), review: nullable(reviewFile), reviewUnavailable: nullable(str),
+    syntax: object({ status: { enum: ['passed', 'failed', 'not_supported', 'disabled'] }, diagnostics: list(object({ message: str, line: nat, column: nat }, ['message'])) }) }, ['path', 'bytes', 'sha256', 'review', 'reviewUnavailable']),
+  edit_file: object({ path: nonempty, replaced: { type: 'integer', minimum: 1 }, sha256: nullable(str), review: reviewFile,
+    syntax: object({ status: { enum: ['passed', 'failed', 'not_supported', 'disabled'] }, diagnostics: list(object({ message: str, line: nat, column: nat }, ['message'])) }) }, ['path', 'replaced', 'sha256', 'review']),
   read_file: object({ path: nonempty, language: str, binary: { const: false }, lineCount: { type: 'integer', minimum: 1 },
     matched: str, sourceSha256: str, sourceRangeSha256: str, extractedTruncated: bool, truncated: bool,
     offset: nat, charOffset: nat, startLine: nat, endLine: nat, nextOffset: nullable(nat), nextCharOffset: nullable(nat),

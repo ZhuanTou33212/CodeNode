@@ -306,6 +306,9 @@ function createExecutionContext(source, descriptor, callInfo) {
     if (typeof base.planSessionId === 'function') ctx.planSessionId = () => safeCall(() => base.planSessionId(), '');
     if (typeof base.planOwnerExists === 'function') ctx.planOwnerExists = (taskId) => safeCall(() => base.planOwnerExists(taskId), false) === true;
   }
+  if (['write_file', 'edit_file', 'bulk_edit'].includes(toolName) && typeof base.editingConfig === 'function') {
+    ctx.editingConfig = () => base.editingConfig();
+  }
   // Only retrieval needs access to the request budget for embeddings/reranking.
   if (toolName === 'retrieve_context' && typeof base.modelRuntime === 'function') {
     ctx.modelRuntime = () => ({ ...base.modelRuntime(), traceContext,

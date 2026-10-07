@@ -207,14 +207,17 @@ async function createFiles(context, args) {
     }
     try {
       if (path.dirname(target)) fs.mkdirSync(path.dirname(target), { recursive: true });
+      const editing = require('../../safeEditing.cjs');
+      const before = editing.snapshot(target);
+      editing.validateCandidate(relative, before.text, content, context.editingConfig ? context.editingConfig() : require('../../../config/ui.editing.json').defaults, before.existed);
       // #23：与 write_file / edit_file 统一走原子替换（临时文件 + fsync + rename）——
       // 裸 writeFileSync 在中途崩溃/断电时会把文件截成半截且没有 .bak。
-      atomicWriteFile(target, content, 'utf-8');
+      atomicWriteFile(target, content, 'utf-8', { expectedSha256: before.sha256 });
       written.push(relative);
+      context.notifyFileChange(relative, before.existed ? 'modify' : 'create', content.length + ' 字节');
     } catch (e) {
       errors.push(relative + ': ' + ((e && e.message) || e));
     }
-    context.notifyFileChange(relative, 'create', content.length + ' 字节');
     n++;
   }
   context.audit('bulk_edit create_files written=' + written.length + ' errors=' + errors.length);

@@ -26,6 +26,7 @@ const READ_ONLY_TOOLS = new Set([
   'scan_project', 'analyze_project', 'project_info', 'read_file',
   'find_files', 'search_files', 'list_directory', 'code_review', 'ask_user',
   'retrieve_context', 'read_skill', 'view_image',
+  'find_definition', 'find_references', 'get_callers', 'get_callees',
   // 语义上只读，但**故意不进缓存白名单**：画布/标量是权威读源，变更后必须立刻读到最新状态
   'get_workbench_model', 'query_scalars', 'poll_job', 'recall', 'get_subagent_task',
   // 取消子任务（第 6 项）：只 abort 一个子代理，不改工作区；与 get_subagent_task 同类
@@ -81,6 +82,10 @@ const CAPABILITY_BY_TOOL = Object.freeze({
   read_file: 'workspace.read',
   find_files: 'workspace.read',
   search_files: 'workspace.read',
+  find_definition: 'workspace.read',
+  find_references: 'workspace.read',
+  get_callers: 'workspace.read',
+  get_callees: 'workspace.read',
   list_directory: 'workspace.read',
   analyze_project: 'workspace.read',
   project_info: 'workspace.read',

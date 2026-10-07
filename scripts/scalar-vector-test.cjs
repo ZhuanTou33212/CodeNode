@@ -63,6 +63,15 @@ async function main() {
   assert.ok(records.some((r) => r.key === 'node:n2:label'));
 
   // ---- 3. query_scalars 工具（注册 + 端到端） ----
+  const standaloneRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false });
+  assert.ok(standaloneRegistry.contains('query_scalars'), '关闭 RAG 后基础标量工具仍然可用');
+  assert.ok(!standaloneRegistry.contains('retrieve_context'), '关闭 RAG 后可选检索工具被移除');
+  const standaloneContext = new AgentToolContext({ projectRoot: root, scalarStore: store2, ragConfig: { enabled: false } });
+  const standalone = await standaloneRegistry.execute('query_scalars', { key: 'node:n1:prompt' }, standaloneContext);
+  assert.equal(standalone.ok, true);
+  assert.equal(standalone.data.items[0].value, '实现登录与令牌轮换');
+  const prefixResult = await standaloneRegistry.execute('query_scalars', { prefix: 'node:n1' }, standaloneContext);
+  assert.ok(prefixResult.data.items.length >= 3);
   clearScalarCache();
   const registry = toolkit.buildDefaultRegistryWithConfig({ toolsEnabled: true, ragEnabled: true });
   assert.ok(registry.listTools().some((t) => t.name === 'query_scalars'), '应注册 query_scalars');
