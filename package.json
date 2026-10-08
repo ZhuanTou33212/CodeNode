@@ -23,6 +23,7 @@
     "test:backend-ui": "node scripts/run-electron.cjs scripts/ui/backend-settings-ui-test.cjs",
     "test:backend-live": "node scripts/tools/codex-backend-smoke.cjs",
     "test:backend-live-agents": "node scripts/tools/agent-backend-live-smoke.cjs --backends=hermes,opencode",
+    "test:backend-live-deepseek": "node scripts/tools/deepseek-harness-live-smoke.cjs",
     "test:backend-live-workflow": "node scripts/tools/agent-backend-live-workflow.cjs --backends=hermes,opencode",
     "test:backend-live-acp-lifecycle": "node scripts/tools/agent-backend-live-acp-lifecycle.cjs",
     "test:backend-connection": "node scripts/tools/codex-backend-connection.cjs",
