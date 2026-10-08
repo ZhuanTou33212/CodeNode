@@ -70,7 +70,7 @@ const extensionStore = require('../tools/extensions.cjs');
 const { getScalarStore } = require('../scalars/index.cjs');
 const { GraphModel } = require('../tools/GraphModel.cjs');
 // 跨 Agent 资源租约（P3）：**按 run 一个实例**，主代理与所有子代理共享
-const { LeaseRegistry } = require('../tools/leases.cjs');
+const { createProjectRunLeases } = require('../tools/leases.cjs');
 
 /**
  * 画布被 Agent 改过 → 世界状态版本号 +1（并把计数写回 doc.root.revision 供跨请求 round-trip）。
@@ -417,6 +417,8 @@ function register(ctx) {
     let memoryScopeKey = '';
     /** @type {CostLedger|null} */
     let runCostLedger = null;
+    /** @type {ReturnType<typeof createProjectRunLeases>|null} */
+    let runLeases = null;
     /** SessionStop 钩子需要的上下文：run 过程中可能抛异常，catch 里也要能补跑一次（保持外层可见） */
     /** @type {{cfg: any, sandboxPolicy: any, runId: string|null, projectRoot: string|null}|null} */
     let hookSessionCtx = null;
@@ -434,7 +436,7 @@ function register(ctx) {
       cfg.requestBudget = new RequestBudget(cfg.limits.maxTotalTokens, {
         retryLimit: cfg.limits.maxTotalRetries, costLimitUsd: cfg.limits.maxCostUsd, prices: cfg.costPrices,
       });
-      if (requestId && activeRequests.has(requestId)) return { ok: false, error: '重复的 Agent requestId' };
+      if (requestId && (activeRequests.has(requestId) || activeRequests.has(runStore.normalizeRunId(requestId)))) return { ok: false, error: '重复的 Agent requestId' };
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
       // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
       const baseCfg = agent.loadConfig(null);
@@ -684,8 +686,8 @@ function register(ctx) {
       /** @type {any} 本次 run 的资源租约账本（P3）；run 收尾时释放主代理持有的全部租约 */
       let leases = null;
       if (cfg.tools.toolsEnabled) {
-        // 资源租约账本：一次 run 一份（主代理 + 它的所有子代理共享同一个实例，否则锁不住）
-        leases = new LeaseRegistry({
+        // 底层租约按工程共享，持有者按 Run 分域；主/子代理使用同一 facade。
+        leases = runLeases = createProjectRunLeases(projectRoot, runId, {
           enabled: (cfg.subagent && cfg.subagent.leases) !== false,
           ttlMs: (cfg.subagent && cfg.subagent.leaseTtlMs) || 120000,
         });
@@ -1401,6 +1403,7 @@ function register(ctx) {
       sendDelta({ kind: 'error', error: String((e && e.message) || e) });
       return { ok: false, error: String((e && e.message) || e) };
     } finally {
+      if (runLeases) { runLeases.releaseAll('supervisor'); runLeases.dispose(); }
       if (memoryScopeKey) activeMemorySessions.delete(memoryScopeKey);
       if (runSpan) runSpan.end(runTraceStatus);
     }

@@ -87,6 +87,7 @@ const CORE = [
   'test:subagent-envelope',
   'test:context-overflow',
   'test:multi-agent-integrity',
+  'test:cross-run-leases',
   'test:agent-request-shape',
   'test:agent-progress',
   'test:truncation-safety',

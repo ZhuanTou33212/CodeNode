@@ -273,7 +273,7 @@ function registryFor(leases, over = {}) {
     const first = await writer(a, 'shared.txt', 'A 写的');
     check('[C] 第一个写者拿到租约并写成功', () => {
       assert.strictEqual(first.ok, true, String(first.text));
-      assert.ok(leases.holder('file:' + path.join(root, 'shared.txt').split(path.sep).join('/')));
+      assert.ok(leases.holder(resourceKeysFor('write_file', { path: 'shared.txt' }, { projectRoot: root })[0]));
     });
 
     const second = await writer(b, 'shared.txt', 'B 写的');

@@ -18,6 +18,19 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
+function canonicalPath(value) {
+  let cursor = path.resolve(value || process.cwd()); const tail = [];
+  while (true) {
+    try { cursor = path.join(fs.realpathSync(cursor), ...tail.reverse()); break; } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) { cursor = path.resolve(value || process.cwd()); break; }
+      tail.push(path.basename(cursor)); cursor = parent;
+    }
+  }
+  const normalized = cursor.split(path.sep).join('/');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
 
 /** 默认租约时长：一次写操作远用不到这么久，纯粹是「持有者崩了别永久占住」的兜底 */
 const DEFAULT_TTL_MS = 120000;
@@ -42,7 +55,7 @@ function resourceKeysFor(name, args, options = {}) {
     if (!raw) return;
     const abs = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(projectRoot, raw);
     // 统一成 posix 风格：Windows 上反斜杠/大小写差异不能让同一个文件变成两把锁
-    keys.push('file:' + abs.split(path.sep).join('/'));
+    keys.push('file:' + canonicalPath(abs));
   };
   const tool = String(name || '');
   if (tool === 'write_file' || tool === 'edit_file') {
@@ -184,4 +197,45 @@ class LeaseRegistry {
   }
 }
 
-module.exports = { LeaseRegistry, resourceKeysFor, DEFAULT_TTL_MS, CANVAS_KEY, PROJECT_SAVE_KEY };
+// One registry per canonical project in this main process, one holder namespace per Run.
+const projectPools = new Map();
+function createProjectRunLeases(projectRoot, runId, options = {}) {
+  if (!runId) throw new Error('Shared leases require a Run id');
+  for (const [key, entry] of projectPools) {
+    entry.registry.sweep();
+    if (!entry.scopes.size && !entry.registry.snapshot().held.length) projectPools.delete(key);
+  }
+  const projectKey = canonicalPath(projectRoot);
+  let pool = projectPools.get(projectKey);
+  if (!pool) { pool = { registry: new LeaseRegistry(), scopes: new Map() }; projectPools.set(projectKey, pool); }
+  const id = String(runId);
+  if (pool.scopes.has(id)) throw new Error('Run already has an active project lease scope');
+  const registry = pool.registry;
+  const prefix = JSON.stringify(id) + ':';
+  const owner = holder => prefix + String(holder || 'supervisor');
+  const enabled = options.enabled !== false;
+  const ttlMs = Number(options.ttlMs) > 0 ? Number(options.ttlMs) : DEFAULT_TTL_MS;
+  let disposed = false;
+  const token = {};
+  pool.scopes.set(id, token);
+  const cleanup = () => {
+    if (!pool.scopes.size && !registry.snapshot().held.length && projectPools.get(projectKey) === pool) projectPools.delete(projectKey);
+  };
+  const timer = setInterval(() => {
+    for (const held of registry.snapshot().held) if (held.holder.startsWith(prefix)) registry.acquire([held.key], held.holder, { role: held.role, ttlMs });
+  }, Math.max(10, Math.floor(ttlMs / 3)));
+  timer.unref();
+  return {
+    enabled, ttlMs,
+    acquire(keys, holder, meta = {}) {
+      if (disposed) throw new Error('Run lease scope already disposed');
+      return enabled ? registry.acquire(keys, owner(holder), { ...meta, ttlMs }) : { ok: true, granted: [], conflict: null };
+    },
+    holder(key) { return registry.holder(key); },
+    release(keys, holder) { const count = registry.release(keys, owner(holder)); cleanup(); return count; },
+    releaseAll(holder) { const count = registry.releaseAll(owner(holder)); cleanup(); return count; },
+    snapshot() { return registry.snapshot(); },
+    dispose() { disposed = true; clearInterval(timer); if (pool.scopes.get(id) === token) pool.scopes.delete(id); cleanup(); },
+  };
+}
+module.exports = { LeaseRegistry, createProjectRunLeases, resourceKeysFor, DEFAULT_TTL_MS, CANVAS_KEY, PROJECT_SAVE_KEY };

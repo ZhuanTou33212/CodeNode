@@ -246,8 +246,10 @@ function freshStores() {
 
 const pending = [];
 function defer() {
-  let resolve;
-  let reject;
+  /** @type {(value:any)=>void} */
+  let resolve = () => { throw new Error('Deferred not initialized'); };
+  /** @type {(reason:any)=>void} */
+  let reject = () => { throw new Error('Deferred not initialized'); };
   const promise = new Promise((res, rej) => {
     resolve = res;
     reject = rej;
@@ -680,11 +682,66 @@ async function testAccessibilityMarkup() {
 // ---------------------------------------------------------------------------
 // 7) 入口
 // ---------------------------------------------------------------------------
+async function testSessionOwnershipRace() {
+  freshStores();
+  const { chat, session, ui, project } = registry;
+  installApi();
+  session.getState().startOnCurrent('A');
+  const a = session.getState().activeId;
+  session.getState().beginWorkSession('B');
+  const b = session.getState().activeId;
+  session.getState().switchSession(a);
+  const delayed = defer();
+  /** @type {(event:any)=>void} */
+  let listener = () => { throw new Error('Delta subscription missing'); };
+  let payload = { requestId: '' };
+  installApi({ agentChat: input => { payload = input; return delayed.promise; }, onAgentDelta: fn => { listener = fn; return () => {}; } });
+  const running = chat.getState().send('A request');
+  listener({ requestId: payload.requestId, kind: 'content', text: 'A partial' });
+  session.getState().switchSession(b);
+  check('E1 运行时 store 阻止切换，不改变当前会话', session.getState().activeId === a && /切换会话/.test(ui.getState().toast));
+  chat.getState().stop(payload.requestId);
+  check('E2 停止立即结束当前流状态，允许随后切换', session.getState().streaming === false);
+  session.getState().switchSession(b);
+  const before = JSON.stringify(session.getState().messages);
+  listener({ requestId: payload.requestId, kind: 'content', text: 'LATE A' });
+  if (!delayed.resolve) throw new Error('Deferred resolver missing');
+  delayed.resolve({ ok: true, reply: 'LATE FINAL A', document: { root: { nodes: [{ id: 'late-node', type: 'task', data: {label:'late'} }], edges: [] } } });
+  await running;
+  check('E3 停止后旧 Run 的流与最终文档均不污染 B', session.getState().activeId === b && JSON.stringify(session.getState().messages) === before && !JSON.stringify(session.getState().current()?.doc).includes('late-node'));
+  freshStores(); installApi(); session.getState().startOnCurrent('Original project');
+  const moved = defer();
+  installApi({ agentChat: input => { payload = input; return moved.promise; }, onAgentDelta: fn => { listener = fn; return () => {}; } });
+  const pending = chat.getState().send('Old project request');
+  project.setState({ root: '/different-project' });
+  session.setState({ activeId: 'another-project-session', messages: [{role:'user',content:'new project'}], streaming: false });
+  const newMessages = JSON.stringify(session.getState().messages);
+  listener({ requestId: payload.requestId, kind: 'content', text: 'OLD PROJECT DATA' });
+  if (!moved.resolve) throw new Error('Deferred resolver missing');
+  moved.resolve({ ok:true, reply:'OLD PROJECT FINAL' }); await pending;
+  check('E4 工程和会话归属变化时拒绝旧流/旧最终结果', JSON.stringify(session.getState().messages) === newMessages && registry.isSending() === false);
+  freshStores(); installApi(); session.getState().startOnCurrent('Same session');
+  const first = defer(), second = defer();
+  let received = 0;
+  const requests = [];
+  installApi({ agentChat: input => { requests.push(input); return received++ === 0 ? first.promise : second.promise; } });
+  const oldRequest = chat.getState().send('first request');
+  chat.getState().stop(requests[0].requestId);
+  const newRequest = chat.getState().send('second request');
+  if (!first.resolve || !second.resolve) throw new Error('Deferred resolver missing');
+  first.resolve({ok:true,reply:'OLD FINISH'}); await oldRequest;
+  check('E5 同会话停止后重发，旧结果不得结束新请求的 streaming', session.getState().streaming && registry.isSending());
+  second.resolve({ok:true,reply:'NEW FINISH'}); await newRequest;
+  check('E6 新请求独立正常完成且没有旧回复', session.getState().messages.some(m=>m.content==='NEW FINISH') && !session.getState().messages.some(m=>m.content==='OLD FINISH') && !registry.isSending());
+
+}
+
 async function main() {
   installApi();
   loadConfig();
   await testInflightRegistry();
   await testSendGuardAndConcurrency();
+  await testSessionOwnershipRace();
   await testResumePlanAndDeltas();
   await testReportError();
   await testAccessibilityMarkup();

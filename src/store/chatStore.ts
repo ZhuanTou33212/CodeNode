@@ -21,6 +21,11 @@ import type { AgentAttachment, ToolRecord } from '../types';
  * （见 `useChatStore((s) => s.inflight.size() > 0)`），`finally` 只删自己那一条。
  */
 const inflight = createInflightRegistry<AbortController>();
+const requestOwners = new Map<string, { sessionId: string | null; root: string | null; projectFile: string | null }>();
+function ownsActiveView(id: string): boolean {
+  const owner = requestOwners.get(id);
+  return !!owner && useSessionStore.getState().activeId === owner.sessionId && useProjectStore.getState().root === owner.root && useProjectStore.getState().projectFile === owner.projectFile;
+}
 /** 最近一个「已受理」的 requestId：给「停止当前请求」用（不是全局唯一语义，只影响默认指向） */
 let lastRequestId: string | null = null;
 
@@ -127,7 +132,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // 无论哪种，都从登记表里**按 id** 摘除并 abort —— 不会再出现「controller 被覆盖后点不到」。
     const rid = requestId || lastRequestId;
     if (!rid || !inflight.has(rid)) return;
+    const ownsView = ownsActiveView(rid);
     inflight.abort(rid);
+    if (ownsView) useSessionStore.getState().stopTurn();
     if (lastRequestId === rid) lastRequestId = null;
     if (api && api.stopAgent) {
       const p = api.stopAgent(rid);
@@ -140,7 +147,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   stopAll: () => {
+    const ownsView = inflight.ids().some(ownsActiveView);
     const ids = inflight.abortAll();
+    if (ownsView) useSessionStore.getState().stopTurn();
     lastRequestId = null;
     for (const rid of ids) {
       const p = window.codenode?.stopAgent?.(rid);
@@ -214,26 +223,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     ss.beginTurn();
 
     const requestId = 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-    const unsub = api.onAgentDelta
-      ? api.onAgentDelta((d) => {
-          if (d.requestId === requestId) useSessionStore.getState().streamDelta(d);
-        })
-      : null;
-
-    const us = useUsageStore.getState();
-    // 登记：key 是**这次的** requestId，值是**这次的** controller。
-    // `sending` 不再是一个全局布尔（那个东西会被并发覆盖），而是 `inflight.size() > 0` 的派生值。
     const controller = new AbortController();
+    const requestRoot = useProjectStore.getState().root;
+    const us = useUsageStore.getState();
     const accepted = inflight.begin(requestId, controller, userText.slice(0, 80));
     if (!accepted) {
       useUiStore.getState().setToast(GUARD_MESSAGES.busy);
       useSessionStore.getState().stopTurn();
       return empty;
     }
+    requestOwners.set(requestId, { sessionId: planSessionId, root: requestRoot, projectFile: useProjectStore.getState().projectFile });
     lastRequestId = requestId;
+    let unsub: (() => void) | null = null;
     try {
+      unsub = api.onAgentDelta ? api.onAgentDelta((d) => {
+        if (d.requestId !== requestId || controller.signal.aborted || !ownsActiveView(requestId)) return;
+        useSessionStore.getState().streamDelta(d);
+        // A confirmed save can assign the first project file without changing request ownership.
+        if (d.kind === 'saved') {
+          const owner = requestOwners.get(requestId);
+          if (owner) owner.projectFile = useProjectStore.getState().projectFile;
+        }
+      }) : null;
       const res = await api.agentChat({
-        projectRoot: useProjectStore.getState().root,
+        projectRoot: requestRoot,
         prompt: userText,
         attachments: attachments.length ? attachments : undefined,
         // /compact：让主进程无视阈值立刻压一次（见上面对命令的解析）
@@ -255,6 +268,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // #7：把这一条请求自己的中止信号交出去，`stop(id)` / `stopAll()` 才停得准
         signal: controller.signal,
       });
+      if (controller.signal.aborted || !ownsActiveView(requestId)) return empty;
       // 需要人工复核的续跑：主进程拒绝自动执行 —— #21 的关键点是**不能把 plan 丢掉**。
       // 后端回传 `{ok:false, needsReview:true, plan}`，plan 里有 reason / warning /
       // unknownEffects（哪些工具结果不可知）/ pendingSteps（还差哪几步），全部要落到界面上，
@@ -353,14 +367,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       return { reply: res.reply, reasoning: res.reasoning || '', tools };
     } catch (e) {
-      useSessionStore.getState().failTurn(String(e));
-      useUiStore.getState().setToast('Agent 调用异常：' + String(e));
+      if (!controller.signal.aborted && ownsActiveView(requestId)) {
+        useSessionStore.getState().failTurn(String(e)); useUiStore.getState().setToast('Agent 调用异常：' + String(e));
+      }
       return empty;
     } finally {
-      if (unsub) unsub();
+      try { if (unsub) unsub(); } catch { /* A disposed IPC listener cannot retain a request lock. */ }
       // #7 只清自己那一条：修复前这里无条件 `set({ sending:false, requestId:null })`，
       // 会把**别人的**在跑请求一起标成空闲（旧请求的 controller 也就此失联）。
       inflight.end(requestId);
+      requestOwners.delete(requestId);
       if (lastRequestId === requestId) lastRequestId = null;
     }
   },

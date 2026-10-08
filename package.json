@@ -87,6 +87,7 @@
     "test:compaction": "node scripts/core/compaction-test.cjs",
     "test:subagent-envelope": "node scripts/core/subagent-envelope-test.cjs",
     "test:context-overflow": "node scripts/core/context-overflow-test.cjs",
+    "test:cross-run-leases": "node scripts/core/concurrent-run-leases-test.cjs",
     "test:multi-agent-integrity": "node scripts/core/multi-agent-integrity-test.cjs",
     "test:agent-request-shape": "node scripts/core/agent-request-shape-test.cjs",
     "test:agent-progress": "node scripts/core/agent-progress-test.cjs",

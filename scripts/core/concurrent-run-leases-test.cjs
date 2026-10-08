@@ -1,0 +1,27 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const {createProjectRunLeases,resourceKeysFor}=require('../../electron/tools/leases.cjs');
+const {AgentToolContext}=require('../../electron/tools/context.cjs');
+const toolkit=require('../../electron/tools/toolkit.cjs');
+const sandbox=require('../../electron/sandbox.cjs');
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'codenode-cross-run-'));
+const scopes=[];const scope=(id,project=root,opts={})=>{const value=createProjectRunLeases(project,id,opts);scopes.push(value);return value;};
+(async()=>{try{
+const policy=sandbox.resolvePolicy({mode:'off'},{projectRoot:root,userDataDir:root});sandbox.setDefaultPolicy(policy);
+const noProject=scope('no-project',null);noProject.releaseAll('supervisor');noProject.dispose();
+const a=scope('run-a'),b=scope('run-b',path.join(root,'.'));
+assert.throws(()=>createProjectRunLeases(root,'run-a'),/active project lease scope/);
+const ctx=id=>new AgentToolContext({projectRoot:root,confirm:async()=>true,sandbox:policy,runId:id});
+const ra=toolkit.buildDefaultRegistryWithConfig({projectRoot:root,ragEnabled:false,leases:a}),rb=toolkit.buildDefaultRegistryWithConfig({projectRoot:root,ragEnabled:false,leases:b});
+assert.equal((await ra.execute('write_file',{path:'shared.txt',content:'A'},ctx('run-a'))).ok,true);
+const blocked=await rb.execute('write_file',{path:'shared.txt',content:'B'},ctx('run-b'));assert.equal(blocked.ok,false);assert.equal(blocked.failure.code,'RESOURCE_LOCKED');assert.equal(fs.readFileSync(path.join(root,'shared.txt'),'utf8'),'A');
+assert.equal(b.releaseAll('supervisor'),0,'B cannot release A supervisor lock');
+assert.equal((await rb.execute('write_file',{path:'other.txt',content:'B'},ctx('run-b'))).ok,true);
+assert.equal((await rb.execute('read_file',{path:'shared.txt'},ctx('run-b'))).ok,true);
+assert.equal(a.releaseAll('supervisor'),1);assert.equal((await rb.execute('write_file',{path:'shared.txt',content:'B'},ctx('run-b'))).ok,true);
+assert.equal(a.acquire(['child-resource'],'task-1').ok,true);assert.equal(b.acquire(['child-resource'],'task-1').ok,false,'Same child name across Runs is not same owner');a.releaseAll('task-1');assert.equal(b.acquire(['child-resource'],'task-1').ok,true);
+const another=path.join(root,'another-project');fs.mkdirSync(another);const c=scope('run-c',another);assert.equal(a.acquire(['resource:canvas'],'supervisor').ok,true);assert.equal(c.acquire(['resource:canvas'],'supervisor').ok,true);
+if(process.platform==='win32')assert.deepEqual(resourceKeysFor('write_file',{path:'SHARED.TXT'},{projectRoot:root}),resourceKeysFor('write_file',{path:'shared.txt'},{projectRoot:root}));
+const heartbeat=scope('heartbeat',root,{ttlMs:90});assert.equal(heartbeat.acquire(['long-operation'],'supervisor').ok,true);await new Promise(r=>setTimeout(r,220));assert.equal(b.acquire(['long-operation'],'supervisor').ok,false,'Active Run renews leases beyond TTL');heartbeat.dispose();await new Promise(r=>setTimeout(r,130));assert.equal(b.acquire(['long-operation'],'supervisor').ok,true,'Disposed abandoned lease can expire');
+assert.equal(fs.readFileSync(path.join(root,'shared.txt'),'utf8'),'B');console.log('CROSS-RUN LEASES: PASS (actual tool writes, owner isolation, different files/projects, read access, child IDs, heartbeat, release and expiry)');
+}finally{for(const value of scopes){for(const who of ['supervisor','task-1'])value.releaseAll(who);value.dispose();}assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('codenode-cross-run-'));fs.rmSync(root,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1});

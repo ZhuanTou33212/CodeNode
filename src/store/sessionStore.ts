@@ -297,6 +297,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   switchSession: (id) => {
     const s = get();
     if (id === s.activeId || !s.sessions[id]) return;
+    if (s.streaming) { useUiStore.getState().setToast('Agent 正在运行，请先停止或等待完成后切换会话'); return; }
     // 先把当前画布的最新状态（含自动排版后的节点位置）保存回会话，避免切换后位置丢失/重叠
     get().syncActiveGraph();
     const target = s.sessions[id];
