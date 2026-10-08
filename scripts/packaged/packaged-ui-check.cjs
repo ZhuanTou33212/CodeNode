@@ -65,11 +65,14 @@ app.whenReady().then(async () => {
     ok('asar 可加载 ACP 与 DeepSeek Harness adapters', packagedBackends.createBackend('hermes', { backend: 'hermes', sandbox: 'read-only' }).constructor.name === 'AcpBackend' && packagedBackends.createBackend('deepseek-harness', { backend: 'deepseek-harness', sandbox: 'read-only' }).constructor.name === 'DeepSeekHarnessBackend');
     const packagedGoalStore = require(path.join(ASAR, 'electron', 'goalStore.cjs'));
     ok('asar 可加载 Goal admission、重启恢复、证据与等待调度', typeof packagedGoalStore.admit === 'function' && typeof packagedGoalStore.reconcileAdmissions === 'function' && typeof packagedGoalStore.recordEvidence === 'function' && typeof packagedGoalStore.releaseDueTimeWaits === 'function' && typeof packagedGoalStore.confirmExperience === 'function');
+    ok('asar 包含未知 Run 的差异复核与重排门', typeof packagedGoalStore.runReview === 'function' && typeof packagedGoalStore.confirmRunReview === 'function');
 
     // asar 内 .js/.css 用相对路径引用，file:// 读不到；把同一份 asar 内资源实体化到临时目录，
     // 保证加载的就是「打包产物里的那一份」而不是源码 dist。
     const assetsDir = path.join(ASAR, 'dist', 'assets');
     const assetNames = fs.readdirSync(assetsDir);
+    const rendererBundles=assetNames.filter(name=>name.endsWith('.js')).map(name=>fs.readFileSync(path.join(assetsDir,name),'utf8'));
+    ok('asar 渲染包包含 Run 差异复核与显式重排确认',rendererBundles.some(bundle=>bundle.includes('确认复核并重新排队')&&bundle.includes('我已查看 Run 差异并核对外部副作用')));
     const distTmp = path.join(tmp, 'dist');
     fs.mkdirSync(path.join(distTmp, 'assets'), { recursive: true });
     fs.writeFileSync(path.join(distTmp, 'index.html'), rawHtml);

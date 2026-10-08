@@ -26,7 +26,7 @@ const EXPECTED = {
   'agent.cjs': [
     'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:editing-save', 'agent:execution-save', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:scheduling-save',
-    'goal:list', 'goal:create', 'goal:update', 'goal:task-create', 'goal:task-update',
+    'goal:list', 'goal:create', 'goal:update', 'goal:task-create', 'goal:task-update', 'goal:run-review', 'goal:run-review-confirm',
     'goal:decision-create', 'goal:decision-resolve', 'goal:verify', 'goal:audit',
     'goal:can-run', 'goal:context-add', 'goal:experience-confirm', 'goal:context-for-role', 'goal:wait-observe', 'goal:wait-check',
     'agent:backend-save', 'agent:backend-status',

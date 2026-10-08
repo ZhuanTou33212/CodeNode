@@ -19,6 +19,8 @@ try {
   const restartTask = goal.createTask(root, restartGoal.id, { title: 'Interrupted work', criteriaIds: [restartGoal.criteria[0].id] });
   runStore.startRun(root,'run-before-restart',{backend:'builtin',prompt:'interrupted Goal task'});
   goal.admit(root, restartGoal.id, restartTask.id, 'run-before-restart');
+  const restartDecision=goal.addDecision(root,restartGoal.id,{question:'continue after restart?',options:['continue'],taskIds:[restartTask.id]});
+  runStore.appendEvent(root,'run-before-restart','backend_changes',{changes:{complete:true,scope:'fixture workspace',files:[{path:'source.txt',kind:'modified',before:'b'.repeat(64),after:'a'.repeat(64)}]}});
   assert.equal(goal.reconcileAdmissions(root, new Set(['run-before-restart'])).count, 0, 'a live Run is not reconciled as interrupted');
   assert.deepEqual(runStore.recoverInterrupted(root,new Set()),['run-before-restart']);
   assert.equal(runStore.summarizeRun(runStore.readRun(root,'run-before-restart')).status,'interrupted');
@@ -28,7 +30,22 @@ try {
   assert.equal(goal.read(root).goals.find(g => g.id === restartGoal.id).tasks[0].status, 'blocked');
   assert.equal(goal.read(root).goals.find(g => g.id === restartGoal.id).budget.costUnknown, true);
   assert.equal(goal.reconcileAdmissions(root, new Set()).count, 0, 'restart reconciliation is idempotent');
+  assert.equal(goal.canRun(root,restartGoal.id,restartTask.id).decision,'needs-user','run admission check reports that an unknown Task needs review');
+  goal.resolveDecision(root,restartDecision.id,'continue');
+  assert.equal(goal.read(root).goals.find(g=>g.id===restartGoal.id).tasks[0].status,'blocked','resolving a business decision cannot bypass unknown Run review');
+  assert.throws(()=>goal.updateTask(root,restartGoal.id,restartTask.id,{status:'todo'}),/必须先查看对应 Run 差异/,'unknown Run cannot be requeued through the storage API without a review');
+  assert.throws(()=>goal.updateTask(root,restartGoal.id,restartTask.id,{status:'ready'}),/必须先查看对应 Run 差异/,'unknown Run cannot bypass review through a ready status');
+  assert.throws(()=>goal.updateTask(root,restartGoal.id,restartTask.id,{waitCondition:{kind:'time',description:'retry later'}}),/必须先查看对应 Run 差异/,'unknown Run cannot bypass review by entering a timed wait');
+  const initialReview=goal.runReview(root,restartGoal.id,restartTask.id,'run-before-restart');
+  assert.equal(initialReview.status,'interrupted');assert.equal(initialReview.files[0].path,'source.txt');assert.equal(initialReview.changesComplete,true);
+  assert.throws(()=>goal.confirmRunReview(root,restartGoal.id,restartTask.id,'different-run',initialReview.projectFingerprint),/不是当前等待人工复核/,'review cannot be transferred to another Run');
+  goal.confirmRunReview(root,restartGoal.id,restartTask.id,'run-before-restart',initialReview.projectFingerprint);
+  fs.writeFileSync(path.join(root,'source.txt'),'changed after review\n');
+  assert.throws(()=>goal.updateTask(root,restartGoal.id,restartTask.id,{status:'todo'}),/必须先查看对应 Run 差异/,'workspace changes after review invalidate the requeue authorization');
+  const refreshedReview=goal.runReview(root,restartGoal.id,restartTask.id,'run-before-restart');
+  goal.confirmRunReview(root,restartGoal.id,restartTask.id,'run-before-restart',refreshedReview.projectFingerprint);
   goal.updateTask(root, restartGoal.id, restartTask.id, { status: 'todo' });
+  assert.equal(goal.read(root).goals.find(g=>g.id===restartGoal.id).tasks[0].executionStatus,'reviewed');
   assert.equal(goal.canRun(root, restartGoal.id, restartTask.id).decision, 'run', 'manual review can explicitly requeue an unknown Run');
 
   const unknownCostGoal=goal.createGoal(root,{title:'Cost gate',criteria:['cost audited'],maxCostUsd:10});

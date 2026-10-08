@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('codenode', {
   goalUpdate: (root, goalId, patch) => ipcRenderer.invoke('goal:update', root, goalId, patch),
   goalTaskCreate: (root, goalId, input) => ipcRenderer.invoke('goal:task-create', root, goalId, input),
   goalTaskUpdate: (root, goalId, taskId, patch) => ipcRenderer.invoke('goal:task-update', root, goalId, taskId, patch),
+  goalRunReview: (root, goalId, taskId, runId) => ipcRenderer.invoke('goal:run-review', root, goalId, taskId, runId),
+  goalRunReviewConfirm: (root, goalId, taskId, runId, projectFingerprint) => ipcRenderer.invoke('goal:run-review-confirm', root, goalId, taskId, runId, projectFingerprint),
   goalDecisionCreate: (root, goalId, input) => ipcRenderer.invoke('goal:decision-create', root, goalId, input),
   goalDecisionResolve: (root, decisionId, value, reason) => ipcRenderer.invoke('goal:decision-resolve', root, decisionId, value, reason),
   goalVerify: (root, goalId, taskId, criterionId, command) => ipcRenderer.invoke('goal:verify', root, goalId, taskId, criterionId, command),

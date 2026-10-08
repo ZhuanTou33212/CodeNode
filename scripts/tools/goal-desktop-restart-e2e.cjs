@@ -55,6 +55,11 @@ function runParent() {
     assert.equal(secondResult?.taskExecutionStatus, 'unknown');
     assert.equal(secondResult?.costUnknown, true);
     assert.equal(secondResult?.secondRefreshRecoveries, 0, 'refreshing again does not repeat restart recovery');
+    assert.equal(secondResult?.reviewedRunId,RUN_ID);
+    assert.deepEqual(secondResult?.reviewedFiles,['src/changed.cjs']);
+    assert.equal(secondResult?.requeuedTaskStatus,'todo');
+    assert.equal(secondResult?.requeuedTaskExecutionStatus,'reviewed');
+    assert.equal(secondResult?.canRunAfterUserReview,'run');
     console.log(JSON.stringify({
       phase1Pid: firstResult.pid,
       phase2Pid: secondResult.pid,
@@ -63,7 +68,7 @@ function runParent() {
       taskStatus: secondResult.taskStatus,
       idempotentSecondRefresh: true,
     }));
-    console.log('GOAL DESKTOP RESTART E2E: PASS (separate Electron main processes, persisted unknown Run, real goal:list IPC reconciliation)');
+    console.log('GOAL DESKTOP RESTART E2E: PASS (desktop restart, persisted unknown Run, reviewed file-diff acknowledgement, direct requeue blocked, UI requeue admitted)');
   } finally {
     cleanTemp(root);
   }
@@ -87,6 +92,9 @@ async function runElectronPhase() {
     const task = goalStore.createTask(project, goal.id, { title: TASK_TITLE, criteriaIds: [goal.criteria[0].id] });
     assert(runStore.startRun(project, RUN_ID, { backend: 'builtin', prompt: 'leave this Run unresolved across desktop restart' }));
     goalStore.admit(project, goal.id, task.id, RUN_ID);
+    fs.mkdirSync(path.join(project,'src'),{recursive:true});
+    fs.writeFileSync(path.join(project,'src','changed.cjs'),'module.exports = "after restart";\n');
+    runStore.appendEvent(project,RUN_ID,'backend_changes',{changes:{complete:true,scope:'E2E project snapshot',files:[{path:'src/changed.cjs',kind:'modified',before:'b'.repeat(64),after:'a'.repeat(64)}]}});
     process.stdout.write('GOAL_RESTART_PHASE=' + JSON.stringify({ phase, pid: process.pid, goalId: goal.id, taskId: task.id }) + '\n');
     app.exit(0);
     return;
@@ -117,6 +125,50 @@ async function runElectronPhase() {
   const revision = goalStore.read(project).revision;
   const secondRefresh = await window.webContents.executeJavaScript(`window.codenode.goalList(${JSON.stringify(project)})`);
   const secondGoal = secondRefresh.value.goals.find(item => item.title === GOAL_TITLE);
+  assert.equal(goalStore.read(project).revision, revision, 'second list call is idempotent before user review writes its audit record');
+  await window.webContents.executeJavaScript(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
+  await window.webContents.executeJavaScript(`window.__codenodeUi.getState().setSideTab('agent')`);
+  const panelDeadline=Date.now()+10000;
+  while(Date.now()<panelDeadline){
+    if(await window.webContents.executeJavaScript("!!document.querySelector('.goal-control-panel .goal-toolbar select')"))break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  const panelReady=await window.webContents.executeJavaScript("!!document.querySelector('.goal-control-panel .goal-toolbar select')");
+  assert.equal(panelReady,true,'Goal control panel is mounted in the Agent side panel');
+  await window.webContents.executeJavaScript(`(()=>{const panel=document.querySelector('.goal-control-panel');panel.open=true;const select=panel.querySelector('.goal-toolbar select');select.value=${JSON.stringify(goal.id)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  const taskDeadline=Date.now()+10000;
+  while(Date.now()<taskDeadline){
+    if(await window.webContents.executeJavaScript(`!![...document.querySelectorAll('.goal-control-panel .goal-task')].find(button=>button.textContent.includes(${JSON.stringify(TASK_TITLE)}))`))break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.goal-control-panel .goal-task')].find(button=>button.textContent.includes(${JSON.stringify(TASK_TITLE)})).click())()`);
+  const directRequeue=await window.webContents.executeJavaScript(`window.codenode.goalTaskUpdate(${JSON.stringify(project)},${JSON.stringify(goal.id)},${JSON.stringify(task.id)},{status:'todo'})`);
+  assert.equal(directRequeue.ok,false,'unknown Run cannot bypass review through direct Goal IPC');
+  assert.match(directRequeue.error,/查看对应 Run 差异/);
+  const initialRequeueState=await window.webContents.executeJavaScript(`(()=>{const button=[...document.querySelectorAll('.goal-control-panel button')].find(item=>item.textContent==='确认复核并重新排队');return button?{exists:true,disabled:button.disabled}:{exists:false};})()`);
+  assert.equal(initialRequeueState.exists,true);assert.equal(initialRequeueState.disabled,true,'requeue stays disabled until Run details are reviewed');
+  await window.webContents.executeJavaScript(`document.querySelector('[data-testid=goal-run-review] button').click()`);
+  const reviewDeadline=Date.now()+10000;
+  while(Date.now()<reviewDeadline){
+    if(await window.webContents.executeJavaScript("document.querySelector('.goal-run-review-detail')?.innerText.includes('src/changed.cjs')"))break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  const reviewText=await window.webContents.executeJavaScript("document.querySelector('.goal-run-review-detail')?.innerText||''");
+  assert.match(reviewText,/src\/changed\.cjs/);assert.match(reviewText,/bbbbbbbbbbbb/);assert.match(reviewText,/aaaaaaaaaaaa/);
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label="我已查看 Run 差异并核对外部副作用"]').click()`);
+  const enabledAfterReview=await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.goal-control-panel button')].find(button=>button.textContent==='确认复核并重新排队')?.disabled===false)()`);
+  assert.equal(enabledAfterReview,true,'explicit acknowledgment enables requeue');
+  await window.webContents.executeJavaScript(`(()=>[...document.querySelectorAll('.goal-control-panel button')].find(button=>button.textContent==='确认复核并重新排队').click())()`);
+  const requeueDeadline=Date.now()+10000;
+  let requeued=null;
+  while(Date.now()<requeueDeadline){
+    requeued=await window.webContents.executeJavaScript(`window.codenode.goalList(${JSON.stringify(project)}).then(result=>result.value.goals.find(item=>item.id===${JSON.stringify(goal.id)}).tasks.find(item=>item.id===${JSON.stringify(task.id)}))`);
+    if(requeued?.status==='todo')break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.equal(requeued?.status,'todo');assert.equal(requeued?.executionStatus,'reviewed');
+  const canRun=await window.webContents.executeJavaScript(`window.codenode.goalCanRun(${JSON.stringify(project)},${JSON.stringify(goal.id)},${JSON.stringify(task.id)})`);
+  assert.equal(canRun.value.decision,'run');
   const payload = {
     phase,
     pid: process.pid,
@@ -127,9 +179,13 @@ async function runElectronPhase() {
     taskExecutionStatus: task.executionStatus,
     costUnknown: goal.budget.costUnknown,
     secondRefreshRecoveries: secondRefresh.value.recoveredAdmissions.count,
+    reviewedRunId: RUN_ID,
+    reviewedFiles: ['src/changed.cjs'],
+    requeuedTaskStatus: requeued.status,
+    requeuedTaskExecutionStatus: requeued.executionStatus,
+    canRunAfterUserReview: canRun.value.decision,
   };
   assert.equal(secondGoal.tasks.find(item => item.id === task.id).status, 'blocked');
-  assert.equal(goalStore.read(project).revision, revision, 'second list call is idempotent');
   process.stdout.write('GOAL_RESTART_PHASE=' + JSON.stringify(payload) + '\n');
   app.exit(0);
 }

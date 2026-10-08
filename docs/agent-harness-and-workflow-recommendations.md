@@ -342,14 +342,14 @@ Goal/Task 表单保存目标、排除项、必需验收条件、预算、依赖�
 
 ### 本轮验证与边界
 
-协议夹具测试覆盖 ACP 初始化/会话/权限拒绝/授权与 DeepSeek SDK 的 initialize、prompt、assistant、tool/call、tool/result、终态通知。Goal 单测覆盖预算与准入、活动 Run、依赖循环、等待条件、业务决定、按角色筛选上下文、验收证据、文件快照失效、条件修订和声明写入范围检查。Electron UI 验证了 Goal 控件和后端控件在日夜主题结构一致，且主题切换保留会话、草稿、模型和侧栏状态。
+协议夹具测试覆盖 ACP 初始化/会话/权限拒绝/授权与 DeepSeek SDK 的 initialize、prompt、assistant、tool/call、tool/result、终态通知。Goal 单测覆盖预算与准入、活动 Run、依赖循环、等待条件、业务决定、按角色筛选上下文、验收证据、文件快照失效、条件修订、声明写入范围，以及未知 Run 的复核绑定、直接状态/等待/决定绕过拒绝和复核后指纹失效。Electron UI 验证了 Goal 控件和后端控件在日夜主题结构一致，且主题切换保留会话、草稿、模型和侧栏状态。
 
-本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（156/156）；Goal GitHub Actions provider/IPC、后端设置与 Goal 双主题 UI、真实 Agent smoke 和 Goal IPC restart 恢复专项通过。暂存与固定路径的 packaged UI/asar 自检均为 11/11 通过，固定交付为 `E:\CodeNode\release\win-unpacked`，GitHub Actions 等待 provider 交付后的 `app.asar` SHA-256 为 `3651E1FEC47FA19C88C904684B7D11D040132DF9765CB983A592023CB3FFAE70`。当前主机的 Windows `rcedit` 无法提交资源更新，因此阶段构建关闭了 exe 资源编辑，并沿用同一 CodeNode 0.13.0 的现有品牌启动程序；新的功能代码位于经过自检的 `app.asar`。两个 executable 均未签名。
+本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（156/156）；另行通过 `npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练、`npm run test:backend-ui` 双主题 UI 测试及 `npm run check:js`。最终固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI/asar 自检为 13/13，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `66163A21CD496F29AEB9BDE51570AA497A8BF485F9F0DAA4F746B3A31BEC2F0F`。Windows `rcedit` 在本机不可用，因此交付沿用原有 CodeNode 0.13.0 品牌 `CodeNode.exe`（SHA-256 `7B6E5D42317C316E8469DF32BD306711B62E8547F0795C3CB3564C2A09F8F057`），新功能位于 app.asar；两个 executable 均未签名。
 
 | 路线项 | 当前覆盖 | 尚需的证据 |
 | --- | --- | --- |
 | P0 后端与设置 | builtin、Codex、DeepSeek Harness、Hermes、OpenCode、OpenClaw 可选；ACP/SDK fixture、Hermes/OpenCode/DeepSeek 短文本请求、OpenClaw 临时 Gateway session、OpenCode 临时源码修改及权限拒绝/取消/恢复、打包自检通过 | Codex 原生 sandbox 故障；Hermes 文件工具初始化错误；OpenClaw 全局安装及真实模型/文件任务/权限闭环；DeepSeek 源码任务与逐会话取消/权限闭环；实际 OS 沙箱边界 |
-| P1 Goal/Task/Evidence | 持久化、准入、预算、决定版本、环境/文件/验收版本绑定证据、重启未知状态、用户复核后重排已实现；`npm run test:goal-desktop-restart` 通过两个独立 Electron 主进程验证关闭/重开恢复、结果未知/阻塞和重复刷新幂等 | 尚需在桌面 UI 展示具体 Run 差异后由用户复核重排的操作型演练 |
+| P1 Goal/Task/Evidence | 持久化、准入、预算、决定版本、环境/文件/验收版本绑定证据、重启未知状态已实现；`npm run test:goal-desktop-restart` 通过两个 Electron 主进程完成重启后的 Run 复核与 UI 重排；直接 IPC、`ready` 状态、定时等待和未解决业务决定都不能绕过未知 Run 复核；项目指纹变化会使复核失效 | 该 E2E 操作项已完成。RunStore 保存文件路径和前后 SHA-256，不保存旧源码正文；界面如实标注这一点并提供打开当前文件入口，外部副作用仍需用户核对 |
 | P1 角色上下文 | 主 Agent 与五类子 Agent 都按角色筛选规范/材料/确认经验，实际子代理提示注入已测试，Run 记录上下文版本 | 真实模型角色任务与人工质量比较 |
 | P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、外部状态观察/指数退避已实现；GitHub Actions 可按精确 commit SHA 查询，只有该 SHA 的最新 workflow runs 全部成功才释放等待 Task；IPC、UI 和真实 GitHub API 均有验证；查询由用户手动触发，不自动启动模型 | 实验数据源尚未接入；等待条件满足后经用户授权的周期自动推进尚未实现 |
 | P2 经验回写 | 基于新鲜、独立通过的测试证据自动生成局部测试方法候选；记录来源 Run、Task、证据 ID、文件指纹和验收修订；UI 标明自动建议；重复结算幂等；未确认前不注入实现上下文，用户显式确认后才可用 | 当前自动建议限于“修改这些文件后运行该测试命令”的可验证事实；从模型总结、架构规律或重复故障中提炼更一般经验尚未实现 |
@@ -371,7 +371,7 @@ Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 work
 
 Goal settlement 现会在 Run 完成、当前 Task 仍有有效证据且 CodeNode 局部测试命令通过后，自动生成一条经验候选。候选包含准确的测试命令、相关文件、Run/Task ID、证据 ID、文件指纹和验收条件修订；重复结算不会重复生成。失败、仅语法检查、过期指纹或不完整快照都不生成候选。Goal 面板显示“自动建议”，但候选仍是待复核状态；只有用户点选确认后，后续实现上下文才会包含它。该生成器先覆盖可验证的测试方法，不从单次模型回答推断架构规则或反复故障模式。
 
-另新增 `npm run test:goal-desktop-restart`：测试驱动启动第一份真实 Electron 主进程并写入活动 Run，等待进程关闭后再启动第二份主进程，通过渲染进程 bridge 调用真实 `goal:list` IPC。第二进程将 Run 标为 interrupted、结算和 Task 标为 unknown/blocked；再次刷新没有重复结算。该自动测试使用独立临时 User Data 与项目目录并在结束后清理。它补上进程重启持久化验收，尚未覆盖人在界面检查文件差异后手动重新排队的完整操作。
+`npm run test:goal-desktop-restart` 现用两个独立 Electron 主进程覆盖完整复核操作：第一进程写入活动 Goal Run 后关闭；第二进程通过真实 `goal:list` IPC 恢复为 unknown/blocked，在 Agent 侧栏显示该 Run 持久化的文件路径与前后 SHA-256。E2E 验证直接调用 `goal:task-update`、改为 `ready`、设置定时等待或解决业务决定都不能绕过复核；随后在界面展开差异、勾选“我已查看 Run 差异并核对外部副作用”，确认后才把 Task 重新排队并重新获得 `canRun=run`。复核记录绑定 Run ID 与当前项目文件指纹，复核后文件变化会拒绝重排并要求重新查看。`npm run test:backend-ui` 另验证复核明细控件在日/夜主题下结构一致，同时会话、草稿、模型和侧栏状态保持不变。当前 RunStore 保存的是文件路径和指纹摘要，不保存旧源码正文；界面明确说明该边界并提供打开当前文件入口。测试使用独立临时 User Data 与项目目录，结束后清理。
 
 Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说明禁用用户自定义配置后推理链路仍可用；但同一安全模式下的隔离源码任务仍在 DeepSeek API 返回后卡于 `Creating new local environment for task default...`，约 75 秒后 `session/prompt` 超时，无工具调用、无文件变化。该运行不再出现用户配置中的缺失 shell hook，说明 hook 不是唯一故障原因。[Hermes 上游 Windows ACP 问题](https://github.com/NousResearch/hermes-agent/issues/73693)仍报告本地文件操作触发 Git Bash 快照初始化挂起及取消错误，并标注其底层 MSYS 原因尚未证明；本机结果与其症状一致，但不据此声称已经定位或修复。
 

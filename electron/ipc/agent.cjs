@@ -255,6 +255,8 @@ function register(ctx) {
   ipcMain.handle('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
   ipcMain.handle('goal:task-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.createTask(root,goalId,input||{})));
   ipcMain.handle('goal:task-update', async (_event, projectRoot, goalId, taskId, patch) => withGoalRoot(projectRoot, root => goalStore.updateTask(root,goalId,taskId,patch||{})));
+  ipcMain.handle('goal:run-review', async (_event, projectRoot, goalId, taskId, runId) => withGoalRoot(projectRoot, root => goalStore.runReview(root,goalId,taskId,runId)));
+  ipcMain.handle('goal:run-review-confirm', async (_event, projectRoot, goalId, taskId, runId, projectFingerprint) => withGoalRoot(projectRoot, root => goalStore.confirmRunReview(root,goalId,taskId,runId,projectFingerprint)));
   ipcMain.handle('goal:decision-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.addDecision(root,goalId,input||{})));
   ipcMain.handle('goal:decision-resolve', async (_event, projectRoot, decisionId, value, reason) => withGoalRoot(projectRoot, root => goalStore.resolveDecision(root,decisionId,value,reason)));
   ipcMain.handle('goal:verify', async (event, projectRoot, goalId, taskId, criterionId, command) => {

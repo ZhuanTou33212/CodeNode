@@ -4473,6 +4473,13 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .goal-summary p,.goal-summary small,.goal-item small,.goal-task-detail small { margin:0; color:var(--glass-muted); overflow-wrap:anywhere; }
 .goal-item { display:grid; gap:3px; padding:5px 0; }
 .goal-item > div input { flex:1; }
+.goal-run-review { display:grid; gap:6px; margin:6px 0; }
+.goal-run-review-detail { display:grid; gap:6px; min-width:0; padding:8px; border:1px solid var(--glass-border); border-radius:6px; background:var(--glass-control); }
+.goal-run-review-detail > strong,.goal-run-review-detail > small,.goal-run-review-detail > p { overflow-wrap:anywhere; }
+.goal-run-review-files { display:grid; gap:5px; max-height:180px; overflow:auto; }
+.goal-run-review-files > div { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.goal-run-review-detail label { display:flex; align-items:flex-start; gap:7px; }
+.goal-run-review-detail label input { flex:none; }
 
 /* Extensions share the settings page scroll and theme tokens. */
 .extensions-panel { min-width: 0; color: var(--glass-text); }
