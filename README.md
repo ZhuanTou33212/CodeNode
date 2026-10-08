@@ -154,11 +154,15 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 Codex 首版兼容经本机 schema 核对的 `0.135.0`、`0.160.0` 协议版本；依次自动查找 PATH 原生程序、桌面版自带运行时及 npm 安装的原生程序，也可指定可执行文件绝对路径。“检测已保存后端”会检查真实协议握手与账户状态；登录信息仍由本机 Codex 管理，握手成功不能代替模型可访问性验证。Codex 模型留空时使用其本机配置，工作目录固定为所选项目。默认只读，允许修改项目文件需在设置中选择；后端审批只对当前请求有效，中断等待真实终态，连接丢失与中断未确认会标记结果未知。
 
+Windows 上未设置显式 `HTTP_PROXY`／`HTTPS_PROXY`／`ALL_PROXY` 时，模型子进程会继承已启用的手动系统代理与可表达的绕过列表；已有代理环境变量优先，不修改系统代理或 Codex 账户配置。PAC 自动代理需为子进程配置代理环境。只读模式允许沙箱内命令，拒绝扩权请求；项目写入模式沿用逐次信任审批。检测结果同时提示原生 Windows 沙箱最近的初始化错误，不能把协议握手当成文件命令已可用。
+
 对话与画布文件任务共用这个入口。运行记录保存后端、协议、线程、执行、目录和权限；从运行列表恢复时先复核副作用并查询原执行状态，原执行仍在运行或状态无法核实时阻止重复启动。外部后端提供的补丁和独立扫描获得的文件内容指纹可在文件变更卡片中查看，代码修改复用本地独立校验。
 
 首版外部后端未接入 CodeNode 画布修改工具、子 Agent、图片与 `/compact`；这些功能使用内置执行器。Codex 的权限与工具机制负责外部执行边界，CodeNode 工具注册表不拦截其全部操作；网络默认关闭，用户批准的命令仍需按显示范围审阅。外部用量按线程累计差额统计，费用显示未知，不承诺 CodeNode 的逐请求硬费用限制或自动副作用回滚。
 
 离线协议与画布闭环：`npm run test:backends`、`npm run test:backend-workflow`；主题与持久化：`npm run test:backend-ui`；使用本机 Codex 登录执行真实只读任务：`npm run test:backend-live`（需要模型服务可访问，不进入离线 CI）。协议依据 [OpenAI app-server 文档](https://learn.chatgpt.com/docs/app-server) 和本机版本导出的 JSON Schema。
+
+`npm run test:backend-connection` 单独验证真实模型连接，不代替文件任务验收。本机系统代理继承后该检查通过；Windows 原生文件任务仍受 Codex 沙箱初始化错误 `helper_sandbox_lock_failed` 阻塞，完整 P0 验收尚未完成。CodeNode 不自动降低沙箱权限或修改 Codex 全局目录 ACL。
 
 ## 许可证
 

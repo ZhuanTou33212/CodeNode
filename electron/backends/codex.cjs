@@ -1,9 +1,11 @@
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const { RpcClient, executableVersion } = require('./rpc.cjs');
 const config = require('../../config/agent.backends.json');
 const { redact } = require('../redaction.cjs');
 const { resolveInRoot } = require('../tools/impl/shared.cjs');
+const { launchEnvironment } = require('./network.cjs');
 
 class CodexBackend {
   constructor(settings, deps = {}) {
@@ -19,7 +21,9 @@ class CodexBackend {
   async connect(cwd) {
     this.version = await (this.deps.executableVersion || executableVersion)(this.settings.executable);
     if (!config.supportedProtocolVersions.includes(this.version)) throw new Error('Codex 协议版本未验证，支持 ' + config.supportedProtocolVersions.join(' / ') + '，实际 ' + this.version);
-    this.rpc = new (this.deps.RpcClient || RpcClient)(this.settings.executable, cwd);
+    const network = await (this.deps.launchEnvironment || launchEnvironment)();
+    this.proxySource = network.proxySource;
+    this.rpc = new (this.deps.RpcClient || RpcClient)(this.settings.executable, cwd, { env: network.env });
     this.rpc.on('notification', message => this.notification(message));
     this.rpc.on('request', message => { void this.approval(message).catch(error => this.fail(error)); });
     this.rpc.on('disconnect', error => this.fail(error));
@@ -27,6 +31,7 @@ class CodexBackend {
       clientInfo: { name: 'codenode', title: 'CodeNode', version: require('../../package.json').version },
       capabilities: { experimentalApi: false },
     });
+    this.codexHome = initialized.codexHome || null;
     this.rpc.send({ method: 'initialized', params: {} });
     return initialized;
   }
@@ -34,10 +39,24 @@ class CodexBackend {
     try {
       await this.connect(cwd);
       const account = await this.rpc.request('account/read', { refreshToken: false });
+      let commandSandbox = null;
+      if (process.platform === 'win32') {
+        let readiness = 'unknown';
+        try { readiness = (await this.rpc.request('windowsSandbox/readiness', {})).status; } catch {}
+        let lastSetupError = null;
+        if (this.codexHome) try {
+          const errorPath = path.join(this.codexHome, '.sandbox', 'setup_error.json');
+          if (fs.statSync(errorPath).size <= 8192) {
+            const error = JSON.parse(fs.readFileSync(errorPath, 'utf8'));
+            lastSetupError = { code: String(error.code || ''), message: String(redact(error.message || '')) };
+          }
+        } catch {}
+        commandSandbox = { readiness, lastSetupError, verified: false };
+      }
       return { backend: 'codex', available: true, authenticated: !!account.account,
         protocolVersion: this.version, conversation: true, events: true, approvals: true,
         interrupt: true, resume: true, usage: true, hardBudget: false, customTools: false,
-        permissions: this.settings.sandbox, cost: 'unknown', version: this.version };
+        permissions: this.settings.sandbox, cost: 'unknown', version: this.version, proxySource: this.proxySource, commandSandbox };
     } catch (error) { return { backend: 'codex', available: false, error: error.message }; }
     finally { await this.rpc?.close(); this.rpc = null; }
   }
@@ -56,7 +75,8 @@ class CodexBackend {
     try {
       if (input.signal?.aborted) return { content: '', state: 'CANCELLED', aborted: true };
       await this.connect(input.projectRoot);
-      const params = { cwd: input.projectRoot, approvalPolicy: 'untrusted', approvalsReviewer: 'user',
+      const approvalPolicy = config.approvalPolicies[this.settings.sandbox];
+      const params = { cwd: input.projectRoot, approvalPolicy, approvalsReviewer: 'user',
         sandbox: this.settings.sandbox, ...(this.settings.model ? { model: this.settings.model } : {}) };
       let thread;
       if (input.backendSession) {
@@ -77,7 +97,8 @@ class CodexBackend {
       const saveSession = () => input.onSession?.({ backend: 'codex', protocolVersion: this.version,
         threadId: this.threadId, turnId: this.turnId, cwd: input.projectRoot, model: thread.model || this.settings.model || null,
         usageTotal: this.usageTotal || input.backendSession?.usageTotal || null,
-        permissions: { approvalPolicy: 'untrusted', sandbox: this.settings.sandbox, network: false } });
+        proxySource: this.proxySource,
+        permissions: { approvalPolicy, sandbox: this.settings.sandbox, network: false } });
       this.saveSession = saveSession; saveSession();
       if (this.stopping || input.signal?.aborted) return { content: '', state: 'CANCELLED', aborted: true };
       const terminal = new Promise(resolve => { this.settle = resolve; });
@@ -88,7 +109,7 @@ class CodexBackend {
         '此前对话（仅作上下文）：\n' + input.history.map(item => item.role + ': ' + item.content).join('\n') + '\n\n' : '';
       const text = prior + String(input.prompt || '') + (input.canvasSummary ? '\n\n当前画布上下文：\n' + input.canvasSummary : '');
       const started = await this.rpc.request('turn/start', { threadId: this.threadId, cwd: input.projectRoot,
-        input: [{ type: 'text', text }], sandboxPolicy: this.policy(input.projectRoot), approvalPolicy: 'untrusted', approvalsReviewer: 'user',
+        input: [{ type: 'text', text }], sandboxPolicy: this.policy(input.projectRoot), approvalPolicy, approvalsReviewer: 'user',
         ...(['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(input.reasoningEffort) ? { effort: input.reasoningEffort } : {}) });
       this.turnId = started.turn.id; saveSession();
       if (this.stopping || input.signal?.aborted) void this.interrupt();
@@ -167,7 +188,7 @@ class CodexBackend {
       this.rpc?.send({ id: message.id, error: { code: -32601, message: 'CodeNode does not support this request' } }); return;
     }
     this.approvals.set(message.id, p);
-    this.emit({ kind: 'backend_approval', phase: 'requested', requestId: message.id, method: message.method, ...p });
+    this.emit({ ...redact(p), kind: 'backend_approval', phase: 'requested', requestId: message.id, method: message.method });
     const outside = value => value && !resolveInRoot(this.input.projectRoot, value);
     if (outside(p.cwd) || outside(p.grantRoot)) { this.respondToApproval(message.id, false); return; }
     const approved = await this.input.confirm('HIGH', 'Codex ' + (p.command ? '命令审批' : '文件审批'),

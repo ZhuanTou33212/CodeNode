@@ -17,6 +17,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   const answer = result => send({ id: m.id, result });
   if (m.method === 'initialize') answer({ userAgent: 'fixture/anything' });
   else if (m.method === 'account/read') answer({ account: { type: 'chatgpt' } });
+  else if (m.method === 'windowsSandbox/readiness') answer({ status: 'ready' });
   else if (m.method === 'thread/start' || m.method === 'thread/resume') answer({ thread, model: 'fixture-model' });
   else if (m.method === 'thread/read') answer({ thread });
   else if (m.method === 'turn/start') {
@@ -28,7 +29,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     awaiting = { turn, text };
     const edit = text.includes('resume-edit');
     send({ id: 'approval-' + turn.id, method: edit ? 'item/fileChange/requestApproval' : 'item/commandExecution/requestApproval',
-      params: { threadId: thread.id, turnId: turn.id, itemId: 'item-' + turn.id, cwd: process.cwd(), startedAtMs: Date.now(),
+      params: { kind: 'command', threadId: thread.id, turnId: turn.id, itemId: 'item-' + turn.id, cwd: process.cwd(), startedAtMs: Date.now(),
         command: edit ? undefined : 'node denied.cjs', reason: 'fixture request' } });
   } else if (m.method === 'turn/interrupt') {
     const turn = thread.turns.find(t => t.id === m.params.turnId);

@@ -16,7 +16,7 @@ runExternal({ projectRoot: root, requestId: 'live-readonly', sessionId: 'live-se
   settings: { ...backendConfig.defaults, backend: 'codex' }, cfg: agent.loadConfig(null), signal: controller.signal,
   reasoningEffort: 'low',
   prompt: 'Read message.txt in the current directory. Return its exact content. Do not modify any file. Do not start subagents.',
-  confirm: async () => false, onDelta: event => { events.push(event.kind); if (event.kind !== 'content' && event.kind !== 'reasoning') console.log('event:', event.kind); },
+  confirm: async () => false, onDelta: event => { events.push(event.kind); if (event.kind !== 'content' && event.kind !== 'reasoning') console.log('event:', event.kind); if (event.kind === 'backend_approval' && event.phase === 'requested') fs.writeFileSync(path.join(__dirname, '../../.cache/p0-readonly-approval.json'), JSON.stringify(require('../../electron/redaction.cjs').redact(event), null, 2)); },
   onProtocol: method => console.log('protocol:', method),
 }).then(result => {
   console.log(JSON.stringify({ ok: result.ok, state: result.state, reply: result.reply, error: result.error,

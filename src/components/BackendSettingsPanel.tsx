@@ -43,7 +43,7 @@ export default function BackendSettingsPanel() {
       if (useProjectStore.getState().root !== root) return;
       const c = result.capabilities;
       setMessage(!result.ok || !c?.available ? result.error || c?.error || '后端不可用' : c.backend === 'builtin' ? '内置后端可用。' :
-        `Codex ${c.protocolVersion} 协议可用；${c.authenticated ? '已检测到登录账户' : '未检测到登录账户，请先在本机 codex login；自定义 provider 以实际执行结果为准'}。支持对话、事件、审批、中断、恢复；费用未知，无逐请求硬费用上限。`);
+        `Codex ${c.protocolVersion} 协议可用；${c.authenticated ? '已检测到登录账户' : '未检测到登录账户，请先在本机 codex login；自定义 provider 以实际执行结果为准'}。${c.proxySource === 'windows-system' ? '模型连接跟随 Windows 手动系统代理。' : ''}${c.commandSandbox?.lastSetupError ? '检测到最近的 Windows 沙箱初始化错误：' + c.commandSandbox.lastSetupError.code + '。请修复 Codex 沙箱后重试文件命令，协议握手成功不能证明命令可用。' : ''}支持对话、事件、审批、中断、恢复；费用未知，无逐请求硬费用上限。`);
     } catch (error) { if (useProjectStore.getState().root === root) setMessage(String(error)); }
     finally { setBusy(false); }
   };

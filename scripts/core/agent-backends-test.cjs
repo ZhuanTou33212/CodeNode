@@ -11,6 +11,7 @@ const settings = require('../../electron/backends/settings.cjs');
 const external = require('../../electron/backends/runExternal.cjs');
 const runStore = require('../../electron/runStore.cjs');
 const { capture, compare } = require('../../electron/backends/workspaceDiff.cjs');
+const { launchEnvironment } = require('../../electron/backends/network.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backends-'));
 const userData = path.join(root, '.userdata');
 const fixture = path.join(__dirname, '../fixtures/codex-app-server.cjs');
@@ -21,6 +22,14 @@ const selected = { ...settings.config.defaults, backend: 'codex', executable: pr
 const create = () => new CodexBackend(selected, { RpcClient: FixtureRpc, executableVersion: async () => settings.config.protocolVersion });
 const cfg = { editing: { autoVerify: true, blockOnFailure: true, lintCommand: 'node -e "process.exit(0)"', testCommand: 'node math.test.cjs' } };
 async function main() {
+  const network = await launchEnvironment({ platform: 'win32', env: {}, readProxy: async () => ({ enabled: 1, server: '127.0.0.1:7890', bypass: '<local>;*.example.local' }) });
+  assert.equal(network.env.HTTPS_PROXY, 'http://127.0.0.1:7890/');
+  assert.equal(network.proxySource, 'windows-system');
+  assert.match(network.env.NO_PROXY, /localhost/); assert.match(network.env.NO_PROXY, /\.example.local/);
+  const inherited = await launchEnvironment({ platform: 'win32', env: { HTTPS_PROXY: 'http://explicit:8080', NO_PROXY: 'private.local' }, readProxy: async () => { throw new Error('must not read system'); } });
+  assert.equal(inherited.env.HTTPS_PROXY, 'http://explicit:8080'); assert.equal(inherited.env.NO_PROXY, 'private.local');
+  const separate = await launchEnvironment({ platform: 'win32', env: {}, readProxy: async () => ({ enabled: 1, server: 'http=127.0.0.1:8080;https=127.0.0.1:8443' }) });
+  assert.equal(separate.env.HTTP_PROXY, 'http://127.0.0.1:8080/'); assert.equal(separate.env.HTTPS_PROXY, 'http://127.0.0.1:8443/');
   assert.equal(settings.read(root, userData).settings.backend, 'builtin');
   settings.write(root, userData, 'machine', selected);
   settings.write(root, userData, 'project', { ...selected, sandbox: 'read-only' });
@@ -38,6 +47,12 @@ async function main() {
   try { assert.equal(await new BuiltinBackend().start({ cfg: { test: true } }), value); assert.equal(count, 1); }
   finally { agent.runAgentChat = original; }
   assert.equal((await create().capabilities(root)).available, true);
+  const readOnlyRoot = path.join(root, 'readonly-project'); fs.mkdirSync(readOnlyRoot);
+  const readOnly = new CodexBackend({ ...selected, sandbox: 'read-only' }, { RpcClient: FixtureRpc, executableVersion: async () => settings.config.protocolVersion });
+  const deniedEvents = [];
+  await readOnly.start({ projectRoot: readOnlyRoot, prompt: 'resume-edit', confirm: async () => true, onDelta: event => deniedEvents.push(event) });
+  assert.equal(fs.existsSync(path.join(readOnlyRoot, 'math.cjs')), false, 'Read-only must decline escalation even after a dialog accepts');
+  assert(deniedEvents.some(event => event.kind === 'backend_approval' && event.phase === 'denied'));
   fs.writeFileSync(path.join(root, 'math.cjs'), 'module.exports = (a,b) => a - b;\n');
   fs.writeFileSync(path.join(root, 'math.test.cjs'), "require('assert').strictEqual(require('./math.cjs')(2,3),5);\n");
   const events = []; const controller = new AbortController();
@@ -49,6 +64,7 @@ async function main() {
   assert.equal(first.aborted, true);
   assert.equal(fs.existsSync(path.join(root, 'denied.txt')), false);
   assert(events.some(e => e.kind === 'backend_approval' && e.phase === 'denied'));
+  assert(!events.some(e => e.kind === 'command'), 'Protocol fields must not overwrite host event kind');
   const record = external.sessionFromRun(root, 'first');
   assert.equal(record.session.threadId, 'thread-fixture'); assert.equal(record.session.turnId, 'turn-1');
   const plan = external.resumePlan(root, 'first', new Set());

@@ -203,7 +203,7 @@ interface CodenodeApi {
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
   backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
-  backendStatus: (root: string | null) => Promise<{ ok: boolean; error?: string; capabilities?: { backend: string; available: boolean; authenticated?: boolean; protocolVersion?: string; hardBudget?: boolean; customTools?: boolean; error?: string } }>;
+  backendStatus: (root: string | null) => Promise<{ ok: boolean; error?: string; capabilities?: { backend: string; available: boolean; authenticated?: boolean; protocolVersion?: string; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;
   costSettingsSave: (root: string, settings: import('./types').CostSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').CostSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;

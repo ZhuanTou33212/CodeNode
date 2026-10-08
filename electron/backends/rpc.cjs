@@ -47,7 +47,7 @@ class RpcClient extends EventEmitter {
   constructor(command, cwd, deps = {}) {
     super();
     this.pending = new Map(); this.seq = 0; this.closed = false; this.buffer = '';
-    const env = { ...process.env };
+    const env = { ...(deps.env || process.env) };
     for (const key of Object.keys(env)) if (key.startsWith('CODEX_INTERNAL_') || key === 'CODEX_THREAD_ID') delete env[key];
     this.child = (deps.spawn || spawn)(resolveExecutable(command), ['app-server', '--listen', 'stdio://'],
       { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env });
