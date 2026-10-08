@@ -29,9 +29,23 @@ app.whenReady().then(async () => {
     await js(`window.__codenodeSession.getState().newCanvas()`);
     await js(`window.__codenodeSession.getState().pushUser('保留会话')`);
     await js(`window.__codenodeUi.getState().setSideOpen(true)`);
+    await waitFor(() => js('!!document.querySelector(".goal-control-panel")'), 'Goal panel');
+    const goal = await js(`window.codenode.goalCreate(${JSON.stringify(root)}, {title:'UI Goal',criteria:['验收通过']})`);
+    assert.equal(goal.ok, true);
+    const task = await js(`window.codenode.goalTaskCreate(${JSON.stringify(root)}, ${JSON.stringify(goal.value.id)}, {title:'UI Task', criteriaIds:[${JSON.stringify(goal.value.criteria[0].id)}], writeScope:['src']})`);
+    assert.equal(task.ok, true);
+    await js(`document.querySelector('.goal-control-panel summary').click()`);
+    await js(`document.querySelector('.goal-toolbar button').click()`);
+    await waitFor(() => js(`document.querySelector('.goal-control-panel')?.innerText.includes('UI Task')`), 'Goal and Task rendering');
     await win.webContents.executeJavaScript(`const textarea=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'后端测试草稿');textarea.dispatchEvent(new Event('input',{bubbles:true}))`);
     const view = () => js(`JSON.stringify({id:window.__codenodeSession.getState().activeId,messages:window.__codenodeSession.getState().messages,draft:document.querySelector('.pp-input').value,model:document.querySelector('.pp-model')?.textContent,sideOpen:window.__codenodeUi.getState().sideOpen,sideTab:window.__codenodeUi.getState().sideTab})`);
-    await sleep(80); const before = await view();
+    const goalSurface = () => js(`JSON.stringify([...document.querySelectorAll('.goal-control-panel input,.goal-control-panel textarea,.goal-control-panel select,.goal-control-panel button,.goal-control-panel summary')].map(n=>[n.tagName,n.getAttribute('aria-label'),n.textContent,n.value||'',n.disabled]))`);
+    await sleep(80); const before = await view(); const goalBefore = await goalSurface(); const themeBefore = await js('window.__codenodeUi.getState().theme');
+    for (const theme of ['light', 'dark']) {
+      await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`); await sleep(80);
+      assert.equal(await goalSurface(), goalBefore); assert.equal(await view(), before);
+    }
+    await js(`window.__codenodeUi.setState({theme:${JSON.stringify(themeBefore)}})`);
     await js(`window.__codenodeUi.getState().openSettings('general')`);
     await waitFor(() => js('!!document.querySelector("[aria-label=执行后端]")'), 'backend controls');
     await waitFor(() => js('!document.querySelector("[aria-label=执行后端]").disabled'), 'loaded settings');
@@ -66,7 +80,7 @@ app.whenReady().then(async () => {
     await waitFor(() => js('document.querySelector("[aria-label=执行后端]")?.value === "builtin"'), 'inherit defaults');
     assert.equal(fs.existsSync(path.join(root, '.codenode/backend.json')), false);
     await js(`window.__codenodeUi.getState().closeSettings()`); assert.equal(await view(), before);
-    console.log('BACKEND SETTINGS UI: PASS (real IPC save/reload/inherit, shared controls in both themes, session/draft/model/sidebar preserved)');
+    console.log('BACKEND SETTINGS UI: PASS (real IPC save/reload/inherit, Goal panel and backend controls shared in both themes, session/draft/model/sidebar preserved)');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });

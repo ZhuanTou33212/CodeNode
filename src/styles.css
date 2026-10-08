@@ -4454,6 +4454,22 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .global-settings .backend-settings-panel .settings-row :is(input,select,button) { background: var(--glass-control); color: var(--glass-text); border: 1px solid var(--glass-border); border-radius: 7px; padding: 7px 10px; font: inherit; }
 .backend-settings-panel input { width: min(320px,45vw); min-width: 0; }
 .backend-settings-panel .settings-row:has(> button) { flex-wrap: wrap; }
+.goal-control-panel { flex:none; margin:0 12px 8px; padding:7px 10px; border:1px solid var(--glass-border); border-radius:8px; background:var(--glass-surface); color:var(--glass-text); }
+.goal-control-panel > summary { cursor:pointer; font-size:12px; color:var(--glass-muted); }
+.goal-control-body { display:grid; gap:8px; max-height:35vh; overflow:auto; padding-top:8px; font-size:12px; }
+.goal-control-body section,.goal-summary { border-top:1px solid var(--glass-border); padding-top:7px; }
+.goal-control-body h4 { margin:2px 0 6px; color:var(--glass-text); }
+.goal-control-body :is(input,textarea,select) { min-width:0; max-width:100%; box-sizing:border-box; border:1px solid var(--glass-border); border-radius:6px; background:var(--glass-control); color:var(--glass-text); padding:6px 8px; font:inherit; }
+.goal-toolbar,.goal-actions,.goal-item > div { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.goal-form { display:grid; gap:6px; margin-top:6px; }
+.goal-control-body button,.goal-task { border:1px solid var(--glass-border); border-radius:6px; background:var(--glass-control); color:var(--glass-text); padding:5px 8px; font:inherit; }
+.goal-control-body button:disabled { opacity:.55; }
+.goal-task { width:100%; text-align:left; margin-top:4px; }
+.goal-task[aria-pressed=true] { background:var(--glass-selected); }
+.goal-summary { display:grid; gap:4px; }
+.goal-summary p,.goal-summary small,.goal-item small,.goal-task-detail small { margin:0; color:var(--glass-muted); overflow-wrap:anywhere; }
+.goal-item { display:grid; gap:3px; padding:5px 0; }
+.goal-item > div input { flex:1; }
 
 /* Extensions share the settings page scroll and theme tokens. */
 .extensions-panel { min-width: 0; color: var(--glass-text); }

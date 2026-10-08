@@ -14,6 +14,9 @@
   },
   "scripts": {
     "test:backends": "node scripts/core/agent-backends-test.cjs",
+    "test:multi-backends": "node scripts/core/multi-agent-backends-test.cjs",
+    "test:goal-store": "node scripts/core/goal-store-test.cjs",
+    "test:goal-scope": "node scripts/core/goal-scope-test.cjs",
     "test:backend-workflow": "node scripts/core/backend-workflow-test.cjs",
     "test:backend-ui": "node scripts/run-electron.cjs scripts/ui/backend-settings-ui-test.cjs",
     "test:backend-live": "node scripts/tools/codex-backend-smoke.cjs",

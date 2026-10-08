@@ -150,7 +150,7 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 ### Agent 后端
 
-在 **设置 → 常规 → Agent 后端** 选择 CodeNode 内置执行器或 Codex app-server。配置可保存为本机默认或当前项目覆盖，项目也可恢复跟随本机。默认使用内置执行器，已有模型配置和工具行为沿用原逻辑。
+在 **设置 → 常规 → Agent 后端** 选择 CodeNode 内置执行器、Codex app-server、DeepSeek Harness、Hermes Agent、OpenCode 或 OpenClaw。配置可保存为本机默认或当前项目覆盖，项目也可恢复跟随本机。默认使用内置执行器，已有模型配置和工具行为沿用原逻辑。
 
 Codex 首版兼容经本机 schema 核对的 `0.135.0`、`0.160.0` 协议版本；依次自动查找 PATH 原生程序、桌面版自带运行时及 npm 安装的原生程序，也可指定可执行文件绝对路径。“检测已保存后端”会检查真实协议握手与账户状态；登录信息仍由本机 Codex 管理，握手成功不能代替模型可访问性验证。Codex 模型留空时使用其本机配置，工作目录固定为所选项目。默认只读，允许修改项目文件需在设置中选择；后端审批只对当前请求有效，中断等待真实终态，连接丢失与中断未确认会标记结果未知。
 
@@ -158,7 +158,11 @@ Windows 上未设置显式 `HTTP_PROXY`／`HTTPS_PROXY`／`ALL_PROXY` 时，模�
 
 对话与画布文件任务共用这个入口。运行记录保存后端、协议、线程、执行、目录和权限；从运行列表恢复时先复核副作用并查询原执行状态，原执行仍在运行或状态无法核实时阻止重复启动。外部后端提供的补丁和独立扫描获得的文件内容指纹可在文件变更卡片中查看，代码修改复用本地独立校验。
 
-首版外部后端未接入 CodeNode 画布修改工具、子 Agent、图片与 `/compact`；这些功能使用内置执行器。Codex 的权限与工具机制负责外部执行边界，CodeNode 工具注册表不拦截其全部操作；网络默认关闭，用户批准的命令仍需按显示范围审阅。外部用量按线程累计差额统计，费用显示未知，不承诺 CodeNode 的逐请求硬费用限制或自动副作用回滚。
+DeepSeek Harness 通过官方 stdio SDK JSON-RPC profile。安装 `deepseek-harness-sdk` runtime（包含 `dsh`），并设置有效的 `DSH_HOME`；SDK profile 管理执行权限，协议没有逐会话取消或权限请求方法，停止会关闭该专属 runtime。Hermes、OpenCode、OpenClaw 通过 ACP stdio 接入并复用各自账号配置；OpenClaw 需要正常运行的 Gateway。所有外部后端在启动前都会检测协议握手，缺少 CLI、配置或依赖时会显示具体错误。
+
+外部 Agent 的工具和沙箱由对应 runtime/profile 控制，CodeNode 工具注册表不能拦截其全部操作。ACP 只读模式拒绝所有权限请求；写入模式对每个 ACP 权限请求逐次询问。ACP 请求类型由 Agent 提供，不能代替操作系统沙箱，也不能证明 Agent 不会绕过权限请求直接操作文件。CodeNode 在运行前后扫描项目文件指纹并展示 Agent 报告的补丁；修改代码后复用独立本地校验，缺少有效校验时不把代码修改标成验收通过。外部用量与费用不一定可得，不承诺 CodeNode 硬费用预算或自动副作用回滚。
+
+首版外部后端未接入 CodeNode 画布修改工具、子 Agent、图片与 `/compact`；这些功能使用内置执行器。OpenClaw 的 ACP Gateway 桥能力受其本机安装和 Gateway 配置影响；DeepSeek Harness SDK 的运行与权限由显式选择的 SDK profile 决定。
 
 离线协议与画布闭环：`npm run test:backends`、`npm run test:backend-workflow`；主题与持久化：`npm run test:backend-ui`；使用本机 Codex 登录执行真实只读任务：`npm run test:backend-live`（需要模型服务可访问，不进入离线 CI）。协议依据 [OpenAI app-server 文档](https://learn.chatgpt.com/docs/app-server) 和本机版本导出的 JSON Schema。
 

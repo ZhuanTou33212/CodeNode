@@ -17,6 +17,9 @@ const ROOT = path.join(__dirname, "../..");
 const ASAR = process.env.CODENODE_PACKAGED_ASAR
   ? path.resolve(process.env.CODENODE_PACKAGED_ASAR)
   : path.join(ROOT, 'release', 'win-unpacked', 'resources', 'app.asar');
+const SHOT = process.env.CODENODE_PACKAGED_UI_SHOT
+  ? path.resolve(process.env.CODENODE_PACKAGED_UI_SHOT)
+  : path.join(ROOT, 'out', 'packaged-ui.png');
 function removeIsolatedTemp(target, prefix) {
   if (!target) return;
   const resolved = path.resolve(target);
@@ -56,6 +59,12 @@ app.whenReady().then(async () => {
     const indexInAsar = path.join(ASAR, 'dist', 'index.html');
     const rawHtml = fs.readFileSync(indexInAsar, 'utf8'); // 走 Electron 的 asar 感知 fs
     console.log('asar 内入口可读: ' + rawHtml.length + ' 字节');
+    const packagedConfig = JSON.parse(fs.readFileSync(path.join(ASAR, 'config', 'agent.backends.json'), 'utf8'));
+    ok('asar 包含六种已注册后端', JSON.stringify(packagedConfig.backends) === JSON.stringify(['builtin', 'codex', 'deepseek-harness', 'hermes', 'opencode', 'openclaw']));
+    const packagedBackends = require(path.join(ASAR, 'electron', 'backends', 'index.cjs'));
+    ok('asar 可加载 ACP 与 DeepSeek Harness adapters', packagedBackends.createBackend('hermes', { backend: 'hermes', sandbox: 'read-only' }).constructor.name === 'AcpBackend' && packagedBackends.createBackend('deepseek-harness', { backend: 'deepseek-harness', sandbox: 'read-only' }).constructor.name === 'DeepSeekHarnessBackend');
+    const packagedGoalStore = require(path.join(ASAR, 'electron', 'goalStore.cjs'));
+    ok('asar 可加载持久化 Goal/Task 门禁', typeof packagedGoalStore.admit === 'function' && typeof packagedGoalStore.recordEvidence === 'function');
 
     // asar 内 .js/.css 用相对路径引用，file:// 读不到；把同一份 asar 内资源实体化到临时目录，
     // 保证加载的就是「打包产物里的那一份」而不是源码 dist。
@@ -87,7 +96,9 @@ app.whenReady().then(async () => {
     await win.loadFile(path.join(distTmp, 'index.html'));
     await sleep(700);
 
-    const js = (code) => win.webContents.executeJavaScript(code);
+    const js = (code) => win.webContents.executeJavaScript(code).catch((error) => {
+      throw new Error(String(error) + '\nRenderer script: ' + code);
+    });
 
     // 打包后的 App 同样走门禁页；注入临时工程进入工作台
     projRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-packaged-proj-'));
@@ -98,32 +109,31 @@ app.whenReady().then(async () => {
     ok('工作台已渲染', await js(`!!document.querySelector('.canvas-wrap')`));
     ok('画布上已无悬浮会话面板/输入条', await js(`!document.querySelector('.cs-sidebar') && !document.querySelector('.prompt-bar')`));
 
-    await js(`(()=>{ window.__codenodeUi.getState().setSideTab('agent'); return true; })()`);
+    await js(`(()=>{ window.__codenodeUi.getState().setSideTab('agent'); window.__codenodeUi.setState({conversationOpen:true}); return true; })()`);
     await sleep(500);
     const geom = await js(`(function(){
-      const el = document.querySelector('.side-panel');
+      const el = document.querySelector('.conversation-workspace');
       const r = el.getBoundingClientRect();
       const c = document.querySelector('.canvas-wrap').getBoundingClientRect();
-      const navigation = document.querySelector('.project-navigation');
-      const nr = navigation && navigation.getBoundingClientRect();
       const compt = document.querySelector('.pp-composer');
       const cr = compt.getBoundingClientRect();
       return {
-        tabs: [...document.querySelectorAll('.sp-tab')].map(function(b){return b.textContent.trim();}),
-        side: { x: Math.round(r.x), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) },
-        canvasX: Math.round(c.x),
-        navigation: nr ? { x: Math.round(nr.x), right: Math.round(nr.right), width: Math.round(nr.width) } : null,
+        conversationVisible: !el.hidden,
+        conversation: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), bottom: Math.round(r.bottom) },
+        canvas: { x: Math.round(c.x), y: Math.round(c.y), w: Math.round(c.width), h: Math.round(c.height), bottom: Math.round(c.bottom) },
         composerInside: cr.bottom <= r.bottom + 1,
         composerH: Math.round(cr.height),
         bodyH: Math.round(document.querySelector('.ap-body').getBoundingClientRect().height),
         hasInput: !!document.querySelector('.pp-composer .pp-input'),
-        hasSend: !!document.querySelector('.pp-send')
+        hasSend: !!document.querySelector('.pp-send'),
+        duplicateWorkspaceTabs: !!document.querySelector('.workspace-tabs')
       };
     })()`);
     console.log('GEOM: ' + JSON.stringify(geom));
-    ok('四个标签齐全', geom.tabs.length === 4 && geom.tabs[0] === 'Agent' && geom.tabs[1] === '节点' && ['项目', '文件'].includes(geom.tabs[2]) && geom.tabs[3] === '预览', geom.tabs.join('/'));
-    ok('导航、面板与画布连续排列且不重叠', (geom.navigation ? geom.navigation.x <= 1 && geom.navigation.width > 0 && Math.abs(geom.side.x - geom.navigation.right) <= 1 : geom.side.x <= 1) && geom.side.w > 0 && Math.abs(geom.side.right - geom.canvasX) <= 1, JSON.stringify(geom));
-    ok('Agent 输入框常驻面板底部', geom.hasInput && geom.hasSend && geom.composerInside, JSON.stringify(geom));
+    ok('对话栏已显示', geom.conversationVisible, JSON.stringify(geom));
+    ok('画布与对话栏左右相邻且不重叠', geom.conversation.x >= geom.canvas.x + geom.canvas.w - 1 && Math.abs(geom.conversation.y - geom.canvas.y) <= 1 && geom.conversation.w > 0, JSON.stringify(geom));
+    ok('Agent 输入框位于对话栏底部', geom.hasInput && geom.hasSend && geom.composerInside, JSON.stringify(geom));
+    ok('工作区没有重复顶部页签', !geom.duplicateWorkspaceTabs);
     ok('对话区占据主要高度', geom.bodyH > geom.composerH, `body=${geom.bodyH} composer=${geom.composerH}`);
 
     await js(`(()=>{ window.__codenodeUi.getState().setSideTab('project'); return true; })()`);
@@ -131,9 +141,9 @@ app.whenReady().then(async () => {
     ok('项目标签含文件树与过滤框', await js(`!!document.querySelector('.pm-tree') && !!document.querySelector('.pm-search')`));
 
     const img = await win.webContents.capturePage();
-    fs.mkdirSync(path.join(ROOT, 'out'), { recursive: true });
-    fs.writeFileSync(path.join(ROOT, 'out', 'packaged-ui.png'), img.toPNG());
-    console.log('  shot → out/packaged-ui.png');
+    fs.mkdirSync(path.dirname(SHOT), { recursive: true });
+    fs.writeFileSync(SHOT, img.toPNG());
+    console.log('  shot → ' + SHOT);
   } catch (e) {
     failures.push('harness error');
     console.error('PACKAGED UI CHECK ERROR: ' + (e && e.stack ? e.stack : e));

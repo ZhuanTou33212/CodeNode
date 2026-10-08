@@ -3,6 +3,7 @@ import { useProjectStore } from './projectStore';
 import { useGraphStore } from './graphStore';
 import { useUiStore } from './uiStore';
 import { useSessionStore } from './sessionStore';
+import { useGoalControlStore } from './goalControlStore';
 import { useUsageStore, type UsageSnapshot } from './usageStore';
 import { createInflightRegistry } from '../lib/inflight';
 import { describeFailure } from '../lib/reportError';
@@ -218,6 +219,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const planSessionId = useSessionStore.getState().activeId;
     const memoryConversationId = useSessionStore.getState().memoryConversationId;
     const memoryTaskEpoch = useSessionStore.getState().memoryTaskEpoch;
+    const selectedGoal = useGoalControlStore.getState();
+    const goalBinding = !options?.resumeRunId && selectedGoal.selectedGoalId && selectedGoal.selectedTaskId
+      ? { goalId: selectedGoal.selectedGoalId, taskId: selectedGoal.selectedTaskId }
+      : {};
     useSessionStore.getState().beginPlanRun(planSessionId);
     ss.pushUser(userText, attachments);
     ss.beginTurn();
@@ -247,6 +252,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }) : null;
       const res = await api.agentChat({
         projectRoot: requestRoot,
+        ...goalBinding,
         prompt: userText,
         attachments: attachments.length ? attachments : undefined,
         // /compact：让主进程无视阈值立刻压一次（见上面对命令的解析）

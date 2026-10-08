@@ -203,7 +203,20 @@ interface CodenodeApi {
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
   backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
-  backendStatus: (root: string | null) => Promise<{ ok: boolean; error?: string; capabilities?: { backend: string; available: boolean; authenticated?: boolean; protocolVersion?: string; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
+  backendStatus: (root: string | null) => Promise<{ ok: boolean; error?: string; capabilities?: { backend: string; available: boolean; authenticated?: boolean | null; protocolVersion?: string; protocol?: string; resume?:boolean; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
+  goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[]}}>;
+  goalCreate: (root:string|null,input:{title:string;objective?:string;scope?:string;exclusions?:string;criteria?:string[];maxTokens?:number;maxCostUsd?:number})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalUpdate: (root:string|null,goalId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalTaskUpdate: (root:string|null,goalId:string,taskId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalDecisionCreate: (root:string|null,goalId:string,input:{question:string;options:string[];taskIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalDecisionResolve: (root:string|null,decisionId:string,value:string,reason?:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalVerify: (root:string|null,goalId:string,taskId:string|null,criterionId:string|null,command:string)=>Promise<{ok:boolean;error?:string;status?:string;runId?:string;output?:string;exitCode?:number;evidence?:any;filesChangedDuringCheck?:boolean}>;
+  goalAudit: (root:string|null,goalId:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalCanRun: (root:string|null,goalId:string,taskId?:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalContextAdd: (root:string|null,goalId:string,kind:'rules'|'taskMaterial'|'confirmedExperience',input:{content:string;source?:string;confirmed?:boolean})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalContextForRole: (root:string|null,goalId:string,taskId:string|null,role:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalWaitObserve: (root:string|null,goalId:string,taskId:string,observation:{id:string;source?:string;status?:string;matched:boolean;revision?:string})=>Promise<{ok:boolean;error?:string;value?:any}>;
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;
   costSettingsSave: (root: string, settings: import('./types').CostSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').CostSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
@@ -395,6 +408,8 @@ interface CodenodeApi {
   }>;
   agentChat: (payload: {
     projectRoot: string | null;
+    goalId?: string;
+    taskId?: string;
     resumeRunId?: string;
     resumeForce?: boolean;
     sessionId?: string;
@@ -425,7 +440,7 @@ interface CodenodeApi {
     reply?: string;
     reasoning?: string;
     toolCalls?: ToolRecordDto[];
-    backend?: 'builtin' | 'codex';
+    backend?: import('./types').AgentBackendSettings['backend'];
     costUnknown?: boolean;
     usage?: unknown;
     grounding?: {

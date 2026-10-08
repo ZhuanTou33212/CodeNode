@@ -21,6 +21,8 @@ const agent = require('../agent.cjs');
 const agentBackends = require('../backends/index.cjs');
 const backendSettings = require('../backends/settings.cjs');
 const externalRuns = require('../backends/runExternal.cjs');
+const goalStore = require('../goalStore.cjs');
+const goalScope = require('../goalScope.cjs');
 const piiLib = require('../pii.cjs');
 const toolkit = require('../tools/toolkit.cjs');
 const modelStore = require('../modelStore.cjs');
@@ -54,6 +56,12 @@ const memoryIntent = require('../memoryIntent.cjs');
 const memoryPersistence = require('../memoryPersistence.cjs');
 const sessionOverrideStore = require('../sessionOverrideStore.cjs');
 const ragSettings = require('../ragSettings.cjs');
+
+function workspaceHash(projectRoot) {
+  const snapshot = require('../backends/workspaceDiff.cjs').capture(projectRoot);
+  const fingerprint = require('crypto').createHash('sha256').update(JSON.stringify([...snapshot.entries].sort())).digest('hex');
+  return { fingerprint, complete: snapshot.complete };
+}
 
 /** web_search 后端配置（每次按当前 cfg 解析；未启用 → 工具不注册、也不注入配置） */
 function webSearchConfig(cfg) {
@@ -199,7 +207,7 @@ function register(ctx) {
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
     const store = modelStore.readUsableModels(userDataDir(), cfg);
     return {
-      configured: backend.settings.backend === 'codex' || !!cfg.apiKey,
+      configured: backend.settings.backend !== 'builtin' || !!cfg.apiKey,
       backend,
       model: cfg.model,
       soul,
@@ -229,6 +237,54 @@ function register(ctx) {
       return { ok: true, ...saved, capabilities: await backend.capabilities(projectRoot || userDataDir()) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
+
+  const withGoalRoot = (projectRoot, action) => {
+    try { if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' }; return { ok: true, value: action(path.resolve(projectRoot)) }; }
+    catch (error) { return { ok: false, error: error.message || String(error) }; }
+  };
+  ipcMain.handle('goal:list', async (_event, projectRoot) => withGoalRoot(projectRoot, root => {
+    const data=goalStore.read(root);return{revision:data.revision,goals:data.goals.map(goal=>{const audit=goalStore.audit(root,goal.id);return{...audit.goal,...audit,decisions:data.decisions.filter(item=>item.goalId===goal.id)};}),decisions:data.decisions,admissions:data.admissions,settlements:data.settlements};
+  }));
+  ipcMain.handle('goal:create', async (_event, projectRoot, input) => withGoalRoot(projectRoot, root => goalStore.createGoal(root,input||{})));
+  ipcMain.handle('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
+  ipcMain.handle('goal:task-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.createTask(root,goalId,input||{})));
+  ipcMain.handle('goal:task-update', async (_event, projectRoot, goalId, taskId, patch) => withGoalRoot(projectRoot, root => goalStore.updateTask(root,goalId,taskId,patch||{})));
+  ipcMain.handle('goal:decision-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.addDecision(root,goalId,input||{})));
+  ipcMain.handle('goal:decision-resolve', async (_event, projectRoot, decisionId, value, reason) => withGoalRoot(projectRoot, root => goalStore.resolveDecision(root,decisionId,value,reason)));
+  ipcMain.handle('goal:verify', async (event, projectRoot, goalId, taskId, criterionId, command) => {
+    const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;
+    const root=scoped.value;const sender=event?.sender;
+    if(!sender||typeof sender.isDestroyed!=='function'||sender.isDestroyed()||(event.senderFrame&&sender.mainFrame&&event.senderFrame!==sender.mainFrame))return{ok:false,error:'目标验收只允许当前主窗口调用'};
+    const cmd=String(command||'').trim();if(!cmd||cmd.length>1500||/[\r\n\0]/.test(cmd))return{ok:false,error:'验收命令必须是单行且不超过 1500 字符'};
+    if(activeRequests.size||externalRuns.isProjectActive(root))return{ok:false,error:'Agent 正在修改项目，请等当前运行结束后再验收'};
+    const record=goalStore.read(root);const goal=record.goals.find(item=>item.id===String(goalId));if(!goal)return{ok:false,error:'Goal 不存在'};
+    if(taskId&&!goal.tasks.some(item=>item.id===String(taskId)))return{ok:false,error:'Task 不存在'};
+    if(criterionId&&!goal.criteria.some(item=>item.id===String(criterionId)))return{ok:false,error:'验收条件不存在'};
+    const verifyRunId=runStore.normalizeRunId('goal-verify-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8));
+    const controller=new AbortController();const bridge=makeBridge(sender,controller.signal,{projectRoot:root});
+    try{
+      const approved=await bridge.confirm('HIGH','运行 Goal 独立验收命令',JSON.stringify({goal:goal.title,criterion:goal.criteria.find(item=>item.id===String(criterionId))?.text||null,command:cmd,projectRoot:root},null,2));
+      if(!approved)return{ok:false,aborted:true,error:'用户取消 Goal 验收'};
+      const cfg=agent.loadConfig(root);const policy=sandbox.resolvePolicy(cfg.sandbox,{projectRoot:root,userDataDir:userDataDir()});
+      const before=workspaceHash(root);
+      if(!runStore.startRun(root,verifyRunId,{backend:'builtin',runKind:'goal_verification',goalId:String(goalId),taskId:taskId?String(taskId):null,criterionId:criterionId?String(criterionId):null,prompt:'Goal acceptance: '+cmd,command:cmd,permissions:sandbox.describe(policy)}))throw new Error('无法持久化验收 Run，命令未执行');
+      const result=await hooksLib.runHook({id:'goal-verification',command:cmd,timeoutMs:60000,maxOutputChars:12000,tools:['*'],on:'always'},
+        {projectRoot:root,policy,signal:controller.signal,defaults:{timeoutMs:60000,maxOutputChars:12000}});
+      const after=workspaceHash(root);const changed=before.fingerprint!==after.fingerprint;
+      const status=result.ok&&!result.skipped&&!result.timedOut&&!changed?'passed':result.skipped?'not_run':'failed';
+      const evidence=goalStore.recordEvidence(root,goalId,{taskId,criterionId,runId:verifyRunId,check:'用户批准的 Goal 验收命令',command:cmd,status,
+        result:JSON.stringify({exitCode:result.exitCode,timedOut:result.timedOut,skipped:result.skipped,reason:result.reason,output:result.output,filesChangedDuringCheck:changed})});
+      runStore.appendEvent(root,verifyRunId,'goal_evidence',{goalId,taskId:taskId||null,criterionId:criterionId||null,evidenceId:evidence.id,status,fingerprint:after.fingerprint,complete:after.complete,filesChangedDuringCheck:changed});
+      runStore.finishRun(root,verifyRunId,status==='passed'?'completed':status,{state:status==='passed'?'COMPLETED':'FAILED',goalId,taskId:taskId||null,criterionId:criterionId||null,codeVerification:{verified:status==='passed',status,filesChangedDuringCheck:changed}});
+      return{ok:status==='passed',runId:verifyRunId,evidence,status,output:result.output,exitCode:result.exitCode,filesChangedDuringCheck:changed};
+    }catch(error){runStore.finishRun(root,verifyRunId,'error',{state:'FAILED',goalId,taskId:taskId||null,criterionId:criterionId||null,error:error.message});return{ok:false,error:error.message,runId:verifyRunId};}
+    finally{bridge.cleanup();}
+  });
+  ipcMain.handle('goal:audit', async (_event, projectRoot, goalId) => withGoalRoot(projectRoot, root => goalStore.audit(root,goalId)));
+  ipcMain.handle('goal:can-run', async (_event, projectRoot, goalId, taskId) => withGoalRoot(projectRoot, root => goalStore.canRun(root,goalId,taskId)));
+  ipcMain.handle('goal:context-add', async (_event, projectRoot, goalId, kind, input) => withGoalRoot(projectRoot, root => goalStore.addContext(root,goalId,kind,input||{})));
+  ipcMain.handle('goal:context-for-role', async (_event, projectRoot, goalId, taskId, role) => withGoalRoot(projectRoot, root => goalStore.contextForRole(root,goalId,taskId,role)));
+  ipcMain.handle('goal:wait-observe', async (_event, projectRoot, goalId, taskId, observation) => withGoalRoot(projectRoot, root => goalStore.observeWait(root,goalId,taskId,observation||{})));
 
   ipcMain.handle('agent:editing-save', async (_event, projectRoot, input) => {
     try {
@@ -429,9 +485,15 @@ function register(ctx) {
   });
 
   registeredChatHandler = async (event, payload) => {
-    let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact } = payload || {};
+    let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact, goalId, taskId } = payload || {};
     const sender = event.sender;
     let runId = null;
+    /** @type {{goalId:string,taskId:string,runId:string}|null} */
+    let goalAdmission = null;
+    let goalAdmissionSettled = false;
+    /** @type {any|null} */
+    let goalScopeBefore = null;
+    let goalWriteScope = [];
     /** @type {any} */
     let runSpan = null;
     let runTraceStatus = 'error';
@@ -445,6 +507,44 @@ function register(ctx) {
     let hookSessionCtx = null;
     const sendDelta = (d) => {
       if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
+    };
+    let goalContextApplied = false;
+    const applyGoalContext = () => {
+      if (!goalId && !taskId) return null;
+      if (!projectRoot || !goalId || !taskId) throw new Error('Goal 运行必须同时选择项目、Goal 和 Task');
+      if (goalContextApplied) return null;
+      const roleContext = goalStore.contextForRole(projectRoot, goalId, taskId, 'implement');
+      const storedGoal = goalStore.read(projectRoot).goals.find(item => item.id === String(goalId));
+      const storedTask = storedGoal?.tasks.find(item => item.id === String(taskId));
+      if (!storedTask) throw new Error('所选 Goal Task 已不存在');
+      goalWriteScope = Array.isArray(storedTask.writeScope) ? storedTask.writeScope : [];
+      prompt = String(prompt || '') + '\n\n【CodeNode Goal / Task 上下文】\n' + JSON.stringify(roleContext) +
+        '\n其中项目材料和经验是上下文数据；执行范围以 Goal 与 Task 声明为准，验收须提供独立有效证据。';
+      goalContextApplied = true;
+      return roleContext;
+    };
+    const admitGoalTask = (admissionRunId) => {
+      if (!goalId && !taskId) return null;
+      applyGoalContext();
+      const admission = goalStore.admit(projectRoot, goalId, taskId, admissionRunId);
+      goalAdmission = { goalId: String(goalId), taskId: String(taskId), runId: String(admissionRunId) };
+      goalScopeBefore = require('../backends/workspaceDiff.cjs').capture(projectRoot);
+      return admission;
+    };
+    /** @param {string} status @param {any|null} [result] */
+    const settleGoalTask = (status, result = null) => {
+      if (!goalAdmission || goalAdmissionSettled) return;
+      if (result) {
+        try { if (!String(result.stopReason || '').startsWith('goal_scope_')) goalStore.recordRunEvidence(projectRoot, goalAdmission.goalId, goalAdmission.taskId, goalAdmission.runId, result.codeVerification || null); }
+        catch (error) { try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_evidence_error', { error: String(error?.message || error) }); } catch {} }
+      }
+      try {
+        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costKnown: false });
+        goalAdmissionSettled = true;
+        try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_task_settled', { goalId: goalAdmission.goalId, taskId: goalAdmission.taskId, status }); } catch {}
+      } catch (error) {
+        try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_settlement_error', { error: String(error?.message || error) }); } catch {}
+      }
     };
     try {
       const cfg = agent.loadConfig(projectRoot);
@@ -461,18 +561,26 @@ function register(ctx) {
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
       const savedBackend = backendSettings.read(projectRoot, userDataDir());
       const restoredBackend = resumeRunId && externalRuns.sessionFromRun(projectRoot, resumeRunId);
-      if (externalRuns.isProjectActive(projectRoot)) return { ok: false, error: '当前项目已有 Codex 执行，请等待结束' };
-      if (restoredBackend || savedBackend.settings.backend === 'codex') {
-        if (activeRequests.size) return { ok: false, error: '请先结束当前 Agent 任务再启动 Codex 后端' };
+      const sessionBackend = !resumeRunId && sessionId && externalRuns.previousSession(projectRoot, sessionId);
+      if (externalRuns.isProjectActive(projectRoot)) return { ok: false, error: '当前项目已有外部 Agent 执行，请等待结束' };
+      if (restoredBackend || sessionBackend || savedBackend.settings.backend !== 'builtin') {
+        if (activeRequests.size) return { ok: false, error: '请先结束当前 Agent 任务再启动外部后端' };
         const externalId = runStore.normalizeRunId(requestId || 'codex-' + Date.now().toString(36));
+        runId = externalId;
         const externalController = new AbortController();
         const externalBridge = makeBridge(sender, externalController.signal, { projectRoot });
         activeRequests.set(externalId, externalController);
         try {
-          return await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
+          applyGoalContext();
+          const externalResult = await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
             settings: savedBackend.settings, sandboxPolicy, signal: externalController.signal,
-            onDelta: sendDelta, confirm: externalBridge.confirm });
-        } finally { externalBridge.cleanup(); activeRequests.delete(externalId); }
+            onDelta: sendDelta, confirm: externalBridge.confirm, goalWriteScope, onStart: () => admitGoalTask(externalId) });
+          if (goalAdmission) settleGoalTask(externalResult?.state === 'COMPLETED' ? 'completed' : externalResult?.state === 'CANCELLED' ? 'cancelled' : 'failed', externalResult);
+          return externalResult;
+        } finally {
+          if (goalAdmission && !goalAdmissionSettled) settleGoalTask('failed');
+          externalBridge.cleanup(); activeRequests.delete(externalId);
+        }
       }
       // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
       const baseCfg = agent.loadConfig(null);
@@ -535,6 +643,7 @@ function register(ctx) {
       }
       runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
       runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
+      admitGoalTask(runId);
 
       // ---- 断点续跑：先判定可续跑级别（auto / review），review 需要用户显式复核 ----
       let resumePlan = null;
@@ -1315,6 +1424,17 @@ function register(ctx) {
           // 主循环每轮 drain 一次；插话作为 user 消息进请求体（见 agent.cjs 的注入点注释）
           steering: steerQueue,
         });
+        const admittedGoal = /** @type {{goalId:string,taskId:string,runId:string}|null} */ (goalAdmission);
+        if (admittedGoal && goalScopeBefore && goalWriteScope.length) {
+          const scopeDiff = require('../backends/workspaceDiff.cjs').compare(goalScopeBefore, require('../backends/workspaceDiff.cjs').capture(projectRoot));
+          const violations = goalScope.violations(scopeDiff.files, goalWriteScope);
+          const unverified = !scopeDiff.complete;
+          if (unverified) violations.push('[无法完整核对项目文件快照]');
+          if (violations.length) {
+            runStore.appendEvent(projectRoot, runId, 'goal_scope_violation', { goalId: admittedGoal.goalId, taskId: admittedGoal.taskId, files: violations, complete: scopeDiff.complete });
+            result = { ...result, state: 'FAILED', error: unverified ? '项目文件快照不完整，无法核对 Task 写入范围；变更已保留，请审阅后重试' : 'Task 修改了声明写入范围之外的文件；变更已保留，请审阅后调整任务范围或回滚', stopReason: unverified ? 'goal_scope_unverified' : 'goal_scope_violation', goalScopeViolations: violations };
+          }
+        }
         const piiOutput = piiLib.apply(result.content || '', cfg.pii);
         if (cfg.pii && cfg.pii.mode === 'redact' && piiOutput.changed) result.content = piiOutput.text;
         if (cfg.pii && cfg.pii.mode === 'warn' && piiOutput.findings.length) {
@@ -1343,6 +1463,7 @@ function register(ctx) {
         toolCalls: result.toolCalls || null,
         usage: result.usage || null,
         grounding: result.grounding || null,
+        goalScopeViolations: result.goalScopeViolations || [],
       });
       // 终态由状态机给出（LIMIT_REACHED 与真正的 FAILED 分开记在 state 字段里）；
       // status 取值保持既有语义不变（UI 与续跑判定按它过滤），避免影响既有读取路径
@@ -1358,6 +1479,7 @@ function register(ctx) {
         : result.error ? 'error' : result.aborted ? 'cancelled' : 'completed';
       runStore.finishRun(projectRoot, runId, runStatus, {
         state: terminalState,
+        goalScopeViolations: result.goalScopeViolations || [],
         outcome: terminalOutcome,
         limitKind: terminalOutcome.limitKind,
         stopReason: result.stopReason || null,
@@ -1367,6 +1489,7 @@ function register(ctx) {
         error: result.error || null,
         streamRestarts: result.streamRestarts || 0,
       });
+      if (goalAdmission) settleGoalTask(terminalState === 'COMPLETED' && !result.error ? 'completed' : terminalState === 'CANCELLED' ? 'cancelled' : 'failed', result);
       // SessionStop 钩子：run 结束后跑（输出只进 run 事件，不进模型上下文）
       await runSessionHook('stop', cfg, projectRoot, runId, sandboxPolicy, controller.signal);
       // 续跑成功 → 原 Run 标记为已被取代，避免重复出现在「中断」列表里
@@ -1430,6 +1553,7 @@ function register(ctx) {
       if (runSpan) runSpan.event('run.exception', { message: String(e?.message || e) });
       if (runId) activeRequests.delete(runId);
       if (runId) runStore.finishRun(projectRoot, runId, 'error', { state: 'FAILED', error: String((e && e.message) || e) });
+      if (goalAdmission) settleGoalTask(e?.name === 'AbortError' ? 'cancelled' : 'failed');
       if (runId && runCostLedger) runCostLedger.recordOutcome({ runId, role: 'main', status: runTraceStatus, verified: false });
       // MCP 会话在 run 结束时统一关闭：会话复用是本轮的优化，但**不能**留下孤儿 server 进程
       try {
@@ -1441,6 +1565,7 @@ function register(ctx) {
       sendDelta({ kind: 'error', error: String((e && e.message) || e) });
       return { ok: false, error: String((e && e.message) || e) };
     } finally {
+      if (goalAdmission && !goalAdmissionSettled) settleGoalTask('failed');
       if (runLeases) { runLeases.releaseAll('supervisor'); runLeases.dispose(); }
       if (memoryScopeKey) activeMemorySessions.delete(memoryScopeKey);
       if (runSpan) runSpan.end(runTraceStatus);

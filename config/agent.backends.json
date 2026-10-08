@@ -1,6 +1,16 @@
 {
-  "defaults": { "backend": "builtin", "executable": "codex", "model": "", "sandbox": "read-only" },
-  "backends": ["builtin", "codex"],
+  "defaults": { "backend": "builtin", "executable": "", "args": [], "model": "", "provider": "deepseek-official", "home": "", "sandbox": "read-only", "reasoningEffort": "" },
+  "backends": ["builtin", "codex", "deepseek-harness", "hermes", "opencode", "openclaw"],
+  "labels": { "builtin": "CodeNode 内置", "codex": "Codex app-server", "deepseek-harness": "DeepSeek Harness", "hermes": "Hermes Agent", "opencode": "OpenCode", "openclaw": "OpenClaw" },
+  "commands": { "builtin": "", "codex": "codex", "deepseek-harness": "dsh", "hermes": "hermes", "opencode": "opencode", "openclaw": "openclaw" },
+  "defaultArgs": { "deepseek-harness": ["--profile", "sdk"], "hermes": ["acp"], "opencode": ["acp"], "openclaw": ["acp"] },
+  "capabilityNotes": {
+    "deepseek-harness": "Requires installed dsh SDK runtime and explicit DSH_HOME; its SDK JSON-RPC has no per-session cancel or approval methods.",
+    "hermes": "Requires Hermes ACP dependencies and configured provider credentials.",
+    "opencode": "Requires OpenCode ACP CLI and configured provider authentication.",
+    "openclaw": "Requires a healthy OpenClaw ACP bridge and Gateway.",
+    "codex": "Requires a supported app-server CLI and local authentication."
+  },
   "sandboxModes": ["read-only", "workspace-write"],
   "approvalPolicies": { "read-only": "on-request", "workspace-write": "untrusted" },
   "protocolVersion": "0.160.0",

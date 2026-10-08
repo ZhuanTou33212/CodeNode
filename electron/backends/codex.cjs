@@ -96,6 +96,7 @@ class CodexBackend {
       this.threadId = thread.thread.id;
       const saveSession = () => input.onSession?.({ backend: 'codex', protocolVersion: this.version,
         threadId: this.threadId, turnId: this.turnId, cwd: input.projectRoot, model: thread.model || this.settings.model || null,
+        adapterSettings: this.settings,
         usageTotal: this.usageTotal || input.backendSession?.usageTotal || null,
         proxySource: this.proxySource,
         permissions: { approvalPolicy, sandbox: this.settings.sandbox, network: false } });

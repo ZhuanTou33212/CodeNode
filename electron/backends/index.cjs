@@ -1,5 +1,7 @@
 'use strict';
 const { CodexBackend } = require('./codex.cjs');
+const { AcpBackend } = require('./acp.cjs');
+const { DeepSeekHarnessBackend } = require('./deepseekHarness.cjs');
 
 class BuiltinBackend {
   constructor() { this.controller = null; this.result = null; this.listener = (delta) => {}; }
@@ -25,6 +27,8 @@ class BuiltinBackend {
 function createBackend(name, settings, deps) {
   if (name === 'builtin') return new BuiltinBackend();
   if (name === 'codex') return new CodexBackend(settings, deps);
+  if (name === 'deepseek-harness') return new DeepSeekHarnessBackend(settings, deps);
+  if (['hermes', 'opencode', 'openclaw'].includes(name)) return new AcpBackend(settings, deps);
   throw new Error('未知 Agent 后端：' + name);
 }
 module.exports = { createBackend, BuiltinBackend };

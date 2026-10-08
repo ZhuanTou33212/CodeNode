@@ -37,6 +37,8 @@ async function main() {
   settings.write(root, userData, 'project', null);
   assert.equal(settings.read(root, userData).settings.sandbox, 'workspace-write');
   assert.throws(() => settings.normalize({ ...selected, sandbox: 'danger-full-access' }));
+  assert.throws(() => settings.normalize({ ...selected, backend: 'openclaw', args: ['acp', '--token', 'sample-secret'] }), /不能保存明文密钥/);
+  assert.throws(() => settings.normalize({ ...selected, backend: 'openclaw', args: ['acp', '--password=sample-secret'] }), /不能保存明文密钥/);
   const invalid = new CodexBackend(selected, { executableVersion: async () => '999.0.0' });
   assert.equal((await invalid.capabilities(root)).available, false);
   const agent = require('../../electron/agent.cjs');
@@ -90,8 +92,14 @@ async function main() {
   const rejected = await external.runExternal({ ...common, requestId: 'verification-failed', prompt: 'resume-edit',
     confirm: async () => true }, { createBackend: create,
     verifyRun: async () => ({ ok: false, output: 'independent check failed', exitCode: 1 }) });
-  assert.equal(rejected.ok, false); assert.equal(rejected.stopReason, 'verification_failed');
+  assert.equal(rejected.ok, false); assert.equal(rejected.stopReason, 'verification_unavailable');
   assert.equal(rejected.codeVerification.verified, false);
+  fs.writeFileSync(path.join(root, 'math.cjs'), 'module.exports = (a,b) => a - b;\n');
+  const outOfScope = await external.runExternal({ ...common, requestId: 'goal-scope-violation', prompt: 'resume-edit', goalWriteScope: ['docs'],
+    confirm: async () => true }, { createBackend: create, verifyRun: async () => ({ ok: true, output: 'passes', exitCode: 0 }) });
+  assert.equal(outOfScope.ok, false); assert.equal(outOfScope.stopReason, 'goal_scope_violation');
+  assert.deepEqual(outOfScope.goalScopeViolations, ['math.cjs']);
+  assert.match(fs.readFileSync(path.join(root, 'math.cjs'), 'utf8'), /module\.exports/, 'out-of-scope changes stay available for review');
   assert.equal(runStore.summarizeRun(runStore.readRun(root, 'resumed')).stateHistoryValid, true);
   const calls = fs.readFileSync(path.join(root, '.codenode/fixture-rpc.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const read = calls.findIndex(c => c.method === 'thread/read');

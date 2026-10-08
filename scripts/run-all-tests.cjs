@@ -22,6 +22,9 @@ const os = require('os');
 // 核心套件：全部为纯 Node 断言，不弹窗、不联网、可在三平台无显示环境运行。
 const CORE = [
   'test:backends',
+  'test:multi-backends',
+  'test:goal-store',
+  'test:goal-scope',
   'test:backend-workflow',
   'test:soul',
   'test:session',
