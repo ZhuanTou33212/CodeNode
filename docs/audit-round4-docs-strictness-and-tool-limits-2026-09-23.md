@@ -99,7 +99,7 @@ $ grep -n "agent.max_total_tokens'" electron/agent.cjs
 多为噪音）。要推的话还需清 147 处，建议单独一轮。
 
 **变异校验**（证明这道闸真的在拦）：`electron/attachments.cjs` 注入 `__probeNull.field` →
-严格档变红（`TS18047: '__probeNull' is possibly 'null'`，退出码 2）；`scripts/agent-boundary-test.cjs`
+严格档变红（`TS18047: '__probeNull' is possibly 'null'`，退出码 2）；`scripts/core/agent-boundary-test.cjs`
 注入 `1..nonexistentProperty` → 脚本档变红（`TS2339`）；还原后两档回到 0 错（还原被 `trap` 兜住）。
 
 ## 4. 数组参数一律有长度上限（`b6e961e`）

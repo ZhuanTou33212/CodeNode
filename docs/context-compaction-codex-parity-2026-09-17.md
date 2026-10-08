@@ -72,7 +72,7 @@ agent.compact.keep_user_total_chars=20000
 agent.compact.on_trim=true              # 硬裁剪一开始丢正文就顺手做语义压缩
 ```
 
-## 4. 判据（`scripts/compaction-test.cjs`，进 CORE）
+## 4. 判据（`scripts/core/compaction-test.cjs`，进 CORE）
 
 1. **Codex 口径**：提示词逐字一致（5 行结构全在）；出厂 ratio=0.9；默认保留人的轮次且默认开。
 2. **未到阈值**：只有 1 次模型请求（不多花一次摘要调用）、历史逐字节原样送达、无 `compacted` 增量。

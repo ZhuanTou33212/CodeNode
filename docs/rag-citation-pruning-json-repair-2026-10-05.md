@@ -24,7 +24,7 @@ judgeJson 接受带 content/finishReason 的模型结果；即便 JSON 可以 pa
 
 ## 验证
 
-- 新增脚本 `scripts/rag-delivery-repair-test.cjs`：未读/越界/半行限制、事实文本不变、缺核心不能裁剪、裁剪后事实仍失败则不交付、分批完整 ID、截断的合法 JSON 仍需修复、真实 runAgentChat 最终发布与版本门。
+- 新增脚本 `scripts/core/rag-delivery-repair-test.cjs`：未读/越界/半行限制、事实文本不变、缺核心不能裁剪、裁剪后事实仍失败则不交付、分批完整 ID、截断的合法 JSON 仍需修复、真实 runAgentChat 最终发布与版本门。
 - 最终完整核心回归 136/136 通过，静态检查与构建通过。首轮发现现有 UI 新模型菜单渲染测试缺失浏览器全局尺寸；补齐测试模拟后 87 条渲染断言通过。未删除无障碍断言。
 - 打包 worker 测试新增包内引用对齐与 JSON 截断保护；通过。界面脚本按照当前项目导航 + Agent 侧栏布局检查连续且不重叠，并验证文件树/输入区；7 项通过。
 - 先独立暂存并自检，再确认 CodeNode 未运行后原位替换，无旧备份。固定路径 E:/CodeNode/release/win-unpacked/CodeNode.exe。

@@ -2,7 +2,7 @@
 
 > 落地：`electron/intent.cjs`（新增）、`electron/agent.cjs`、`electron/ipc/agent.cjs`、
 > `electron/tools/context.cjs`、`electron/tools/approval.cjs`、`config/agent.properties.example`。
-> 判据：`scripts/intent-test.cjs`（8 组 100 条断言，含真实 HTTP 链路）+
+> 判据：`scripts/core/intent-test.cjs`（8 组 100 条断言，含真实 HTTP 链路）+
 > 变异校验 **12/12** 条有判别力（`out/mutation-spec-intent.json`）。
 
 ## 1. 为什么做：此前的「意图相关」判定全是静态的
@@ -77,7 +77,7 @@
 | 分类输出上限 | 1024 tokens（`agent.intent_max_tokens`，**真机取证后从 256 抬高**，见 §9） | `parseIntentConfig` 默认值 |
 | 单 run 分类次数上限 | 5（`auto` 下画布非空时 0 次） | `shouldClassify` + `createIntentClassifier.stats()` |
 | 端到端链路 | 本机真起 HTTP 端点，分类请求真的发出去 **1 次**，`/chat/completions`，Bearer 头，`used=760` 记账，`entries=['intent']` | `test:intent` H 块 |
-| 断言总数 | **117** 条（8 组） | `node scripts/intent-test.cjs \| grep -c '^PASS'` |
+| 断言总数 | **117** 条（8 组） | `node scripts/core/intent-test.cjs \| grep -c '^PASS'` |
 | 变异校验 | **21/21** 有判别力 | `node out/mutation-check.cjs --spec out/mutation-spec-intent.json` |
 
 `auto` 模式的成本边界（默认）：**只在画布为空时**分类一次 —— 那是提示词层唯一可能误判的分支；
@@ -209,7 +209,7 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
 - **挂载**：`AgentPanel` 里紧挨 `PlanCard`（同一「run 级信息」区），排在消息列表之前。
 - **样式**：`src/styles.css` 的 `.ap-intent*`，沿用 `.ap-plan` 的亮度分层与语义色
   （低风险绿 `#6ed2a0` / 中风险蓝 `#78a7ff` / 高风险橙 `#ff9e6a`），不引新 accent。
-- **判据** `scripts/intent-ui-test.cjs`（进 DISPLAY 组，**18 条断言**，真实渲染进程）：空壳、中文文案、
+- **判据** `scripts/ui/intent-ui-test.cjs`（进 DISPLAY 组，**18 条断言**，真实渲染进程）：空壳、中文文案、
   色阶（高风险与低风险的**计算色值必须不同**）、位置（面板内且在消息列表之前）、11px 密度、
   tooltip 里的判据、`unavailable` 不留结论、`partial` 显式标注、`reset` 清空。
 - 显示组 **6 → 7**；变异校验新增 2 条 UI 条目（store 不再消费 / unavailable 也渲染结论），本轮 **18/18**。
@@ -229,7 +229,7 @@ agent.intent_max_calls_per_run=5  # 一个 run 内最多分类几次（0 = 不�
 - abort 后分类器捕获 `AbortError` → `unavailableVerdict` → **按「没有信号」处理**（不收紧、不阻断），
   随后 `runAgentChat` 看到已 abort 的信号，立刻返回取消终态。
 
-**判据**（`scripts/agent-state-test.cjs` B6，走真实 IPC handler + 真实 `agent:stop`）：
+**判据**（`scripts/core/agent-state-test.cjs` B6，走真实 IPC handler + 真实 `agent:stop`）：
 
 | 断言 | 锁住什么 |
 |---|---|

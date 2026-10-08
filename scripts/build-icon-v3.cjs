@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(__dirname, "..");
 const SOURCE = path.join(ROOT, 'assets', 'branding', 'codenode-icon.png');
 const OUTPUT_DIR = path.join(ROOT, 'build');
 const OUTPUT = path.join(OUTPUT_DIR, 'icon.ico');

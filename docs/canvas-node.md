@@ -58,7 +58,7 @@ VectorNode(id)
 
 ## 4. 验收
 
-`scripts/vector-ui-test.cjs`（`npm run test:vector`）用无头 Edge + CDP 驱动真实 DOM，覆盖 48 项：
+`scripts/ui/vector-ui-test.cjs`（`npm run test:vector`）用无头 Edge + CDP 驱动真实 DOM，覆盖 48 项：
 
 - 画布节点直接出现在 Agent 画布上、工作台画布未被替换；节点带左右端口与标题栏
 - 模式切换位于节点左上角、切换写回 data

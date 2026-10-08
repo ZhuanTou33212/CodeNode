@@ -22,8 +22,8 @@
 与审计文档 §3.1 同一条装配路径，全部是本地只读探针：
 
 ```bash
-node scripts/token-overhead-test.cjs        # 基线 + 各 profile 的固定输入 + 负向 + 变异 + 真实请求体
-node scripts/tool-result-projection-test.cjs # 单份投影 + 重复率 + 负向（真实执行 search_files/execute_shell）
+node scripts/core/token-overhead-test.cjs        # 基线 + 各 profile 的固定输入 + 负向 + 变异 + 真实请求体
+node scripts/core/tool-result-projection-test.cjs # 单份投影 + 重复率 + 负向（真实执行 search_files/execute_shell）
 ```
 
 口径：`toolkit.buildDefaultRegistryWithConfig(...)` → `SubagentManager.register(...)` →
@@ -142,7 +142,7 @@ agent.memory_inject=matched           # matched（默认，有命中才注入）
 
 - 新增：`electron/tools/profiles.cjs`（profile 名单 + 确定性路由，纯函数）、
   `electron/tools/impl/discoverToolsTool.cjs`（取回入口）、
-  `scripts/token-overhead-test.cjs`、`scripts/tool-result-projection-test.cjs`
+  `scripts/core/token-overhead-test.cjs`、`scripts/core/tool-result-projection-test.cjs`
 - 修改：`electron/tools/registry.cjs`（暴露面 / schema 缓存 + 哈希 / `toOpenAiTools(names)`）、
   `electron/tools/toolkit.cjs`（`registerDiscoverTool`）、`electron/tools/result.cjs`（`modelContent`）、
   `electron/agent.cjs`（`buildToolContent` 投影 + 规则门控 + `parseMemoryConfig` + `tools.tool_profile`）、
@@ -150,7 +150,7 @@ agent.memory_inject=matched           # matched（默认，有命中才注入）
   `electron/memory.cjs`（`buildMemoryInjection`）、`electron/userMemory.cjs`、
   `electron/subagents.cjs`（子代理视图单份投影）、
   `electron/tools/impl/{findFilesTool,searchFilesTool,executeShellTool}.cjs`、
-  `scripts/user-memory-test.cjs`（接线判据跟进新入口）、`scripts/run-all-tests.cjs`、`package.json`
+  `scripts/core/user-memory-test.cjs`（接线判据跟进新入口）、`scripts/run-all-tests.cjs`、`package.json`
 
 ## 8.1 续跑（resume）边界：同一 run 的工具面只增不减
 

@@ -49,7 +49,7 @@
 - 接线：`electron/agent.cjs:1420`（每次模型请求前裁剪）、配置 `agent.context.*`（`electron/agent.cjs:285`）、
   事件 `context_trim`（trace + delta）、返回值 `contextTrims/contextTrimmedChars`（8 个返回点）。
   裁剪不动内容时**如实报 `overBudget=true`**（不谎报「已在预算内」）。
-**回归测试**：`scripts/context-budget-test.cjs`（进 CORE `test:context-budget`，20 条断言）
+**回归测试**：`scripts/core/context-budget-test.cjs`（进 CORE `test:context-budget`，20 条断言）
 - 纯函数：只裁 tool 正文 / 从最旧开始 / 保留最近 N 条 / 第二档仍保护 system 与最后一条 / 幂等 / 结构不变 / 压不住时如实标 overBudget。
 - 真实循环：同场景下**最大请求输入 59,605 字符**（未裁剪 1,128,425）、裁剪事件如实上报、`tool_call_id` 配对仍合法；
   反向锁：`agent.context.trim=false` 时输入照旧超预算（证明有界是这次修复带来的，且关掉开关能回到旧行为）。
@@ -80,7 +80,7 @@
 - `electron/ipc/agent.cjs:462-467`：`out.limitReached / out.wrapUp / out.contextTrims`。
 - `src/store/chatStore.ts:176`：`limitReached` 时**照常交付这轮回答**（并在 toast 里说明「达到步数上限 + 可续跑」），不再走「调用失败」分支。
 - `src/components/WorkbenchDock.tsx:22`：`isResumableRun()` 把 `interrupted` 与 `state==='LIMIT_REACHED'` 一起列进「可续跑」，标题也改成「可续跑的 Agent 运行（中断 / 达到步数上限）」。
-**回归测试**：`scripts/limit-wrapup-test.cjs`（进 CORE `test:limit-wrapup`，16 条断言）
+**回归测试**：`scripts/core/limit-wrapup-test.cjs`（进 CORE `test:limit-wrapup`，16 条断言）
 - 纯函数：结构化字段真实、失败带码、涉及文件去重、写清续跑方式、零进展时不编造。
 - 真实循环：迭代上限（`iteration_limit` + `LIMIT_REACHED` + content 含收尾）、工具调用上限（`tool_limit`）、
   半截回答保留（`先读两个文件：` + 收尾）、失败调用进收尾（`FATAL_FAILURE`）、`limit_reached` delta。
@@ -107,7 +107,7 @@
 - `pricePrecision()`（`electron/costLedger.cjs:99`）→ `cost.snapshot().pricePrecision = 'single-rate' | 'cached-aware'`，
   让界面/日志能如实说清「这是统一单价估算」还是「命中感知计费」。
 - `tokenParts.reasoning` + 计数器的 `reasoningTokens`：**只做观测，不重复计入金额**（DeepSeek 已把它算进 completion）。
-**回归测试**：`scripts/cost-monitor-test.cjs`（原有 `test:cost` 内新增 H1–H6，共 6 条）
+**回归测试**：`scripts/core/cost-monitor-test.cjs`（原有 `test:cost` 内新增 H1–H6，共 6 条）
 命中感知算例（900k 命中 ×0.2 + 100k 未命中 ×2 = $0.38）、未配命中价退回旧口径（$2）、OpenAI 口径、reasoning 单独记录且不重复计价、快照精度标注。
 **是否与其他问题重复**：无。
 
@@ -120,7 +120,7 @@
 - `electron/tools/toolkit.cjs:22-45` 的 `BUILTINS` 共 22 个模块，**不含** `createNodesTool.cjs` / `workbenchConnectTool.cjs`；
   实测 `buildDefaultRegistry()` 只出 **24** 个工具名（`buildDefaultRegistry` 输出），其中没有 `create_nodes` / `workbench_connect`。
   `registry.register('create_nodes'…)` 确实写在这两个文件里（`impl/createNodesTool.cjs:40`、`impl/workbenchConnectTool.cjs:11`），但**无人 require**。
-- 这不是「忘了接」：`scripts/tool-contract-closure-test.cjs:148-165` 有断言 C6/C7 把这两个文件列入「未接入白名单」并锁住
+- 这不是「忘了接」：`scripts/core/tool-contract-closure-test.cjs:148-165` 有断言 C6/C7 把这两个文件列入「未接入白名单」并锁住
   （新增同类未接入文件会红）→ 属于**已知并有意**的状态。
 - 但下游清单/文档仍把它们当现役工具：
   - `README.md:165` 把 `create_nodes`/`workbench_connect` 列进「变更类工具」；
@@ -163,7 +163,7 @@
 - `ipc/agent.cjs:300` 改为按当前用户消息检索注入；`recall` 工具（`impl/memoryTool.cjs:22-40`）复用同一打分口径，
   且无命中时不再把「最近的记忆」冒充为匹配结果。
 - **如实标注**：这仍是项目级、关键词打分的记忆，不是跨项目用户记忆，也不是语义向量检索。
-**回归测试**：`scripts/memory-recall-test.cjs`（进 CORE `test:memory-recall`，12 条断言）
+**回归测试**：`scripts/core/memory-recall-test.cjs`（进 CORE `test:memory-recall`，12 条断言）
 中英分词、权重序（key>tags>content）、相关但更旧的条目胜出、无命中退回最近且标 `matched:false`、
 **35 条时最旧的相关条目仍被注入（旧实现 `slice(-30)` 会丢掉它）**、真实 `remember`→`recall` 链路。
 **是否与其他问题重复**：无（与向量检索 `retrieve_context` 是两套东西，本项只修注入/召回口径）。
@@ -194,7 +194,7 @@
   结果状态如实标 `cancelled`（不再是统一的「信号中断」），并写入 `subagent_cancel` 审计；`descriptor.cjs:30/86` 补只读门与能力声明
   （与 `get_subagent_task` 同类，不改工作区）。对已结束的任务返回明确错误，不静默成功。
 - （b）缺 UI、（c）任务视图不持久化：**仍待做**（需要产品决策：是否把子代理做成一级可观测对象）。
-**回归测试**：`scripts/subagent-test.cjs` 新增一段（真实 SubagentManager + 真实注册表）：
+**回归测试**：`scripts/core/subagent-test.cjs` 新增一段（真实 SubagentManager + 真实注册表）：
 并行两个子任务 → 只取消挂起的那个 → 被取消者 `status='cancelled'` 且原因含「主动取消」、另一个 `status='done'`、
 **父 signal 未被带崩**；对已结束任务再取消 → 明确报「已结束」。
 **是否与其他问题重复**：与第 2 项（主 Run 收尾）不同层，但共用「结果要如实交付」这条原则。
@@ -221,7 +221,7 @@
 ③ Windows 上 `C:\Program Files\...` 这类路径直接失败。
 **现有保护**：1MiB 响应上限、整体超时（`timeoutMs`，默认 120s）、取消传播、沙箱包装 spawn、扩展工具默认按「可写」注册（fail-closed）且每次调用都要用户确认。
 **最小修复（已实施）**：握手校验（`initialize` 应答/超时/error 三态分别处理）+ 命令解析失败时给出「路径含空格请加引号」的提示。
-**回归测试**：`scripts/mcp-handshake-test.cjs`（新增，进 CORE `test:mcp-handshake`）：
+**回归测试**：`scripts/core/mcp-handshake-test.cjs`（新增，进 CORE `test:mcp-handshake`）：
 ① server 不回 `initialize` → 调用**必须失败**且错误提到握手（回归锁住旧行为）；② server 正常握手 → 调用成功；
 ③ `initialize` 返回 error → 透出 server 的错误；④ 未加引号的含空格路径 → 报错提示加引号（不再冒成 `ENOENT`）。
 **是否与其他问题重复**：与第 10 项（限流）无关。
@@ -265,7 +265,7 @@ UI 提示「更早的对话未随本次请求发送，需要时可以让 Agent �
 **现有保护**：大小上限让最坏情况有界；worker 化的是遍历/PDF 这类真·重活；`edit_file` 也是原子写（`atomicWriteFile` + `.bak`）。
 **最小修复（已实施）**：把 `readTextFileSafe` 的原因**如实透出**（超上限时明确说「超过 2MB 上限，请用 offset 分段 / search_files 定位」，
 不再冒充「二进制或不可读」），并在 `read_file` 描述里说明上限。
-**回归测试**：`scripts/read-file-limits-test.cjs`（新增，进 CORE `test:read-file-limits`，7 条断言）：
+**回归测试**：`scripts/core/read-file-limits-test.cjs`（新增，进 CORE `test:read-file-limits`，7 条断言）：
 >2MB 文本 → 报「超过上限」且**不含**「二进制」字样；二进制文件 → 仍报二进制；非 UTF-8 → 报编码问题；2MB 内正常文件 → 照常读到内容。
 **是否与其他问题重复**：无。
 
@@ -301,7 +301,7 @@ UI 提示「更早的对话未随本次请求发送，需要时可以让 Agent �
   `electron/agent.cjs:849-870`）会保留原文。三者都是**有意行为**，不是「实现错误」。
 - 真正的缺口不是配额语义，而是**配额用尽后没有第二道闸** —— 这一条已由第 1 项的上下文预算补上（两者互补：压缩保质量、预算保上限）。
 **最小修复**：把配额语义写进配置样例注释（已做：`config/agent.properties.example`），避免下一个人按「条数」误读。
-**回归测试**：`scripts/compression-batch-test.cjs`（既有）+ 第 1 项的 `test:context-budget`（覆盖「配额用尽后仍不超窗」）。
+**回归测试**：`scripts/core/compression-batch-test.cjs`（既有）+ 第 1 项的 `test:context-budget`（覆盖「配额用尽后仍不超窗」）。
 
 ---
 

@@ -13,6 +13,9 @@
 *.bin binary
 *.cnode binary
 
+# 冻结评测材料按原始字节校验，不能自动转换行尾。
+baselines/** binary
+
 # 生成的评测报告与临时产物不纳入 diff 噪音
 docs/eval-reports/** linguist-generated=true
 package-lock.json -diff linguist-generated=true

@@ -36,7 +36,7 @@
 - 类型与桥：`preload.cjs` 的四条方法、`global.d.ts` 的方法声明与两个预设/测试 DTO。
 
 保留（都属于「不是界面、也不是网络行为」的部分）：`electron/modelProtocol.cjs` 的协议翻译、
-`bin/codenode-agent.cjs` 与 `scripts/agent-eval.cjs` / `provider-smoke.cjs` 的 `*_PROTOCOL/_AUTH/_ENDPOINT`
+`bin/codenode-agent.cjs` 与 `scripts/eval/agent-eval.cjs` / `provider-smoke.cjs` 的 `*_PROTOCOL/_AUTH/_ENDPOINT`
 环境变量覆盖（headless / CI 真机档）、`config/agent.properties.example` 里的可选配置键。
 
 ## 判据（`npm run test:model-protocol`，**79 条断言**；核心套件仍 104 项）

@@ -29,8 +29,8 @@ agent.subagent.model.explorer=<已接入模型 ID>
 
 ## 验证
 
-- `scripts/token-cost-policy-test.cjs`：真实本地 HTTP 调用验证连接隔离、角色优先级、父预算、零请求准入、无重复记账、重启持久化、失败成本与未知价格。
-- `scripts/token-cost-ui-test.cjs`：实际 Electron IPC 保存／重新打开，五角色下拉框与开关，昼夜一致，会话、草稿、主模型及侧栏状态保留。
+- `scripts/core/token-cost-policy-test.cjs`：真实本地 HTTP 调用验证连接隔离、角色优先级、父预算、零请求准入、无重复记账、重启持久化、失败成本与未知价格。
+- `scripts/ui/token-cost-ui-test.cjs`：实际 Electron IPC 保存／重新打开，五角色下拉框与开关，昼夜一致，会话、草稿、主模型及侧栏状态保留。
 - 日志与主题截图：`out/token-cost-policy.log`、`out/token-cost-ui.log`、`out/token-cost-settings-light.png`、`out/token-cost-settings-dark.png`。
 
 未给出整体节省百分比；真实收益需在相同任务与验收标准下比较完成成本。

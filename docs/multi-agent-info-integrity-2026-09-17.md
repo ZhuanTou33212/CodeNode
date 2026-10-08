@@ -80,7 +80,7 @@
 - 统一事件流（`.codenode/events.jsonl`）+ 每步 `tool_intent/tool_commit`（`runCheckpoint`）
   = 「谁、在什么时间、基于哪个状态、做了什么」的完整账本。
 - 合并顺序用**确定性排序键**（事件 seq + msgId），不用墙钟/返回顺序。
-- 出问题时的第一现场是**回放**（`scripts/event-replay.cjs`），不是问 agent "你刚才做了什么"。
+- 出问题时的第一现场是**回放**（`scripts/tools/event-replay.cjs`），不是问 agent "你刚才做了什么"。
 
 ## 6. 反模式（明确别做）
 
@@ -110,7 +110,7 @@
 ## 8. P1 已落地：子代理结果的单一 JSON 信封（2026-09-17）
 
 实现：`electron/subagentEnvelope.cjs`（契约构建/校验/渲染 + 产物哈希）+ `electron/subagents.cjs`
-完成路径；用例 `scripts/subagent-envelope-test.cjs`（13 段，进 CORE）。
+完成路径；用例 `scripts/core/subagent-envelope-test.cjs`（13 段，进 CORE）。
 
 ```jsonc
 {
@@ -153,7 +153,7 @@
 
 实现：`electron/subagentEnvelope.cjs` 的 `verifyEnvelope(envelope, {projectRoot, model})`
 + `SubagentManager` 的 `get_subagent_task`（每次读取都重算，返回 `verification`）。
-用例：`scripts/multi-agent-integrity-test.cjs` 的 B 段（含端到端拒收）。
+用例：`scripts/core/multi-agent-integrity-test.cjs` 的 B 段（含端到端拒收）。
 
 **为什么必须在接收侧做**：信封里的 `evidence.files[].sha256` 与 `snapshot.hash` 都是**报告那一刻**测出来的；
 报告之后文件可能被改、画布可能被改 —— 只看信封永远看不出来，必须**重算再比**。

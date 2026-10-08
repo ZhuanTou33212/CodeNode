@@ -12,7 +12,7 @@
  *   npm i @zilliz/milvus2-sdk-node
  * 之后 `npm run dist:win` 会把该依赖一并打进产物（electron-builder 默认包含生产依赖）。
  *
- * 测试：可注入 client（`options.client`）——scripts/vector-store-test.cjs 用假客户端
+ * 测试：可注入 client（`options.client`）——scripts/core/vector-store-test.cjs 用假客户端
  * 覆盖建表/写入/删除/检索/维度校验全部分支，无需真实 Milvus；真实服务端到端由
  * MILVUS_ADDR 环境变量守卫（未设置则明确 SKIP，不静默通过）。
  */

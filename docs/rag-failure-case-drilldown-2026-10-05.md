@@ -20,7 +20,7 @@
 
 原始评测保存了最终答复、被拒草稿、最终 grounding 和完整参考证据覆盖标记，但没有逐次工具调用和每次校验的完整记录。安全拒答 fallback 又可能覆盖初始判定结果。因此不能回头声称知道原始 3 道缺证题的第一跳原因，也不能从最终 abstained 反推出原草稿为什么失败。
 
-新增 `scripts/rag-agent-case-diagnostic.cjs`，对 S04、S19、X11、X13、N22、N27 六题复跑。使用原冻结 after runtime、同模型、原题集和 production/native-read-only 配置；新增完整工具序列、来源池、对话与 grounding 事件记录。诊断为新的随机运行，不替换原始 100 题，不计入新通过率。
+新增 `scripts/eval/rag-agent-case-diagnostic.cjs`，对 S04、S19、X11、X13、N22、N27 六题复跑。使用原冻结 after runtime、同模型、原题集和 production/native-read-only 配置；新增完整工具序列、来源池、对话与 grounding 事件记录。诊断为新的随机运行，不替换原始 100 题，不计入新通过率。
 
 结果：3/6 通过（S04、S19、N27），3/6 未通过（X11、X13、N22），执行/评分错误 0。复跑改变了轨迹，不能用新轨迹冒充原运行。
 

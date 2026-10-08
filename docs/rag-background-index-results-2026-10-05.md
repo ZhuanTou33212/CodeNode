@@ -45,8 +45,8 @@ worker 需要真实文件路径，部署到 app.asar.unpacked。RAG、内存向�
 
 ## 回归与结果文件
 
-- `scripts/rag-scan-worker-test.cjs`：同步结果等价、关系图、暖缓存复用、强制失效、删除、修改中重扫、回传完成时取消、排队取消隔离、资源文件配额和心跳。
-- `scripts/rag-packaged-worker-test.cjs`：实际 ASAR worker 依赖闭包。
+- `scripts/core/rag-scan-worker-test.cjs`：同步结果等价、关系图、暖缓存复用、强制失效、删除、修改中重扫、回传完成时取消、排队取消隔离、资源文件配额和心跳。
+- `scripts/packaged/rag-packaged-worker-test.cjs`：实际 ASAR worker 依赖闭包。
 - `out/rag-worker-5000-full-chain.log`：发现剩余主线程停顿的记录。
 - `out/rag-worker-main-phases.log`：提交/评分计时。
 - `out/rag-worker-5000-backpressure.log`：背压后的完整链结果。

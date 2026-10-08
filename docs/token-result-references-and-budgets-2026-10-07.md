@@ -24,11 +24,11 @@ agent.subagent.budget.explorer.maxOutputTokens=8192
 
 ## 对比口径与验证
 
-`scripts/token-result-reference-test.cjs` 驱动真实工具循环，分别关闭／开启引用；两侧工具参数、模型响应序列、最终结果、调用轮数和完整数据相同。对序列化请求使用相同输入 token 估算，并将受控用量写入账本。它测量输入请求规模，没有调用真实商业模型，不证明模型质量、实际账单或全部任务的平均节省。
+`scripts/core/token-result-reference-test.cjs` 驱动真实工具循环，分别关闭／开启引用；两侧工具参数、模型响应序列、最终结果、调用轮数和完整数据相同。对序列化请求使用相同输入 token 估算，并将受控用量写入账本。它测量输入请求规模，没有调用真实商业模型，不证明模型质量、实际账单或全部任务的平均节省。
 
 重复读取用例：4 轮请求、3 次读取；估算输入从 112105 降至 60724，减少 45.83%。输出与工具原始数据一致；来源被替换、移出或压缩后失效，正文裁剪后重取恢复。详见 `out/token-result-reference-comparison.json`、`out/token-result-reference.log`。
 
-角色预算在真实 HTTP 请求与 Electron 聊天 IPC 中验证，包括保存预设、重新打开、昼夜控件一致、会话／草稿／主模型／侧栏状态保留。相关用例：`scripts/token-cost-policy-test.cjs`、`scripts/token-cost-ui-test.cjs`。
+角色预算在真实 HTTP 请求与 Electron 聊天 IPC 中验证，包括保存预设、重新打开、昼夜控件一致、会话／草稿／主模型／侧栏状态保留。相关用例：`scripts/core/token-cost-policy-test.cjs`、`scripts/ui/token-cost-ui-test.cjs`。
 
 ## 最终交付
 

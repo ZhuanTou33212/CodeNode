@@ -1,0 +1,24 @@
+const assert = require('node:assert/strict');
+const { capabilities } = require("../../electron/modelEffort.cjs");
+const { discover } = require("../../electron/providerModels.cjs");
+const { buildRequest } = require("../../electron/modelProtocol.cjs");
+(async () => {
+  assert.equal(require("../../electron/modelStore.cjs").maskApiKey('sk-e5fd0xxxxxxxx20f9'), 'sk-e5fd0*****20f9');
+  assert.equal(require("../../electron/modelStore.cjs").maskApiKey('short'), '*****');
+  assert.deepEqual(capabilities({model:'deepseek-flash'}).effortLevels,['low','high','max']);
+  assert.deepEqual(capabilities({model:'gpt-6.1-sol'}).effortLevels,['low','medium','high','xhigh','max']);
+  assert.deepEqual(capabilities({model:'gpt-6-sol'}).effortLevels,['none','low','medium','high','xhigh','max']);
+  assert.deepEqual(capabilities({model:'unknown-model'}).effortLevels,[]);
+  const listed = await discover('deepseek','test-key',async()=>({status:200,text:JSON.stringify({data:[{id:'future-model',effort:{supported_levels:['minimal','high','ultra'],default_level:'ultra'}}]})}));
+  assert.deepEqual(listed[0].effortLevels,['minimal','high','ultra']);
+  assert.equal(listed[0].defaultEffort,'ultra');
+  const cfg = {apiBase:'https://api.example',apiKey:'test-key',maxTokens:8192,model:'claude-opus-4-7',protocol:'anthropic',reasoningEffort:'xhigh'};
+  const claude = buildRequest(cfg,[{role:'user',content:'test'}],{tools:[]}).body;
+  assert.deepEqual(claude.output_config,{effort:'xhigh'});
+  assert.deepEqual(claude.thinking,{type:'adaptive'});
+  const gemini = buildRequest({...cfg,model:'gemini-3-flash-preview',protocol:'gemini',reasoningEffort:'minimal'},[{role:'user',content:'test'}],{tools:[]}).body;
+  assert.deepEqual(gemini.generationConfig.thinkingConfig,{thinkingLevel:'minimal'});
+  const deepseek = buildRequest({...cfg,model:'deepseek-flash',protocol:'openai',reasoningEffort:'max'},[{role:'user',content:'test'}],{tools:[]}).body;
+  assert.equal(deepseek.reasoning_effort,'max');
+  console.log('MODEL EFFORT: PASS (vendor metadata, distinct levels and native request parameters)');
+})().catch(error=>{console.error(error);process.exitCode=1;});

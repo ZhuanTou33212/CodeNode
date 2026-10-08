@@ -20,8 +20,8 @@ LocalRagIndex 与 retrieve_context 默认路径已停止调用 assessAnswerabili
 命令形式：
 
 ```powershell
-node scripts/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-before-runtime --limit=100 --runtime-profile=production --system-prompt=native-read-only --token-budget=8000000 --confirm-send --out=out/rag-stages-before-100.json
-node scripts/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-after-runtime --limit=100 --runtime-profile=production --system-prompt=native-read-only --token-budget=8000000 --confirm-send --out=out/rag-stages-after-100.json
+node scripts/eval/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-before-runtime --limit=100 --runtime-profile=production --system-prompt=native-read-only --token-budget=8000000 --confirm-send --out=out/rag-stages-before-100.json
+node scripts/eval/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-after-runtime --limit=100 --runtime-profile=production --system-prompt=native-read-only --token-budget=8000000 --confirm-send --out=out/rag-stages-after-100.json
 ```
 
 必须以 finishedAt 存在、100 个唯一题号完成为完整结果。两组题号运行均已终态。修改前完整执行/评分 100 题；修改后首批仅 90 题完成执行与评分，N21 评分与 N22–N30 执行曾收到 DeepSeek HTTP 402 Insufficient Balance。用户确认余额恢复后，于 2026-10-05 10:19:59 UTC 完成同冻结运行时、同模型、同评分器的 10 题补跑。运行时与评分脚本 SHA256、题集、压缩和单题预算已核对一致；仅替换余额失败记录，合并结果 100 个唯一题号全部完成执行与评分，错误均为 0。合并为两批，不能描述为一次连续运行。
@@ -55,7 +55,7 @@ node scripts/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-after-runtime
 已实际执行的补跑命令：
 
 ```powershell
-node scripts/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-after-runtime --ids=N21,N22,N23,N24,N25,N26,N27,N28,N29,N30 --limit=100 --runtime-profile=production --system-prompt=native-read-only --token-budget=1000000 --confirm-send --out=out/rag-stages-after-balance-recovery-10.json
+node scripts/eval/rag-agent-task-eval.cjs --runtime-root=out/rag-stages-after-runtime --ids=N21,N22,N23,N24,N25,N26,N27,N28,N29,N30 --limit=100 --runtime-profile=production --system-prompt=native-read-only --token-budget=1000000 --confirm-send --out=out/rag-stages-after-balance-recovery-10.json
 ```
 
 补跑及合并已完成，原始与补跑来源均保留，未更换模型。合并脚本 out/merge-rag-stage-recovery.cjs 校验补跑仅覆盖原 HTTP 402 失败题、10 个唯一题号、每题执行与评分成功、冻结代码/模型/评分器一致，并拒绝覆盖已有合并报告。正样本 70 题的源记录保留，不重跑或择优选择。

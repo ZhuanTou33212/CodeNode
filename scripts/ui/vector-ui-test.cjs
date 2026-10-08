@@ -1,0 +1,715 @@
+/**
+ * 画布节点（矢量画布）—— 端到端 UI 验收脚本
+ * 用法：node scripts/ui/vector-ui-test.cjs；默认自动准备独立的静态构建快照。
+ * 驱动无头 Edge 通过 CDP 操作真实 DOM / React 事件，验证关键验收项。
+ *
+ * 重构后矢量画布不再单独占一栏，而是嵌在 Agent 画布上的「画布节点」里：
+ *  - 左上角切换 设计 / 逻辑 模式
+ *  - 左侧工具 + 预设配件，可用预设配件自由绘制
+ *  - 保持 Blender 风格节点外观与左右端口
+ */
+/* eslint-disable no-console */
+const { spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+let BASE = process.env.VECTOR_TEST_URL || '';
+// 默认由操作系统分配空闲端口，避免并发回归撞上旧调试进程。
+let PORT = Number(process.env.VECTOR_TEST_PORT) || 0;
+const EDGE = process.env.VECTOR_TEST_EDGE || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-vec-'));
+const ROOT_DIR = path.join(__dirname, "../..");
+
+let rendererServer = null;
+
+/**
+ * 静态快照不接收 HMR：并发修改源码不能重置正在测试的会话/画布。
+ * 显式 VECTOR_TEST_URL 仍可选择外部被测页面。
+ */
+async function ensureRendererServer() {
+  if (BASE) return;
+  const dist = path.join(ROOT_DIR, 'dist');
+  if (!fs.existsSync(path.join(dist, 'index.html'))) {
+    const build = spawnSync(process.execPath, [path.join(ROOT_DIR, 'node_modules/vite/bin/vite.js'), 'build'],
+      { cwd: ROOT_DIR, encoding: 'utf8', timeout: 60000, windowsHide: true });
+    if (build.status !== 0) throw new Error('无法准备被测构建：' + String(build.stderr || build.error || build.stdout).slice(-3000));
+  }
+  const snapshot = path.join(PROFILE, 'renderer');
+  fs.cpSync(dist, snapshot, { recursive: true });
+  const http = require('node:http');
+  const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+  rendererServer = http.createServer((request, response) => {
+    try {
+      const relative = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname).replace(/^\/+/, '') || 'index.html';
+      const file = path.resolve(snapshot, relative);
+      if (!file.startsWith(snapshot + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        response.writeHead(404); response.end(); return;
+      }
+      response.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      response.end(fs.readFileSync(file));
+    } catch { response.writeHead(400); response.end(); }
+  });
+  await new Promise((resolve, reject) => {
+    rendererServer.once('error', reject);
+    rendererServer.listen(0, '127.0.0.1', resolve);
+  });
+  const address = rendererServer.address();
+  if (!address || typeof address === 'string') throw new Error('无法启动被测页面服务器');
+  BASE = 'http://127.0.0.1:' + address.port;
+  out('▶ 已准备隔离构建快照：' + BASE);
+}
+
+function stopRendererServer() {
+  rendererServer?.close();
+  rendererServer = null;
+}
+process.on('exit', stopRendererServer);
+
+/** 画布节点根选择器 */
+const NODE = '[data-testid="vector-node"]';
+
+let browser = null;
+let passed = 0;
+let failed = 0;
+const failures = [];
+
+/** 同步输出：避免 process.exit() 截断管道里未 flush 的 stdout。 */
+function out(line) {
+  try {
+    fs.writeSync(1, String(line) + '\n');
+  } catch {
+    console.log(line);
+  }
+}
+
+function err(line) {
+  try {
+    fs.writeSync(2, String(line) + '\n');
+  } catch {
+    console.error(line);
+  }
+}
+
+function ok(name, cond, extra = '') {
+  if (cond) {
+    passed += 1;
+    out(`  ✓ ${name}`);
+  } else {
+    failed += 1;
+    failures.push(name);
+    out(`  ✗ ${name} ${extra}`);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function startBrowser() {
+  if (!fs.existsSync(EDGE)) throw new Error('Edge 可执行文件不存在：' + EDGE);
+  if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error('VECTOR_TEST_PORT 必须是有效端口');
+  if (!PORT) {
+    const net = require('node:net');
+    PORT = await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (!address || typeof address === 'string') { server.close(); reject(new Error('无法分配调试端口')); return; }
+        server.close(error => error ? reject(error) : resolve(address.port));
+      });
+    });
+  }
+  let startupError = null, exited = false, exitCode = null, diagnostics = '';
+  browser = spawn(EDGE, [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-first-run',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--window-size=1500,950',
+    `--user-data-dir=${PROFILE}`,
+    `--remote-debugging-port=${PORT}`,
+    BASE,
+  ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  browser.once('error', error => { startupError = error; });
+  browser.once('exit', code => { exited = true; exitCode = code; });
+  const collect = data => { diagnostics = (diagnostics + String(data)).slice(-4096); };
+  browser.stdout.on('data', collect);
+  browser.stderr.on('data', collect);
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const spawnFailure = /** @type {Error|null} */ (startupError);
+    if (spawnFailure) throw new Error('Edge 启动失败：' + spawnFailure.message);
+    if (exited) throw new Error('Edge 在调试端口就绪前退出（exit=' + exitCode + '）：' + diagnostics.trim());
+    try {
+      const res = await fetch(`http://127.0.0.1:${PORT}/json`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) {
+        const targets = await res.json();
+        if (Array.isArray(targets) && targets.some(target => target.type === 'page' && String(target.url || '').startsWith(BASE))) return;
+      }
+    } catch { /* retry */ }
+    await sleep(300);
+  }
+  throw new Error('Edge CDP 未就绪（port=' + PORT + '，profile=' + PROFILE + '）：' + diagnostics.trim());
+}
+
+async function stopBrowser() {
+  stopRendererServer();
+  if (browser) {
+    // Windows 上 kill 主进程会留下子进程，用 taskkill /T 结束整棵进程树
+    try {
+      if (process.platform === 'win32' && browser.pid) {
+        spawn('taskkill', ['/PID', String(browser.pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
+        browser.kill();
+      }
+    } catch { /* ignore */ }
+    await sleep(600);
+  }
+  try {
+    if (path.dirname(PROFILE) !== path.resolve(os.tmpdir()) || !path.basename(PROFILE).startsWith('edge-vec-')) throw new Error('Unexpected profile cleanup path');
+    fs.rmSync(PROFILE, { recursive: true, force: true });
+  } catch { /* ignore */ }
+}
+
+class Cdp {
+  constructor(ws) {
+    this.ws = ws;
+    this.id = 0;
+    this.pending = new Map();
+    this.errors = [];
+    this.exceptions = [];
+    ws.addEventListener('message', (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.id && this.pending.has(msg.id)) {
+        const { resolve, reject } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message));
+        else resolve(msg.result);
+        return;
+      }
+      if (msg.method === 'Runtime.exceptionThrown') {
+        this.exceptions.push(msg.params.exceptionDetails?.text || 'exception');
+      }
+      if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
+        this.errors.push((msg.params.args || []).map((a) => a.value || a.description || '').join(' '));
+      }
+      if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
+        this.errors.push(msg.params.entry.text);
+      }
+    });
+  }
+
+  static async connect(url) {
+    const ws = new WebSocket(url);
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve, { once: true });
+      ws.addEventListener('error', reject, { once: true });
+    });
+    const cdp = new Cdp(ws);
+    await cdp.send('Runtime.enable');
+    await cdp.send('Log.enable');
+    await cdp.send('Page.enable');
+    return cdp;
+  }
+
+  send(method, params = {}) {
+    const id = ++this.id;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async eval(expression) {
+    const res = await this.send('Runtime.evaluate', {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+    });
+    if (res.exceptionDetails) {
+      throw new Error(`页面执行出错: ${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description || ''}`);
+    }
+    return res.result?.value;
+  }
+
+  close() {
+    try { this.ws.close(); } catch { /* ignore */ }
+  }
+}
+
+async function waitFor(cdp, expression, timeoutMs = 8000, label = expression) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      last = await cdp.eval(expression);
+      if (last) return last;
+    } catch (e) {
+      last = String(e);
+    }
+    await sleep(120);
+  }
+  // 超时信息带上真实 DOM 片段：应用改了启动流程时，报错能直接看出当时渲染的是什么
+  let snapshot = '';
+  try {
+    snapshot = await cdp.eval(`(() => {
+      const body = document.body;
+      if (!body) return '(no body)';
+      const cls = [...body.querySelectorAll('[class]')].slice(0, 12).map((el) => el.className).join(' | ');
+      return (body.innerHTML || '').slice(0, 300) + '\\n--- class 样本: ' + cls;
+    })()`);
+  } catch (e) {
+    snapshot = 'DOM 读取失败: ' + String(e);
+  }
+  throw new Error(`等待超时: ${label} (last=${JSON.stringify(last)})\n--- 当时 DOM ---\n${snapshot}`);
+}
+
+/**
+ * React Flow 会对节点整体做 CSS scale；屏幕像素与 SVG 本地像素因此不是 1:1。
+ * 从 viewport 的 transform 里读出缩放比例，用于把世界坐标换算成真实 client 坐标。
+ */
+async function readStageScale(cdp) {
+  return cdp.eval(`(() => {
+    const el = document.querySelector('.react-flow__viewport');
+    const m = el && /scale\\(([-0-9.]+)\\)/.exec(el.style.transform || '');
+    return m ? parseFloat(m[1]) : 1;
+  })()`);
+}
+
+/**
+ * 等画布视口动画停下：工具栏放置节点后会做 240ms 的 rfSetViewport 动画，
+ * 动画期间节点会缩放/平移，按「世界坐标 → client 坐标」派发的拖拽会整体漂掉
+ * （实测同一个 160×110 的拖拽被记成 564×359 —— zoom 从 ~1.9 动画到 0.55 的比值）。
+ * 判据用节点自身的 bounding rect 连续两次一致，与实现无关。
+ */
+async function waitForViewportIdle(cdp, timeoutMs = 4000) {
+  const read = () =>
+    cdp.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(NODE)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)].join(',');
+    })()`);
+  let last = await read();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(160);
+    const now = await read();
+    if (now && now === last) return;
+    last = now;
+  }
+}
+
+/** 在画布节点的 svg 上按世界坐标派发一次真实点击（pointerdown + pointerup，不移动） */
+async function clickWorld(cdp, world) {
+  await waitForViewportIdle(cdp);
+  const scale = await readStageScale(cdp);
+  return cdp.eval(`(() => {
+    const svg = document.querySelector(${JSON.stringify(NODE)} + ' .vs-svg');
+    if (!svg) return 'no-svg';
+    const rect = svg.getBoundingClientRect();
+    const st = window.__codenodeVectorNode(document.querySelector('.react-flow__node-vector').dataset.id).getState();
+    const scale = ${scale};
+    const p = {
+      x: rect.left + (st.pan.x + ${JSON.stringify(world)}.x * st.zoom) * scale,
+      y: rect.top + (st.pan.y + ${JSON.stringify(world)}.y * st.zoom) * scale,
+    };
+    const opts = { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 1, clientX: p.x, clientY: p.y };
+    const hit = document.elementFromPoint(p.x, p.y);
+    const el = hit && svg.contains(hit) ? hit : svg;
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 }));
+    return 'ok';
+  })()`);
+}
+
+/** 在画布节点的 svg 上按世界坐标派发一次指针拖动 */
+async function dragWorld(cdp, worldFrom, worldTo, button = 0, startSelector = null) {
+  await waitForViewportIdle(cdp);
+  const scale = await readStageScale(cdp);
+  return cdp.eval(`(async () => {
+    const svg = document.querySelector(${JSON.stringify(NODE)} + ' .vs-svg');
+    if (!svg) return 'no-svg';
+    const rect = svg.getBoundingClientRect();
+    const st = window.__codenodeVectorNode(document.querySelector('.react-flow__node-vector').dataset.id).getState();
+    const scale = ${scale};
+    const toClient = (w) => ({
+      x: rect.left + (st.pan.x + w.x * st.zoom) * scale,
+      y: rect.top + (st.pan.y + w.y * st.zoom) * scale,
+    });
+    const a = toClient(${JSON.stringify(worldFrom)});
+    const b = toClient(${JSON.stringify(worldTo)});
+    const opts = (x, y, extra = {}) => ({ bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: ${button}, buttons: 1, clientX: x, clientY: y, ...extra });
+    // 真实拖动里应用会 setPointerCapture，事件始终回到 svg；这里做同样的事，
+    // 否则浮层元素（如逻辑图例）会吞掉中途的 pointermove。
+    const at = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      return el && svg.contains(el) ? el : svg;
+    };
+    const startEl = ${startSelector ? `document.querySelector(${JSON.stringify(startSelector)})` : 'at(a.x, a.y)'} || at(a.x, a.y) || svg;
+    startEl.dispatchEvent(new PointerEvent('pointerdown', opts(a.x, a.y)));
+    const steps = 6;
+    for (let i = 1; i <= steps; i += 1) {
+      const x = a.x + ((b.x - a.x) * i) / steps;
+      const y = a.y + ((b.y - a.y) * i) / steps;
+      const el = at(x, y) || svg;
+      el.dispatchEvent(new PointerEvent('pointermove', opts(x, y)));
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    const upEl = at(b.x, b.y) || svg;
+    upEl.dispatchEvent(new PointerEvent('pointerup', opts(b.x, b.y)));
+    return 'ok';
+  })()`);
+}
+
+async function clickEl(cdp, selector, index = 0) {
+  return cdp.eval(`(() => {
+    const els = document.querySelectorAll(${JSON.stringify(selector)});
+    if (!els[${index}]) return 'missing:' + ${JSON.stringify(selector)};
+    const el = els[${index}];
+    if (typeof el.click === 'function') el.click();
+    else el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    return 'ok';
+  })()`);
+}
+
+async function keyOnWindow(cdp, key, ctrl = false, shift = false) {
+  return cdp.eval(`(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(key)}, ctrlKey: ${ctrl}, shiftKey: ${shift}, bubbles: true, cancelable: true }));
+    return 'ok';
+  })()`);
+}
+
+async function main() {
+  await ensureRendererServer();
+  out('▶ 启动无头 Edge…');
+  await startBrowser();
+  const targets = /** @type {any[]} */ (await fetch(`http://127.0.0.1:${PORT}/json`).then((r) => r.json()));
+  // 必须挑「被测应用」那个 target：Edge 启动时可能先开自己的内部页（#app-root + 混淆类名 + Edge logo），
+  // 直接取第一个 page target 会连到它上面，表现是一直等不到应用自己的元素（.gate / .toolbar）。
+  const pages = targets.filter((t) => t.type === 'page');
+  const page = pages.find((t) => String(t.url || '').startsWith(BASE)) || pages[0];
+  if (!page) throw new Error('没有可用的 page target（Edge 未起来？）');
+  if (!String(page.url || '').startsWith(BASE)) {
+    out(`  ⚠ 没有匹配 ${BASE} 的页面，退回第一个 page target：${page.url}`);
+  } else {
+    out(`  ✓ 已选中应用页面 ${page.url}`);
+  }
+  const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
+  out('▶ 页面已连接，等待应用加载…');
+
+  let nodeId = null;
+  /** 读取当前画布节点 store 状态表达式；g() 每次都会拿到最新 state，s 是进入时的快照 */
+  const vs = (expr) =>
+    cdp.eval(`(() => { const g = () => window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState(); const s = g(); return ${expr}; })()`);
+
+  try {
+    /* ========== 0. 基础加载 ========== */
+    /* 启动门禁：未打开工程时必须拦住工作台（本次新增的启动页契约） */
+    await waitFor(cdp, `!!document.querySelector('.gate')`, 9000, '启动门禁页出现');
+    ok('未打开工程时被启动门禁拦住（无工具栏 / 无画布）', await cdp.eval(`!document.querySelector('.toolbar') && !document.querySelector('.react-flow')`));
+    const gateBtns = await cdp.eval(`[...document.querySelectorAll('.gate-btn-title')].map((b) => b.textContent)`);
+    ok(`门禁页提供打开/新建工程入口（${JSON.stringify(gateBtns)}）`, gateBtns.length >= 2 && gateBtns[0].includes('打开工程') && gateBtns[1].includes('新建工程'));
+    // 等价于「打开工程」：直接把工程根目录载入，放行到工作台
+    await cdp.eval(`window.__codenodeProject.getState().loadRoot('E:\\\\demo')`);
+    await waitFor(cdp, `document.querySelector('.toolbar') && !!window.__codenodeVectorNode`);
+    out('— Agent 工作台已加载，画布节点 store 工厂已挂载');
+
+    /* ========== 1. 在画布上新增画布节点（不再单独占一栏） ========== */
+    ok('工具栏不再进入独立矢量工作区', await cdp.eval(`!/矢量设计工作室/.test(document.querySelector('.toolbar-vector').title)`));
+    await clickEl(cdp, '.toolbar-vector');
+    await waitFor(cdp, `!!document.querySelector(${JSON.stringify(NODE)})`, 6000, '画布节点挂载');
+    nodeId = await cdp.eval(`document.querySelector('.react-flow__node-vector').dataset.id`);
+    ok('画布节点直接出现在 Agent 画布上', Boolean(nodeId));
+    ok('工作台画布未被替换（无全屏工作区）', await cdp.eval(`!!document.querySelector('.react-flow') && !document.querySelector('.vs-app')`));
+    ok('节点类型为 vector，且带 Blender 风格端口', await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-handle').length === 2`));
+
+    /* ========== 2. 节点结构：左上角模式切换 + 预设配件 ========== */
+    ok('模式切换位于节点左上角', await cdp.eval(`document.querySelector(${JSON.stringify(NODE)} + ' .wf-vector-title').firstElementChild.classList.contains('wf-vector-modes')`));
+    const modeBtns = await cdp.eval(`[...document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-vector-mode')].map(b => b.textContent.trim())`);
+    ok(`模式按钮为 设计/逻辑（${JSON.stringify(modeBtns)}）`, modeBtns.length === 2 && modeBtns[0].includes('设计') && modeBtns[1].includes('逻辑'));
+    ok('初始为设计模式', await cdp.eval(`document.querySelector(${JSON.stringify(NODE)} + ' .wf-vector-mode').classList.contains('on')`));
+    ok('无限网格渲染（且无纸张矩形）', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-grid-layer') && !document.querySelector(${JSON.stringify(NODE)} + ' .vs-paper')`));
+    ok('左下角缩放控件渲染', await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-zoombar button').length === 4`));
+    ok('标尺渲染', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-ruler-top') && !!document.querySelector(${JSON.stringify(NODE)} + ' .vs-ruler-left')`));
+    const toolCount = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-vector-tool').length`);
+    const presetCount = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-vector-asset').length`);
+    ok(`工具 ${toolCount} 个 / 预设配件 ${presetCount} 个`, toolCount === 8 && presetCount === 6, `${toolCount}/${presetCount}`);
+    ok('节点文档初始为空白', (await vs('s.objects.length')) === 0, `objects=${await vs('s.objects.length')}`);
+
+    /* ========== 3. 用预设配件放置图形 ========== */
+    await clickEl(cdp, `${NODE} .wf-vector-asset`);
+    await waitFor(cdp, `window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().objects.length === 1`);
+    const presetInfo = await vs(`(() => { const o = s.objects[0]; return { type: o.type, sel: s.selectedIds.includes(o.id), name: o.name }; })()`);
+    ok('点击预设配件生成矩形并选中', presetInfo.type === 'rectangle' && presetInfo.sel, JSON.stringify(presetInfo));
+
+    /* ========== 4. 工具自由绘制：拖拽创建矩形 ========== */
+    await clickEl(cdp, `${NODE} .wf-vector-tool[title="矩形 (R)"]`);
+    const countBefore = await vs('s.objects.length');
+    const rectWorld = { x: 700, y: 420 };
+    await dragWorld(cdp, { x: rectWorld.x, y: rectWorld.y }, { x: rectWorld.x + 160, y: rectWorld.y + 110 });
+    await waitFor(cdp, `window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().objects.length === ${countBefore + 1}`);
+    ok('拖拽创建矩形', true);
+    const rectInfo = await vs(`(() => { const o = s.objects[s.objects.length-1]; return { type: o.type, w: o.width, h: o.height, sel: s.selectedIds.includes(o.id) }; })()`);
+    ok('矩形尺寸≈拖拽范围且被选中', rectInfo.type === 'rectangle' && Math.abs(rectInfo.w - 160) < 6 && Math.abs(rectInfo.h - 110) < 6 && rectInfo.sel, JSON.stringify(rectInfo));
+
+    /* ========== 5. 双击编辑文字 ========== */
+    const rectObj = await vs(`(() => { const o = s.objects[s.objects.length-1]; return { id: o.id, cx: o.x + o.width/2, cy: o.y + o.height/2 }; })()`);
+    const scale = await readStageScale(cdp);
+    await cdp.eval(`(() => {
+      const svg = document.querySelector(${JSON.stringify(NODE)} + ' .vs-svg');
+      const st = window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState();
+      const r = svg.getBoundingClientRect();
+      const p = { x: r.left + (st.pan.x + ${rectObj.cx} * st.zoom) * ${scale}, y: r.top + (st.pan.y + ${rectObj.cy} * st.zoom) * ${scale} };
+      const el = document.elementFromPoint(p.x, p.y) || svg;
+      el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, view: window }));
+      return 'ok';
+    })()`);
+    await waitFor(cdp, `!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-foreign-edit .vs-edit-input')`, 5000, '内联编辑框出现');
+    ok('双击矩形进入文字编辑', true);
+    await cdp.eval(`(() => { const input = document.querySelector(${JSON.stringify(NODE)} + ' .vs-foreign-edit .vs-edit-input'); const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; setter.call(input, '集合A'); input.dispatchEvent(new Event('input', { bubbles: true })); input.blur(); return 'ok'; })()`);
+    await waitFor(cdp, `window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().objects[window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().objects.length-1].text === '集合A'`, 4000, '文字写入');
+    ok('编辑文字实时写入对象', true);
+    ok('文字标签渲染在图形上', await cdp.eval(`[...document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-text-label tspan')].some(t => t.textContent === '集合A')`));
+
+    /* ========== 6. 撤销 / 重做（节点内历史，不与工作台冲突） ========== */
+    const beforeUndo = await vs('s.objects.length');
+    await cdp.eval(`window.__codenodeStore.getState().setSelectedIds([${JSON.stringify(nodeId)}])`);
+    await keyOnWindow(cdp, 'z', true);
+    await sleep(200);
+    const afterUndo = await vs('s.past.length');
+    ok('Ctrl+Z 作用于画布节点内容（不撤销工作台节点）', (await vs('s.objects.length')) <= beforeUndo && afterUndo >= 0);
+    await keyOnWindow(cdp, 'z', true, true);
+    await sleep(200);
+    ok('Ctrl+Shift+Z 重做', (await vs('s.objects.length')) === beforeUndo, `${beforeUndo} → ${await vs('s.objects.length')}`);
+
+    /* ========== 7. 模式切换到逻辑分析 ========== */
+    await clickEl(cdp, `${NODE} .wf-vector-mode`, 1);
+    await waitFor(cdp, `!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-logic')`, 6000, '逻辑面板');
+    ok('节点内左上角切换到逻辑模式', true);
+    ok('模式写回节点 data', (await cdp.eval(`window.__codenodeStore.getState().nodes.find(n => n.id === ${JSON.stringify(nodeId)}).data.mode`)) === 'logic');
+
+    // 载入示例工程 → 3 个集合参与分析
+    await clickEl(cdp, `${NODE} .wf-vector-mini[title="载入示例工程"]`);
+    await waitFor(cdp, `window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().objects.length >= 5`, 5000, '示例工程');
+    const setRows = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-set-row.on').length`);
+    ok(`默认 3 个集合参与分析（实际 ${setRows}）`, setRows === 3, `rows=${setRows}`);
+    const statsRows = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-region-row').length`);
+    ok(`区域统计表生成（${statsRows} 行）`, statsRows >= 1);
+    const relations = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-relation-row').length`);
+    ok(`两两关系列出（${relations} 条）`, relations >= 1);
+    const expr = await cdp.eval(`document.querySelector(${JSON.stringify(NODE)} + ' .vs-expr-value')?.textContent`);
+    ok(`表达式非空：${expr}`, Boolean(expr && !expr.includes('—')));
+
+    await clickEl(cdp, `${NODE} .vs-op`, 0);
+    await waitFor(cdp, `document.querySelector(${JSON.stringify(NODE)} + ' .vs-expr-value')?.textContent.includes('∪')`, 4000, '并集');
+    await sleep(200);
+    const unionArea = await cdp.eval(`Number((document.querySelector(${JSON.stringify(NODE)} + ' .vs-logic-legend b')?.textContent||'0').replace(/[^0-9]/g,''))`);
+    ok(`并集结果区 ${unionArea.toLocaleString()} px² 且画布高亮`, unionArea > 500 && (await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-logic-highlight')`)));
+
+    /* ========== 8. 逻辑模式实时联动：移动图形 → 结果面积变化 ========== */
+    const uBefore = await cdp.eval(`Number((document.querySelector(${JSON.stringify(NODE)} + ' .vs-logic-legend b')?.textContent||'0').replace(/[^0-9]/g,''))`);
+    const beta = await vs(`(() => { const o = s.objects.find(x => x.name.includes('Beta')); return o ? { id: o.id, cx: o.x + o.width/2, cy: o.y + o.height/2, x: o.x } : null; })()`);
+    ok('示例工程包含 Beta 集合', Boolean(beta));
+    await cdp.eval(`(() => { const st = window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState(); st.clearSelection(); if (st.snapOn) st.toggleSnap(); return 'ok'; })()`);
+    await dragWorld(cdp, { x: beta.cx, y: beta.cy }, { x: beta.cx - 110, y: beta.cy }, 0, `${NODE} .vs-obj[data-oid="${beta.id}"]`);
+    await sleep(600);
+    const betaAfter = await vs(`s.objects.find(o => o.id === ${JSON.stringify(beta.id)}).x`);
+    const uAfter = await cdp.eval(`Number((document.querySelector(${JSON.stringify(NODE)} + ' .vs-logic-legend b')?.textContent||'0').replace(/[^0-9]/g,''))`);
+    ok(`真实拖拽移动 Beta（-110，实际 ${Math.round(beta.x - betaAfter)}）`, beta.x - betaAfter > 90);
+    ok('并集结果面积随拖动实时更新', uAfter !== uBefore, `${uBefore} → ${uAfter}`);
+
+    /* ========== 9. 回到设计模式：属性 / 图层面板 ========== */
+    await clickEl(cdp, `${NODE} .wf-vector-mode`, 0);
+    await waitFor(cdp, `!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-right-tabs')`, 5000, '设计面板');
+    await cdp.eval(`(() => { const s = window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState(); s.selectIds([s.objects[0].id]); return 'ok'; })()`);
+    await clickEl(cdp, `${NODE} .vs-right-tabs button`, 0);
+    await waitFor(cdp, `!!document.querySelector(${JSON.stringify(NODE)} + ' .vs-props')`, 4000, '属性面板');
+    ok('右栏属性面板显示（选中对象）', await cdp.eval(`document.querySelector(${JSON.stringify(NODE)} + ' .vs-props').textContent.includes('变换')`));
+    await clickEl(cdp, `${NODE} .vs-right-tabs button`, 1);
+    await waitFor(cdp, `document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-layer-list .vs-layer-row').length > 0`, 4000, '图层行');
+    const layerRows = await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .vs-layer-list .vs-layer-row').length`);
+    ok(`图层面板列出 ${layerRows} 行`, layerRows >= 4, `实际 ${layerRows}`);
+
+    /* ========== 10. 图层操作：编组 / 解组 / 显隐 / 锁定 / 重命名 / 层级 ========== */
+    const gres = await vs(`(() => { g().selectIds(g().objects.slice(0,2).map(o => o.id)); g().groupSelected('测试组'); const s2 = g(); const g0 = s2.groups[s2.groups.length-1]; return g0 ? { name: g0.name, n: g0.memberIds.length, grouped: s2.objects.filter(o => o.groupId === g0.id).length } : null; })()`);
+    ok('多选编组成功', gres && gres.n === 2 && gres.grouped === 2, JSON.stringify(gres));
+    const ungroupOk = await vs(`(() => { g().selectIds(g().objects.slice(0,2).map(o => o.id)); g().ungroupSelected(); const s2 = g(); return s2.groups.length === 0 && s2.objects.every(o => !o.groupId); })()`);
+    ok('取消分组恢复独立图层', ungroupOk);
+    const visOk = await vs(`(() => { const id = g().objects[0].id; g().toggleVisible([id]); const v1 = !g().objects[0].visible; g().toggleVisible([id]); return v1 && g().objects[0].visible; })()`);
+    ok('图层显隐切换', visOk);
+    const lockOk = await vs(`(() => { const id = g().objects[1].id; g().toggleLocked([id]); const l1 = g().objects[1].locked; g().toggleLocked([id]); return l1 && !g().objects[1].locked; })()`);
+    ok('图层锁定切换', lockOk);
+    const renameOk = await vs(`(() => { g().renameLayer(g().objects[0].id, '改名图形'); return g().objects[0].name === '改名图形'; })()`);
+    ok('图层重命名', renameOk);
+    const orderOk = await vs(`(() => { const first = g().objects[0].id; g().selectIds([first]); const before = g().objects.map(o => o.id); g().reorderObjects([...before.slice(1), first], ''); return g().objects[g().objects.length-1].id === first; })()`);
+    ok('层级重排（底层移到最上层）', orderOk);
+
+    /* ========== 11. Delete 删除选中图形 ========== */
+    const n1 = await vs('s.objects.length');
+    // 真实点一下图形：既选中它，也让焦点落进画布节点（画布内快捷键的守卫要求焦点在 .vs-scope 内，
+    // 见 VectorNode.tsx 的 focusBodyOnPointerDown）；此前这里直接程序化 selectIds + 派发 Delete，
+    // 走的不是用户真实路径，Delete 会落到工作台的「删除选中节点」上，把整个画布节点删掉。
+    // The node inspector floats over this part of the canvas. Close it using
+    // its user control so elementFromPoint can hit the object itself.
+    await clickEl(cdp, '.side-panel .sp-close');
+    const firstObj = await vs(`(() => { const o = s.objects[0]; return { x: o.x + o.width / 2, y: o.y + o.height / 2 }; })()`);
+    await clickWorld(cdp, firstObj);
+    await waitFor(
+      cdp,
+      `window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().selectedIds.length === 1`,
+      3000,
+      '点击图形后被选中'
+    );
+    await keyOnWindow(cdp, 'Delete');
+    await sleep(200);
+    const n2 = await vs('s.objects.length');
+    ok('Delete 删除节点内选中图形（不删除画布节点）', n2 === n1 - 1, `${n1}→${n2}`);
+    ok('画布节点本身仍然存在', await cdp.eval(`!!document.querySelector('.react-flow__node-vector')`));
+
+    /* ========== 12. 持久化：文档写入节点专属 key ========== */
+    await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(nodeId)}).getState().saveProject()`);
+    await sleep(200);
+    const saved = await cdp.eval(`(() => { const raw = localStorage.getItem('codenode.vector.node.' + ${JSON.stringify(nodeId)}); return raw ? JSON.parse(raw).objects.length : -1; })()`);
+    ok(`画布节点文档保存到独立 localStorage（${saved} 个对象）`, saved === n2, `saved=${saved} expect=${n2}`);
+
+    /* ========== 13. 多个画布节点：各自独立文档 ========== */
+    const firstId = nodeId;
+    const firstCount = await vs('s.objects.length');
+    await clickEl(cdp, '.toolbar-vector');
+    await waitForViewportIdle(cdp);
+    await waitFor(cdp, `document.querySelectorAll('.react-flow__node-vector').length === 2`, 6000, '第二个画布节点');
+    const ids = await cdp.eval(`[...document.querySelectorAll('.react-flow__node-vector')].map(n => n.dataset.id)`);
+    const secondId = ids.find((x) => x !== firstId);
+    ok('可以再新增一个画布节点', Boolean(secondId), JSON.stringify(ids));
+    ok('两个画布节点 store 实例不同', await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(firstId)}) !== window.__codenodeVectorNode(${JSON.stringify(secondId)})`));
+    const secondCount = await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(secondId)}).getState().objects.length`);
+    ok(`新画布节点是独立空白文档（${firstCount} / ${secondCount}）`, firstCount > 0 && secondCount === 0);
+    await cdp.eval(`(() => {
+      const el = [...document.querySelectorAll('.react-flow__node-vector')].find(n => n.dataset.id === ${JSON.stringify(secondId)});
+      el.querySelector('.wf-vector-asset').click();
+      return 'ok';
+    })()`);
+    await waitFor(cdp, `window.__codenodeVectorNode(${JSON.stringify(secondId)}).getState().objects.length === 1`, 4000, '第二节点新增图形');
+    const firstAfter = await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(firstId)}).getState().objects.length`);
+    ok('在第二个节点绘制不影响第一个节点', firstAfter === firstCount, `${firstCount} → ${firstAfter}`);
+
+    /* ========== 14. 选中后可抓住边角手柄，实际放大整个画布节点 ========== */
+    await cdp.eval(`window.__codenodeStore.getState().setSelectedIds([${JSON.stringify(secondId)}])`);
+    await waitFor(cdp, `!!document.querySelector('.react-flow__node-vector[data-id="${secondId}"] .react-flow__resize-control.handle.bottom.right')`, 3000, '缩放手柄出现');
+    await waitForViewportIdle(cdp);
+    const resize = await cdp.eval(`(() => {
+      const node = document.querySelector('.react-flow__node-vector[data-id="${secondId}"]');
+      const handle = node.querySelector('.react-flow__resize-control.handle.bottom.right');
+      const r = handle.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const data = window.__codenodeStore.getState().nodes.find(n => n.id === ${JSON.stringify(secondId)}).data;
+      return { x, y, width: r.width, height: r.height, visible: getComputedStyle(node.querySelector('.wf-vector')).overflow === 'visible', hit: hit === handle || handle.contains(hit), nodeWidth: data.width || 1040, nodeHeight: data.height || 640 };
+    })()`);
+    ok('缩放手柄未被节点裁剪且能命中', resize.visible && resize.hit && resize.width >= 5, JSON.stringify(resize));
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resize.x, y: resize.y });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: resize.x, y: resize.y, button: 'left', clickCount: 1 });
+    for (let i = 1; i <= 5; i += 1) {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: resize.x + i * 16, y: resize.y + i * 12, button: 'left', buttons: 1 });
+      await sleep(25);
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: resize.x + 80, y: resize.y + 60, button: 'left', clickCount: 1 });
+    await waitFor(cdp, `(() => { const d = window.__codenodeStore.getState().nodes.find(n => n.id === ${JSON.stringify(secondId)}).data; return d.width > ${resize.nodeWidth + 30} && d.height > ${resize.nodeHeight + 20}; })()`, 3000, '拖动边角后尺寸变大');
+    ok('拖动边角会放大整个画布节点', true);
+    await cdp.eval(`window.__codenodeStore.getState().updateNodeData(${JSON.stringify(secondId)}, {width:650,height:460})`);
+    await sleep(250);
+    const compactLayout = await cdp.eval(`(() => { const node=document.querySelector('.react-flow__node-vector[data-id="${secondId}"]'); const rail=node.querySelector('.wf-vector-rail'); const dock=node.querySelector('.vs-node-dock'); return {railOverflow:rail.scrollWidth>rail.clientWidth, dockWidth:parseFloat(getComputedStyle(dock).width)}; })()`);
+    ok('窄节点工具栏无横向溢出且属性栏自动缩窄', !compactLayout.railOverflow && compactLayout.dockWidth <= 181, JSON.stringify(compactLayout));
+    await cdp.eval(`document.querySelector('.react-flow__node-vector[data-id="${secondId}"] [aria-label="放大节点并适应窗口"]').click()`);
+    await sleep(400);
+    const expanded = await cdp.eval(`(() => { const data=window.__codenodeStore.getState().nodes.find(n=>n.id===${JSON.stringify(secondId)}).data; const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(); return {width:data.width,height:data.height,expectedW:Math.max(560,Math.round(canvas.width-80)),expectedH:Math.max(380,Math.round(canvas.height-80))}; })()`);
+    ok('放大入口按可用窗口调整节点尺寸', expanded.width===expanded.expectedW && expanded.height===expanded.expectedH, JSON.stringify(expanded));
+
+    /* ========== 15. 样式归属：节点与连线用本地 Blender 那套，不被覆盖 ========== */
+    // 背景：n0_12 的「session surface」主题在后面又写了一遍 .wf-node/.wf-scope/.react-flow__edge-path
+    // 等选择器，同优先级下后写的会赢。这里锁死「节点样式 + 连线样式」必须来自本地那套。
+    await cdp.eval(`(() => {
+      const st = window.__codenodeStore.getState();
+      st.addNode({ id: 'style-task', type: 'task', position: { x: 80, y: 80 }, data: { label: '样式任务', status: 'running', prompt: 'p', subtitle: 'Task', accent: '#3b82f6' } });
+      st.addNode({ id: 'style-task2', type: 'task', position: { x: 420, y: 80 }, data: { label: '样式任务2', status: 'pending', prompt: 'p', subtitle: 'Task', accent: '#3b82f6' } });
+      st.addNode({ id: 'style-scope', type: 'scope', position: { x: 80, y: 320 }, data: { label: '样式范围', status: 'pending', accent: '#8b5cf6', width: 320, height: 200, fill: '#3b2f6b', opacity: 0.16, shrink: false } });
+      // 连线两端都必须是普通节点（scope 是纯 Frame，没有 socket，按设计不画边）
+      st.onConnect({ source: 'style-task', target: 'style-task2' });
+      return 'ok';
+    })()`);
+    await sleep(600);
+    const style = await cdp.eval(`(() => {
+      const q = (s) => document.querySelector(s);
+      const cs = (el) => (el ? getComputedStyle(el) : null);
+      const node = q('.react-flow__node-task .wf-node');
+      const title = q('.react-flow__node-task .wf-node-title');
+      const handle = q('.react-flow__node-task .wf-handle');
+      const edge = q('.react-flow__edge-path');
+      const scope = q('.react-flow__node-scope .wf-scope');
+      const nr = node && node.getBoundingClientRect();
+      const tr = title && title.getBoundingClientRect();
+      const n = cs(node); const t = cs(title); const h = cs(handle); const e = cs(edge); const sc = cs(scope);
+      return {
+        nodeRadius: n && n.borderTopLeftRadius,
+        nodeBgImage: n && n.backgroundImage,
+        nodePaddingTop: n && n.paddingTop,
+        nodePaddingX: n && n.paddingLeft + '/' + n.paddingRight,
+        nodeMinWidth: n && n.minWidth,
+        titleInsetL: nr && tr ? +(tr.left - nr.left).toFixed(2) : null,
+        titleInsetR: nr && tr ? +(nr.right - tr.right).toFixed(2) : null,
+        titleFontSize: t && t.fontSize,
+        handleW: h && h.width,
+        edgeStroke: e && e.stroke,
+        edgeStrokeWidth: e && e.strokeWidth,
+        edgeLinecap: e && e.strokeLinecap,
+        scopeRadius: sc && sc.borderTopLeftRadius,
+      };
+    })()`);
+    ok(`节点圆角用本地 7px（实际 ${style.nodeRadius}）`, style.nodeRadius === '7px');
+    ok('节点背景没有被覆盖成渐变', style.nodeBgImage === 'none');
+    ok(`节点内边距用本地 0/10px（实际 ${style.nodePaddingTop} ${style.nodePaddingX}）`, style.nodePaddingTop === '0px' && style.nodePaddingX === '10px/10px');
+    ok(`节点 min-width 用本地 160px（实际 ${style.nodeMinWidth}）`, style.nodeMinWidth === '160px');
+    // 标题栏应落在节点内（左右对称、不为负即未凸出）；数值随画布缩放变化，故只校验对称与不凸出
+    ok(`标题栏不凸出节点（左右 inset ${style.titleInsetL}/${style.titleInsetR}）`, style.titleInsetL > 0.3 && style.titleInsetR > 0.3 && Math.abs(style.titleInsetL - style.titleInsetR) < 0.3);
+    ok(`标题字号用本地 12px（实际 ${style.titleFontSize}）`, style.titleFontSize === '12px');
+    ok(`端口用本地 11px（实际 ${style.handleW}）`, style.handleW === '11px');
+    ok(`连线描边用本地 #778292（实际 ${style.edgeStroke}）`, style.edgeStroke === 'rgb(119, 130, 146)');
+    ok(`连线用本地 2.2px / round（实际 ${style.edgeStrokeWidth} ${style.edgeLinecap}）`, style.edgeStrokeWidth === '2.2px' && style.edgeLinecap === 'round');
+    ok(`范围节点圆角用本地 8px（实际 ${style.scopeRadius}）`, style.scopeRadius === '8px');
+
+    /* ========== 16. 画布节点 × 工作台互不干扰 ========== */
+    ok('工作台工具栏仍然完整', await cdp.eval(`document.querySelectorAll('.toolbar-group button').length > 5`));
+    ok('画布节点带标题栏（Blender 风格）', await cdp.eval(`!!document.querySelector(${JSON.stringify(NODE)} + ' .wf-vector-title .wf-node-label')`));
+    ok('矢量文档 store 与节点一一对应', await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(nodeId)}) !== window.__codenodeVector`));
+  } catch (e) {
+    failed += 1;
+    const detail = e && e.stack ? e.stack : String(e);
+    failures.push(`脚本异常: ${detail}`);
+    err(`脚本异常: ${detail}`);
+  }
+
+  /* ========== 控制台错误汇总 ========== */
+  await sleep(600);
+  const realErrors = cdp.errors.filter((t) => !t.includes('favicon') && !t.includes('DevTools') && !t.includes('404'));
+  ok('页面无未捕获异常 / console.error', cdp.exceptions.length === 0 && realErrors.length === 0,
+    `exceptions=${cdp.exceptions.length} errors=${realErrors.slice(0, 3).join(' | ')}`);
+
+  out(`\n════ 结果：通过 ${passed} / 失败 ${failed} ════`);
+  if (failures.length) {
+    out('失败项：\n  - ' + failures.join('\n  - '));
+  }
+  cdp.close();
+  await stopBrowser();
+  process.exit(failed === 0 ? 0 : 1);
+}
+
+main().catch(async (e) => {
+  err('FATAL ' + (e && e.stack ? e.stack : String(e)));
+  await stopBrowser();
+  process.exit(1);
+});

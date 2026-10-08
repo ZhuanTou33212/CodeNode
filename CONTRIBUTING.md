@@ -6,7 +6,7 @@ CodeNode 桌面端：Electron 主进程（`electron/`）+ React 渲染层（`src
 
 | 项 | 要求 |
 |---|---|
-| Node | **22**（`.nvmrc` 与 `package.json` 的 `engines` 是唯一来源；CI 用 `node-version-file: .nvmrc`） |
+| Node | **22.12 或更新版本**（`package.json` 的 `engines` 定义最低版本；CI 用 `node-version-file: .nvmrc`，固定 22 系列） |
 | 包管理 | npm（有 `package-lock.json`，CI 用 `npm ci`） |
 | 行尾 | 一律 LF（`.gitattributes` 强制；Windows 上不要开 `core.autocrlf=true` 提交 CRLF）、缩进 2 空格（`.editorconfig`） |
 
@@ -27,11 +27,13 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 |---|---|
 | `npm run build` | `src/` 的 `tsc --noEmit` + vite 构建 + 图标 |
 | `npm run check:js` | `electron/**`、`scripts/**` 的 checkJs 静态检查（这些是 `.cjs`，不受 `src/` 的 tsc 覆盖）。**分两档**：`electron/**` 走 `tsconfig.checkjs.json`（开 `strictNullChecks`），`scripts/**` 走 `tsconfig.checkjs-scripts.json`（宽松） |
-| `npm test` | **core 套件**：25 项，无显示环境、无网络、确定性（CI 跑这个） |
+| `npm test` | **core 套件**：无需显示环境的回归与门禁；当前集合和数量以 `npm run test:list` 为准（CI 跑这个） |
 | `npm run test:display` | 需要 Electron 窗口 / 本机无头 Edge 的用例（smoke、RAG UI、矢量画布） |
 | `npm run test:list` | 打印套件清单 |
 
-单项排查：`npx npm run test:sandbox`、`npm run test:eval -- --list` 等。统一入口 runner 支持
+脚本按用途分为 `scripts/core`、`scripts/ui`、`scripts/packaged`、`scripts/eval` 和 `scripts/tools`；共用代码与输入保留在 `scripts/lib`、`scripts/fixtures`。分类与手工验收入口见 [脚本目录](scripts/README.md)。
+
+单项排查：`npm run test:sandbox`、`npm run test:eval -- --list` 等。统一入口 runner 支持
 `--only test:eval,test:sandbox`、`--stop-on-fail`。
 
 ### 测试理念（请遵守）
@@ -49,7 +51,7 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 | `electron/` | 主进程：`main.cjs`（窗口与 IPC）、`agent.cjs`（工具循环）、`tools/`（工具注册表与实现）、`sandbox.cjs`（执行隔离）、`runCheckpoint.cjs`（断点续跑）、`sideEffects.cjs`（幂等）、`costLedger.cjs` + `alerts.cjs`（成本与告警）、`selfTest.cjs`（发布自检） |
 | `src/` | 渲染层（React + zustand + xyflow）；`src/vector/` 是矢量工作室 |
 | `scripts/*-test.cjs` | 回归用例（纯 Node 断言，见上） |
-| `scripts/runtime-gate.cjs` | **运行时门禁**：断言上述能力真的接线可用（不是"源码里出现过某个字符串"） |
+| `scripts/core/runtime-gate.cjs` | **运行时门禁**：断言上述能力真的接线可用（不是"源码里出现过某个字符串"） |
 | `docs/` | 设计与评审文档；`docs/eval-reports/` 是**生成物**（CI 以 artifact 上传，不入库） |
 
 ## 生成物不要入库

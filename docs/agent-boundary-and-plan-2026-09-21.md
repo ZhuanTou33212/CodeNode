@@ -63,8 +63,8 @@ Codex CLI / Claude Code，其中两条最值得先做：
 
 | 项 | 用例 | 断言数 | 变异校验 |
 |---|---|---|---|
-| #1 | `test:shell-boundary`（`scripts/shell-boundary-test.cjs`） | 38 | 4/4 有判别力 |
-| #2 | `test:agent-plan`（`scripts/agent-plan-test.cjs`） | 49 | 4/4 有判别力 |
+| #1 | `test:shell-boundary`（`scripts/core/shell-boundary-test.cjs`） | 38 | 4/4 有判别力 |
+| #2 | `test:agent-plan`（`scripts/core/agent-plan-test.cjs`） | 49 | 4/4 有判别力 |
 
 - 真实输出：`npm test` → `PASS —— 81/81 项通过，用时 312.4s`；`npm run check:js` 退出 0；`npm run build` 退出 0。
 - 变异校验（`out/mutation-spec-boundary-plan.json`，8 条）：出厂值退回 `inherit`（两处各一条）、
@@ -85,10 +85,10 @@ macOS（sandbox-exec 可按 writeRoots 拦内核级写）**被拦下**（防护�
 
 | 用例 | 原写法 | 现在 | 原因 |
 |---|---|---|---|
-| `scripts/tool-descriptor-test.cjs` D3 | `resolvePolicy({mode:'off'})` 当「网络没被切断」 | 显式 `network:'inherit'` | D3 的语义是「网络没被切时不一刀切」；出厂改 deny 后「不写 network」不再等于不切网 |
-| `scripts/shell-hardening-test.cjs` #8 | 同上（裸写法 vs 路径限定写法都要弹确认） | 显式 `network:'inherit'` | 该节考察的是「sensitive 判据与白名单共用归一化」；出厂 deny 会让 `nuget restore` 先被断网策略拒，测的就不是敏感判定了 |
+| `scripts/core/tool-descriptor-test.cjs` D3 | `resolvePolicy({mode:'off'})` 当「网络没被切断」 | 显式 `network:'inherit'` | D3 的语义是「网络没被切时不一刀切」；出厂改 deny 后「不写 network」不再等于不切网 |
+| `scripts/core/shell-hardening-test.cjs` #8 | 同上（裸写法 vs 路径限定写法都要弹确认） | 显式 `network:'inherit'` | 该节考察的是「sensitive 判据与白名单共用归一化」；出厂 deny 会让 `nuget restore` 先被断网策略拒，测的就不是敏感判定了 |
 
-另外 `scripts/prompt-layers-test.cjs` 的**每轮固定开销上界**随新增工具抬高（16,000 → 17,000 字符、
+另外 `scripts/core/prompt-layers-test.cjs` 的**每轮固定开销上界**随新增工具抬高（16,000 → 17,000 字符、
 合计 18,000 → 19,000），并在断言文案里注明「为什么抬高（新增 `update_plan`，24 → 25 个工具）」——
 上界是棘轮而不是橡皮筋：再抬必须给出理由。
 

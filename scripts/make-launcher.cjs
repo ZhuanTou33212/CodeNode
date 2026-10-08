@@ -40,7 +40,7 @@ function build() {
   const dirs = process.argv.slice(2).length ? process.argv.slice(2) : ['release', 'release/win-unpacked'];
   let written = 0;
   for (const rel of dirs) {
-    const target = path.resolve(__dirname, '..', rel);
+    const target = path.resolve(__dirname, "..", rel);
     if (!fs.existsSync(target)) continue;
     const exe = fs.readdirSync(target).find((f) => /^(CodeNode-.*\.exe|CodeNode\.exe)$/i.test(f));
     if (!exe) continue;

@@ -11,7 +11,7 @@
  *   - **不猜**：前像缺失、内容过大、blob 哈希对不上、别人在本 Run 之后又改过该文件 —— 一律如实
  *     报告并**拒绝自动改**（要 `force:true` 才动有冲突的项），绝不「尽力而为」地写半个文件。
  *
- * 判据见 scripts/run-rollback-test.cjs（含负向：只读 Run 无可回滚项、越界路径被拒、冲突需 force）。
+ * 判据见 scripts/core/run-rollback-test.cjs（含负向：只读 Run 无可回滚项、越界路径被拒、冲突需 force）。
  */
 'use strict';
 

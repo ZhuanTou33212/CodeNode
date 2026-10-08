@@ -4,7 +4,7 @@
 
 ## 结果及边界
 
-- 脚本：`scripts/rag-agent-task-eval.cjs`。默认可运行现有 100 题；本次只完成前 10 道单文件正样本冒烟，没有完成 100 题任务验收。
+- 脚本：`scripts/eval/rag-agent-task-eval.cjs`。默认可运行现有 100 题；本次只完成前 10 道单文件正样本冒烟，没有完成 100 题任务验收。
 - 原始报告：`out/rag-agent-task-smoke.json`，任务通过 0/10，参考证据覆盖 10/10。
 - 修改后报告：`out/rag-agent-task-final-smoke.json`，任务通过 2/10，参考证据覆盖 10/10。两次是顺序回归，模型生成有随机性，不能视为严格消融收益。
 - 模型为 DeepSeek；判分模型与生成模型相同，标签由 AI 作者提供并待独立人工复核。以上是模型与作者标签的一致结果，不是真实人工准确率；已经曝光的题不能称为未污染验收集。
@@ -25,7 +25,7 @@
 复现命令（会向配置模型发送已授权的冻结源码）：
 
 ```powershell
-node scripts/rag-agent-task-eval.cjs --limit=100 --confirm-send --out=out/rag-agent-task-new-run.json
+node scripts/eval/rag-agent-task-eval.cjs --limit=100 --confirm-send --out=out/rag-agent-task-new-run.json
 ```
 
 报告禁止覆盖；运行脚本不把参考答案提供给生成 Agent，参考答案只用于独立的后置模型判分。

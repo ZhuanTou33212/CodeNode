@@ -111,7 +111,7 @@ Run 的 prompt 和 audit 直接写入事件日志，没有统一经过 agent.red
 
 ## 8. 当前评测和 CI 不足以证明生产质量
 
-证据：scripts/production-gate.cjs 主要检查源码模式与少量函数行为；scripts/provider-smoke.cjs 只要求模型返回固定文本；.github/workflows/production-gate.yml 仅配置 Ubuntu job。
+证据：scripts/core/production-gate.cjs 主要检查源码模式与少量函数行为；scripts/tools/provider-smoke.cjs 只要求模型返回固定文本；.github/workflows/production-gate.yml 仅配置 Ubuntu job。
 
 当前缺少真实多步工具任务、修改后测试、长上下文、提示注入、取消和崩溃恢复的端到端评测。供应商脚本无 Key 时以成功退出码跳过，CI 启用后若漏配 Key 也可能形成假绿。
 

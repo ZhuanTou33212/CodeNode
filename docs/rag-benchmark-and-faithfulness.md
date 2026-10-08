@@ -11,7 +11,7 @@
 ```powershell
 npm run test:rag-benchmark
 npm run rag:ablation -- --out=out/rag-ablation.json
-node scripts/rag-eval.cjs --out=out/rag-repository-eval.json
+node scripts/eval/rag-eval.cjs --out=out/rag-repository-eval.json
 ```
 
 v1 冻结基线的 holdout 全证据召回率为 58.3%。评测定位到 `src/cache` 被通用 cache 排除规则跳过；RAG 现在允许嵌套业务 cache 目录，根目录 cache 和 `.cache` 仍排除。修复后该小语料的 development/holdout 全证据召回均为 100%。两组检索 `answerable` 的负样本误判率仍为 50%，这是尚未解决的质量缺口，不等于最终回答误判率。
@@ -29,13 +29,13 @@ TS/JS 保留函数、方法、接口等结构段。长段优先在后半段的�
 离线实验包含默认词法、关闭关系图的 BM25、哈希混合对照。真实实验显式提供 `EMBED_BASE/EMBED_MODEL/EMBED_DIM/EMBED_KEY`，使用同一冻结语料；`RERANK_URL/RERANK_MODEL/RERANK_KEY` 可增加重排对照。缺向量分数或重排失败会报错，不能把降级后的 BM25 记为真实模型结果。
 
 ```powershell
-node scripts/rag-benchmark.cjs --ablation --real --confirm-send --out=out/rag-real.json
+node scripts/eval/rag-benchmark.cjs --ablation --real --confirm-send --out=out/rag-real.json
 ```
 
 本轮利用本机已有 Jina 代码 ONNX 量化模型（768 维、均值池化、归一化、512 token 截断、CPU）跑通环回接口，无模型下载。实验服务仅供诊断，不属于安装包依赖：
 
 ```powershell
-python scripts/rag-local-onnx-server.py --model-dir=.cache/rag-experiment/jina-code
+python scripts/eval/rag-local-onnx-server.py --model-dir=.cache/rag-experiment/jina-code
 ```
 
 修复后 holdout MRR：默认词法 0.771、向量优先 0.819、真实混合 0.785；全证据召回均为 1.0，负样本误判率均为 0.5。向量优先模式沿用产品 `mode=vector`，仍保留 15% 词法排名贡献，因此不是严格纯 Dense 实验。延迟包含冷启动建索引，不能直接作为稳态 SLA。

@@ -38,7 +38,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
-const ROOT = path.resolve(__dirname, '..');
+const ROOT = path.resolve(__dirname, "..");
 const pkg = require(path.join(ROOT, 'package.json'));
 
 const DEFAULT_RELEASE_DIR = path.join(ROOT, 'release');

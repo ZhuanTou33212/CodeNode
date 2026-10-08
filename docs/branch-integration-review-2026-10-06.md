@@ -13,9 +13,9 @@ The legacy agentic RAG tip is from 2026-08-24 (v0.11); the integration base cont
 | electron/tools/impl/retrieveContextTool.cjs | Same registry API with later scalar/vector and citation behavior. |
 | electron/tools/toolkit.cjs | All old exports retained, plus roles and profiles. |
 | package.json | Retain v0.13 scripts, packaging and test coverage rather than reverting to v0.11. |
-| scripts/rag-grounding-test.cjs | Retain expanded citation/read-range regression coverage. |
-| scripts/rag-test.cjs | Retain updated async retrieval tests including prior RRF, exclusion and cache cases. |
-| scripts/rag-ui-test.cjs | Retain current component-based test rather than obsolete floating sidebar assumptions. |
+| scripts/core/rag-grounding-test.cjs | Retain expanded citation/read-range regression coverage. |
+| scripts/core/rag-test.cjs | Retain updated async retrieval tests including prior RRF, exclusion and cache cases. |
+| scripts/ui/rag-ui-test.cjs | Retain current component-based test rather than obsolete floating sidebar assumptions. |
 | src/components/ChatSidebar.tsx | Keep its existing removal; its MessageView and SessionTree behavior is implemented by MessageList, AgentPanel and ProjectNavigation. Restoring it would reintroduce the superseded sidebar. |
 | src/global.d.ts | Retain all old API fields plus current model, retrieval and workflow interfaces. |
 | src/store/chatStore.ts | Preserve grounding transfer plus later streamed call IDs, cancellation, truncation and compaction behavior. |

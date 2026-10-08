@@ -3,7 +3,7 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 
-const cli = path.join(__dirname, '..', 'node_modules', 'electron', 'cli.js');
+const cli = path.join(__dirname, "../node_modules/electron/cli.js");
 const env = {
   ...process.env,
   ELECTRON_MIRROR: process.env.ELECTRON_MIRROR || 'https://npmmirror.com/mirrors/electron/',

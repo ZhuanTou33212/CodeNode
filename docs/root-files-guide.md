@@ -10,7 +10,6 @@
 | `.npmrc` | npm 注册表与 Electron 下载镜像配置 | 保留 |
 | `.nvmrc` | 指定 Node 22 系列；CI 的 setup-node 读取它 | 保留 |
 | `AGENTS.md` | 项目交付、Git 同步、界面及配置约定 | 保留 |
-| `CHANGELOG.md` | 历史版本与修复记录，发行说明引用 | 保留 |
 | `CONTRIBUTING.md` | 开发环境、验证流程和贡献约定 | 保留 |
 | `LICENSE` | 开源授权许可证；package.json 声明 MIT | 保留 |
 | `README.md` | 项目首页、启动方法、功能及文档入口 | 保留 |
@@ -22,6 +21,8 @@
 | `tsconfig.checkjs.json` | Electron 主进程和工具层 CJS 静态检查 | 保留 |
 | `tsconfig.checkjs-scripts.json` | 测试与构建脚本的 CJS 静态检查，与主进程分档 | 保留 |
 | `workflow.cnode` | 仓库示例工程，也是默认工程文件名；截图脚本使用此示例 | 保留，不能当缓存清理 |
+
+旧文档中提到的 `CHANGELOG.md` 是历史版本记录；若当前工作区不含该文件，可从 Git 历史查阅，不影响构建。核心配置继续保留在根目录。
 
 ## 品牌资源
 
@@ -41,7 +42,7 @@
 - `build`：构建所需的派生图标。
 - `src`：React 前端源码。
 - `electron`：桌面主进程、IPC、Agent、工具与检索。
-- `scripts`：构建、测试、评测及维护脚本。
+- `scripts`：根目录只保留启动、构建与调度入口；测试按 `core/`、`ui/`、`packaged/` 分类，评测放 `eval/`，专项工具放 `tools/`，共用代码和输入放 `lib/`、`fixtures/`。见 [脚本目录](../scripts/README.md)。
 - `config`：集中设置、主题和 Agent 配置；本地密钥及自动对话记录不作为此次提交内容。
 - `docs`：技术说明、变更分析与评测说明。
 - `baselines`：冻结回归快照与原始成绩。
@@ -58,3 +59,5 @@
 6. 源码、测试、公共配置及文档同步 origin/yimi-branch；本地密钥、自动对话和生成物不加入提交。此次打包使用公共配置模板，不把本地密钥与对话样本写入包；实际用户模型、工程和运行数据不清空。
 
 验证记录：`out/root-structure-2026-10-08-assets.json`、`out/root-structure-2026-10-08-package-check.json`、`out/root-structure-2026-10-08-theme.log`、`out/root-structure-2026-10-08-stage-selftest.json`、`out/root-structure-2026-10-08-fixed-selftest.json`、`out/root-structure-2026-10-08-delivery.json`、`out/root-structure-2026-10-08-sync.json`。
+
+脚本分类整理的检查记录：`out/scripts-organization-audit.json`、`out/scripts-organize-verify-final.log`、`out/scripts-organize-display-final.log`、`out/scripts-organization-stage-selftest.json`、`out/scripts-organization-fixed-selftest.json`、`out/scripts-organization-delivery.json`。冻结材料使用 `.gitattributes` 的 `baselines/** binary` 按原始字节保存，避免行尾转换和文本合并破坏校验；不更新数据集、原始成绩或其哈希清单。

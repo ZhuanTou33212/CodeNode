@@ -64,7 +64,7 @@ if (estimate + maxTokens > window) → maxTokens = max(1024, window - estimate -
 | 硬裁剪 | `electron/contextBudget.cjs` | 每次请求前，超字符预算 | 旧工具结果换占位符 | 兜底（压不动时保证发得出去） |
 | 超窗闸门 | 本文（`electron/agent.cjs`） | 输入超窗 / 供应商 400 | 预检拒发 + 输出收缩 + 自救 | **收尾**，把「必然的报错」变成「可理解的处置」 |
 
-## 3. 判据（`scripts/context-overflow-test.cjs`，进 CORE，9 段 24 断言）
+## 3. 判据（`scripts/core/context-overflow-test.cjs`，进 CORE，9 段 24 断言）
 
 1. **预检**：输入超窗 → `calls=0`（一次请求都不发）、`stopReason=context_overflow`、文案含出路、
    增量带 tokens/window。

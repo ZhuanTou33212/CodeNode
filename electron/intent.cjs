@@ -23,7 +23,7 @@
  *          这里补一个「模型说是画布任务」的信号，只在关键词漏判时救场，**只增不减**）；
  *        - `forceConfirm`：决定**审批是否强制弹窗**（可以忽略 `.codenode/approvals.json` 的免打扰规则）。
  *
- * 三条不变量（判据见 scripts/intent-test.cjs）：
+ * 三条不变量（判据见 scripts/core/intent-test.cjs）：
  *   I1 **只收紧，不放宽**：verdict 只能让审批**多问一次**，永远不可能自动放行任何东西
  *      —— 没有任何一条路径会因为 verdict 而跳过审批或签发令牌。
  *   I2 **无信号 ≠ 低风险**：模型没跑 / 报错 / 超时 → `source === 'unavailable'`，

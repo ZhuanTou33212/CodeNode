@@ -1,0 +1,22 @@
+'use strict';
+const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const os=require('node:os');
+const setup=require("../../electron/tools/extensionSetup.cjs");const mcp=require("../../electron/tools/mcpClient.cjs");const sandbox=require("../../electron/sandbox.cjs");
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'codenode-extension-setup-'));const file=path.join(root,'.codenode','extensions.json');
+(async()=>{try {
+  sandbox.setDefaultPolicy(sandbox.resolvePolicy({mode:'off',network:'inherit'},{projectRoot:root,userDataDir:root}));
+  fs.mkdirSync(path.join(root,'config'));fs.writeFileSync(path.join(root,'config','extensions.json'),JSON.stringify({version:2,extensions:[{name:'existing-skill',kind:'skills',instructions:'保持原指令'}]}));
+  let result=await setup.add(root,{name:'command-tool',command:'node tools/helper.cjs',description:'项目工具',readOnly:true});assert.equal(result.ok,true,JSON.stringify(result));
+  let saved=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(saved.version,2);assert.equal(saved.extensions[0].instructions,'保持原指令');assert.equal(saved.extensions.length,2);
+  const before=fs.readFileSync(file,'utf8');result=await setup.add(root,{name:'command-tool',command:'node x'});assert.equal(result.ok,false);assert.equal(fs.readFileSync(file,'utf8'),before);
+  result=await setup.add(root,{mcpServers:{'test-mcp':{command:process.execPath,args:[path.join(__dirname,"../lib/mock-mcp-server.cjs")]}}});assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.added[0].toolCount,2);
+  saved=JSON.parse(fs.readFileSync(file,'utf8'));const server=saved.extensions.find(item=>item.name==='test-mcp');assert.equal(server.tools[0].name,'echo');assert.equal(server.tools[0].parameters.properties.text.type,'string');assert.equal(mcp.activeKeys().length,0);
+  const pagedServer=path.join(root,'paged-server.cjs');
+  fs.writeFileSync(pagedServer,"let buf='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{buf+=chunk;const lines=buf.split('\\n');buf=lines.pop();for(const line of lines){let m;try{m=JSON.parse(line)}catch{continue}if(m.id===undefined)continue;const result=m.method==='initialize'?{protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'paged',version:'1'}}:m.params&&m.params.cursor?{tools:[{name:'env_probe_two',inputSchema:{type:'object'}}]}:{tools:[{name:'env_probe',description:process.env.UI_EXT_MARKER,inputSchema:{type:'object'}}],nextCursor:'second'};process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');}});process.stdin.on('end',()=>process.exit(0));");
+  result=await setup.add(root,{name:'paged-mcp',kind:'mcp',command:process.execPath,args:[pagedServer],env:{UI_EXT_MARKER:'synthetic-env'}});assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.added[0].toolCount,2);
+  const envSaved=JSON.parse(fs.readFileSync(file,'utf8')).extensions.find(item=>item.name==='paged-mcp');assert.equal(envSaved.tools[0].description,'synthetic-env');
+  const both=await Promise.all([setup.add(root,{name:'first',kind:'skills',instructions:'第一份'}),setup.add(root,{name:'second',kind:'skills',instructions:'第二份'})]);assert.ok(both.every(result=>result.ok));assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).extensions.length,6);
+  const content=fs.readFileSync(file,'utf8');result=await setup.add(root,[{name:'good',kind:'skills',instructions:'完整指令'},{name:'bad',command:''}]);assert.equal(result.ok,false);assert.equal(fs.readFileSync(file,'utf8'),content);
+  result=await setup.add(root,{name:'read_file',command:'node x'});assert.equal(result.ok,false);
+  fs.writeFileSync(file,'invalid');result=await setup.add(root,{name:'safe',command:'node x'});assert.equal(result.ok,false);assert.equal(fs.readFileSync(file,'utf8'),'invalid');
+  console.log('EXTENSION SETUP: PASS (fallback preservation, atomic merge, duplicate checks, real MCP discovery, concurrency, batch rollback, invalid config)');
+}finally{mcp.closeAll();await new Promise(resolve=>setTimeout(resolve,500));if(path.dirname(root)===os.tmpdir()&&path.basename(root).startsWith('codenode-extension-setup-'))await fs.promises.rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});}})().catch(error=>{console.error(error);process.exitCode=1});

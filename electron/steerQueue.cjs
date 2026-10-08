@@ -5,7 +5,7 @@
  * 全部上下文与进度，重启还得从头再来。有了插话队列，用户可以边跑边纠偏
  * （「别改 utils，只改 api 层」），主循环在下一轮把它作为 user 消息送进请求体。
  *
- * 语义（判据见 scripts/agent-steering-test.cjs）：
+ * 语义（判据见 scripts/core/agent-steering-test.cjs）：
  *   - `push` 只在 run 存活时接受；run 已结束返回 `{accepted:false, reason:'run-ended'}` ——
  *     **绝不静默丢弃**（用户以为插上了、其实没插，比直接报错更糟）；
  *   - `push('   ')` 空内容拒绝（reason:'empty'）；

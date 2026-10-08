@@ -446,12 +446,12 @@ cached_tokens / miss_tokens
 
 建议新增以下测试，而不是只看单次真实模型账单：
 
-- `scripts/token-overhead-test.cjs`：锁住各 profile 的工具数、schema token 和固定 prompt 上限。
-- `scripts/tool-result-projection-test.cjs`：断言 `text/data` 不重复、完整结果仍可由句柄取回。
-- `scripts/prompt-prefix-stability-test.cjs`：记忆/画布变化不能改动固定前缀 hash。
-- `scripts/intent-cost-gate-test.cjs`：低风险代码任务零分类；歧义高风险任务必须分类。
-- `scripts/compression-roi-test.cjs`：预计净收益为负时不得调用压缩模型。
-- `scripts/compaction-tail-test.cjs`：最近完整操作组不被摘要或拆断。
+- `scripts/core/token-overhead-test.cjs`：锁住各 profile 的工具数、schema token 和固定 prompt 上限。
+- `scripts/core/tool-result-projection-test.cjs`：断言 `text/data` 不重复、完整结果仍可由句柄取回。
+- `scripts/core/prompt-prefix-stability-test.cjs`：记忆/画布变化不能改动固定前缀 hash。
+- `scripts/core/intent-cost-gate-test.cjs`：低风险代码任务零分类；歧义高风险任务必须分类。
+- `scripts/core/compression-roi-test.cjs`：预计净收益为负时不得调用压缩模型。
+- `scripts/core/compaction-tail-test.cjs`：最近完整操作组不被摘要或拆断。
 - 真机评测同时记录成功终态、总输入/输出、缓存命中、调用数、wall time，防止“少 token 但多失败/多重试”。
 
 ## 8. 外部一手资料

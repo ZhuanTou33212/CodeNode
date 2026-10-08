@@ -245,7 +245,7 @@ if (flag('--list')) {
 }
 
 const isWindows = process.platform === 'win32';
-const cwd = path.join(__dirname, '..');
+const cwd = path.join(__dirname, "..");
 // 模拟模型回归不应向应用的全局成长记录写入假对话。
 const suiteData = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-suite-soul-'));
 const suiteSoul = path.join(suiteData, 'soul.md');

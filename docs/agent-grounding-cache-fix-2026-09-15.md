@@ -69,9 +69,9 @@ B4 磁盘实际内容 = "NEW-CONTENT"
 
 | 用例 | 覆盖 |
 | --- | --- |
-| `scripts/agent-cache-invalidation-test.cjs`（新增，`npm run test:agent-cache`） | shell 改文件后必须失效 / 写工具路径仍失效 / 未注册工具失败后也失效 / 纯只读之间仍复用 / 不同参数不共享键 |
-| `scripts/rag-grounding-test.cjs`（扩 10 组断言） | 块内子区间有效 / read_file 实读区间有效 / 行号越界无效 / search_files 命中行 / scalar 命中与伪造 / `source:` 前缀 / `./` 归一 / 分段读取 / PDF 整文件 / binary 不产生来源 |
-| `scripts/sandbox-test.cjs`（新增第 10 节） | 策略对象与 getter 两种注入都解析为策略对象、保留 backend 声明、strict 经 context 注入仍 fail-closed |
+| `scripts/core/agent-cache-invalidation-test.cjs`（新增，`npm run test:agent-cache`） | shell 改文件后必须失效 / 写工具路径仍失效 / 未注册工具失败后也失效 / 纯只读之间仍复用 / 不同参数不共享键 |
+| `scripts/core/rag-grounding-test.cjs`（扩 10 组断言） | 块内子区间有效 / read_file 实读区间有效 / 行号越界无效 / search_files 命中行 / scalar 命中与伪造 / `source:` 前缀 / `./` 归一 / 分段读取 / PDF 整文件 / binary 不产生来源 |
+| `scripts/core/sandbox-test.cjs`（新增第 10 节） | 策略对象与 getter 两种注入都解析为策略对象、保留 backend 声明、strict 经 context 注入仍 fail-closed |
 
 **变异测试（证明判据有判别力）**：
 
@@ -87,4 +87,4 @@ B4 磁盘实际内容 = "NEW-CONTENT"
 - 合并后在分支 `0_2` 的 `69e000e`（另一条线随后提交了可插拔向量后端 + `test:vector-store`）上再跑一次
   `npm run verify`：**28/28 通过**，check:js 0 错误。
 - 说明：`check:js` 中途曾报 11 个 TS 错误，全部落在当时**未提交**的 `electron/rag/index.cjs` 与
-  `scripts/vector-store-test.cjs`（不是本次修复的文件）；对方提交后这些错误消失。
+  `scripts/core/vector-store-test.cjs`（不是本次修复的文件）；对方提交后这些错误消失。

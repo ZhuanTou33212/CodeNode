@@ -8,7 +8,7 @@
 | # | 现象 | 根因 | 证据（真实运行） |
 |---|---|---|---|
 | 1 | 回答写到大半被砍断，文字停在半句 | 思考 token 与正文**共用** `max_tokens`，而出厂值是 8192 | 同一份「写 4000 字文档」请求：`max_tokens=1000` → 1000 tokens 全给思考、**正文 0 字**；`max_tokens=8192` → `finish_reason=length`，8196 tokens（思考 5037）+ 正文 5520 字；供应商侧 32768/65536 都接受 |
-| 2 | 被截断后模型「越写越水」或直接停 | 补问文案是「请把回复拆短：只给结论」= 让模型主动丢信息；上限写死 2 次 | `scripts/truncation-safety-test.cjs` 锁住的旧行为；真实 DeepSeek 上 8192 档位随机复现 `length` |
+| 2 | 被截断后模型「越写越水」或直接停 | 补问文案是「请把回复拆短：只给结论」= 让模型主动丢信息；上限写死 2 次 | `scripts/core/truncation-safety-test.cjs` 锁住的旧行为；真实 DeepSeek 上 8192 档位随机复现 `length` |
 | 3 | 慢但一直在输出的长回答被整轮砍掉，报错是英文 `This operation was aborted` | 单轮 180s **墙钟**硬超时、写死不可配；且没有「停滞」概念 | 探针 `out/probe-truncate.cjs`：30s 超时 → 已流出 4154 字的回答被作废，`usage=null`、`iterations=0`、state=FAILED，报错原文英文 |
 | 4 | 回答流到一半突然没了（半截内容还在，但进程报错） | 重试只覆盖**建连**阶段；流中途 `reader.read()` 抛错直接冒到主循环 | 探针 `out/probe-stream-break.cjs`：mock 服务吐 3 个分片后杀连接 → **服务端只收到 1 次请求**、错误 `terminated`、18 字半截内容已推给界面 |
 
@@ -60,7 +60,7 @@
 
 ## 2. 判据（进 CORE 门禁）
 
-`scripts/stream-recovery-test.cjs`（8 段 / 29 条断言，全部落在可观察终态）：
+`scripts/core/stream-recovery-test.cjs`（8 段 / 29 条断言，全部落在可观察终态）：
 
 1. 中途断线 → 服务端收到 2 次请求；交付内容 == 重发的完整回答；半截片段不出现在交付里；
    **界面拼出来的文本 == 交付内容**（`content_reset` 生效）；`streamRestarts === 1`。
@@ -72,7 +72,7 @@
 7. 预算补偿 → 重发的结算量 > 单次对照（去掉补偿即红）。
 8. 出厂口径：停滞 120s / 单轮 600s / 重发 2 次 / 补问 4 次 / 配置样例 `max_tokens ≥ 16384`。
 
-`scripts/truncation-safety-test.cjs` 同步改写：补问文案必须是「接着写」且**不得**出现「拆短」；
+`scripts/core/truncation-safety-test.cjs` 同步改写：补问文案必须是「接着写」且**不得**出现「拆短」；
 拼接交付（4 段都在）；`truncationNudges` 配置生效；用尽时 `continuing:false`。
 
 ## 3. 当时剩下的第 5 类缺口：现已由「两层」补上（2026-09-17 追记）

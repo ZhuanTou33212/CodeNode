@@ -22,7 +22,7 @@
  *
  * 为什么流式要走「翻译成 OpenAI SSE」而不是各写一套累加器：流中途断线要**整轮重发**、
  * 停滞判定、坏 JSON、重复/累积分片、usage 帧归并……这些语义 streamAccumulator 已经逐条
- * 用测试锁死了（见 scripts/stream-accumulator-test.cjs）。翻译层只做「原生帧 → OpenAI 帧」的
+ * 用测试锁死了（见 scripts/core/stream-accumulator-test.cjs）。翻译层只做「原生帧 → OpenAI 帧」的
  * 1:1 映射，下游一行都不用改，风险面最小。
  *
  * 负向保证（用例锁住）：`protocol` 未声明 / = 'openai' 时，`buildRequest` 产出的

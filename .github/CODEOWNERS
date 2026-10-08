@@ -9,6 +9,6 @@
 /electron/alerts.cjs @yimi528
 /electron/runCheckpoint.cjs @yimi528
 /electron/sideEffects.cjs @yimi528
-/scripts/runtime-gate.cjs @yimi528
-/scripts/sandbox-test.cjs @yimi528
+/scripts/core/runtime-gate.cjs @yimi528
+/scripts/core/sandbox-test.cjs @yimi528
 /scripts/release-sign.cjs @yimi528

@@ -18,10 +18,10 @@
 
 `out/rag-agent-task-complete-v1.json` 由真实只读 Agent 逐题写入，原始报告保留。当前运行尚未结束，不能将已完成部分当作 100 题成功率。运行记录模型和代码哈希；在运行期间修正的汇总类别名不改变已加载的 Agent/判定代码。
 
-`scripts/rag-agent-task-summary.cjs` 从原始报告产生独立、不可覆盖的汇总，按数据集中真实类别 `single / cross-file / negative` 分层，报告遗漏题号及是否完整结束。失败分类可能重叠，不能相加当作失败题总数。实时快照见 `out/rag-agent-task-checkpoint-01.json`，它不是最终成绩。
+`scripts/eval/rag-agent-task-summary.cjs` 从原始报告产生独立、不可覆盖的汇总，按数据集中真实类别 `single / cross-file / negative` 分层，报告遗漏题号及是否完整结束。失败分类可能重叠，不能相加当作失败题总数。实时快照见 `out/rag-agent-task-checkpoint-01.json`，它不是最终成绩。
 
 ```powershell
-node scripts/rag-agent-task-summary.cjs out/rag-agent-task-complete-v1.json out/rag-agent-task-final-summary.json
+node scripts/eval/rag-agent-task-summary.cjs out/rag-agent-task-complete-v1.json out/rag-agent-task-final-summary.json
 ```
 
 现有 100 题仍是 AI 候选标签的曝光回归集。同模型评分、人审未完成、负样本给定上下文边界等限制继续保留；不能报告为人审准确率或新的未见集。

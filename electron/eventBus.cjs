@@ -9,7 +9,7 @@
  *
  * 做法：新增一个**统一形状**的事件流 `.codenode/events.jsonl`，每条事件都带
  *   `{v, ts, kind, runId, turnId, toolCallId, attemptId, ...payload}`
- * 旧文件继续写（只读兼容一个版本周期），回放走 `scripts/event-replay.cjs`。
+ * 旧文件继续写（只读兼容一个版本周期），回放走 `scripts/tools/event-replay.cjs`。
  *
  * 幂等/失败语义：写入失败**不抛异常**（事件流是旁路，不能拖垮工具循环），返回 null
  * 并复用 runStore.appendJsonl 的落盘策略（原子替换、坏行容忍、字节上限）。

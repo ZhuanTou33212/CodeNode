@@ -955,7 +955,7 @@ const CANVAS_RULES_STUB =
  * 为什么要显式登记：重排的唯一目的是让**请求前缀**尽量长且稳定（prompt cache 命中前缀），
  * 而「哪些段落每轮都会变」是个必须有人负责的知识 —— 新增段落忘了登记时，`orderPromptSections`
  * 会把它当**动态**段（fail-open：宁可放到边界之后，也不让它打断稳定前缀）。
- * 判据 `scripts/prompt-prefix-stability-test.cjs` 直接读这张表。
+ * 判据 `scripts/core/prompt-prefix-stability-test.cjs` 直接读这张表。
  */
 const PROMPT_SECTIONS = Object.freeze([
   // ---- 稳定前缀：同一项目 + 同一工具面 → 逐字节相同 ----
@@ -2502,7 +2502,7 @@ function groundingRetryPrompt(grounding) {
  * 追踪一次运行里的事件：**双写**
  *   1. `.codenode/tools_trace.jsonl`（旧文件，保留一个版本周期的兼容读取路径）；
  *   2. `.codenode/events.jsonl`（S8 统一事件流，带 runId/turnId/toolCallId/attemptId，
- *      可按 run / turn / 单次调用回放 —— 见 scripts/event-replay.cjs）。
+ *      可按 run / turn / 单次调用回放 —— 见 scripts/tools/event-replay.cjs）。
  * 事件流是旁路：写入失败只丢事件，绝不影响工具循环。
  */
 function logToolTrace(projectRoot, entry) {
@@ -3170,7 +3170,7 @@ async function runAgentChatInternal({ cfg, messages, onDelta, tools, signal, tim
        * 注入点刻意选在**压缩/硬裁剪之后、超窗预检之前**：
        *   - 压缩会把机器注入的 user 消息丢掉（`isMachineInjection`），插话若放在压缩前就有被吞掉的风险；
        *   - 放在预检前，插话的 token 会被算进本轮估算，超窗时能如实拒发而不是发出去吃 400。
-       * 每轮只 drain 一次：同一条插话只进一次请求体（判据见 scripts/agent-steering-test.cjs）。
+       * 每轮只 drain 一次：同一条插话只进一次请求体（判据见 scripts/core/agent-steering-test.cjs）。
        */
       if (steering && typeof steering.drain === 'function') {
         let pendingSteers = [];

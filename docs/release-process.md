@@ -11,7 +11,8 @@
 npm version 0.14.0 --no-git-tag-version   # 只改 package.json/package-lock.json
 npm run verify                            # 门禁全绿再提交
 git commit -am "chore(release): 版本号 0.14.0"
-git tag v0.14.0 && git push origin main --tags
+git tag v0.14.0
+git push origin yimi-branch --tags
 ```
 
 > 历史教训：仓库里同时存在 `0.11 / 0.12 / 0.13 / n0_11 / v0.12.0 / v0.3.0 / v0.3.1` 等标签，
@@ -20,9 +21,11 @@ git tag v0.14.0 && git push origin main --tags
 ## 2. 本地预检（发布前必跑）
 
 ```bash
-npm run verify                      # build + check:js + core 套件（25 项）
+npm run verify                    # build + check:js + core 套件（集合以 test:list 为准）
 npm run test:display                # 需要窗口 / 浏览器的用例（smoke、RAG UI、矢量画布）
-npx electron . --codenode-selftest  # 发布自检：输出 JSON，ok:true 才算通过（不创建窗口）
+New-Item -ItemType Directory -Path out/release-selftest/userData,out/release-selftest/project -Force
+node scripts/run-electron.cjs . --codenode-selftest --codenode-user-data-dir=out/release-selftest/userData --codenode-selftest-project=out/release-selftest/project --codenode-selftest-seed
+# 在隔离目录发布自检：JSON 中 ok:true 才算通过；验收后清理隔离数据。
 ```
 
 ## 3. 打包
@@ -59,4 +62,6 @@ gh workflow run production-gate.yml -f mode=release
 
 - 打包产物：`release/*`（CI 作为 artifact 上传，不入库）
 - 评测报告：`docs/eval-reports/*.json|md`（CI 作为 artifact 上传，不入库）
-- 发布说明：在 GitHub Release 里引用 `CHANGELOG.md` 对应版本段落
+- 发布说明：写明该版本的实际变更与验证；历史 `CHANGELOG.md` 可从 Git 历史查阅，不把当前工作区可能不存在的文件作为唯一入口。
+
+本机交付先在独立 `.stage-*` 目录打包并验收；覆盖前检查旧 `CodeNode.exe` 是否运行，保留未保存的工作。验收通过后替换固定 `release/win-unpacked`，不保留旧包备份。覆盖后再次检查 EXE、`resources/app.asar` 和隔离自检结果，清理暂存及自检数据。源码、测试、配置与文档提交到 `origin/yimi-branch`，生成物按 `.gitignore` 留在本地。

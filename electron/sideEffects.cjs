@@ -130,7 +130,7 @@ function beforeImageDir(projectRoot, scopeRunId) {
 /**
  * 抓写操作执行**之前**的文件状态（Run 级回滚的依据）。
  *
- * 语义（判据见 scripts/run-rollback-test.cjs）：
+ * 语义（判据见 scripts/core/run-rollback-test.cjs）：
  *   - 文件当时不存在 → `{ existed:false, restorable:true, delete:true }`（回滚 = 删掉它）；
  *   - 存在且 ≤ 256KB → 正文内容寻址存 blob，`{ existed:true, restorable:true, sha256, blob }`；
  *   - 存在但过大/不可读/不是普通文件 → `restorable:false` + 原因（**不假装能回滚**）。
@@ -334,7 +334,7 @@ class SideEffectLedger {
     record.lastIntentAt = this.clock();
     if (!record.firstIntentAt) record.firstIntentAt = record.lastIntentAt;
     // Run 级回滚的依据：写操作**第一次触碰该路径之前**抓一次前像，按**路径**保存 ——
-    // 回滚要回到「本次 Run 开始前」，而不是「上一次写之前」。判据见 scripts/run-rollback-test.cjs。
+    // 回滚要回到「本次 Run 开始前」，而不是「上一次写之前」。判据见 scripts/core/run-rollback-test.cjs。
     if (effect === 'write' && statePath && !this.beforeImages.has(statePath)) {
       this.beforeImages.set(statePath, captureBeforeImage(this.projectRoot, this.scopeRunId, statePath));
     }

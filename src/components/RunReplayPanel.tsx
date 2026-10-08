@@ -146,7 +146,7 @@ function shortTime(ts: unknown): string {
  * 运行回放（S8）：按 run 展示统一事件流的**时间线 + 摘要**。
  *
  * 数据来自 `window.codenode.replayEvents()`（主进程走 `eventBus.replayPayload`），
- * 与 `scripts/event-replay.cjs` 是同一份载荷 —— 界面与 CLI 不会各说各话。
+ * 与 `scripts/tools/event-replay.cjs` 是同一份载荷 —— 界面与 CLI 不会各说各话。
  */
 export default function RunReplayPanel() {
   const root = useProjectStore((s) => s.root);

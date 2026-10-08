@@ -316,13 +316,13 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 | 修复项 | 改动文件 | 回归用例 | 变异测试（把修复点改回旧行为） |
 |---|---|---|---|
-| 幂等键规范化（键序无关，与缓存键同口径） | `electron/sideEffects.cjs` | `scripts/side-effect-idempotency-test.cjs`（进 CORE） | 回退成 `JSON.stringify(args)` → 3 项 FAIL（键序/去重/skip 原因） |
+| 幂等键规范化（键序无关，与缓存键同口径） | `electron/sideEffects.cjs` | `scripts/core/side-effect-idempotency-test.cjs`（进 CORE） | 回退成 `JSON.stringify(args)` → 3 项 FAIL（键序/去重/skip 原因） |
 | 幂等账本 `committed` 不再被 `begin()` 降级 | `electron/sideEffects.cjs` | 同上 | — |
-| `save_project` 路径边界（`resolveInRoot`） | `electron/ipc/agent.cjs` | `scripts/save-project-boundary-test.cjs`（进 CORE） | — |
+| `save_project` 路径边界（`resolveInRoot`） | `electron/ipc/agent.cjs` | `scripts/core/save-project-boundary-test.cjs`（进 CORE） | — |
 | 保存失败不再谎报成功 | `electron/tools/context.cjs`、`impl/saveProjectTool.cjs` | 同上 | — |
-| 前台/后台超时不再 `ok=true` | `electron/tools/impl/executeShellTool.cjs` | `scripts/shell-timeout-result-test.cjs`（进 CORE） | — |
-| 沙箱子进程 stdin 立即 EOF（修 `git` 挂死） | `electron/sandbox/winjob.cs` | `scripts/sandbox-stdin-eof-test.cjs`（进 CORE） | 回退成 `RedirectStandardInput = false` → 15.1s 挂死 FAIL |
-| `tool_call_id` 三处统一（P0-1） | `electron/agent.cjs` | `scripts/tool-call-id-test.cjs`（进 CORE） | 回退成 `tool_call_id: tc.id \|\| ''` → 4 项 FAIL（空 tool_call_id / 配对不符） |
+| 前台/后台超时不再 `ok=true` | `electron/tools/impl/executeShellTool.cjs` | `scripts/core/shell-timeout-result-test.cjs`（进 CORE） | — |
+| 沙箱子进程 stdin 立即 EOF（修 `git` 挂死） | `electron/sandbox/winjob.cs` | `scripts/core/sandbox-stdin-eof-test.cjs`（进 CORE） | 回退成 `RedirectStandardInput = false` → 15.1s 挂死 FAIL |
+| `tool_call_id` 三处统一（P0-1） | `electron/agent.cjs` | `scripts/core/tool-call-id-test.cjs`（进 CORE） | 回退成 `tool_call_id: tc.id \|\| ''` → 4 项 FAIL（空 tool_call_id / 配对不符） |
 
 **验证证据**（全部为本机实测输出）：
 
@@ -339,7 +339,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 |---|---|
 | 新增纯函数累加器：`createAccumulator` / `applySseText` / `consumeLine` / `finalize` / `isJsonComplete`（不碰网络与全局，坏数据只记 anomaly，不抛异常） | `electron/streamAccumulator.cjs` |
 | 主循环改用累加器（事件转发语义保持不变）；`finish_reason=length` 的三条安全行为；trace 记录 `finishReason` | `electron/agent.cjs` |
-| 用例（进 CORE，门禁 33 → 35） | `scripts/stream-accumulator-test.cjs`（22 断言 / 14 类分片形态）、`scripts/truncation-safety-test.cjs`（12 断言） |
+| 用例（进 CORE，门禁 33 → 35） | `scripts/core/stream-accumulator-test.cjs`（22 断言 / 14 类分片形态）、`scripts/core/truncation-safety-test.cjs`（12 断言） |
 
 累加器覆盖的分片形态：重复下发整段 name·args、前缀累积、补完式累积、参数整段重发（拼接后非法 → 替换而非拼接）、多调用交错、`index` 缺失/漂移、`index` 被复用给另一个调用（拆槽，避免 id/参数串味）、id 分片与重复、`finish_reason` 变化、usage、坏数据行、流内联 `error`、末尾无换行残行。每个工具调用额外给出 `argsValid`（参数是否已构成完整 JSON）。
 
@@ -356,7 +356,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 状态上报钩子（`setStateNotifier`/`notifyState`）：`confirm()`/`askUser()` 真正等用户时上报 `WAITING_USER`，应答后回 `WAITING_TOOL` | `electron/tools/context.cjs` |
 | 迁移落成 run 事件 `run_state`（带 `previous`/`reason`）；`finishRun` 增加 `state`/`stopReason`（`status` 取值不变） | `electron/ipc/agent.cjs` |
 | `summarizeRun` 新增附加字段 `state`（`finish.state` → 最近 `run_state` → `RUNNING`），`status` 不变 | `electron/runStore.cjs` |
-| 用例（进 CORE，门禁 35 → 36） | `scripts/agent-state-test.cjs`（34 断言） |
+| 用例（进 CORE，门禁 35 → 36） | `scripts/core/agent-state-test.cjs`（34 断言） |
 
 状态与终态映射：abort → `CANCELLED`；迭代/调用触顶 → `LIMIT_REACHED`；异常 → `FAILED`；正常结束 → `COMPLETED`。`toRunStatus` 保持既有 `status` 取值（`LIMIT_REACHED` 仍写 `error`，靠 `state` 字段区分），因此 UI 与续跑判定（只按 `status === 'interrupted'` 过滤）不受影响。
 
@@ -380,7 +380,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 注册表按契约执行：`registerDescriptor`/`descriptorOf`/`listDescriptors`/`describeAll`/`setDefaultTimeoutMs` + 三道 fail-closed 门（只读守卫 / 网络能力 / 确认门）+ 契约超时 | `electron/tools/registry.cjs` |
 | `save_project` 迁到显式契约（本阶段唯一行为变化）：覆盖工程文件属破坏性写 → `requiresConfirmation='WRITE'`，不批准就一个字节都不写 | `electron/tools/impl/saveProjectTool.cjs` |
 | 三份名单改为引用同一对象；`agent:tools` 顺带返回契约摘要（UI/审计可读） | `electron/agent.cjs`、`electron/ipc/agent.cjs` |
-| 用例（进 CORE，门禁 36 → 37） | `scripts/tool-descriptor-test.cjs`（40 断言） |
+| 用例（进 CORE，门禁 36 → 37） | `scripts/core/tool-descriptor-test.cjs`（40 断言） |
 
 **三道门与超时的实现要点**：
 
@@ -401,7 +401,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 新增按契约组装的最小能力面：`exec`（四个 id + 角色 + 能力集）+ `project`/`approval`/`audit`/`ui`/`checkpoint`/`cancel`/`trace` 七面 + 能力蕴含关系 | `electron/tools/executionContext.cjs` |
 | `registry.execute(name, args, ctx, callInfo)` 改为给工具传能力面；`callInfo`（`turnId`/`toolCallId`/`attemptId`）由主循环传入 | `electron/tools/registry.cjs`、`electron/agent.cjs` |
 | 能力面按真实用法校准：标量索引（派生数据）归读面；`scan_project` 因 `applyToWorkbench` 归 `workspace.write` | `electron/tools/descriptor.cjs` |
-| 用例（进 CORE，门禁 37 → 38） | `scripts/context-capability-test.cjs`（25 断言） |
+| 用例（进 CORE，门禁 37 → 38） | `scripts/core/context-capability-test.cjs`（25 断言） |
 
 **关键设计取舍**：
 
@@ -443,7 +443,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 - **结果契约只报事实**：`changedFiles` 从工具调用参数里解析（解析不出就跳过），`acceptanceJudgement` 固定为 `manual` —— 验收是否达成不自动判定，避免「编造结论」。
 - **压缩那块**：`system` 恒定 + 内容级缓存解决「同一份内容重复付 prefill」，但**没有**假装解决前缀命中率本身 —— 真正能把命中率拉上去的是「把同一轮多个超大结果合并成一次压缩请求」，本轮未做（见下）。
 
-**验证证据**：`npm run verify` = **39/39 PASS，196.8s**（CORE 38 → 39）。新增 `scripts/subagent-isolation-test.cjs` 进 CORE，A–J 共 11 段断言：角色契约一致性（含 canvas 提示与 enum 对齐、白名单/能力集与契约逐项相等）、只读门双向（白名单+无能力 → 拒；能力授予 → 放行）、`scan_project` 只读不谎报 + 有权限时确实写入、预算父子链（子超额只拒自己、父总量守恒）、总时长钳制、结果契约（字段头/截断/变更文件/`acceptanceJudgement`）、stage 警告、失败劝退、幂等归因（含 `context → guard` 传递）、压缩缓存（键稳定/命中统计/LRU/落盘复用）、配置默认值。
+**验证证据**：`npm run verify` = **39/39 PASS，196.8s**（CORE 38 → 39）。新增 `scripts/core/subagent-isolation-test.cjs` 进 CORE，A–J 共 11 段断言：角色契约一致性（含 canvas 提示与 enum 对齐、白名单/能力集与契约逐项相等）、只读门双向（白名单+无能力 → 拒；能力授予 → 放行）、`scan_project` 只读不谎报 + 有权限时确实写入、预算父子链（子超额只拒自己、父总量守恒）、总时长钳制、结果契约（字段头/截断/变更文件/`acceptanceJudgement`）、stage 警告、失败劝退、幂等归因（含 `context → guard` 传递）、压缩缓存（键稳定/命中统计/LRU/落盘复用）、配置默认值。
 
 变异测试 **4/4 有判别力**（临时改回旧行为 → 新用例变红在预期行 → 自动还原并核对 sha256，基线绿）：只读门退回白名单豁免 → 红在 B 段（行 77）；`scan_project` 不检查是否真写入 → 红在 C 段（行 85）；`context` 不传 actor → 红在 H2（行 239）；子代理结果不截断 → 红在 F 段（行 178）。
 
@@ -463,7 +463,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 切分 `chunkCompressionItems`：按条数（`agent.compression.batch_max_items`，默认 4）与累计字符（`max_input_chars`）双约束分批 | `electron/agent.cjs` |
 | 主循环改为「先登记、轮末结算」：tool 消息先按原文进上下文，轮末批量压缩后**改写**对应 tool 消息内容（消息顺序不变） | `electron/agent.cjs` |
 | 配置 `agent.compression.batch`（默认开）/ `batch_max_items` | `electron/agent.cjs`、`config/agent.properties` |
-| 用例（进 CORE，门禁 39 → 40） | `scripts/compression-batch-test.cjs`（7 段断言） |
+| 用例（进 CORE，门禁 39 → 40） | `scripts/core/compression-batch-test.cjs`（7 段断言） |
 
 **关键设计取舍**：
 
@@ -488,7 +488,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | **结构化结果**：`kind`（`success`/`partial`/`failure`）+ `failure` + `failed[]`；新增 `AgentToolResult.failure(code, msg, data)` / `partial(text, data, failed)` | `electron/tools/result.cjs` |
 | 注册表门失败显式化：角色无权 → `PERMISSION_DENIED`、未知工具 → `FATAL_FAILURE`（此前只有中文文案，主循环无法分类） | `electron/tools/registry.cjs` |
 | 主循环：工具记录带 `callId` + 失败即刻归类；nudge 改为**分类化**并按 toolCallId 限次，被抑制的落 `failure_taxonomy` trace | `electron/agent.cjs` |
-| 用例（进 CORE，门禁 41 → 42） | `scripts/tool-failure-taxonomy-test.cjs`（10 段断言） |
+| 用例（进 CORE，门禁 41 → 42） | `scripts/core/tool-failure-taxonomy-test.cjs`（10 段断言） |
 
 **关键设计取舍**：
 
@@ -514,7 +514,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | `linkAbort(parent, controller)`：父 signal → 子 controller 的取消贯穿链（含「订阅前父已 abort」的补发） | 同上 |
 | 主循环接入：轮开始前 `prime()`，执行处优先 `await` 预启动的 promise（未预启动的按原顺序走 registry） | `electron/agent.cjs` |
 | 配置 `agent.tools.parallel`（默认 **false**）/ `agent.tools.parallel_concurrency`（默认 3，钳制 1–8） | `electron/agent.cjs`、`config/agent.properties` |
-| 用例（进 CORE，门禁 42 → 43） | `scripts/scheduler-parallel-test.cjs`（9 段） |
+| 用例（进 CORE，门禁 42 → 43） | `scripts/core/scheduler-parallel-test.cjs`（9 段） |
 
 **关键设计取舍**：
 
@@ -541,7 +541,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | 注册表：**剥离模型自填的审批字段**（`confirmed`/`approved`/`approvalToken`…，在参数校验之前剥离并落 trace）；门 3 改为「申请令牌 → 校验令牌」；新增 `declareContract()` 支持渐进补契约；`confirmWrites` 三态开关 | `electron/tools/registry.cjs` |
 | 画布写工具补审批：`workbench_edit` / `ui_control` / `create_nodes` 经 `declareContract` 声明 `requiresConfirmation='WRITE'`（`save_project` 早已声明） | `electron/tools/impl/*.cjs` |
 | 配置 `tools.confirm_writes`（默认 **true**）/ `agent.approval.ttl_ms`（默认 5 分钟） | `electron/agent.cjs`、`config/agent.properties` |
-| 用例（进 CORE，门禁 43 → 44） | `scripts/approval-token-test.cjs`（12 段） |
+| 用例（进 CORE，门禁 43 → 44） | `scripts/core/approval-token-test.cjs`（12 段） |
 
 **关键设计取舍**：
 
@@ -570,7 +570,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 **关键设计取舍**：越界判定用**策略的 `writeRoots`**（含 projectRoot + `sandbox.allow_write` + tmpdir + userData）而不是「项目根」，这样临时目录里的写不会被误伤（测试与真实脚本都常写 tmp）。静态审计**只认显式写出口**（不模拟命令语义），宁可漏判不误伤。
 
-**验证证据**：`npm run verify` 49/49 PASS。用例 `scripts/shell-guard-test.cjs`（10 段：越界写拒绝 + **磁盘上确实没有那个文件**、相对逃逸、脚本 API 字面量、项目内写仍放行、只读引用不误伤、`network=deny` 三条、`cp` 源在外部不误判、确认文案带审计提示、strict 模式拒绝无法判定的写目标）与 `scripts/test-mode-capability-test.cjs`（A 层 bridge 语义 / B 层越界写·只读上下文·network=deny 三门在 `CODENODE_TEST` 下照旧拒绝 / C 层无审批通道报 `APPROVAL_REQUIRED` / D 层静态守卫：仓库与 CI 里没有任何地方赋值 `process.env.CODENODE_TEST`）。
+**验证证据**：`npm run verify` 49/49 PASS。用例 `scripts/core/shell-guard-test.cjs`（10 段：越界写拒绝 + **磁盘上确实没有那个文件**、相对逃逸、脚本 API 字面量、项目内写仍放行、只读引用不误伤、`network=deny` 三条、`cp` 源在外部不误判、确认文案带审计提示、strict 模式拒绝无法判定的写目标）与 `scripts/core/test-mode-capability-test.cjs`（A 层 bridge 语义 / B 层越界写·只读上下文·network=deny 三门在 `CODENODE_TEST` 下照旧拒绝 / C 层无审批通道报 `APPROVAL_REQUIRED` / D 层静态守卫：仓库与 CI 里没有任何地方赋值 `process.env.CODENODE_TEST`）。
 
 **未做**：`shellGuard` 是启发式，`bash -c "$(curl …)"` 这类动态构造仍可绕过；真正的根治是 Windows 文件系统级隔离（AppContainer / 管理员 Job Object），本平台暂不可行。
 
@@ -582,8 +582,8 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 |---|---|
 | 统一形状 `{v, ts, kind, runId, turnId, toolCallId, attemptId, …payload}` + `emit / readEvents / replay / formatEvent`；写失败返回 null（旁路，不拖垮工具循环） | `electron/eventBus.cjs`（新） |
 | `logToolTrace` **双写**（旧 `tools_trace.jsonl` 保留一个版本周期的兼容读取）；主循环所有事件带身份 | `electron/agent.cjs` |
-| `scripts/event-replay.cjs`：`--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1 | （新） |
-| 用例（进 CORE） | `scripts/event-replay-test.cjs`（A 纯函数归一/坏行容忍/过滤、B 真实循环断言 tool 事件带四个 id 且 `toolCallId` 与 assistant 声明一致、C CLI 退出码） |
+| `scripts/tools/event-replay.cjs`：`--run / --kinds / --limit / --json`，有事件退出码 0、无匹配退出码 1 | （新） |
+| 用例（进 CORE） | `scripts/core/event-replay-test.cjs`（A 纯函数归一/坏行容忍/过滤、B 真实循环断言 tool 事件带四个 id 且 `toolCallId` 与 assistant 声明一致、C CLI 退出码） |
 
 **第一遍的范围（当日早先）**：只有 `tools_trace` 一条链路双写；`checkpoints.jsonl` / `audit.jsonl` / `side-effects.json` / runs 状态 / 成本 / 告警 都还没挂上事件流。
 
@@ -601,14 +601,14 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 
 - 新增 `eventBus.bridge(projectRoot, kind, payload)`：**永不抛**的旁路桥 —— 事件流是旁路，任何失败都必须吞掉，不能拖垮工具循环 / 账本 / 检查点。
 - 新增 `eventBus.summarize(events)`：回放摘要（工具调用序列与失败次数、S5 的失败码分布、审批签发/拒绝/消费、成本与 token）——**只统计实际写进事件的字段，不补、不猜**。
-- `scripts/event-replay.cjs` 加 `--summary`（文本摘要）与 `--json --summary`（结构化摘要）。
+- `scripts/tools/event-replay.cjs` 加 `--summary`（文本摘要）与 `--json --summary`（结构化摘要）。
 - 用例扩展到 18 段：C4/C5（CLI 摘要）、D×6 + D7/D8（六套来源都进流、成本事件带 runId/token、审批事件带 toolCallId）、E1–E4（摘要统计正确 + 空数据不编造）。变异 **5/5 有判别力**：bridge 整体变 no-op → 8 条 FAIL；run 状态 / 副作用账本 / 审批事件分别断桥 → 各 1–2 条 FAIL；摘要 token 统计失效 → 1 条 FAIL。
 
 **仍未做**：UI 侧没有消费 `events.jsonl`（回放目前仍是 CLI）；`events.jsonl` 自身没有独立的轮转策略（复用 runStore 的字节上限）。
 
 ### S8-UI 实施记录（运行回放接进界面，2026-09-16）
 
-**动因**：S8 的记录里写着「UI 侧没有消费 `events.jsonl`（回放目前是 CLI）」—— 用户看得到 Agent 在跑，却看不到「这一轮到底发生了什么」；排查问题时只能去命令行敲 `scripts/event-replay.cjs`。
+**动因**：S8 的记录里写着「UI 侧没有消费 `events.jsonl`（回放目前是 CLI）」—— 用户看得到 Agent 在跑，却看不到「这一轮到底发生了什么」；排查问题时只能去命令行敲 `scripts/tools/event-replay.cjs`。
 
 | 内容 | 文件 |
 |---|---|
@@ -617,7 +617,7 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 | `src/store/replayStore.ts`：zustand store（loading / error / file / total / runs / events / summary + `load()`） | （新） |
 | `src/components/RunReplayPanel.tsx`：挂在「工作流运行」标签内的**摘要条 + 类型芯片 + 时间线**（工具名/ok/耗时、审批相位中文、成本与 token、run 下拉、事件文件路径） | （新） |
 | 样式沿用既有 token（三层亮度 + 单一 accent，时间线 hover 用 `--bg-panel-3`） | `src/styles.css` |
-| 用例：`test:event-replay` 扩到 **26 段**（新增 F1–F4 载荷契约）；新增 `test:event-replay-ui`（**offscreen Electron 真实渲染** 12 段，进 DISPLAY 组） | `scripts/event-replay-test.cjs`、`scripts/event-replay-ui-test.cjs`（新）、`scripts/run-all-tests.cjs` |
+| 用例：`test:event-replay` 扩到 **26 段**（新增 F1–F4 载荷契约）；新增 `test:event-replay-ui`（**offscreen Electron 真实渲染** 12 段，进 DISPLAY 组） | `scripts/core/event-replay-test.cjs`、`scripts/ui/event-replay-ui-test.cjs`（新）、`scripts/run-all-tests.cjs` |
 
 **设计取舍**：
 
@@ -635,14 +635,14 @@ messages += tool 结果（tool_call_id 统一取自 Scheduler 分配的 callId�
 - **契约显式化**：`toolkit.declareSemantics()` 构建后把语义固化成 `source: 'explicit'`（字段值逐字不变），`requiresConfirmation` **原样传递** —— 补声明不给写工具凭空加审批（用例 C3/C4 锁住）。
 - **顺带修掉的真 bug**：模型自填审批字段的剥离此前只在 `requiresConfirmation` 为真的工具上执行，且 `const traceFn = execContext.trace; typeof traceFn === 'function'` 对**冻结对象**恒假（审计从未落盘）。schema 闭合把这些残留字段变成「未知参数」后，`write_file` 带 `confirmed=true` 直接 `INVALID_TOOL_ARGUMENTS`。现在所有工具、校验前一律剥离，审计走 `trace.note`。
 - **上限可配置**：`agent.max_tool_iterations`（12）/ `agent.max_total_tool_calls`（100）/ `agent.data_truncate_cap`（120000），默认值与旧常量逐字一致；`buildToolContent` 现在对**正文本身**也截断（此前只截 `[data]` 附加段，`result.text` 无上限）。
-- **新增门禁**：`scripts/tool-contract-closure-test.cjs`（22/22 闭合、拼错字段被拒、自填字段仍被剥离、`source` 全为 explicit、语义与名单一致、审批级别未被改变、**impl 目录里没有「文件在却没注册」的静默漂移**——`createNodesTool.cjs` / `workbenchConnectTool.cjs` 作为显式白名单列出）与 `scripts/agent-limits-test.cjs`（默认值不变 + 配小后真实循环按新上限停下且 `stopReason` 为 `iteration_limit`/`tool_limit` 而非 `FAILED` + 正文截断生效）。
+- **新增门禁**：`scripts/core/tool-contract-closure-test.cjs`（22/22 闭合、拼错字段被拒、自填字段仍被剥离、`source` 全为 explicit、语义与名单一致、审批级别未被改变、**impl 目录里没有「文件在却没注册」的静默漂移**——`createNodesTool.cjs` / `workbenchConnectTool.cjs` 作为显式白名单列出）与 `scripts/core/agent-limits-test.cjs`（默认值不变 + 配小后真实循环按新上限停下且 `stopReason` 为 `iteration_limit`/`tool_limit` 而非 `FAILED` + 正文截断生效）。
 
 ### P6/P7 实施记录（grounding 门、同步遍历工具可取消，2026-09-16）
 
-- **来源校验门（原计划 S10）**：`agent.grounding.mode` = `warn`（默认，只上报 —— 行为与之前逐字一致）/ `enforce`（引用不可信不允许直接交付：先让模型按 `groundingRetryPrompt` 订正，最多 `agent.grounding.max_retries`（默认 1）次；仍不达标 → 返回值 `groundingBlocked=true` + 独立 `grounding_blocked` 事件，**不把校验提示拼进交付正文**）。用例 `scripts/grounding-gate-test.cjs`（14 段：配置默认/回落、warn 不拦、enforce 拦下→订正→合格交付、订正用尽→如实标记、`max_retries=0` 直接标记）——其中 `retrieve_context` 用**测试替身**覆盖（离线环境没有嵌入服务，替换成固定返回一份文件型来源，让「检索到了可用来源」这个前提成立）。
+- **来源校验门（原计划 S10）**：`agent.grounding.mode` = `warn`（默认，只上报 —— 行为与之前逐字一致）/ `enforce`（引用不可信不允许直接交付：先让模型按 `groundingRetryPrompt` 订正，最多 `agent.grounding.max_retries`（默认 1）次；仍不达标 → 返回值 `groundingBlocked=true` + 独立 `grounding_blocked` 事件，**不把校验提示拼进交付正文**）。用例 `scripts/core/grounding-gate-test.cjs`（14 段：配置默认/回落、warn 不拦、enforce 拦下→订正→合格交付、订正用尽→如实标记、`max_retries=0` 直接标记）——其中 `retrieve_context` 用**测试替身**覆盖（离线环境没有嵌入服务，替换成固定返回一份文件型来源，让「检索到了可用来源」这个前提成立）。
 - **同步遍历工具可取消**：`impl/shared.cjs` 新增 `isCancelled(context)`；`scan_project`（含 `projectScan` 的遍历与逐文件分类两个循环）、`find_files`、`search_files` 在循环里加检查点，取消时返回 `kind=failure / code=CANCELLED` 并如实说明「结果不完整」（`partial` 计数）。
   **边界（别当成已解决）**：单次同步 fs 调用（一次 `readFileSync` 大文件、一次巨型 `JSON.parse`）**依旧不可打断**，真正的可中断需要把这些工具挪到 worker/子进程 —— 未做。
-  用例 `scripts/sync-tool-cancel-test.cjs`：用**计数式 `aborted` getter** 造出「同步循环内部真的发生取消」（`setTimeout` 在同步遍历里排不上队，用它永远测不到），判据是「取消 → `CANCELLED` + `partial < 完整结果`」与「不取消 → 结果完整」（防过度修复）。
+  用例 `scripts/core/sync-tool-cancel-test.cjs`：用**计数式 `aborted` getter** 造出「同步循环内部真的发生取消」（`setTimeout` 在同步遍历里排不上队，用它永远测不到），判据是「取消 → `CANCELLED` + `partial < 完整结果`」与「不取消 → 结果完整」（防过度修复）。
 
 ### P7 收口（文件遍历搬进 worker 线程，2026-09-16）
 
@@ -729,7 +729,7 @@ RangeError: Maximum call stack size exceeded
 
 **变异测试暴露的判据缺陷（值得记住）**：第 3 条变异（把 `readLiteral` 的转义跳过从 `j += 2` 改成 `j += 1`）**最初失效** —— 因为 fixture 用的是 `\(` / `\)` 这种**深度恰好抵消**的转义括号，改坏跳过逻辑输出照样一致。换成「转义反斜杠紧跟真括号」（内容 `a\)b`）后才真正有判别力 → 最终 3/3。**判据要挑对变异敏感的输入，不能只挑"看起来复杂"的**。
 
-**证据**：新增 `scripts/pdf-text-test.cjs`（19 条，进 CORE 门禁）：各操作符 golden + null 语义 + 大内容流 **8.58MB / 17.17MB 能提取且可打印字符数与理论值精确吻合**（7200000 / 14400000）。`fs-worker-test` 的慢 PDF fixture 提到 8.58MB（正是旧实现爆栈的规模），一并成为回归锁。
+**证据**：新增 `scripts/core/pdf-text-test.cjs`（19 条，进 CORE 门禁）：各操作符 golden + null 语义 + 大内容流 **8.58MB / 17.17MB 能提取且可打印字符数与理论值精确吻合**（7200000 / 14400000）。`fs-worker-test` 的慢 PDF fixture 提到 8.58MB（正是旧实现爆栈的规模），一并成为回归锁。
 
 ---
 

@@ -111,7 +111,7 @@ BM25 的词频饱和与长度归一化分别由 `rag.bm25_k1`（默认 1.35，�
 #### 2.2.1.1 真机验证结论（2026-09-15：Milvus v2.6.5 + SDK 3.0.5）
 
 已跑通真实服务端到端：写入 → 全库 ANN 检索 → 纯语义命中并入 → 按 file 删除传播 → 索引端到端
-（`MILVUS_ADDR=http://127.0.0.1:19530 node scripts/vector-store-test.cjs`，`realMilvus: pass`）。
+（`MILVUS_ADDR=http://127.0.0.1:19530 node scripts/core/vector-store-test.cjs`，`realMilvus: pass`）。
 过程中暴露四个「只有真机才会出现」的坑，均已修入 `electron/vectorStore/milvus.cjs`：
 
 1. **不要显式传 `search_params`**：SDK 的 `buildSearchParams` 只在未提供 `search_params` 时才注入
@@ -155,11 +155,11 @@ minio 官方镜像已从 Docker Hub 撤下（404），改用 `quay.io/minio/mini
 链路：`llama.cpp llama-server`（CPU 版，`bge-m3-Q8_0.gguf`，`--embeddings --pooling cls --ctx-size 8192`）
 暴露 OpenAI 兼容 `/v1/embeddings` → 本适配器 `embed_provider=openai` 指向它 → Milvus v2.6.5（HNSW/COSINE/Strong）。
 
-- 端到端：`MILVUS_ADDR=… MILVUS_DIM=1024 EMBED_PROVIDER=openai EMBED_MODEL=bge-m3 EMBED_BASE=http://127.0.0.1:8080/v1 node scripts/vector-store-test.cjs`
+- 端到端：`MILVUS_ADDR=… MILVUS_DIM=1024 EMBED_PROVIDER=openai EMBED_MODEL=bge-m3 EMBED_BASE=http://127.0.0.1:8080/v1 node scripts/core/vector-store-test.cjs`
   → `realMilvus=pass`，`dim=1024`、`indexType=HNSW`、`M16/efC200/ef64`；中文查询 `topVectorScore=0.7033`。
 - **语义判别**（哈希向量必然通不过的断言）：中文问句「会话令牌续期怎么做」对
   「刷新令牌实现代码」cosine **0.4597** vs 对「发票金额计算代码」**0.3366** —— 真嵌入能区分相关/无关。
-- **语义收益**（`node scripts/vector-store-semantic-probe.cjs`，可复跑）：
+- **语义收益**（`node scripts/eval/vector-store-semantic-probe.cjs`，可复跑）：
 
   | 中文问句（与代码无词面交集） | 纯 BM25 | 真嵌入 + 全库 ANN |
   | --- | --- | --- |
@@ -284,8 +284,8 @@ agent.compression.max_calls=8
 
 ### 5.1 离线检索评测
 
-运行 `node scripts/rag-eval.cjs --out=out/rag-eval-report.json`，会用
-`scripts/rag-eval-cases.json` 中固定的问题与目标代码片段，对比默认配置、两组 BM25 参数、
+运行 `node scripts/eval/rag-eval.cjs --out=out/rag-eval-report.json`，会用
+`scripts/eval/rag-eval-cases.json` 中固定的问题与目标代码片段，对比默认配置、两组 BM25 参数、
 不同哈希向量权重、纯词法及关闭图扩展的结果。报告分别记录文件与目标片段的
 Recall@3、Recall@6，以及片段 MRR、
 无答案问题的误判率、各问题排名与检索耗时。评测在本地运行，不调用嵌入服务。

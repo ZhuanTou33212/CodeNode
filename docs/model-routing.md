@@ -39,4 +39,4 @@ cost.price.your-backup-model=1,2
 
 费用硬上限开启且请求带图片时，每个实际候选还需配置 `cost.image_input_tokens.<model>` 每图输入上界；换模型不会继承另一模型的图片计费假设。Gemini 的响应候选与思考 Token 一起计入输出，符合[官方用量说明](https://ai.google.dev/gemini-api/docs/generate-content/thinking)；其他无法归入输入/输出的总量差额按配置最高单价保守占用预算，账本保留计费不确定性。
 
-验证：`node scripts/model-routing-test.cjs` 使用本地真实 HTTP 服务，覆盖候选模型请求、生产压缩任务接线、断流复位、非重试错误、实际模型账单，以及父子共享 Token/重试/费用上限。测试不调用收费模型。
+验证：`node scripts/core/model-routing-test.cjs` 使用本地真实 HTTP 服务，覆盖候选模型请求、生产压缩任务接线、断流复位、非重试错误、实际模型账单，以及父子共享 Token/重试/费用上限。测试不调用收费模型。

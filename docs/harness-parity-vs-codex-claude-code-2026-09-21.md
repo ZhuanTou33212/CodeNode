@@ -94,12 +94,12 @@ Claude Code 2.1.153: PostToolUse 154 · bypassPermissions 137 · WebFetch 105 ·
 
 ## 3. CodeNode 明确领先的三条（对照时要一起说）
 
-1. **真机评测挂到 PR 门禁**：`scripts/agent-eval.cjs --subset=pr` 只跑 3 个「判据只看世界状态」的任务
+1. **真机评测挂到 PR 门禁**：`scripts/eval/agent-eval.cjs --subset=pr` 只跑 3 个「判据只看世界状态」的任务
    （文件字节 / 工具返回 / Run 事件 / 退出码 / 供应商 usage），CI 侧 `model-eval-pr` job 在 `has_key == 'true'` 时执行，
    无凭据时 fail-closed；`scripts/lib/eval-limits.cjs` 只许放宽白名单内的 `steps-at-most` 且幅度 ≤2×。
    两家 CLI 都没有公开可复跑的评测门禁。
 2. **统一事件流 + 回放**：`.codenode/events.jsonl` 七条链路双写（tool / run_state / checkpoint / side_effect /
-   cost / alert / audit + approval），CLI `scripts/event-replay.cjs` 与界面 `RunReplayPanel` 共用同一份数据。
+   cost / alert / audit + approval），CLI `scripts/tools/event-replay.cjs` 与界面 `RunReplayPanel` 共用同一份数据。
 3. **审批令牌不可伪造**：服务端签发、绑定 `capability`/`scope`/`toolCallId`/`attemptId`、单次有效，
    且注册表在**参数校验之前**剥离模型自填的 `confirmed`/`approved`/`approvalToken`。
    对照：ToolUse 类 harness 常见的「模型自己批准自己」在这里被结构性堵死。

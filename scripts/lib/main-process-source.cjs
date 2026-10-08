@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..', '..');
+const ROOT = path.join(__dirname, "../..");
 
 /** @returns {string} 主进程全部源码（按文件名排序拼接，便于 diff 与稳定复现） */
 function readMainProcessSource() {

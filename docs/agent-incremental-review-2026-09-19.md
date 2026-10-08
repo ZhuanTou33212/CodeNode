@@ -21,7 +21,7 @@
 > 因此 §1 的「状态」列与 §3 表格里的「未修/成立」是**审查当时（`50e9b4b`）**的描述，**不要当作现状照抄**。
 >
 > **仍未做的是 §4 的四类结构性问题**（不是单点 bug，需要产品决策）：
-> ①真机回归与代码演进脱节（`scripts/agent-eval-tasks.cjs` 仍 6 个 `realModel:false` / 5 个 true；
+> ①真机回归与代码演进脱节（`scripts/eval/agent-eval-tasks.cjs` 仍 6 个 `realModel:false` / 5 个 true；
 > 真机 job 只在手动 release 模式跑）②用户对运行中的 Agent 没有控制手段
 > （无 steering/排队消息；子代理任务视图仅内存 `Map`、无 UI；无 Run 级文件改动回滚、幂等账本无 before-image）
 > ③每轮固定开销 ≈8k tokens 未审计、无按任务分层注入 ④缺「用例输入与生产同形」的门禁。
@@ -46,7 +46,7 @@
 | `50e9b4b` | P5 落地记录（§12） |
 
 新增模块 `electron/tools/leases.cjs`（资源租约）、`electron/tools/merge.cjs`（确定性合并）、
-用例 `scripts/multi-agent-integrity-test.cjs`。
+用例 `scripts/core/multi-agent-integrity-test.cjs`。
 
 **两处更正（请以本文为准）**：
 
@@ -160,7 +160,7 @@
 **现有保护**：`electron/agent.cjs:1908-1910` 的硬裁剪层**专门声明**「保配对」—— 说明该约束是已知的，
 只是**检查点这条路没遵守**。
 
-**为什么一直没被红出来**：`scripts/agent-resume-test.cjs:174-178` 只断言「有 system / 有断点续跑字样」，
+**为什么一直没被红出来**：`scripts/core/agent-resume-test.cjs:174-178` 只断言「有 system / 有断点续跑字样」，
 **从不校验消息结构合法性**。
 
 **最小修复**：加纯函数 `repairToolPairing(messages)`（在 `saveMessages` 或 `buildResumeMessages` 调用）：
@@ -392,7 +392,7 @@ controller 再也点不到**，停止按钮不生效，旧 Run 继续真实调�
 
 ### 4.1 真机验证与代码演进脱节（本轮我认为最值得处理的系统性问题）
 
-1. **真机模式下 11 个任务只执行 5 个**。`scripts/agent-eval-tasks.cjs` 里 6 个任务标了 `realModel: false`，
+1. **真机模式下 11 个任务只执行 5 个**。`scripts/eval/agent-eval-tasks.cjs` 里 6 个任务标了 `realModel: false`，
    跳过理由统一写成「依赖脚本化模型（确定性注入/预算/取消/崩溃）」——
    而跳过的恰好是**最关键**的可靠性路径：长上下文压缩、越界注入兜底、崩溃恢复、token 预算、
    工具调用上限、迭代上限（见 `docs/eval-reports/agent-eval-72342c7-model-20260917-085235.md`）。
@@ -435,9 +435,9 @@ controller 再也点不到**，停止按钮不生效，旧 Run 继续真实调�
 
 同一模式至少出现三次：
 
-- `scripts/context-budget-test.cjs:43` 的 fixture **自带 `name`**，生产消息没有（掩盖 #22）。
-- `scripts/compression-batch-test.cjs:104` 把「截断」断言成「**信息不丢**」（掩盖 #11）。
-- `scripts/agent-resume-test.cjs:174-178` 只断言「有 system / 有断点续跑字样」，不校验结构合法性（掩盖 #2）。
+- `scripts/core/context-budget-test.cjs:43` 的 fixture **自带 `name`**，生产消息没有（掩盖 #22）。
+- `scripts/core/compression-batch-test.cjs:104` 把「截断」断言成「**信息不丢**」（掩盖 #11）。
+- `scripts/core/agent-resume-test.cjs:174-178` 只断言「有 system / 有断点续跑字样」，不校验结构合法性（掩盖 #2）。
 
 本仓库的**变异测试纪律很强**，但缺一道「用例输入是否与生产同形」的门禁。建议：
 对关键用例增加「fixture 形状断言」（用生产构造函数生成输入，而不是手写近似对象）。

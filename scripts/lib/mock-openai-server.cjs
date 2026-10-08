@@ -90,7 +90,7 @@ function startMockOpenAIInProcess(options) {
 /** 独立进程版本：返回 { port, stop() → requests[] } */
 function startMockOpenAI(options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(__dirname, 'mock-openai-server.cjs')], {
+    const child = spawn(process.execPath, [path.join(__dirname, "./mock-openai-server.cjs")], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, MOCK_USAGE: String((options && options.totalTokens) || 500) },
     });
