@@ -36,6 +36,12 @@ async function main(){
   const openclawResult=await openclaw.start({projectRoot:root,prompt:'Gateway bridge',confirm:async()=>false});
   assert.equal(openclawResult.state,'COMPLETED');
   assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(openclawSessionParams,'utf8')).params,'mcpServers'),false,'OpenClaw rejects even an empty per-session mcpServers field');
+  const legacyOpenclawParams=path.join(root,'openclaw-legacy-session-params.json');
+  const legacyOpenclaw=new AcpBackend({...acpSettings,backend:'openclaw'},
+    {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_REQUIRE_MCP_SERVERS:'1',FIXTURE_SESSION_PARAMS:legacyOpenclawParams}})}}});
+  const legacyOpenclawResult=await legacyOpenclaw.start({projectRoot:root,prompt:'Legacy gateway bridge',confirm:async()=>false});
+  assert.equal(legacyOpenclawResult.state,'COMPLETED','older OpenClaw schema retries only after its explicit missing-mcpServers error');
+  assert.deepEqual(JSON.parse(fs.readFileSync(legacyOpenclawParams,'utf8')).params.mcpServers,[],'legacy retry supplies an empty MCP list');
   const permissionResponse=path.join(root,'acp-permission-response.json');
   const readonly=new AcpBackend({...acpSettings,backend:'hermes',sandbox:'read-only'},
     {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_PERMISSION:'1',FIXTURE_PERMISSION_RESPONSE:permissionResponse}})}}});

@@ -12,8 +12,10 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   }
   if(m.method==='initialize')result({protocolVersion:1,agentCapabilities:{loadSession:true,sessionCapabilities:{resume:{},close:{}}},agentInfo:{name:'fixture',version:'1'}});
   else if(m.method==='error-test')send({jsonrpc:'2.0',id:m.id,error:{code:-32001,message:'fixture protocol error',data:{detail:'preserve diagnostic'}}});
-  else if(m.method==='session/new'){session='acp-fixture';if(process.env.FIXTURE_SESSION_PARAMS)require('node:fs').writeFileSync(process.env.FIXTURE_SESSION_PARAMS,JSON.stringify({method:m.method,params:m.params}));result({sessionId:session});}
-  else if(m.method==='session/load'||m.method==='session/resume'){session=m.params.sessionId;if(process.env.FIXTURE_SESSION_PARAMS)require('node:fs').writeFileSync(process.env.FIXTURE_SESSION_PARAMS,JSON.stringify({method:m.method,params:m.params}));result({});}
+  else if(m.method==='session/new'||m.method==='session/load'||m.method==='session/resume'){
+    if(process.env.FIXTURE_REQUIRE_MCP_SERVERS==='1'&&!Array.isArray(m.params.mcpServers))send({jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Invalid params',data:{_errors:[],mcpServers:{_errors:['Invalid input: expected array, received undefined']}}}});
+    else{session=m.params.sessionId||'acp-fixture';if(process.env.FIXTURE_SESSION_PARAMS)require('node:fs').writeFileSync(process.env.FIXTURE_SESSION_PARAMS,JSON.stringify({method:m.method,params:m.params}));result(m.method==='session/new'?{sessionId:session}:{});}
+  }
   else if(m.method==='session/prompt'){
     pendingPrompt=m.id;
     send({jsonrpc:'2.0',method:'session/update',params:{sessionId:session,update:{sessionUpdate:'agent_message_chunk',messageId:'msg-1',content:{type:'text',text:'ACP_RUNTIME_OK'}}}});

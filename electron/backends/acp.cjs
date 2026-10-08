@@ -5,6 +5,11 @@ const { redact } = require('../redaction.cjs');
 const config = require('../../config/agent.backends.json');
 
 const names = { hermes: 'Hermes Agent', opencode: 'OpenCode', openclaw: 'OpenClaw' };
+function requiresOpenClawMcpArray(error) {
+  if (error?.code !== -32602) return false;
+  const detail = JSON.stringify(error.data || {});
+  return /mcpServers/.test(detail) && /expected array,\s*received undefined/i.test(detail);
+}
 class AcpBackend {
   constructor(settings, deps = {}) {
     this.settings = settings; this.deps = deps; this.rpc = null; this.listener = (delta) => {};
@@ -18,6 +23,15 @@ class AcpBackend {
     const command = this.settings.executable || config.commands[this.settings.backend];
     const args = this.settings.args?.length ? this.settings.args : config.defaultArgs[this.settings.backend] || [];
     return { command, args: [...args] };
+  }
+  async sessionRequest(method, params) {
+    try { return await this.rpc.request(method, params); }
+    catch (error) {
+      // Newer OpenClaw rejects mcpServers entirely, while older ACP bridges
+      // require an array. Retry only the precise missing-array schema error.
+      if (this.settings.backend !== 'openclaw' || Object.hasOwn(params, 'mcpServers') || !requiresOpenClawMcpArray(error)) throw error;
+      return this.rpc.request(method, { ...params, mcpServers: [] });
+    }
   }
   async connect(cwd) {
     const { command, args } = this.command();
@@ -52,18 +66,17 @@ class AcpBackend {
     try {
       if (input.signal?.aborted) return { content: '', state: 'CANCELLED', aborted: true, stopReason: 'cancelled' };
       await this.connect(input.projectRoot);
-      // OpenClaw ACP bridge rejects the mcpServers field entirely, even when
-      // empty; other ACP agents accept an empty list for session lifecycle calls.
+      // Newer OpenClaw ACP bridges reject the mcpServers field entirely.
       const sessionMcp = this.settings.backend === 'openclaw' ? {} : { mcpServers: [] };
       if (input.backendSession?.sessionId) {
         const canLoad = this.capabilityInfo.loadSession === true;
         const canResume = !!this.capabilityInfo.sessionCapabilities?.resume;
-        if (canLoad) await this.rpc.request('session/load', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, ...sessionMcp });
-        else if (canResume) await this.rpc.request('session/resume', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, ...sessionMcp });
+        if (canLoad) await this.sessionRequest('session/load', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, ...sessionMcp });
+        else if (canResume) await this.sessionRequest('session/resume', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, ...sessionMcp });
         else throw new Error(this.settings.backend + ' 未声明 ACP 会话恢复能力，不能恢复原执行');
         this.sessionId = input.backendSession.sessionId;
       } else {
-        const created = await this.rpc.request('session/new', { cwd: input.projectRoot, ...sessionMcp });
+        const created = await this.sessionRequest('session/new', { cwd: input.projectRoot, ...sessionMcp });
         if (!created?.sessionId) throw new Error('ACP session/new 未返回会话编号');
         this.sessionId = created.sessionId;
       }
