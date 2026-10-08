@@ -63,7 +63,12 @@ async function main() {
   fs.writeFileSync(path.join(root, 'math.test.cjs'), "require('assert').strictEqual(require('./math.cjs')(2,3),5);\n");
   const events = []; const controller = new AbortController();
   const common = { projectRoot: root, settings: selected, cfg, history: [], canvasSummary: 'task → end',
-    sessionId: 'canvas-session', onDelta: event => events.push(event) };
+    sessionId: 'canvas-session', onDelta: event => {
+      events.push(event);
+      if (event.kind === 'start' || event.kind === 'backend_approval' || (event.kind === 'state' && ['RUNNING','WAITING_USER','CANCELLED'].includes(event.state))) {
+        console.log('BACKEND TEST EVENT: ' + event.kind + (event.phase ? ':' + event.phase : '') + (event.state ? ':' + event.state : ''));
+      }
+    } };
   const first = await external.runExternal({ ...common, requestId: 'first', prompt: 'interrupt-test', signal: controller.signal,
     confirm: async () => { setImmediate(() => controller.abort()); return false; } }, { createBackend: create });
   assert.equal(first.state, 'CANCELLED');

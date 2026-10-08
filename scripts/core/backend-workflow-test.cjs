@@ -27,8 +27,10 @@ const userData = path.join(root, '.userdata');
 const events = [];
 let stoppedRun = null; let approve = false;
 const sender = { id: 42, isDestroyed: () => false, send: (channel, payload) => {
-  if (channel === 'agent:delta') { events.push(payload); if (payload.kind === 'start') stoppedRun = payload.requestId; }
+  if (channel === 'agent:delta') { events.push(payload); if (payload.kind === 'start') stoppedRun = payload.requestId;
+    if (payload.kind === 'start' || payload.kind === 'backend_approval' || (payload.kind === 'state' && ['RUNNING','WAITING_USER','CANCELLED'].includes(payload.state))) console.log('BACKEND WORKFLOW EVENT: ' + payload.kind + (payload.phase ? ':' + payload.phase : '') + (payload.state ? ':' + payload.state : '')); }
   if (channel === 'tools:request' && payload.type === 'confirm') {
+    console.log('BACKEND WORKFLOW EVENT: tools:confirm');
     setImmediate(() => {
       ipc.emit('tools:response', { sender }, { id: payload.id, result: { ok: approve } });
       if (!approve) setTimeout(() => { void handlers.get('agent:stop')({ sender }, stoppedRun); }, 40);
