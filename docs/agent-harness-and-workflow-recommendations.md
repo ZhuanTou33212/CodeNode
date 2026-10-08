@@ -367,7 +367,7 @@ Goal 等待机制新增只读 GitHub Actions provider：根据项目 `origin` �
 
 新增 `npm run test:goal-github-actions` 用固定 API 响应验证 repository/commit 过滤、workflow attempt 汇总、鉴权头、失败和退避；`goal:wait-check` IPC 另以注入的 fetch fixture 走完任务释放。Goal 面板允许用户选择 GitHub Actions、可选填写完整 commit SHA、查看最近状态；首查默认 HEAD。实时检查使用 Electron `net.fetch`，并验证全局 Git 配置不会被修改。
 
-Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 workflow failure，证明 provider 能读取真实外部状态；失败不会释放 Task。远端日志随后定位到 macOS `workflow-state` 测试把真实路径别名误判为越界、Linux smoke 仍查找旧 `.side-badge` 选择器；这两项已修正。commit `060f3df` 的 CI 中 Ubuntu 与 Windows 通过；macOS 两项后端测试超时。commit `f24289b` 修正取消竞态后，macOS 已能完成中断，但恢复文件任务仍在确认前被边界拒绝，独立代码校验因此为空。日志显示没有进入 `tools:confirm`，结合 `resolveInRoot` 先比较绝对路径前缀再做 realpath，初步指向 `os.tmpdir()` 与子进程 `cwd` 在 macOS 上使用不同临时目录别名。两项测试现在将临时项目根规范为 `fs.realpathSync` 后的真实路径；工作流用例也会在加载确认桥前移除继承的自动应答测试模式。修复后的本机后端专项通过，新的跨平台 CI 正在验证。
+Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 workflow failure，证明 provider 能读取真实外部状态；失败不会释放 Task。远端日志随后定位到 macOS `workflow-state` 测试把真实路径别名误判为越界、Linux smoke 仍查找旧 `.side-badge` 选择器；这两项已修正。commit `060f3df` 的 CI 中 Ubuntu 与 Windows 通过；macOS 两项后端测试超时。commit `f24289b` 修正取消竞态后，macOS 已能完成中断，但恢复文件任务仍在确认前被边界拒绝，独立代码校验因此为空。日志显示没有进入 `tools:confirm`；结合 `resolveInRoot` 先比较绝对路径前缀再做 realpath，最终定位到 `os.tmpdir()` 与子进程 `cwd` 在 macOS 上使用了不同临时目录别名。两项测试现将临时项目根规范为 `fs.realpathSync` 后的真实路径；工作流用例也会在加载确认桥前移除继承的自动应答测试模式。本机后端专项与 `npm run check:js` 通过；commit `43bee0b` 的 CodeNode CI（run `37852323277`）中 Ubuntu、Windows、macOS 验证及三平台打包全部通过，同次推送的 production-gate（run `37852323397`）也通过。
 
 Goal settlement 现会在 Run 完成、当前 Task 仍有有效证据且 CodeNode 局部测试命令通过后，自动生成一条经验候选。候选包含准确的测试命令、相关文件、Run/Task ID、证据 ID、文件指纹和验收条件修订；重复结算不会重复生成。失败、仅语法检查、过期指纹或不完整快照都不生成候选。Goal 面板显示“自动建议”，但候选仍是待复核状态；只有用户点选确认后，后续实现上下文才会包含它。该生成器先覆盖可验证的测试方法，不从单次模型回答推断架构规则或反复故障模式。
 
