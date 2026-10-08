@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 const APP_ICON = path.join(__dirname, '..', 'build', 'icon.ico');
-const APP_ICON_SOURCE = path.join(__dirname, '..', 'codenode-icon.png');
+const APP_ICON_SOURCE = path.join(__dirname, '..', 'assets', 'branding', 'codenode-icon.png');
 
 function resolveAppIcon() {
   if (fs.existsSync(APP_ICON)) return APP_ICON;

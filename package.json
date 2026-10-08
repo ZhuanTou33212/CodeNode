@@ -230,6 +230,7 @@
       "dist/**/*",
       "electron/**/*",
       "config/**/*",
+      "assets/branding/**/*",
       "build/icon.ico",
       "package.json"
     ],

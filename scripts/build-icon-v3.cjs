@@ -10,7 +10,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const ROOT = path.resolve(__dirname, '..');
-const SOURCE = path.join(ROOT, 'codenode-icon.png');
+const SOURCE = path.join(ROOT, 'assets', 'branding', 'codenode-icon.png');
 const OUTPUT_DIR = path.join(ROOT, 'build');
 const OUTPUT = path.join(OUTPUT_DIR, 'icon.ico');
 const SIZES = [16, 24, 32, 48, 64, 128, 256];

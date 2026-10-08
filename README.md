@@ -34,7 +34,9 @@ npm ci
 npm run dev
 ```
 
-`npm run dev` 会同时启动 Vite 和 Electron。Windows 也可以双击仓库中的 `启动项目.bat`。
+`npm run dev` 会同时启动 Vite 和 Electron。已打包的 Windows 桌面版可直接运行 `release/win-unpacked/CodeNode.exe`。
+
+根目录保留构建与协作入口，品牌资源归入 `assets/branding`。各文件用途和维护规则见 [目录结构说明](docs/root-files-guide.md)。
 
 构建后运行桌面版：
 
