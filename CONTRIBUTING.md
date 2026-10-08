@@ -52,7 +52,7 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 | `src/` | 渲染层（React + zustand + xyflow）；`src/vector/` 是矢量工作室 |
 | `scripts/*-test.cjs` | 回归用例（纯 Node 断言，见上） |
 | `scripts/core/runtime-gate.cjs` | **运行时门禁**：断言上述能力真的接线可用（不是"源码里出现过某个字符串"） |
-| `docs/` | 设计与评审文档；`docs/eval-reports/` 是**生成物**（CI 以 artifact 上传，不入库） |
+| `docs/` | 最新设计建议、架构图片和评测数据；`docs/eval-reports/` 是**生成物**（CI 以 artifact 上传，不入库） |
 
 ## 生成物不要入库
 
@@ -74,5 +74,5 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 
 ## 发布
 
-见 `docs/release-process.md`。要点：版本号只在 `package.json` 维护；标签格式 `vX.Y.Z`；发布产物必须带签名
+版本号只在 `package.json` 维护；标签格式 `vX.Y.Z`；发布产物必须带签名
 （`npm run release:sign`），Windows 便携包未签名会被安全软件误判/篡改。
