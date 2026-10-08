@@ -12,7 +12,7 @@ const external = require('../../electron/backends/runExternal.cjs');
 const runStore = require('../../electron/runStore.cjs');
 const { capture, compare } = require('../../electron/backends/workspaceDiff.cjs');
 const { launchEnvironment } = require('../../electron/backends/network.cjs');
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backends-'));
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backends-')));
 const userData = path.join(root, '.userdata');
 const fixture = path.join(__dirname, '../fixtures/codex-app-server.cjs');
 class FixtureRpc extends RpcClient {

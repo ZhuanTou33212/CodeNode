@@ -25,7 +25,7 @@ Module._load = function(request, parent, main) { return request === 'electron' ?
 delete process.env.CODENODE_TEST;
 const agentIpc = require('../../electron/ipc/agent.cjs');
 Module._load = oldLoad;
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backend-workflow-'));
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backend-workflow-')));
 const userData = path.join(root, '.userdata');
 const events = [];
 let stoppedRun = null; let approve = false;
