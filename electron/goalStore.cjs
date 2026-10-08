@@ -6,6 +6,7 @@ const {randomUUID,createHash}=require('crypto');
 const {execFileSync}=require('child_process');
 const {atomicWriteFile}=require('./atomicFile.cjs');
 const {capture}=require('./backends/workspaceDiff.cjs');
+const {redact}=require('./redaction.cjs');
 const FILE='goals.json';
 const MAX_BYTES=8*1024*1024;
 const goalStates=new Set(['active','paused','stopped','completed','archived']);
@@ -82,7 +83,35 @@ function canRun(root,goalId,taskId){
   return{decision:'idle',reason:'Goal 尚无 Task'};
 }
 function admit(root,goalId,taskId,runId){return mutate(root,d=>{const g=findGoal(d,goalId),t=findTask(g,taskId),normalizedRunId=String(runId||'');if(!normalizedRunId||normalizedRunId.length>120)throw new Error('Run ID 无效');if(d.admissions.some(a=>a.goalId===g.id&&a.taskId===t.id&&!a.settledAt))throw new Error('该 Task 已有活动 Run');if(d.admissions.some(a=>a.runId===normalizedRunId))throw new Error('Run 已关联其他 admission');const verdict=canRun(root,goalId,taskId);if(verdict.decision!=='run')throw new Error('运行资格：'+verdict.decision+'；'+verdict.reason);const now=new Date().toISOString(),a={id:id(),goalId:g.id,taskId:t.id,runId:normalizedRunId,status:'running',createdAt:now,settledAt:null};d.admissions.unshift(a);if(!t.runIds.includes(normalizedRunId))t.runIds.push(normalizedRunId);t.status='in_progress';t.executionStatus='running';t.updatedAt=now;g.updatedAt=now;return a;}).result;}
-function settle(root,runId,input={}){return mutate(root,d=>{const old=d.settlements.find(x=>x.runId===String(runId));if(old)return unchanged(old);const admission=d.admissions.find(a=>a.runId===String(runId));if(!admission)throw new Error('Run 没有关联 Goal Task');const g=findGoal(d,admission.goalId),t=findTask(g,admission.taskId);const status=['completed','failed','cancelled','blocked','waiting'].includes(input.status)?input.status:'failed';const record={runId:String(runId),goalId:g.id,taskId:t.id,status,usage:input.usage||null,costUsd:Number.isFinite(input.costUsd)&&input.costUsd>=0?input.costUsd:null,costKnown:input.costKnown===true,finishedAt:new Date().toISOString()};d.settlements.unshift(record);admission.status=status;admission.settledAt=record.finishedAt;t.executionStatus=status;t.status=status==='completed'?(taskProof(root,g,t)?'completed':'blocked'):status;t.updatedAt=record.finishedAt;if(record.usage){const prompt=Number(record.usage.prompt_tokens??record.usage.inputTokens??0);const completion=Number(record.usage.completion_tokens??record.usage.outputTokens??0);const tokens=Number(record.usage.total_tokens??record.usage.totalTokens??(prompt+completion));if(Number.isFinite(tokens)&&tokens>0)g.budget.usedTokens+=Math.floor(tokens);}if(record.costKnown&&record.costUsd!=null)g.budget.knownCostUsd+=record.costUsd;else g.budget.costUnknown=true;g.updatedAt=record.finishedAt;if(goalQualified(root,d,g))g.status='completed';return record;}).result;}
+function createVerifiedExperienceCandidate(root,data,goal,task,settlement,verification){
+  if(settlement.status!=='completed'||verification?.verified!==true||task.status!=='completed')return null;
+  const passedTests=(verification.checks||[]).filter(check=>check?.kind==='test'&&check.status==='passed'&&typeof check.command==='string'&&check.command.trim());
+  if(!passedTests.length)return null;
+  const snapshot=fingerprint(root),env=environment();
+  const evidence=(goal.evidence||[]).filter(item=>item.taskId===task.id&&item.runId===settlement.runId&&item.status==='passed'&&evidenceStatus(goal,item,snapshot.hash,snapshot.complete,env).valid);
+  if(!evidence.length||!taskProof(root,goal,task))return null;
+  if((goal.context.confirmedExperience||[]).some(item=>item.sourceRunId===settlement.runId))return null;
+  const files=[...new Set((verification.files||[]).filter(file=>typeof file==='string').map(file=>redact(file).replace(/[\r\n\0]/g,' ').slice(0,300)))].slice(0,8);
+  const commands=[...new Set(passedTests.map(check=>redact(check.command).replace(/[\r\n\0]/g,' ').slice(0,1200)))].slice(0,3);
+  if(!files.length||!commands.length)return null;
+  const content='经验候选：修改 '+JSON.stringify(files)+' 后，运行 '+JSON.stringify(commands)+' 的局部测试并通过。该结论只绑定本次 Run 的文件指纹与验收条件版本；请复核它是否适用于后续同类改动。';
+  const item={id:id(),content,source:'Run '+settlement.runId,revision:data.revision+1,createdAt:settlement.finishedAt,confirmed:false,generated:true,
+    sourceRunId:settlement.runId,sourceTaskId:task.id,sourceFingerprint:evidence[0].sourceFingerprint,criteriaRevision:goal.criteriaRevision,evidenceIds:evidence.map(entry=>entry.id)};
+  goal.context.confirmedExperience.push(item);
+  return item;
+}
+function settle(root,runId,input={}){return mutate(root,d=>{
+  const old=d.settlements.find(x=>x.runId===String(runId));if(old)return unchanged(old);
+  const admission=d.admissions.find(a=>a.runId===String(runId));if(!admission)throw new Error('Run 没有关联 Goal Task');
+  const g=findGoal(d,admission.goalId),t=findTask(g,admission.taskId);
+  const status=['completed','failed','cancelled','blocked','waiting'].includes(input.status)?input.status:'failed';
+  const record={runId:String(runId),goalId:g.id,taskId:t.id,status,usage:input.usage||null,costUsd:Number.isFinite(input.costUsd)&&input.costUsd>=0?input.costUsd:null,costKnown:input.costKnown===true,finishedAt:new Date().toISOString()};
+  d.settlements.unshift(record);admission.status=status;admission.settledAt=record.finishedAt;t.executionStatus=status;t.status=status==='completed'?(taskProof(root,g,t)?'completed':'blocked'):status;t.updatedAt=record.finishedAt;
+  if(record.usage){const prompt=Number(record.usage.prompt_tokens??record.usage.inputTokens??0);const completion=Number(record.usage.completion_tokens??record.usage.outputTokens??0);const tokens=Number(record.usage.total_tokens??record.usage.totalTokens??(prompt+completion));if(Number.isFinite(tokens)&&tokens>0)g.budget.usedTokens+=Math.floor(tokens);}
+  if(record.costKnown&&record.costUsd!=null)g.budget.knownCostUsd+=record.costUsd;else g.budget.costUnknown=true;
+  createVerifiedExperienceCandidate(root,d,g,t,record,input.verification);
+  g.updatedAt=record.finishedAt;if(goalQualified(root,d,g))g.status='completed';return record;
+}).result;}
 /** @param {any} root @param {Set<string>|string[]} [activeRunIds] */
 function reconcileAdmissions(root,activeRunIds=[]){
   const active=new Set(activeRunIds instanceof Set?[...activeRunIds].map(String):Array.isArray(activeRunIds)?activeRunIds.map(String):[]);

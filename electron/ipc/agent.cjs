@@ -556,7 +556,7 @@ function register(ctx) {
       try {
         const costUsd=Number(result?.cost?.costUsd);
         const costKnown=result?.cost?.costKnown===true&&Number.isFinite(costUsd)&&costUsd>=0;
-        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costUsd:costKnown?costUsd:null, costKnown });
+        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costUsd:costKnown?costUsd:null, costKnown, verification:result?.codeVerification||null });
         goalAdmissionSettled = true;
         activeGoalRuns.delete(goalAdmission.runId);
         try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_task_settled', { goalId: goalAdmission.goalId, taskId: goalAdmission.taskId, status }); } catch {}

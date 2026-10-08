@@ -93,6 +93,48 @@ try {
   assert.equal(goal.read(root).revision,decisionRevision,'repeating the same business decision is idempotent');
   assert.equal(goal.canRun(root, created.id, first.id).decision, 'run');
 
+  const generatedGoal=goal.createGoal(root,{title:'Generate reviewed experience',criteria:['related test passes']});
+  const generatedTask=goal.createTask(root,generatedGoal.id,{title:'Update a source module',criteriaIds:[generatedGoal.criteria[0].id]});
+  fs.mkdirSync(path.join(root,'src'),{recursive:true});fs.writeFileSync(path.join(root,'src','module.cjs'),'module.exports=1;\n');
+  goal.admit(root,generatedGoal.id,generatedTask.id,'run-experience-candidate');
+  const verifiedRun={verified:true,status:'passed',files:['src/module.cjs'],checks:[{kind:'test',status:'passed',command:'node --test src/module.test.cjs',exitCode:0}]};
+  const generatedEvidence=goal.recordRunEvidence(root,generatedGoal.id,generatedTask.id,'run-experience-candidate',verifiedRun);
+  goal.settle(root,'run-experience-candidate',{status:'completed',verification:verifiedRun});
+  let generatedContext=goal.read(root).goals.find(g=>g.id===generatedGoal.id).context.confirmedExperience;
+  assert.equal(generatedContext.length,1,'a verified Goal Run automatically creates one reviewable experience candidate');
+  assert.equal(generatedContext[0].generated,true);
+  assert.equal(generatedContext[0].confirmed,false,'generated experience is never auto-confirmed');
+  assert.equal(generatedContext[0].sourceRunId,'run-experience-candidate');
+  assert.deepEqual(generatedContext[0].evidenceIds,generatedEvidence.map(item=>item.id));
+  assert.match(generatedContext[0].content,/node --test src\/module\.test\.cjs/);
+  assert.equal(goal.contextForRole(root,generatedGoal.id,generatedTask.id,'implement').context.confirmedExperience.length,0,'implementers cannot see an unreviewed generated suggestion');
+  const generatedRevision=goal.read(root).revision;
+  goal.settle(root,'run-experience-candidate',{status:'completed',verification:verifiedRun});
+  assert.equal(goal.read(root).revision,generatedRevision,'duplicate settlement does not generate duplicate experience or advance revision');
+  goal.confirmExperience(root,generatedGoal.id,generatedContext[0].id);
+  generatedContext=goal.contextForRole(root,generatedGoal.id,generatedTask.id,'implement').context.confirmedExperience;
+  assert.equal(generatedContext[0].sourceRunId,'run-experience-candidate','confirmed experience preserves provenance');
+
+  const noTestGoal=goal.createGoal(root,{title:'No automatic learning without tests',criteria:['syntax is valid']});
+  const noTestTask=goal.createTask(root,noTestGoal.id,{title:'Syntax only',criteriaIds:[noTestGoal.criteria[0].id]});
+  goal.admit(root,noTestGoal.id,noTestTask.id,'run-no-test-experience');
+  const syntaxOnly={verified:true,status:'passed',files:['src/module.cjs'],checks:[{kind:'syntax',status:'passed'}]};
+  goal.recordRunEvidence(root,noTestGoal.id,noTestTask.id,'run-no-test-experience',syntaxOnly);
+  goal.settle(root,'run-no-test-experience',{status:'completed',verification:syntaxOnly});
+  assert.equal(goal.read(root).goals.find(g=>g.id===noTestGoal.id).context.confirmedExperience.length,0,'a syntax-only result does not create a test-method suggestion');
+
+  const staleSuggestionGoal=goal.createGoal(root,{title:'No suggestion from stale evidence',criteria:['related test passes']});
+  const staleSuggestionTask=goal.createTask(root,staleSuggestionGoal.id,{title:'Update a stale module',criteriaIds:[staleSuggestionGoal.criteria[0].id]});
+  const staleModule=path.join(root,'src','stale-module.cjs');fs.writeFileSync(staleModule,'module.exports=1;\n');
+  const staleVerification={...verifiedRun,files:['src/stale-module.cjs']};
+  goal.admit(root,staleSuggestionGoal.id,staleSuggestionTask.id,'run-stale-experience-candidate');
+  goal.recordRunEvidence(root,staleSuggestionGoal.id,staleSuggestionTask.id,'run-stale-experience-candidate',staleVerification);
+  fs.appendFileSync(staleModule,'module.exports=2;\n');
+  goal.settle(root,'run-stale-experience-candidate',{status:'completed',verification:staleVerification});
+  const staleSuggestion=goal.read(root).goals.find(g=>g.id===staleSuggestionGoal.id);
+  assert.equal(staleSuggestion.tasks[0].status,'blocked','stale evidence keeps the Task blocked');
+  assert.equal(staleSuggestion.context.confirmedExperience.length,0,'stale evidence cannot produce a generated experience candidate');
+
   goal.addContext(root, created.id, 'rules', { content: 'Use the existing test runner.' });
   goal.addContext(root, created.id, 'taskMaterial', { content: 'Acceptance fixture path is tests/fixture.txt.' });
   const experienceCandidate = goal.addContext(root, created.id, 'confirmedExperience', { content: 'verified runner behavior', confirmed: true });
@@ -143,7 +185,7 @@ try {
   assert.equal(goal.audit(root,finishGoal.id).qualified,true);
   assert.equal(goal.updateGoal(root,finishGoal.id,{status:'completed'}).status,'completed');
   assert.throws(()=>goal.updateGoal(root,finishGoal.id,{status:'active'}),/不能从 completed 切换/);
-  console.log('GOAL STORE: PASS (acceptance criteria, atomic admission, dependency/wait/decision gates, role context, evidence freshness, budgets, no execution-as-acceptance)');
+  console.log('GOAL STORE: PASS (acceptance criteria, atomic admission, dependency/wait/decision gates, role context, evidence freshness, reviewed experience suggestions, budgets, no execution-as-acceptance)');
 } finally {
   const resolved = path.resolve(root);
   if (path.dirname(resolved) === fs.realpathSync(os.tmpdir()) && path.basename(resolved).startsWith('codenode-goal-store-')) {
