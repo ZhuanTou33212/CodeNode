@@ -26,6 +26,7 @@ const CORE = [
   'test:goal-store',
   'test:goal-scope',
   'test:goal-ipc-recovery',
+  'test:goal-github-actions',
   'test:backend-workflow',
   'test:soul',
   'test:session',

@@ -344,14 +344,14 @@ Goal/Task 表单保存目标、排除项、必需验收条件、预算、依赖�
 
 协议夹具测试覆盖 ACP 初始化/会话/权限拒绝/授权与 DeepSeek SDK 的 initialize、prompt、assistant、tool/call、tool/result、终态通知。Goal 单测覆盖预算与准入、活动 Run、依赖循环、等待条件、业务决定、按角色筛选上下文、验收证据、文件快照失效、条件修订和声明写入范围检查。Electron UI 验证了 Goal 控件和后端控件在日夜主题结构一致，且主题切换保留会话、草稿、模型和侧栏状态。
 
-本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（155/155）；后端设置/Goal 双主题 UI 专项、真实 Hermes/OpenCode smoke 与 Goal IPC restart 恢复专项通过。暂存与固定路径的 packaged UI/asar 自检均为 11/11 通过，固定交付为 `E:\CodeNode\release\win-unpacked`，OpenClaw ACP 兼容更新后的 `app.asar` SHA-256 为 `0DC536C22616EC53AE5ED4373DEF6F066ADAD60EB48477D9236E5D60A37FD83A`。当前主机的 Windows `rcedit` 无法提交资源更新，因此阶段构建关闭了 exe 资源编辑，并沿用同一 CodeNode 0.13.0 的现有品牌启动程序；新的功能代码位于经过自检的 `app.asar`。两个 executable 均未签名。
+本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（156/156）；Goal GitHub Actions provider/IPC、后端设置与 Goal 双主题 UI、真实 Agent smoke 和 Goal IPC restart 恢复专项通过。暂存与固定路径的 packaged UI/asar 自检均为 11/11 通过，固定交付为 `E:\CodeNode\release\win-unpacked`，GitHub Actions 等待 provider 交付后的 `app.asar` SHA-256 为 `3651E1FEC47FA19C88C904684B7D11D040132DF9765CB983A592023CB3FFAE70`。当前主机的 Windows `rcedit` 无法提交资源更新，因此阶段构建关闭了 exe 资源编辑，并沿用同一 CodeNode 0.13.0 的现有品牌启动程序；新的功能代码位于经过自检的 `app.asar`。两个 executable 均未签名。
 
 | 路线项 | 当前覆盖 | 尚需的证据 |
 | --- | --- | --- |
 | P0 后端与设置 | builtin、Codex、DeepSeek Harness、Hermes、OpenCode、OpenClaw 可选；ACP/SDK fixture、Hermes/OpenCode/DeepSeek 短文本请求、OpenClaw 临时 Gateway session、OpenCode 临时源码修改及权限拒绝/取消/恢复、打包自检通过 | Codex 原生 sandbox 故障；Hermes 文件工具初始化错误；OpenClaw 全局安装及真实模型/文件任务/权限闭环；DeepSeek 源码任务与逐会话取消/权限闭环；实际 OS 沙箱边界 |
 | P1 Goal/Task/Evidence | 持久化、准入、预算、决定版本、环境/文件/验收版本绑定证据、重启未知状态、用户复核后重排已实现；`npm run test:goal-desktop-restart` 通过两个独立 Electron 主进程验证关闭/重开恢复、结果未知/阻塞和重复刷新幂等 | 尚需在桌面 UI 展示具体 Run 差异后由用户复核重排的操作型演练 |
 | P1 角色上下文 | 主 Agent 与五类子 Agent 都按角色筛选规范/材料/确认经验，实际子代理提示注入已测试，Run 记录上下文版本 | 真实模型角色任务与人工质量比较 |
-| P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、外部等待手动观察与指数退避已实现 | 外部 CI/实验数据源接入；用户授权的周期自动推进尚未实现 |
+| P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、外部状态观察/指数退避已实现；GitHub Actions 可按精确 commit SHA 查询，只有该 SHA 的最新 workflow runs 全部成功才释放等待 Task；IPC、UI 和真实 GitHub API 均有验证；查询由用户手动触发，不自动启动模型 | 实验数据源尚未接入；等待条件满足后经用户授权的周期自动推进尚未实现 |
 | P2 经验回写 | 基于新鲜、独立通过的测试证据自动生成局部测试方法候选；记录来源 Run、Task、证据 ID、文件指纹和验收修订；UI 标明自动建议；重复结算幂等；未确认前不注入实现上下文，用户显式确认后才可用 | 当前自动建议限于“修改这些文件后运行该测试命令”的可验证事实；从模型总结、架构规律或重复故障中提炼更一般经验尚未实现 |
 | 阶段 E 后端比较 | 有离线 fixture、Hermes/OpenCode 文本 smoke 与一次 OpenCode 文件任务（Hermes 文件任务在本机 runtime 报 Internal error，未改文件） | 同任务多轮、相同验收标准下的成功率/用量/成本/恢复率比较未完成 |
 
@@ -362,6 +362,12 @@ OpenCode 最新 ACP 说明确认其支持 `session/cancel`、恢复会话、权�
 DeepSeek 补充实测使用独立 venv 与临时 `DSH_HOME`，CodeNode SDK adapter 初始化后完成一次真实文本推理，未请求工具且工作区指纹不变。新增 `npm run test:backend-live-deepseek`，只在调用者已经安装 SDK/runtime 并通过环境提供 API key 时运行；不保存 API key、不自动安装 runtime。DeepSeek SDK profile 的工具权限由 Harness 管理，当前协议无逐会话审批接口；本次文本 smoke 不构成源码写入或沙箱验收。
 
 OpenClaw 兼容实测使用 npm 隔离安装的 Node 兼容版本 `2026.2.2-3` 和临时 Gateway/state/config/token。CodeNode 通过 ACP 创建 Gateway session，然后在 `session/prompt` 前取消；工作区没有变化，也没有 API prompt。该旧版要求 `session/new` 带 `mcpServers: []`，而当前官方 ACP 文档要求客户端省略该字段；adapter 只在服务端明确返回“期望数组、收到 undefined”的 `-32602` 错误时回退加空数组，避免破坏新版。新增 `npm run test:backend-live-openclaw` 可用 `CODENODE_OPENCLAW_BIN` 指向已安装 CLI 后重跑。全局 OpenClaw 安装依然缺少 `undici` 文件，未被替换；本次临时 Gateway 和安装目录均已清理。
+
+Goal 等待机制新增只读 GitHub Actions provider：根据项目 `origin` 仅接受 `github.com`，以显式完整 commit SHA 或当前 `HEAD` 请求 workflow-runs REST API，忽略其他 SHA，并按每个 workflow 的最新 attempt 汇总；只有所有匹配 workflow 均完成且结论为 success 才把对应 Task 释放为 ready。未完成/失败状态会写入带 SHA、run ID 和 GitHub 详情 URL 的观察记录并使用现有指数退避；下次检查时间未到时 IPC 会拒绝重复查询。私有仓库可用进程环境中的 `GH_TOKEN` 或 `GITHUB_TOKEN`，token 不落盘。该 provider 不创建模型 Run。[GitHub Actions workflow-runs REST API](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository) 是状态来源。
+
+新增 `npm run test:goal-github-actions` 用固定 API 响应验证 repository/commit 过滤、workflow attempt 汇总、鉴权头、失败和退避；`goal:wait-check` IPC 另以注入的 fetch fixture 走完任务释放。Goal 面板允许用户选择 GitHub Actions、可选填写完整 commit SHA、查看最近状态；首查默认 HEAD。实时检查使用 Electron `net.fetch`，并验证全局 Git 配置不会被修改。
+
+Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 workflow failure，证明 provider 能读取真实外部状态；失败不会释放 Task。远端日志随后定位到 macOS `workflow-state` 测试把真实路径别名误判为越界、Linux smoke 仍查找旧 `.side-badge` 选择器；这两项已在工作树修正。macOS 上 `test:backends` 和 `test:backend-workflow` 各自达到测试 runner 的 180 秒超时，已加入阶段日志以便下一次 CI 精确定位，目前尚无新的 macOS 运行结果。
 
 Goal settlement 现会在 Run 完成、当前 Task 仍有有效证据且 CodeNode 局部测试命令通过后，自动生成一条经验候选。候选包含准确的测试命令、相关文件、Run/Task ID、证据 ID、文件指纹和验收条件修订；重复结算不会重复生成。失败、仅语法检查、过期指纹或不完整快照都不生成候选。Goal 面板显示“自动建议”，但候选仍是待复核状态；只有用户点选确认后，后续实现上下文才会包含它。该生成器先覆盖可验证的测试方法，不从单次模型回答推断架构规则或反复故障模式。
 

@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('codenode', {
   goalExperienceConfirm: (root, goalId, itemId) => ipcRenderer.invoke('goal:experience-confirm', root, goalId, itemId),
   goalContextForRole: (root, goalId, taskId, role) => ipcRenderer.invoke('goal:context-for-role', root, goalId, taskId, role),
   goalWaitObserve: (root, goalId, taskId, observation) => ipcRenderer.invoke('goal:wait-observe', root, goalId, taskId, observation),
+  goalWaitCheck: (root, goalId, taskId) => ipcRenderer.invoke('goal:wait-check', root, goalId, taskId),
   ragCheck: (root, settings) => ipcRenderer.invoke('agent:rag-check', root, settings),
   ragSave: (root, settings) => ipcRenderer.invoke('agent:rag-save', root, settings),
   editingSave: (root, settings) => ipcRenderer.invoke('agent:editing-save', root, settings),

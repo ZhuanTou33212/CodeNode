@@ -30,6 +30,7 @@ async function main() {
   assert.equal(inherited.env.HTTPS_PROXY, 'http://explicit:8080'); assert.equal(inherited.env.NO_PROXY, 'private.local');
   const separate = await launchEnvironment({ platform: 'win32', env: {}, readProxy: async () => ({ enabled: 1, server: 'http=127.0.0.1:8080;https=127.0.0.1:8443' }) });
   assert.equal(separate.env.HTTP_PROXY, 'http://127.0.0.1:8080/'); assert.equal(separate.env.HTTPS_PROXY, 'http://127.0.0.1:8443/');
+  console.log('BACKEND TEST STAGE: proxy/settings');
   assert.equal(settings.read(root, userData).settings.backend, 'builtin');
   settings.write(root, userData, 'machine', selected);
   settings.write(root, userData, 'project', { ...selected, sandbox: 'read-only' });
@@ -48,13 +49,16 @@ async function main() {
   agent.runAgentChat = async input => { count++; assert.equal(input.cfg.test, true); return value; };
   try { assert.equal(await new BuiltinBackend().start({ cfg: { test: true } }), value); assert.equal(count, 1); }
   finally { agent.runAgentChat = original; }
+  console.log('BACKEND TEST STAGE: builtin delegation');
   assert.equal((await create().capabilities(root)).available, true);
+  console.log('BACKEND TEST STAGE: Codex capabilities');
   const readOnlyRoot = path.join(root, 'readonly-project'); fs.mkdirSync(readOnlyRoot);
   const readOnly = new CodexBackend({ ...selected, sandbox: 'read-only' }, { RpcClient: FixtureRpc, executableVersion: async () => settings.config.protocolVersion });
   const deniedEvents = [];
   await readOnly.start({ projectRoot: readOnlyRoot, prompt: 'resume-edit', confirm: async () => true, onDelta: event => deniedEvents.push(event) });
   assert.equal(fs.existsSync(path.join(readOnlyRoot, 'math.cjs')), false, 'Read-only must decline escalation even after a dialog accepts');
   assert(deniedEvents.some(event => event.kind === 'backend_approval' && event.phase === 'denied'));
+  console.log('BACKEND TEST STAGE: read-only permission');
   fs.writeFileSync(path.join(root, 'math.cjs'), 'module.exports = (a,b) => a - b;\n');
   fs.writeFileSync(path.join(root, 'math.test.cjs'), "require('assert').strictEqual(require('./math.cjs')(2,3),5);\n");
   const events = []; const controller = new AbortController();
@@ -67,12 +71,14 @@ async function main() {
   assert.equal(fs.existsSync(path.join(root, 'denied.txt')), false);
   assert(events.some(e => e.kind === 'backend_approval' && e.phase === 'denied'));
   assert(!events.some(e => e.kind === 'command'), 'Protocol fields must not overwrite host event kind');
+  console.log('BACKEND TEST STAGE: cancelled run persisted');
   const record = external.sessionFromRun(root, 'first');
   assert.equal(record.session.threadId, 'thread-fixture'); assert.equal(record.session.turnId, 'turn-1');
   const plan = external.resumePlan(root, 'first', new Set());
   assert.equal(plan.requiresReview, true);
   const review = await external.runExternal({ ...common, requestId: 'review', prompt: 'resume-edit', resumeRunId: 'first', confirm: async () => true }, { createBackend: create });
   assert.equal(review.needsReview, true);
+  console.log('BACKEND TEST STAGE: review gate');
   let checks = 0;
   const resumed = await external.runExternal({ ...common, requestId: 'resumed', prompt: 'resume-edit', resumeRunId: 'first', resumeForce: true,
     confirm: async () => true }, { createBackend: create, verifyRun: async (hook) => {
@@ -82,6 +88,7 @@ async function main() {
   assert.equal(resumed.ok, true); assert.equal(resumed.reply, '修改完成');
   assert.equal(resumed.usage.total_tokens, 13, 'Cumulative usage must exclude the previous turn');
   assert.equal(resumed.codeVerification.verified, true); assert.equal(checks, 2);
+  console.log('BACKEND TEST STAGE: resumed run verified');
   assert(resumed.changes.files.some(file => file.path === 'math.cjs' && file.before !== file.after));
   assert.equal(resumed.costUnknown, true);
   const duplicate = await external.runExternal({ ...common, requestId: 'resumed', prompt: 'resume-edit', confirm: async () => true }, { createBackend: create });
@@ -98,6 +105,7 @@ async function main() {
   const outOfScope = await external.runExternal({ ...common, requestId: 'goal-scope-violation', prompt: 'resume-edit', goalWriteScope: ['docs'],
     confirm: async () => true }, { createBackend: create, verifyRun: async () => ({ ok: true, output: 'passes', exitCode: 0 }) });
   assert.equal(outOfScope.ok, false); assert.equal(outOfScope.stopReason, 'goal_scope_violation');
+  console.log('BACKEND TEST STAGE: scope violation');
   assert.deepEqual(outOfScope.goalScopeViolations, ['math.cjs']);
   assert.match(fs.readFileSync(path.join(root, 'math.cjs'), 'utf8'), /module\.exports/, 'out-of-scope changes stay available for review');
   assert.equal(runStore.summarizeRun(runStore.readRun(root, 'resumed')).stateHistoryValid, true);
@@ -110,6 +118,7 @@ async function main() {
   assert.equal(disconnected.stopReason, 'backend_result_unknown');
   const blocked = await external.runExternal({ ...common, requestId: 'blocked', prompt: 'resume-edit', resumeRunId: 'disconnected', resumeForce: true, confirm: async () => true }, { createBackend: create });
   assert.equal(blocked.ok, false); assert.match(blocked.error, /仍在运行/);
+  console.log('BACKEND TEST STAGE: disconnect and duplicate guard');
   const before = capture(root); fs.writeFileSync(path.join(root, 'new.txt'), 'new'); fs.unlinkSync(path.join(root, 'math.cjs'));
   const files = compare(before, capture(root)).files;
   assert(files.some(f => f.path === 'new.txt' && f.kind === 'added'));

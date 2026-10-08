@@ -49,15 +49,19 @@ async function main() {
     getFocusedWindow: () => /** @type {any} */ ({ webContents: sender }),
     sandbox: require('../../electron/sandbox.cjs'), runWorkflowChat: agentIpc.runWorkflowChat });
   const graph = { nodes: [{ id: 'task', type: 'task', data: { label: 'P0 file task', prompt: 'interrupt-test', writeScope: 'math.cjs' } }], edges: [] };
+  console.log('BACKEND WORKFLOW STAGE: setup');
   const state = handlers.get('project:workflow-state')(event, root, 'p0', { action: 'read', graph });
   const interrupted = await handlers.get('project:workflow-execute')(event, root, 'p0', { nodeId: 'task', graph, expectedRevision: state.state.revision });
+  console.log('BACKEND WORKFLOW STAGE: interrupted first run');
   assert.equal(interrupted.ok, true); assert.equal(interrupted.executionOk, false);
   assert.equal(fs.existsSync(path.join(root, 'denied.txt')), false);
   const oldRunId = stoppedRun;
   const plan = await handlers.get('agent:resume-plan')(event, root, oldRunId);
   assert.equal(plan.requiresReview, true);
+  console.log('BACKEND WORKFLOW STAGE: resume review');
   approve = true;
   const resumed = await agentIpc.runWorkflowChat(event, { projectRoot: root, prompt: 'resume-edit', requestId: 'workflow-resume', resumeRunId: oldRunId, resumeForce: true });
+  console.log('BACKEND WORKFLOW STAGE: resumed run returned');
   assert.equal(resumed.ok, true); assert.equal(resumed.codeVerification.verified, true);
   assert(resumed.changes.files.some(f => f.path === 'math.cjs'));
   execFileSync(process.execPath, ['math.test.cjs'], { cwd: root, windowsHide: true });

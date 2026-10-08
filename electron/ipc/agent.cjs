@@ -22,6 +22,7 @@ const agentBackends = require('../backends/index.cjs');
 const backendSettings = require('../backends/settings.cjs');
 const externalRuns = require('../backends/runExternal.cjs');
 const goalStore = require('../goalStore.cjs');
+const githubActionsWait = require('../goalWaitProviders/githubActions.cjs');
 const goalScope = require('../goalScope.cjs');
 const piiLib = require('../pii.cjs');
 const toolkit = require('../tools/toolkit.cjs');
@@ -291,7 +292,22 @@ function register(ctx) {
   ipcMain.handle('goal:experience-confirm', async (_event, projectRoot, goalId, itemId) => withGoalRoot(projectRoot, root => goalStore.confirmExperience(root,goalId,itemId)));
   ipcMain.handle('goal:context-for-role', async (_event, projectRoot, goalId, taskId, role) => withGoalRoot(projectRoot, root => goalStore.contextForRole(root,goalId,taskId,role)));
   ipcMain.handle('goal:wait-observe', async (_event, projectRoot, goalId, taskId, observation) => withGoalRoot(projectRoot, root => goalStore.observeWait(root,goalId,taskId,observation||{})));
-
+  ipcMain.handle('goal:wait-check', async (_event, projectRoot, goalId, taskId) => {
+    const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;
+    try{
+      const root=scoped.value,data=goalStore.read(root),goal=data.goals.find(item=>item.id===String(goalId));
+      const task=goal?.tasks.find(item=>item.id===String(taskId));
+      if(!goal||!task)return{ok:false,error:'Goal 或 Task 不存在'};
+      if(task.status!=='waiting'||task.waitCondition?.provider!=='github-actions')return{ok:false,error:'Task 没有配置 GitHub Actions 等待条件'};
+      const next=Date.parse(task.waitCondition.nextCheckAt||'');
+      if(Number.isFinite(next)&&next>Date.now())return{ok:false,error:'GitHub Actions 尚未到下次检查时间',nextCheckAt:task.waitCondition.nextCheckAt};
+      let fetcher=ctx.githubActionsFetch||globalThis.fetch;
+      try{const electronRuntime=require('electron');if(!ctx.githubActionsFetch&&electronRuntime?.net?.fetch)fetcher=electronRuntime.net.fetch.bind(electronRuntime.net);}catch{}
+      const observation=await githubActionsWait.check(root,task.waitCondition,{fetch:fetcher});
+      const record=goalStore.observeWait(root,goal.id,task.id,observation);
+      return{ok:true,value:{observation:record.observation,matched:record.matched,nextCheckAt:record.nextCheckAt||null,status:record.observation.status}};
+    }catch(error){return{ok:false,error:String(error?.message||error)};}
+  });
   ipcMain.handle('agent:editing-save', async (_event, projectRoot, input) => {
     try {
       if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' };

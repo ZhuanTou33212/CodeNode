@@ -60,6 +60,17 @@ try {
   const waitTask = goal.createTask(root, created.id, { title: 'Wait' });
   goal.updateTask(root, created.id, waitTask.id, { waitCondition: { kind: 'external_status', description: 'service online', expected: 'ready' } });
   assert.equal(goal.canRun(root, created.id, waitTask.id).decision, 'wait');
+  const ciTask=goal.createTask(root,created.id,{title:'Wait for GitHub CI'});
+  const ciSha='0123456789abcdef0123456789abcdef01234567';
+  goal.updateTask(root,created.id,ciTask.id,{waitCondition:{kind:'external_status',provider:'github-actions',description:'Checks for this commit',expected:'success',commitSha:ciSha}});
+  assert.equal(goal.read(root).goals.find(g=>g.id===created.id).tasks.find(t=>t.id===ciTask.id).waitCondition.provider,'github-actions');
+  assert.throws(()=>goal.updateTask(root,created.id,ciTask.id,{waitCondition:{kind:'external_status',provider:'github-actions',description:'bad ref',commitSha:'HEAD'}}),/40 位 commit SHA/);
+  const ciPending=goal.observeWait(root,created.id,ciTask.id,{id:'ci-pending',source:'github-actions',status:'in_progress',matched:false,revision:ciSha,runId:'42',detailsUrl:'https://github.com/example/repo/actions/runs/42',checkedAt:new Date().toISOString(),workflowCount:1});
+  const ciStored=goal.read(root).goals.find(g=>g.id===created.id).tasks.find(t=>t.id===ciTask.id);
+  assert.equal(ciPending.observation.source,'github-actions');assert.equal(ciStored.waitCondition.lastObservation.runId,'42');
+  assert(Date.parse(ciStored.waitCondition.nextCheckAt)>Date.now(),'GitHub Actions polling uses the existing backoff');
+  goal.observeWait(root,created.id,ciTask.id,{id:'ci-success',source:'github-actions',status:'success',matched:true,revision:ciSha,runId:'42',detailsUrl:'https://github.com/example/repo/actions/runs/42'});
+  assert.equal(goal.read(root).goals.find(g=>g.id===created.id).tasks.find(t=>t.id===ciTask.id).status,'ready','verified CI success releases only its waiting Task');
   const stillWaiting = { id: 'gateway-revision-3', source: 'monitor', status: 'starting', revision: '3', matched: false };
   goal.observeWait(root, created.id, waitTask.id, stillWaiting);
   const backoffRevision=goal.read(root).revision;

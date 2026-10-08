@@ -15,7 +15,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let appWin = null;
 app.on('browser-window-created', (_e, win) => {
-  if (!appWin) appWin = win;
+  if (!appWin) { appWin = win; win.hide(); }
 });
 require("../../electron/main.cjs");
 
@@ -41,7 +41,9 @@ app.whenReady().then(async () => {
       hasToolbar: !!document.querySelector('.toolbar'),
       hasCanvas: !!document.querySelector('.react-flow'),
       hasCanvasWrap: !!document.querySelector('.canvas-wrap'),
-      // 左侧项目管理栏已并入侧栏 tab 面板：默认收起时只有入口角标
+      // The primary rail remains visible even when the contextual side panel is closed.
+      hasActivityBar: !!document.querySelector('.activity-bar'),
+      hasSidebarToggle: !!document.querySelector('.toolbar-navigation-toggle'),
       hasSidePanelBadge: !!document.querySelector('.side-badge'),
       hasLegacyOverlay: !!document.querySelector('.cs-sidebar') || !!document.querySelector('.prompt-bar'),
       hasControls: !!document.querySelector('.react-flow__controls'),
@@ -53,7 +55,8 @@ app.whenReady().then(async () => {
       !result.hasToolbar ||
       !result.hasCanvas ||
       !result.hasCanvasWrap ||
-      !result.hasSidePanelBadge ||
+      !result.hasActivityBar ||
+      !result.hasSidebarToggle ||
       result.hasLegacyOverlay ||
       result.hasControls ||
       result.hasMiniMap ||

@@ -135,7 +135,8 @@ try {
   check(!call('corrupt', 'read').ok && !prepareCorrupt(), 'corrupt journal never becomes an empty run');
   function prepareCorrupt() { return call('corrupt', 'prepare', { nodeId: 'source', expectedRevision: 0 }).ok; }
   const protect = require("../../electron/approvalRules.cjs");
-  check(protect.isProtectedWriteTarget(root, workflow.workflowFile(root, 'crash')), 'model file tools cannot forge workflow state');
+  const protectedWorkflowTarget=path.join(root,'.codenode','workflows',path.basename(workflow.workflowFile(root,'crash')));
+  check(protect.isProtectedWriteTarget(root, protectedWorkflowTarget), 'model file tools cannot forge workflow state');
   check(!workflow.dispatch(root, 'public', { action: 'prepare', graph, nodeId: 'source', expectedRevision: 0 }).ok, 'public state IPC cannot forge prepare');
 
   const linkedRoot = path.join(root, 'linked'); const outside = path.join(root, 'outside');

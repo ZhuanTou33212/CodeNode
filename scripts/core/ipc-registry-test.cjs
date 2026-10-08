@@ -28,7 +28,7 @@ const EXPECTED = {
     'agent:scheduling-save',
     'goal:list', 'goal:create', 'goal:update', 'goal:task-create', 'goal:task-update',
     'goal:decision-create', 'goal:decision-resolve', 'goal:verify', 'goal:audit',
-    'goal:can-run', 'goal:context-add', 'goal:experience-confirm', 'goal:context-for-role', 'goal:wait-observe',
+    'goal:can-run', 'goal:context-add', 'goal:experience-confirm', 'goal:context-for-role', 'goal:wait-observe', 'goal:wait-check',
     'agent:backend-save', 'agent:backend-status',
     'agent:cost-settings-save',
     'agent:resume-plan', 'agent:resume-start', 'agent:chat', 'agent:stop',

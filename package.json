@@ -19,6 +19,7 @@
     "test:goal-scope": "node scripts/core/goal-scope-test.cjs",
     "test:goal-ipc-recovery": "node scripts/core/goal-ipc-recovery-test.cjs",
     "test:goal-desktop-restart": "node scripts/tools/goal-desktop-restart-e2e.cjs",
+    "test:goal-github-actions": "node scripts/core/github-actions-wait-test.cjs",
     "test:backend-workflow": "node scripts/core/backend-workflow-test.cjs",
     "test:backend-ui": "node scripts/run-electron.cjs scripts/ui/backend-settings-ui-test.cjs",
     "test:backend-live": "node scripts/tools/codex-backend-smoke.cjs",

@@ -39,6 +39,10 @@ app.whenReady().then(async () => {
     assert.equal(task.ok, true);
     const experience = await js(`window.codenode.goalContextAdd(${JSON.stringify(projectRoot)}, ${JSON.stringify(goal.value.id)}, 'confirmedExperience', {content:'UI confirmed workflow',source:'ui-test',confirmed:true})`);
     assert.equal(experience.value.confirmed, false, 'renderer cannot self-confirm an experience candidate');
+    const waitTask=await js(`window.codenode.goalTaskCreate(${JSON.stringify(projectRoot)},${JSON.stringify(goal.value.id)},{title:'UI CI wait'})`);
+    assert.equal(waitTask.ok,true);
+    const waitSaved=await js(`window.codenode.goalTaskUpdate(${JSON.stringify(projectRoot)},${JSON.stringify(goal.value.id)},${JSON.stringify(waitTask.value.id)},{waitCondition:{kind:'external_status',provider:'github-actions',description:'CI for current commit',expected:'success'}})`);
+    assert.equal(waitSaved.ok,true);
     const verifiedRun={verified:true,status:'passed',files:['src/ui-module.cjs'],checks:[{kind:'test',status:'passed',command:'node --test src/ui-module.test.cjs',exitCode:0}]};
     fs.mkdirSync(path.join(projectRoot,'src'),{recursive:true});fs.writeFileSync(path.join(projectRoot,'src','ui-module.cjs'),'module.exports=1;\n');
     goalStore.admit(projectRoot,goal.value.id,task.value.id,'ui-generated-experience-run');
@@ -55,6 +59,9 @@ app.whenReady().then(async () => {
     await js(`[...document.querySelectorAll('.goal-control-panel button')].find(b=>b.textContent==='确认写入项目经验').click()`);
     const confirmedGenerated = await js(`window.codenode.goalContextForRole(${JSON.stringify(projectRoot)}, ${JSON.stringify(goal.value.id)}, ${JSON.stringify(task.value.id)}, 'implement')`);
     assert.equal(confirmedGenerated.value.context.confirmedExperience.some(item=>item.sourceRunId==='ui-generated-experience-run'),true,'UI confirmation exposes the generated candidate to implementers');
+    await js(`[...document.querySelectorAll('.goal-task')].find(b=>b.textContent.includes('UI CI wait')).click()`);
+    await js(`document.querySelector('.goal-toolbar button').click()`);
+    await waitFor(()=>js(`document.querySelector('.goal-control-panel')?.innerText.includes('查询 GitHub Actions')`),'GitHub Actions wait controls');
     await win.webContents.executeJavaScript(`const textarea=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'后端测试草稿');textarea.dispatchEvent(new Event('input',{bubbles:true}))`);
     const view = () => js(`JSON.stringify({id:window.__codenodeSession.getState().activeId,messages:window.__codenodeSession.getState().messages,draft:document.querySelector('.pp-input').value,model:document.querySelector('.pp-model')?.textContent,sideOpen:window.__codenodeUi.getState().sideOpen,sideTab:window.__codenodeUi.getState().sideTab})`);
     const goalSurface = () => js(`JSON.stringify([...document.querySelectorAll('.goal-control-panel input,.goal-control-panel textarea,.goal-control-panel select,.goal-control-panel button,.goal-control-panel summary')].map(n=>[n.tagName,n.getAttribute('aria-label'),n.textContent,n.value||'',n.disabled]))`);

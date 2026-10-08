@@ -218,6 +218,7 @@ interface CodenodeApi {
   goalExperienceConfirm: (root:string|null,goalId:string,itemId:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalContextForRole: (root:string|null,goalId:string,taskId:string|null,role:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalWaitObserve: (root:string|null,goalId:string,taskId:string,observation:{id:string;source?:string;status?:string;matched:boolean;revision?:string})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalWaitCheck: (root:string|null,goalId:string,taskId:string)=>Promise<{ok:boolean;error?:string;nextCheckAt?:string;value?:any}>;
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;
   costSettingsSave: (root: string, settings: import('./types').CostSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').CostSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
