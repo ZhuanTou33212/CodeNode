@@ -83,6 +83,9 @@ class AcpBackend {
       return await terminal;
     } catch (error) {
       return { content: this.content(), reasoning: '', toolCalls: this.toolCalls, state: 'FAILED', error: error.message,
+        ...(error.code != null ? { backendErrorCode: error.code } : {}), ...(error.data != null ? { backendErrorDetails: redact(error.data) } : {}),
+        ...(error.method ? { backendErrorMethod: error.method } : {}),
+        ...(this.rpc?.stderrTail?.length ? { backendStderr: redact(this.rpc.stderrTail.join('\n')).slice(-4000) } : {}),
         stopReason: this.sessionId ? 'backend_result_unknown' : 'backend_start_failed' };
     } finally {
       this.settle = null; clearTimeout(this.timer); input.signal?.removeEventListener('abort', abort);

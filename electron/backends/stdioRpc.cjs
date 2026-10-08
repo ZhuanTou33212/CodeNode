@@ -69,7 +69,7 @@ class StdioRpc extends EventEmitter {
     return new Promise((resolve, reject) => {
       const id = ++this.sequence;
       const timer = setTimeout(() => { this.pending.delete(String(id)); reject(new Error('Agent 请求超时：' + method)); }, timeout);
-      this.pending.set(String(id), { resolve, reject, timer });
+      this.pending.set(String(id), { resolve, reject, timer, method });
       this.send({ jsonrpc: '2.0', id, method, params: params || {} }).catch(error => {
         clearTimeout(timer); this.pending.delete(String(id)); reject(error);
       });
@@ -87,7 +87,14 @@ class StdioRpc extends EventEmitter {
       else {
         const item = this.pending.get(String(message.id)); if (!item) continue;
         clearTimeout(item.timer); this.pending.delete(String(message.id));
-        if (message.error) item.reject(new Error(message.error.message || 'Agent 协议错误')); else item.resolve(message.result);
+        if (message.error) {
+          /** @type {Error & {code?: any, data?: any, method?: string}} */
+          const error = new Error(message.error.message || 'Agent 协议错误');
+          error.code = message.error.code;
+          error.data = redact(message.error.data);
+          error.method = item.method;
+          item.reject(error);
+        } else item.resolve(message.result);
       }
     }
   }

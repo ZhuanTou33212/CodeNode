@@ -17,6 +17,9 @@ class FixtureRpc{
 async function main(){
   const data=path.join(root,'userdata');
   for(const backend of config.backends){const value=settings.normalize({...config.defaults,backend});assert.equal(value.backend,backend);}
+  const diagnosticRpc=new FixtureRpc('fixture',root);
+  try{await assert.rejects(diagnosticRpc.request('error-test'),error=>{const diagnostic=/** @type {any} */ (error);return diagnostic.code===-32001&&diagnostic.method==='error-test'&&diagnostic.data?.detail==='preserve diagnostic';},'JSON-RPC error code, method and data should survive transport for actionable backend diagnostics');}
+  finally{await diagnosticRpc.close();}
   for(const backend of ['hermes','opencode','openclaw']){
     const available=await new AcpBackend({...config.defaults,backend,executable:'fixture'} ,{StdioRpc:FixtureRpc}).capabilities(root);
     assert.equal(available.available,true,backend+' ACP initialization');assert.equal(available.protocol,'ACP');

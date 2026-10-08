@@ -118,9 +118,10 @@ async function runExternal(input, deps = {}) {
     }
     machine.go(state, result.stopReason || state);
     runStore.finishRun(root, runId, toRunStatus(state), { state, reply: result.content, usage: result.usage,
-      stopReason: result.stopReason, error: result.error, backend: backendName, changes, goalScopeViolations, codeVerification: verification, cost: 'unknown' });
+      stopReason: result.stopReason, error: result.error, backendErrorCode: result.backendErrorCode || null, backendErrorMethod: result.backendErrorMethod || null, backendErrorDetails: result.backendErrorDetails || null, backendStderr: result.backendStderr || null, backend: backendName, changes, goalScopeViolations, codeVerification: verification, cost: 'unknown' });
     return { ok: state === 'COMPLETED', runId, reply: result.content || '', reasoning: result.reasoning || '', toolCalls: result.toolCalls || [],
       usage: result.usage, state, error: result.error, aborted: result.aborted, backend: backendName, stopReason: result.stopReason,
+      backendErrorCode: result.backendErrorCode, backendErrorMethod: result.backendErrorMethod, backendErrorDetails: result.backendErrorDetails, backendStderr: result.backendStderr,
       changes, goalScopeViolations, codeVerification: verification, costUnknown: true };
   } catch (error) {
     machine.go('FAILED', 'backend_result_unknown');

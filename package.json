@@ -22,6 +22,7 @@
     "test:backend-ui": "node scripts/run-electron.cjs scripts/ui/backend-settings-ui-test.cjs",
     "test:backend-live": "node scripts/tools/codex-backend-smoke.cjs",
     "test:backend-live-agents": "node scripts/tools/agent-backend-live-smoke.cjs --backends=hermes,opencode",
+    "test:backend-live-workflow": "node scripts/tools/agent-backend-live-workflow.cjs --backends=hermes,opencode",
     "test:backend-connection": "node scripts/tools/codex-backend-connection.cjs",
     "test:soul": "node scripts/core/soul-evolution-test.cjs",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
