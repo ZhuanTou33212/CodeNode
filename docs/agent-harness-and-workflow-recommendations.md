@@ -367,7 +367,7 @@ Goal 等待机制新增只读 GitHub Actions provider：根据项目 `origin` �
 
 新增 `npm run test:goal-github-actions` 用固定 API 响应验证 repository/commit 过滤、workflow attempt 汇总、鉴权头、失败和退避；`goal:wait-check` IPC 另以注入的 fetch fixture 走完任务释放。Goal 面板允许用户选择 GitHub Actions、可选填写完整 commit SHA、查看最近状态；首查默认 HEAD。实时检查使用 Electron `net.fetch`，并验证全局 Git 配置不会被修改。
 
-Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 workflow failure，证明 provider 能读取真实外部状态；失败不会释放 Task。远端日志随后定位到 macOS `workflow-state` 测试把真实路径别名误判为越界、Linux smoke 仍查找旧 `.side-badge` 选择器；这两项已在工作树修正。macOS 上 `test:backends` 和 `test:backend-workflow` 各自达到测试 runner 的 180 秒超时，已加入阶段日志以便下一次 CI 精确定位，目前尚无新的 macOS 运行结果。
+Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 workflow failure，证明 provider 能读取真实外部状态；失败不会释放 Task。远端日志随后定位到 macOS `workflow-state` 测试把真实路径别名误判为越界、Linux smoke 仍查找旧 `.side-badge` 选择器；这两项已在工作树修正。commit `060f3df` 的新 CI 中 Ubuntu 与 Windows 通过，macOS 的 `test:backends` 和 `test:backend-workflow` 仍各自达到 180 秒超时。事件日志显示两项均在审批拒绝后未完成中断：单元测试在 turn ID 持久化之前发出取消，macOS 工作流测试又继承了 `CODENODE_TEST` 自动拒绝模式。测试现等待 turn ID 持久化后再取消，工作流用例在加载确认桥前移除继承的测试模式；本机 `npm run verify` 已通过 156/156，等待下一次跨平台 CI 复验。
 
 Goal settlement 现会在 Run 完成、当前 Task 仍有有效证据且 CodeNode 局部测试命令通过后，自动生成一条经验候选。候选包含准确的测试命令、相关文件、Run/Task ID、证据 ID、文件指纹和验收条件修订；重复结算不会重复生成。失败、仅语法检查、过期指纹或不完整快照都不生成候选。Goal 面板显示“自动建议”，但候选仍是待复核状态；只有用户点选确认后，后续实现上下文才会包含它。该生成器先覆盖可验证的测试方法，不从单次模型回答推断架构规则或反复故障模式。
 

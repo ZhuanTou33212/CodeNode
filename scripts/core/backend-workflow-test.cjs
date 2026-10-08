@@ -20,20 +20,43 @@ const ipc = /** @type {any} */ (new EventEmitter()); const handlers = new Map();
 ipc.handle = (name, fn) => handlers.set(name, fn);
 const oldLoad = Module._load;
 Module._load = function(request, parent, main) { return request === 'electron' ? { ipcMain: ipc } : oldLoad.call(this, request, parent, main); };
+// This isolated integration test must exercise the real confirmation bridge;
+// do not inherit the host's blanket test auto-answer mode.
+delete process.env.CODENODE_TEST;
 const agentIpc = require('../../electron/ipc/agent.cjs');
 Module._load = oldLoad;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backend-workflow-'));
 const userData = path.join(root, '.userdata');
 const events = [];
 let stoppedRun = null; let approve = false;
+let stopScheduled = false; let stopFailure = null;
+function waitFor(predicate, message, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      let value;
+      try { value = predicate(); } catch {}
+      if (value) { resolve(value); return; }
+      if (Date.now() >= deadline) { reject(new Error(message)); return; }
+      setTimeout(check, 10);
+    };
+    check();
+  });
+}
 const sender = { id: 42, isDestroyed: () => false, send: (channel, payload) => {
   if (channel === 'agent:delta') { events.push(payload); if (payload.kind === 'start') stoppedRun = payload.requestId;
     if (payload.kind === 'start' || payload.kind === 'backend_approval' || (payload.kind === 'state' && ['RUNNING','WAITING_USER','CANCELLED'].includes(payload.state))) console.log('BACKEND WORKFLOW EVENT: ' + payload.kind + (payload.phase ? ':' + payload.phase : '') + (payload.state ? ':' + payload.state : '')); }
+  if (channel === 'agent:delta' && payload.kind === 'backend_approval' && payload.phase === 'denied' && !approve && !stopScheduled) {
+    stopScheduled = true;
+    void waitFor(() => require('../../electron/backends/runExternal.cjs').sessionFromRun(root, stoppedRun)?.session?.turnId,
+      'Codex turn handle was not persisted before workflow cancellation')
+      .then(() => handlers.get('agent:stop')({ sender }, stoppedRun))
+      .catch(error => { stopFailure = error; void handlers.get('agent:stop')({ sender }, stoppedRun); });
+  }
   if (channel === 'tools:request' && payload.type === 'confirm') {
     console.log('BACKEND WORKFLOW EVENT: tools:confirm');
     setImmediate(() => {
       ipc.emit('tools:response', { sender }, { id: payload.id, result: { ok: approve } });
-      if (!approve) setTimeout(() => { void handlers.get('agent:stop')({ sender }, stoppedRun); }, 40);
     });
   }
 } };
@@ -55,6 +78,7 @@ async function main() {
   const state = handlers.get('project:workflow-state')(event, root, 'p0', { action: 'read', graph });
   const interrupted = await handlers.get('project:workflow-execute')(event, root, 'p0', { nodeId: 'task', graph, expectedRevision: state.state.revision });
   console.log('BACKEND WORKFLOW STAGE: interrupted first run');
+  assert.equal(stopFailure, null, stopFailure?.message);
   assert.equal(interrupted.ok, true); assert.equal(interrupted.executionOk, false);
   assert.equal(fs.existsSync(path.join(root, 'denied.txt')), false);
   const oldRunId = stoppedRun;

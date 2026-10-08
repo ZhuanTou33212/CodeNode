@@ -21,6 +21,19 @@ class FixtureRpc extends RpcClient {
 const selected = { ...settings.config.defaults, backend: 'codex', executable: process.execPath, sandbox: 'workspace-write' };
 const create = () => new CodexBackend(selected, { RpcClient: FixtureRpc, executableVersion: async () => settings.config.protocolVersion });
 const cfg = { editing: { autoVerify: true, blockOnFailure: true, lintCommand: 'node -e "process.exit(0)"', testCommand: 'node math.test.cjs' } };
+function waitFor(predicate, message, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      let value;
+      try { value = predicate(); } catch {}
+      if (value) { resolve(value); return; }
+      if (Date.now() >= deadline) { reject(new Error(message)); return; }
+      setTimeout(check, 10);
+    };
+    check();
+  });
+}
 async function main() {
   const network = await launchEnvironment({ platform: 'win32', env: {}, readProxy: async () => ({ enabled: 1, server: '127.0.0.1:7890', bypass: '<local>;*.example.local' }) });
   assert.equal(network.env.HTTPS_PROXY, 'http://127.0.0.1:7890/');
@@ -69,8 +82,12 @@ async function main() {
         console.log('BACKEND TEST EVENT: ' + event.kind + (event.phase ? ':' + event.phase : '') + (event.state ? ':' + event.state : ''));
       }
     } };
-  const first = await external.runExternal({ ...common, requestId: 'first', prompt: 'interrupt-test', signal: controller.signal,
-    confirm: async () => { setImmediate(() => controller.abort()); return false; } }, { createBackend: create });
+  const firstPending = external.runExternal({ ...common, requestId: 'first', prompt: 'interrupt-test', signal: controller.signal,
+    confirm: async () => false }, { createBackend: create });
+  await waitFor(() => events.some(event => event.kind === 'backend_approval' && event.phase === 'denied'), 'Codex fixture did not request and receive a denial');
+  await waitFor(() => external.sessionFromRun(root, 'first')?.session?.turnId === 'turn-1', 'Codex turn handle was not persisted before cancellation');
+  controller.abort();
+  const first = await firstPending;
   assert.equal(first.state, 'CANCELLED');
   assert.equal(first.aborted, true);
   assert.equal(fs.existsSync(path.join(root, 'denied.txt')), false);
