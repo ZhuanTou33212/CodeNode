@@ -9,7 +9,7 @@
 | `.gitignore` | 排除 node_modules、构建包、缓存、运行日志等生成物 | 保留 |
 | `.npmrc` | npm 注册表与 Electron 下载镜像配置 | 保留 |
 | `.nvmrc` | 指定 Node 22 系列；CI 的 setup-node 读取它 | 保留 |
-| `AGENTS.md` | 项目交付、Git 同步、界面及配置约定 | 保留 |
+| `AGENTS.md` | 项目交付、Git 同步、界面及配置约定 | 仅本地保留，已忽略，不提交或推送 |
 | `CONTRIBUTING.md` | 开发环境、验证流程和贡献约定 | 保留 |
 | `LICENSE` | 开源授权许可证；package.json 声明 MIT | 保留 |
 | `README.md` | 项目首页、启动方法、功能及文档入口 | 保留 |

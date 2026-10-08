@@ -1,4 +1,6 @@
 node_modules/
+# 项目交付约定仅保留在本地，不提交或推送。
+/AGENTS.md
 dist/
 logs/
 .cache/
