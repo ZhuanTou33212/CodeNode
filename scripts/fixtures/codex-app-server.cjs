@@ -25,12 +25,17 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     thread.turns.push(turn); persist();
     notify('turn/started', { turn }); answer({ turn });
     const text = m.params.input[0].text;
-    if (text.includes('disconnect-test')) { setTimeout(() => process.exit(1), 20); return; }
-    awaiting = { turn, text };
-    const edit = text.includes('resume-edit');
-    send({ id: 'approval-' + turn.id, method: edit ? 'item/fileChange/requestApproval' : 'item/commandExecution/requestApproval',
-      params: { kind: 'command', threadId: thread.id, turnId: turn.id, itemId: 'item-' + turn.id, cwd: process.cwd(), startedAtMs: Date.now(),
-        command: edit ? undefined : 'node denied.cjs', reason: 'fixture request' } });
+    // Install the turn handle before its first approval request can arrive.
+    // Sending both in the same stdout chunk can race turnId assignment on
+    // slower POSIX runners when the client cancels from the approval callback.
+    setImmediate(() => {
+      if (text.includes('disconnect-test')) { setTimeout(() => process.exit(1), 20); return; }
+      awaiting = { turn, text };
+      const edit = text.includes('resume-edit');
+      send({ id: 'approval-' + turn.id, method: edit ? 'item/fileChange/requestApproval' : 'item/commandExecution/requestApproval',
+        params: { kind: 'command', threadId: thread.id, turnId: turn.id, itemId: 'item-' + turn.id, cwd: process.cwd(), startedAtMs: Date.now(),
+          command: edit ? undefined : 'node denied.cjs', reason: 'fixture request' } });
+    });
   } else if (m.method === 'turn/interrupt') {
     const turn = thread.turns.find(t => t.id === m.params.turnId);
     turn.status = 'interrupted'; persist(); answer({}); notify('turn/completed', { turn });
