@@ -204,7 +204,7 @@ interface CodenodeApi {
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
   backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
   backendStatus: (root: string | null) => Promise<{ ok: boolean; error?: string; capabilities?: { backend: string; available: boolean; authenticated?: boolean | null; protocolVersion?: string; protocol?: string; resume?:boolean; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
-  goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[]}}>;
+  goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[];recoveredAdmissions?:{count:number;recovered:any[]}}}>;
   goalCreate: (root:string|null,input:{title:string;objective?:string;scope?:string;exclusions?:string;criteria?:string[];maxTokens?:number;maxCostUsd?:number})=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalUpdate: (root:string|null,goalId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
@@ -215,6 +215,7 @@ interface CodenodeApi {
   goalAudit: (root:string|null,goalId:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalCanRun: (root:string|null,goalId:string,taskId?:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalContextAdd: (root:string|null,goalId:string,kind:'rules'|'taskMaterial'|'confirmedExperience',input:{content:string;source?:string;confirmed?:boolean})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalExperienceConfirm: (root:string|null,goalId:string,itemId:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalContextForRole: (root:string|null,goalId:string,taskId:string|null,role:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalWaitObserve: (root:string|null,goalId:string,taskId:string,observation:{id:string;source?:string;status?:string;matched:boolean;revision?:string})=>Promise<{ok:boolean;error?:string;value?:any}>;
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;

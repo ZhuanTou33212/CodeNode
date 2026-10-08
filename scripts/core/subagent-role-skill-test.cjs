@@ -140,6 +140,13 @@ const WRITE_TOOLS = ['write_file', 'edit_file', 'workbench_edit', 'save_project'
 
   // ---- D. 真实委派：prompt 工具清单 == 实际可用工具 ----
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-role-skill-'));
+  const goalStore = require('../../electron/goalStore.cjs');
+  const roleGoal = goalStore.createGoal(root, { title: 'Role context', criteria: ['All relevant roles informed'] });
+  const roleTask = goalStore.createTask(root, roleGoal.id, { title: 'Role-aware implementation', criteriaIds: [roleGoal.criteria[0].id], readScope: ['src'], writeScope: ['src'] });
+  goalStore.addContext(root, roleGoal.id, 'rules', { content: 'GOAL_RULE_FOR_EXPLORER' });
+  goalStore.addContext(root, roleGoal.id, 'taskMaterial', { content: 'GOAL_TASK_MATERIAL_FOR_IMPLEMENTER' });
+  const experience = goalStore.addContext(root, roleGoal.id, 'confirmedExperience', { content: 'GOAL_CONFIRMED_EXPERIENCE_FOR_IMPLEMENTER' });
+  goalStore.confirmExperience(root, roleGoal.id, experience.id);
   const policy = sandbox.resolvePolicy({ mode: 'off' }, { projectRoot: root, userDataDir: os.tmpdir() });
   sandbox.setDefaultPolicy(policy);
   {
@@ -158,7 +165,7 @@ const WRITE_TOOLS = ['write_file', 'edit_file', 'workbench_edit', 'save_project'
     const manager = new SubagentManager({
       agent: { runAgentChat: agent.runAgentChat },
       toolkit,
-      cfg: Object.assign({}, cfgBase, { tools: {} }),
+      cfg: Object.assign({}, cfgBase, { tools: {}, goalControl: { goalId: roleGoal.id, taskId: roleTask.id } }),
       registry,
       runId: 'run-role-skill',
       readProjectSkills: () => [{ name: '项目约定', instructions: '改动前先跑 npm run check:js' }],
@@ -195,6 +202,8 @@ const WRITE_TOOLS = ['write_file', 'edit_file', 'workbench_edit', 'save_project'
       /改动前先跑 npm run check:js/.test(system), system.length + ' chars');
     check('D5 子代理 system 里带身份与运行规则（不是只有任务描述）',
       /项目探查员/.test(system) && /【运行规则/.test(system) && /【职责技能/.test(system));
+    check('D7 探查角色收到项目规范但不会收到实现材料或经验',
+      system.includes('GOAL_RULE_FOR_EXPLORER') && !system.includes('GOAL_TASK_MATERIAL_FOR_IMPLEMENTER') && !system.includes('GOAL_CONFIRMED_EXPERIENCE_FOR_IMPLEMENTER'));
 
     // 越权工具在子代理注册表里直接不可用（能力由注册表强制）
     const childRegistry = toolkit.buildDefaultRegistryWithConfig({ projectRoot: root, ragEnabled: false, role: 'explorer', toolsAllowed: [] });

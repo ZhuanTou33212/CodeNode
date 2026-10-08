@@ -64,7 +64,7 @@ app.whenReady().then(async () => {
     const packagedBackends = require(path.join(ASAR, 'electron', 'backends', 'index.cjs'));
     ok('asar 可加载 ACP 与 DeepSeek Harness adapters', packagedBackends.createBackend('hermes', { backend: 'hermes', sandbox: 'read-only' }).constructor.name === 'AcpBackend' && packagedBackends.createBackend('deepseek-harness', { backend: 'deepseek-harness', sandbox: 'read-only' }).constructor.name === 'DeepSeekHarnessBackend');
     const packagedGoalStore = require(path.join(ASAR, 'electron', 'goalStore.cjs'));
-    ok('asar 可加载持久化 Goal/Task 门禁', typeof packagedGoalStore.admit === 'function' && typeof packagedGoalStore.recordEvidence === 'function');
+    ok('asar 可加载 Goal admission、重启恢复、证据与等待调度', typeof packagedGoalStore.admit === 'function' && typeof packagedGoalStore.reconcileAdmissions === 'function' && typeof packagedGoalStore.recordEvidence === 'function' && typeof packagedGoalStore.releaseDueTimeWaits === 'function' && typeof packagedGoalStore.confirmExperience === 'function');
 
     // asar 内 .js/.css 用相对路径引用，file:// 读不到；把同一份 asar 内资源实体化到临时目录，
     // 保证加载的就是「打包产物里的那一份」而不是源码 dist。

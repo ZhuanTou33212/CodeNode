@@ -1935,12 +1935,18 @@ class SubagentManager {
       // 子代理的 system prompt：身份 + 工作范围 + **真实注册表里的**可用工具 + 职责技能 + 项目 Skill + 运行规则。
       // 工具清单取自 childRegistry（不是手写名单），永远不会与角色权限裁剪漂移。
       const childTools = childRegistry.listTools().map((spec) => ({ name: spec.name, description: spec.description }));
+      const goalRoles = { explorer: 'explore', builder: 'implement', verifier: 'verify', reviewer: 'review', canvas: 'canvas' };
+      const goalBinding = this.cfg.goalControl;
+      const goalContext = goalBinding && goalRoles[role] && context.projectRoot()
+        ? require('./goalStore.cjs').contextForRole(context.projectRoot(), goalBinding.goalId, goalBinding.taskId, goalRoles[role])
+        : null;
       const systemPrompt = subagentPrompt.buildSubagentPrompt(task, {
         role,
         tools: childTools,
         projectSkills: this.readProjectSkills(context.projectRoot()),
         confirmedSources: task.confirmedSources,
         verificationCandidate: task.verificationCandidate,
+        goalContext,
       });
       result = await this.agent.runAgentChat({
         cfg: childCfg,

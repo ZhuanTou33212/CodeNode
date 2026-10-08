@@ -25,6 +25,7 @@ const CORE = [
   'test:multi-backends',
   'test:goal-store',
   'test:goal-scope',
+  'test:goal-ipc-recovery',
   'test:backend-workflow',
   'test:soul',
   'test:session',

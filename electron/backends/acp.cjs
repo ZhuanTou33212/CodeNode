@@ -52,16 +52,18 @@ class AcpBackend {
     try {
       if (input.signal?.aborted) return { content: '', state: 'CANCELLED', aborted: true, stopReason: 'cancelled' };
       await this.connect(input.projectRoot);
-      const mcpServers = [];
+      // OpenClaw ACP bridge rejects the mcpServers field entirely, even when
+      // empty; other ACP agents accept an empty list for session lifecycle calls.
+      const sessionMcp = this.settings.backend === 'openclaw' ? {} : { mcpServers: [] };
       if (input.backendSession?.sessionId) {
         const canLoad = this.capabilityInfo.loadSession === true;
         const canResume = !!this.capabilityInfo.sessionCapabilities?.resume;
-        if (canLoad) await this.rpc.request('session/load', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, mcpServers });
-        else if (canResume) await this.rpc.request('session/resume', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, mcpServers });
+        if (canLoad) await this.rpc.request('session/load', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, ...sessionMcp });
+        else if (canResume) await this.rpc.request('session/resume', { sessionId: input.backendSession.sessionId, cwd: input.projectRoot, ...sessionMcp });
         else throw new Error(this.settings.backend + ' 未声明 ACP 会话恢复能力，不能恢复原执行');
         this.sessionId = input.backendSession.sessionId;
       } else {
-        const created = await this.rpc.request('session/new', { cwd: input.projectRoot, mcpServers });
+        const created = await this.rpc.request('session/new', { cwd: input.projectRoot, ...sessionMcp });
         if (!created?.sessionId) throw new Error('ACP session/new 未返回会话编号');
         this.sessionId = created.sessionId;
       }

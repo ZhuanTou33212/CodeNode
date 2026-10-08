@@ -34,9 +34,14 @@ app.whenReady().then(async () => {
     assert.equal(goal.ok, true);
     const task = await js(`window.codenode.goalTaskCreate(${JSON.stringify(root)}, ${JSON.stringify(goal.value.id)}, {title:'UI Task', criteriaIds:[${JSON.stringify(goal.value.criteria[0].id)}], writeScope:['src']})`);
     assert.equal(task.ok, true);
+    const experience = await js(`window.codenode.goalContextAdd(${JSON.stringify(root)}, ${JSON.stringify(goal.value.id)}, 'confirmedExperience', {content:'UI confirmed workflow',source:'ui-test',confirmed:true})`);
+    assert.equal(experience.value.confirmed, false, 'renderer cannot self-confirm an experience candidate');
     await js(`document.querySelector('.goal-control-panel summary').click()`);
     await js(`document.querySelector('.goal-toolbar button').click()`);
-    await waitFor(() => js(`document.querySelector('.goal-control-panel')?.innerText.includes('UI Task')`), 'Goal and Task rendering');
+    await waitFor(() => js(`document.querySelector('.goal-control-panel')?.innerText.includes('UI Task') && document.querySelector('.goal-control-panel')?.innerText.includes('UI confirmed workflow')`), 'Goal, Task, and experience rendering');
+    await js(`[...document.querySelectorAll('.goal-control-panel button')].find(b=>b.textContent==='确认写入项目经验').click()`);
+    const confirmedContext = await js(`window.codenode.goalContextForRole(${JSON.stringify(root)}, ${JSON.stringify(goal.value.id)}, ${JSON.stringify(task.value.id)}, 'implement')`);
+    assert.equal(confirmedContext.value.context.confirmedExperience[0].content, 'UI confirmed workflow');
     await win.webContents.executeJavaScript(`const textarea=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'后端测试草稿');textarea.dispatchEvent(new Event('input',{bubbles:true}))`);
     const view = () => js(`JSON.stringify({id:window.__codenodeSession.getState().activeId,messages:window.__codenodeSession.getState().messages,draft:document.querySelector('.pp-input').value,model:document.querySelector('.pp-model')?.textContent,sideOpen:window.__codenodeUi.getState().sideOpen,sideTab:window.__codenodeUi.getState().sideTab})`);
     const goalSurface = () => js(`JSON.stringify([...document.querySelectorAll('.goal-control-panel input,.goal-control-panel textarea,.goal-control-panel select,.goal-control-panel button,.goal-control-panel summary')].map(n=>[n.tagName,n.getAttribute('aria-label'),n.textContent,n.value||'',n.disabled]))`);

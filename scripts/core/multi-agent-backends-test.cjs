@@ -27,6 +27,12 @@ async function main(){
   assert.equal(acpResult.state,'COMPLETED');assert.match(acpResult.content,/ACP_RUNTIME_OK/);
   assert.equal(acpResult.backendSession.sessionId,'acp-fixture');
   assert(deltas.some(d=>d.kind==='content'));assert(deltas.some(d=>d.kind==='tool_result')===false);
+  const openclawSessionParams=path.join(root,'openclaw-session-params.json');
+  const openclaw=new AcpBackend({...acpSettings,backend:'openclaw'},
+    {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_SESSION_PARAMS:openclawSessionParams}})}}});
+  const openclawResult=await openclaw.start({projectRoot:root,prompt:'Gateway bridge',confirm:async()=>false});
+  assert.equal(openclawResult.state,'COMPLETED');
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(openclawSessionParams,'utf8')).params,'mcpServers'),false,'OpenClaw rejects even an empty per-session mcpServers field');
   const permissionResponse=path.join(root,'acp-permission-response.json');
   const readonly=new AcpBackend({...acpSettings,backend:'hermes',sandbox:'read-only'},
     {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_PERMISSION:'1',FIXTURE_PERMISSION_RESPONSE:permissionResponse}})}}});

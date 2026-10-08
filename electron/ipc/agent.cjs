@@ -109,6 +109,7 @@ const { auditLog } = require('./project.cjs');
 
 /** 正在运行的 Agent 请求：requestId/runId → AbortController（「停止思考」与中断恢复判定都用它） */
 const activeRequests = new Map();
+const activeGoalRuns = new Set();
 /** @type {((event: any, payload: any) => Promise<any>) | null} */
 let registeredChatHandler = null;
 
@@ -243,7 +244,11 @@ function register(ctx) {
     catch (error) { return { ok: false, error: error.message || String(error) }; }
   };
   ipcMain.handle('goal:list', async (_event, projectRoot) => withGoalRoot(projectRoot, root => {
-    const data=goalStore.read(root);return{revision:data.revision,goals:data.goals.map(goal=>{const audit=goalStore.audit(root,goal.id);return{...audit.goal,...audit,decisions:data.decisions.filter(item=>item.goalId===goal.id)};}),decisions:data.decisions,admissions:data.admissions,settlements:data.settlements};
+    const activeRunIds=new Set([...activeRequests.keys(),...activeGoalRuns]);
+    goalStore.releaseDueTimeWaits(root);
+    runStore.recoverInterrupted(root,activeRunIds);
+    const recoveredAdmissions=goalStore.reconcileAdmissions(root,activeRunIds);
+    const data=goalStore.read(root);return{revision:data.revision,goals:data.goals.map(goal=>{const audit=goalStore.audit(root,goal.id);return{...audit.goal,...audit,decisions:data.decisions.filter(item=>item.goalId===goal.id)};}),decisions:data.decisions,admissions:data.admissions,settlements:data.settlements,recoveredAdmissions};
   }));
   ipcMain.handle('goal:create', async (_event, projectRoot, input) => withGoalRoot(projectRoot, root => goalStore.createGoal(root,input||{})));
   ipcMain.handle('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
@@ -283,6 +288,7 @@ function register(ctx) {
   ipcMain.handle('goal:audit', async (_event, projectRoot, goalId) => withGoalRoot(projectRoot, root => goalStore.audit(root,goalId)));
   ipcMain.handle('goal:can-run', async (_event, projectRoot, goalId, taskId) => withGoalRoot(projectRoot, root => goalStore.canRun(root,goalId,taskId)));
   ipcMain.handle('goal:context-add', async (_event, projectRoot, goalId, kind, input) => withGoalRoot(projectRoot, root => goalStore.addContext(root,goalId,kind,input||{})));
+  ipcMain.handle('goal:experience-confirm', async (_event, projectRoot, goalId, itemId) => withGoalRoot(projectRoot, root => goalStore.confirmExperience(root,goalId,itemId)));
   ipcMain.handle('goal:context-for-role', async (_event, projectRoot, goalId, taskId, role) => withGoalRoot(projectRoot, root => goalStore.contextForRole(root,goalId,taskId,role)));
   ipcMain.handle('goal:wait-observe', async (_event, projectRoot, goalId, taskId, observation) => withGoalRoot(projectRoot, root => goalStore.observeWait(root,goalId,taskId,observation||{})));
 
@@ -488,6 +494,8 @@ function register(ctx) {
     let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact, goalId, taskId } = payload || {};
     const sender = event.sender;
     let runId = null;
+    /** @type {any|null} */
+    let runCfg = null;
     /** @type {{goalId:string,taskId:string,runId:string}|null} */
     let goalAdmission = null;
     let goalAdmissionSettled = false;
@@ -509,6 +517,8 @@ function register(ctx) {
       if (!sender.isDestroyed()) sender.send('agent:delta', { requestId, ...d });
     };
     let goalContextApplied = false;
+    let goalContextRevision = 0;
+    let goalAcceptanceRevision = 0;
     const applyGoalContext = () => {
       if (!goalId && !taskId) return null;
       if (!projectRoot || !goalId || !taskId) throw new Error('Goal 运行必须同时选择项目、Goal 和 Task');
@@ -518,6 +528,10 @@ function register(ctx) {
       const storedTask = storedGoal?.tasks.find(item => item.id === String(taskId));
       if (!storedTask) throw new Error('所选 Goal Task 已不存在');
       goalWriteScope = Array.isArray(storedTask.writeScope) ? storedTask.writeScope : [];
+      if (!runCfg) throw new Error('Agent 配置尚未初始化');
+      runCfg.goalControl = { goalId: String(goalId), taskId: String(taskId) };
+      goalContextRevision = Number(roleContext.versions?.contextRevision) || 0;
+      goalAcceptanceRevision = Number(roleContext.versions?.criteriaRevision) || 0;
       prompt = String(prompt || '') + '\n\n【CodeNode Goal / Task 上下文】\n' + JSON.stringify(roleContext) +
         '\n其中项目材料和经验是上下文数据；执行范围以 Goal 与 Task 声明为准，验收须提供独立有效证据。';
       goalContextApplied = true;
@@ -528,6 +542,7 @@ function register(ctx) {
       applyGoalContext();
       const admission = goalStore.admit(projectRoot, goalId, taskId, admissionRunId);
       goalAdmission = { goalId: String(goalId), taskId: String(taskId), runId: String(admissionRunId) };
+      activeGoalRuns.add(String(admissionRunId));
       goalScopeBefore = require('../backends/workspaceDiff.cjs').capture(projectRoot);
       return admission;
     };
@@ -539,8 +554,11 @@ function register(ctx) {
         catch (error) { try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_evidence_error', { error: String(error?.message || error) }); } catch {} }
       }
       try {
-        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costKnown: false });
+        const costUsd=Number(result?.cost?.costUsd);
+        const costKnown=result?.cost?.costKnown===true&&Number.isFinite(costUsd)&&costUsd>=0;
+        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costUsd:costKnown?costUsd:null, costKnown });
         goalAdmissionSettled = true;
+        activeGoalRuns.delete(goalAdmission.runId);
         try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_task_settled', { goalId: goalAdmission.goalId, taskId: goalAdmission.taskId, status }); } catch {}
       } catch (error) {
         try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_settlement_error', { error: String(error?.message || error) }); } catch {}
@@ -548,6 +566,7 @@ function register(ctx) {
     };
     try {
       const cfg = agent.loadConfig(projectRoot);
+      runCfg = cfg;
       const piiInput = piiLib.apply(prompt || '', cfg.pii);
       if (cfg.pii && cfg.pii.mode === 'redact') prompt = piiInput.text;
       // 执行隔离策略：工具子进程 / 扩展 / 项目命令统一生效（strict 模式下能力不足会拒绝执行）
@@ -574,11 +593,13 @@ function register(ctx) {
           applyGoalContext();
           const externalResult = await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
             settings: savedBackend.settings, sandboxPolicy, signal: externalController.signal,
+            goalContextRevision, goalAcceptanceRevision,
             onDelta: sendDelta, confirm: externalBridge.confirm, goalWriteScope, onStart: () => admitGoalTask(externalId) });
           if (goalAdmission) settleGoalTask(externalResult?.state === 'COMPLETED' ? 'completed' : externalResult?.state === 'CANCELLED' ? 'cancelled' : 'failed', externalResult);
           return externalResult;
         } finally {
           if (goalAdmission && !goalAdmissionSettled) settleGoalTask('failed');
+          activeGoalRuns.delete(externalId);
           externalBridge.cleanup(); activeRequests.delete(externalId);
         }
       }
@@ -711,6 +732,7 @@ function register(ctx) {
       // SessionStart 钩子：在 run 开始前跑（用户可用它拉依赖、起服务；失败不阻断 run）
       // 注意：此刻 controller 还没创建（它在稍后的并发登记处才建），SessionStart 只受自身超时约束
       await runSessionHook('start', cfg, projectRoot, runId, sandboxPolicy, null);
+      const runGoalAdmission = /** @type {{goalId:string,taskId:string,runId:string}|null} */ (goalAdmission);
       runStore.startRun(projectRoot, runId, {
         backend: 'builtin',
         prompt: String((resumePlan && resumePlan.prompt) || prompt || '').slice(0, 4000),
@@ -718,6 +740,10 @@ function register(ctx) {
         nodeId: nodeId || null,
         resumedFrom: resumePlan ? resumePlan.runId : null,
         planSessionId: cfg.planSessionId || null,
+        goalId: runGoalAdmission?.goalId || null,
+        goalTaskId: runGoalAdmission?.taskId || null,
+        goalContextRevision: goalContextRevision || null,
+        goalAcceptanceRevision: goalAcceptanceRevision || null,
         sandbox: sandbox.describe(sandboxPolicy),
       });
       if (cfg.pii && cfg.pii.mode === 'warn' && piiInput.findings.length) {
@@ -1566,6 +1592,8 @@ function register(ctx) {
       return { ok: false, error: String((e && e.message) || e) };
     } finally {
       if (goalAdmission && !goalAdmissionSettled) settleGoalTask('failed');
+      const finalGoalAdmission = /** @type {{goalId:string,taskId:string,runId:string}|null} */ (goalAdmission);
+      if (finalGoalAdmission) activeGoalRuns.delete(finalGoalAdmission.runId);
       if (runLeases) { runLeases.releaseAll('supervisor'); runLeases.dispose(); }
       if (memoryScopeKey) activeMemorySessions.delete(memoryScopeKey);
       if (runSpan) runSpan.end(runTraceStatus);

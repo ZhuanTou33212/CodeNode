@@ -4458,6 +4458,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .goal-control-panel > summary { cursor:pointer; font-size:12px; color:var(--glass-muted); }
 .goal-control-body { display:grid; gap:8px; max-height:35vh; overflow:auto; padding-top:8px; font-size:12px; }
 .goal-control-body section,.goal-summary { border-top:1px solid var(--glass-border); padding-top:7px; }
+.goal-focus-queue { display:grid; gap:5px; padding:6px; border:1px solid var(--glass-border); border-radius:6px; background:var(--glass-control); }
+.goal-focus-queue summary { cursor:pointer; color:var(--glass-muted); }
+.goal-focus-queue button { text-align:left; overflow-wrap:anywhere; }
 .goal-control-body h4 { margin:2px 0 6px; color:var(--glass-text); }
 .goal-control-body :is(input,textarea,select) { min-width:0; max-width:100%; box-sizing:border-box; border:1px solid var(--glass-border); border-radius:6px; background:var(--glass-control); color:var(--glass-text); padding:6px 8px; font:inherit; }
 .goal-toolbar,.goal-actions,.goal-item > div { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }

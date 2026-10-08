@@ -77,6 +77,8 @@ async function runExternal(input, deps = {}) {
     if (!runStore.startRun(root, runId, { prompt: String(input.prompt || '').slice(0, 4000), backend: backendName,
       model: adapterSettings.model || backendName, nodeId: input.nodeId || null, planSessionId: sessionId || null,
       resumedFrom: resumeRunId || null, cwd: path.resolve(root), permissions,
+      goalId: input.goalId || null, goalTaskId: input.taskId || null, goalContextRevision: input.goalContextRevision || null,
+      goalAcceptanceRevision: input.goalAcceptanceRevision || null, goalWriteScope: input.goalWriteScope || [],
       cost: 'unknown', hardBudget: false })) throw new Error('无法保存后端运行记录，执行未启动');
     emit({ kind: 'start' });
     emit({ kind: 'state', state: 'RUNNING', previous: null, sequence: 0 });
