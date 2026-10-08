@@ -64,6 +64,7 @@ export function modelPrice(model: ModelSpec): { priceInput: number; priceInputHi
 }
 
 export interface UsageSnapshot {
+  costUnknown?: boolean;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -72,6 +73,7 @@ export interface UsageSnapshot {
 }
 
 export interface UsageSummary {
+  costUnknown?: boolean;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -193,8 +195,8 @@ export const useUsageStore = create<UsageState>((set, get) => {
     recordUsage: (u) => {
       if (!u) return;
       const model = get().models.find((m) => m.id === get().modelId) || get().models[0];
-      if (!model) return;
-      const cost = usageCost(model, u);
+      if (!model && !u.costUnknown) return;
+      const cost = u.costUnknown ? 0 : usageCost(model, u);
       set((s) => ({
         lastUsage: u,
         summary: {
@@ -202,6 +204,7 @@ export const useUsageStore = create<UsageState>((set, get) => {
           completionTokens: s.summary.completionTokens + u.completionTokens,
           totalTokens: s.summary.totalTokens + u.totalTokens,
           cost: s.summary.cost + cost,
+          costUnknown: s.summary.costUnknown || u.costUnknown,
         },
       }));
     },

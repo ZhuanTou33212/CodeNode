@@ -184,6 +184,7 @@ interface CodenodeApi {
     root: string | null
   ) => Promise<{
     configured: boolean;
+    backend?: { settings: import('./types').AgentBackendSettings; machine: import('./types').AgentBackendSettings; project: import('./types').AgentBackendSettings | null; scope: 'machine' | 'project' };
     model: string;
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;
@@ -201,6 +202,8 @@ interface CodenodeApi {
   ragSave: (root: string | null, settings: { enabled?: boolean; strictValidation?: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;milvusToken?:string;key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
+  backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
+  backendStatus: (root: string | null) => Promise<{ ok: boolean; error?: string; capabilities?: { backend: string; available: boolean; authenticated?: boolean; protocolVersion?: string; hardBudget?: boolean; customTools?: boolean; error?: string } }>;
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;
   costSettingsSave: (root: string, settings: import('./types').CostSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').CostSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
@@ -422,6 +425,8 @@ interface CodenodeApi {
     reply?: string;
     reasoning?: string;
     toolCalls?: ToolRecordDto[];
+    backend?: 'builtin' | 'codex';
+    costUnknown?: boolean;
     usage?: unknown;
     grounding?: {
       semantic?: { status: string; supported: boolean | null; safeForDelivery?: boolean };
@@ -490,6 +495,8 @@ interface CodenodeApi {
   }>;
   stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {
+    diff?: string;
+    changes?: import('./types').SessionMsg['backendChanges'];
     codeVerification?: import('./types').CodeVerificationReport;
     requestId?: string;
     kind?: string;

@@ -148,6 +148,18 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 开发与验证入口见[参与开发](CONTRIBUTING.md)和[脚本目录](scripts/README.md)。
 
+### Agent 后端
+
+在 **设置 → 常规 → Agent 后端** 选择 CodeNode 内置执行器或 Codex app-server。配置可保存为本机默认或当前项目覆盖，项目也可恢复跟随本机。默认使用内置执行器，已有模型配置和工具行为沿用原逻辑。
+
+Codex 首版兼容经本机 schema 核对的 `0.135.0`、`0.160.0` 协议版本；依次自动查找 PATH 原生程序、桌面版自带运行时及 npm 安装的原生程序，也可指定可执行文件绝对路径。“检测已保存后端”会检查真实协议握手与账户状态；登录信息仍由本机 Codex 管理，握手成功不能代替模型可访问性验证。Codex 模型留空时使用其本机配置，工作目录固定为所选项目。默认只读，允许修改项目文件需在设置中选择；后端审批只对当前请求有效，中断等待真实终态，连接丢失与中断未确认会标记结果未知。
+
+对话与画布文件任务共用这个入口。运行记录保存后端、协议、线程、执行、目录和权限；从运行列表恢复时先复核副作用并查询原执行状态，原执行仍在运行或状态无法核实时阻止重复启动。外部后端提供的补丁和独立扫描获得的文件内容指纹可在文件变更卡片中查看，代码修改复用本地独立校验。
+
+首版外部后端未接入 CodeNode 画布修改工具、子 Agent、图片与 `/compact`；这些功能使用内置执行器。Codex 的权限与工具机制负责外部执行边界，CodeNode 工具注册表不拦截其全部操作；网络默认关闭，用户批准的命令仍需按显示范围审阅。外部用量按线程累计差额统计，费用显示未知，不承诺 CodeNode 的逐请求硬费用限制或自动副作用回滚。
+
+离线协议与画布闭环：`npm run test:backends`、`npm run test:backend-workflow`；主题与持久化：`npm run test:backend-ui`；使用本机 Codex 登录执行真实只读任务：`npm run test:backend-live`（需要模型服务可访问，不进入离线 CI）。协议依据 [OpenAI app-server 文档](https://learn.chatgpt.com/docs/app-server) 和本机版本导出的 JSON Schema。
+
 ## 许可证
 
 [MIT](LICENSE)

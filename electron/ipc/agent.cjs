@@ -18,6 +18,9 @@ const fs = require('fs');
 const path = require('path');
 
 const agent = require('../agent.cjs');
+const agentBackends = require('../backends/index.cjs');
+const backendSettings = require('../backends/settings.cjs');
+const externalRuns = require('../backends/runExternal.cjs');
 const piiLib = require('../pii.cjs');
 const toolkit = require('../tools/toolkit.cjs');
 const modelStore = require('../modelStore.cjs');
@@ -192,10 +195,12 @@ function register(ctx) {
 
   ipcMain.handle('agent:config', async (_event, projectRoot) => {
     const cfg = agent.loadConfig(projectRoot);
+    const backend = backendSettings.read(projectRoot, userDataDir());
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
     const store = modelStore.readUsableModels(userDataDir(), cfg);
     return {
-      configured: !!cfg.apiKey,
+      configured: backend.settings.backend === 'codex' || !!cfg.apiKey,
+      backend,
       model: cfg.model,
       soul,
       toolsEnabled: cfg.tools.toolsEnabled,
@@ -209,6 +214,20 @@ function register(ctx) {
       models: modelStore.toPublicModels(store.models),
       activeModelId: store.activeId,
     };
+  });
+
+  ipcMain.handle('agent:backend-save', async (_event, projectRoot, scope, input) => {
+    try {
+      if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请结束后修改后端' };
+      return { ok: true, ...backendSettings.write(projectRoot, userDataDir(), scope, input) };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  ipcMain.handle('agent:backend-status', async (_event, projectRoot) => {
+    try {
+      const saved = backendSettings.read(projectRoot, userDataDir());
+      const backend = agentBackends.createBackend(saved.settings.backend, saved.settings);
+      return { ok: true, ...saved, capabilities: await backend.capabilities(projectRoot || userDataDir()) };
+    } catch (error) { return { ok: false, error: error.message }; }
   });
 
   ipcMain.handle('agent:editing-save', async (_event, projectRoot, input) => {
@@ -324,6 +343,8 @@ function register(ctx) {
 
   ipcMain.handle('agent:resume-plan', async (_event, projectRoot, runId) => {
     if (!projectRoot) return { ok: false, error: '未选择项目' };
+    const external = externalRuns.resumePlan(projectRoot, runId, new Set(activeRequests.keys()));
+    if (external) return external;
     // 带幂等账本的续跑计划：能区分「已完成但没来得及提交」与「结果未知」，避免盲目重放副作用
     const ledger = new SideEffectLedger({ projectRoot, scopeRunId: runId });
     return runCheckpoint.planResume(projectRoot, runId, { activeIds: new Set(activeRequests.keys()), ledger });
@@ -438,6 +459,21 @@ function register(ctx) {
       });
       if (requestId && (activeRequests.has(requestId) || activeRequests.has(runStore.normalizeRunId(requestId)))) return { ok: false, error: '重复的 Agent requestId' };
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
+      const savedBackend = backendSettings.read(projectRoot, userDataDir());
+      const restoredBackend = resumeRunId && externalRuns.sessionFromRun(projectRoot, resumeRunId);
+      if (externalRuns.isProjectActive(projectRoot)) return { ok: false, error: '当前项目已有 Codex 执行，请等待结束' };
+      if (restoredBackend || savedBackend.settings.backend === 'codex') {
+        if (activeRequests.size) return { ok: false, error: '请先结束当前 Agent 任务再启动 Codex 后端' };
+        const externalId = runStore.normalizeRunId(requestId || 'codex-' + Date.now().toString(36));
+        const externalController = new AbortController();
+        const externalBridge = makeBridge(sender, externalController.signal, { projectRoot });
+        activeRequests.set(externalId, externalController);
+        try {
+          return await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
+            settings: savedBackend.settings, sandboxPolicy, signal: externalController.signal,
+            onDelta: sendDelta, confirm: externalBridge.confirm });
+        } finally { externalBridge.cleanup(); activeRequests.delete(externalId); }
+      }
       // 优先按 modelId 从 models.json 读取该模型的接入配置（apiBase/apiKey/model）
       const baseCfg = agent.loadConfig(null);
       cfg.resolveRoleModel = (role, parent) => require('../costSettings.cjs').childConfig(parent, role, cfg.costSettings,
@@ -567,6 +603,7 @@ function register(ctx) {
       // 注意：此刻 controller 还没创建（它在稍后的并发登记处才建），SessionStart 只受自身超时约束
       await runSessionHook('start', cfg, projectRoot, runId, sandboxPolicy, null);
       runStore.startRun(projectRoot, runId, {
+        backend: 'builtin',
         prompt: String((resumePlan && resumePlan.prompt) || prompt || '').slice(0, 4000),
         model: cfg.model,
         nodeId: nodeId || null,
@@ -1264,7 +1301,8 @@ function register(ctx) {
       // （`activeRequests.set(runId, controller)` 已提前到意图识别段之前：分类请求也要能取消）
       let result;
       try {
-        result = await agent.runAgentChat({
+        result = await agentBackends.createBackend('builtin').start({
+          controller,
           cfg,
           soulEvolution: true,
           soulMessages: [{ role: 'user', content: prompt }],

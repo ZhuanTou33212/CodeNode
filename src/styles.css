@@ -4451,6 +4451,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .settings-menu-actions label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 
 .glass-theme .settings-row select { max-width: 180px; padding: 7px 10px; border: 1px solid var(--glass-border); border-radius: 7px; background: var(--glass-control); color: var(--glass-text); font: inherit; }
+.global-settings .backend-settings-panel .settings-row :is(input,select,button) { background: var(--glass-control); color: var(--glass-text); border: 1px solid var(--glass-border); border-radius: 7px; padding: 7px 10px; font: inherit; }
+.backend-settings-panel input { width: min(320px,45vw); min-width: 0; }
+.backend-settings-panel .settings-row:has(> button) { flex-wrap: wrap; }
 
 /* Extensions share the settings page scroll and theme tokens. */
 .extensions-panel { min-width: 0; color: var(--glass-text); }

@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('codenode', {
   saveProject: (target, payload) => ipcRenderer.invoke('project:save', target, payload),
   loadProject: (target) => ipcRenderer.invoke('project:load', target),
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
+  backendSave: (root, scope, settings) => ipcRenderer.invoke('agent:backend-save', root, scope, settings),
+  backendStatus: root => ipcRenderer.invoke('agent:backend-status', root),
   ragCheck: (root, settings) => ipcRenderer.invoke('agent:rag-check', root, settings),
   ragSave: (root, settings) => ipcRenderer.invoke('agent:rag-save', root, settings),
   editingSave: (root, settings) => ipcRenderer.invoke('agent:editing-save', root, settings),

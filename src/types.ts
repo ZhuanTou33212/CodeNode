@@ -147,6 +147,8 @@ export type SessionMsg = {
   tools?: ToolRecord[];
   /** 本轮实际写入通知中的文件路径，不包含纯画布操作。 */
   editedFiles?: string[];
+  backendDiff?: string;
+  backendChanges?: { complete: boolean; scope: string; files: { path: string; kind: string; before: string | null; after: string | null }[] };
   status?: string;
   grounding?: RagGrounding;
   codeVerification?: CodeVerificationReport;
@@ -214,4 +216,10 @@ export interface SchedulingSettings {
   warningPercent: number;
   maxAttemptsPerTask: number;
   maxAttemptsPerRun: number;
+}
+export interface AgentBackendSettings {
+  backend: 'builtin' | 'codex';
+  executable: string;
+  model: string;
+  sandbox: 'read-only' | 'workspace-write';
 }

@@ -284,7 +284,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return empty;
       }
       const usage = normalizeUsage(res.usage);
-      if (usage) useUsageStore.getState().recordUsage(usage);
+      if (usage) useUsageStore.getState().recordUsage({ ...usage, costUnknown: res.costUnknown === true });
 
       if (res.aborted) {
         useSessionStore.getState().stopTurn();

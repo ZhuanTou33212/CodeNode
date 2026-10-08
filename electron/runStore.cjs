@@ -289,6 +289,7 @@ function summarizeRun(events) {
   const stateHistory = inspectStateHistory(list);
   return {
     runId: (finish || start || {}).runId || null,
+    backend: start?.backend || 'builtin',
     status: retry ? 'superseded' : finish ? finish.status : start ? 'interrupted' : 'unknown',
     state: (finish && finish.state) || (lastState && lastState.state) || (start ? 'RUNNING' : null),
     outcome: finishOutcome,

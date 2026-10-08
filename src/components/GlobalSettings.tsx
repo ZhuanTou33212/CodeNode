@@ -5,6 +5,7 @@ import ArchivedChatsSettings from './ArchivedChatsSettings';
 import RagSettingsPanel from './RagSettingsPanel';
 import EditingSettingsPanel from './EditingSettingsPanel';
 import AgentExecutionSettings from './AgentExecutionSettings';
+import BackendSettingsPanel from './BackendSettingsPanel';
 import SchedulingSettingsPanel from './SchedulingSettingsPanel';
 import outputUi from '../../config/ui.output.json';
 import CostSettingsPanel from './CostSettingsPanel';
@@ -39,6 +40,7 @@ export default function GlobalSettings() {
       <label className="settings-row"><span>对话栏宽度</span><input aria-label="对话栏宽度" type="range" min="320" max="640" value={conversationWidth} onChange={e => setConversationWidth(Number(e.target.value))}/><output>{conversationWidth}px</output></label>
       {([['navigationOpen','默认显示左侧栏'],['conversationOpen','默认显示对话栏'],['autoCollapseSidebars','窄窗口自动收起侧栏']] as const).map(([key,label]) => <label className="settings-row" key={key}><span>{label}</span><input type="checkbox" checked={preferences[key]} onChange={e => updatePreferences({[key]:e.target.checked})}/></label>)}
       <AgentExecutionSettings />
+      <BackendSettingsPanel />
       <SchedulingSettingsPanel />
       <h3>回复显示</h3>
       <label className="settings-row"><span>逐字显示 Agent 回复</span><input aria-label="逐字显示 Agent 回复" type="checkbox" checked={preferences.typewriterEnabled} onChange={event => updatePreferences({typewriterEnabled:event.target.checked})} /></label>

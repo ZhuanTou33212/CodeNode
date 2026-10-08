@@ -1,0 +1,13 @@
+{
+  "defaults": { "backend": "builtin", "executable": "codex", "model": "", "sandbox": "read-only" },
+  "backends": ["builtin", "codex"],
+  "sandboxModes": ["read-only", "workspace-write"],
+  "protocolVersion": "0.160.0",
+  "supportedProtocolVersions": ["0.135.0", "0.160.0"],
+  "requestTimeoutMs": 30000,
+  "interruptTimeoutMs": 10000,
+  "shutdownTimeoutMs": 5000,
+  "maxMessageBytes": 8388608,
+  "snapshotFiles": 20000,
+  "snapshotBytes": 268435456
+}

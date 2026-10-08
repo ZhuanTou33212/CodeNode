@@ -17,6 +17,8 @@ export default function FileChangesCard({ message }: { message: SessionMsg }) {
       <strong>已编辑 {files.length} 个文件</strong><span>查看变更 {expanded ? '▾' : '▸'}</span>
     </button>
     {message.codeVerification && <CodeVerificationCard report={message.codeVerification} compact />}
+    {expanded && message.backendChanges && <div className="file-changes-list"><small>独立文件指纹核对：{message.backendChanges.complete ? '已完成声明范围内的扫描' : '扫描不完整，请补充检查'} · {message.backendChanges.scope}</small>{message.backendChanges.files.map(file => <div key={file.path}><small>{file.path} · {file.kind} · {file.before?.slice(0, 12) || '不存在'} → {file.after?.slice(0, 12) || '不存在'}</small></div>)}</div>}
+    {expanded && message.backendDiff && <details><summary>Codex 提供的补丁</summary><pre>{message.backendDiff}</pre></details>}
     {expanded && <div className="file-changes-list">{files.map(file => <div className="file-changes-item" key={file.path}>
       <div className="file-changes-path"><button onClick={() => void open(file.path)} title="打开文件">{file.path}</button>
         {file.reviews.length === 1 && <small>+{file.reviews[0].added ?? '?'} −{file.reviews[0].removed ?? '?'}</small>}

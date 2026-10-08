@@ -97,7 +97,7 @@ function UsageMeter() {
           <div className="pb-usage-pop-sep" />
           <div className="pb-metric-row">
             <span>成本</span>
-            <span>{fmtMoney(summary.cost)}</span>
+            <span>{fmtMoney(summary.cost)}{summary.costUnknown ? ' + 未知外部费用' : ''}</span>
           </div>
           <div className="pb-metric-row">
             <span>预算</span>
@@ -134,6 +134,17 @@ function PromptComposer() {
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const pendingDraft = useSessionStore(s => s.newConversationPending);
   const projectRoot = useProjectStore(s => s.root);
+  const [externalModel, setExternalModel] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      void window.codenode?.agentConfig(projectRoot).then(config => {
+        if (alive) setExternalModel(config.backend?.settings.backend === 'codex' ? config.backend.settings.model || '跟随 Codex 配置' : null);
+      }).catch(() => { if (alive) setExternalModel(null); });
+    };
+    refresh(); window.addEventListener('codenode-backend-settings', refresh);
+    return () => { alive = false; window.removeEventListener('codenode-backend-settings', refresh); };
+  }, [projectRoot]);
   const draftRevision = useSessionStore(s => s.draftRevision);
   useEffect(() => { setText(''); setAttachments([]); if (draftRevision) window.setTimeout(() => taRef.current?.focus(), 0); }, [draftRevision]);
   const [modelSearch, setModelSearch] = useState('');
@@ -184,7 +195,7 @@ function PromptComposer() {
   };
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
-  const canVision = !selectedNode && model?.vision === true;
+  const canVision = !externalModel && !selectedNode && model?.vision === true;
 
   useEffect(() => {
     void loadModels();
@@ -315,7 +326,7 @@ function PromptComposer() {
 
       {/* 控件行：模型 / 推理强度 / 发送（紧凑一行，保证输入框常驻面板底部） */}
       <div className="pp-controls">
-        <ModelPicker busy={busy} />
+        {externalModel ? <button type="button" className="pp-model" disabled={busy} onClick={() => useUiStore.getState().openSettings('general')} title="在 Agent 后端设置中选择 Codex 模型">Codex · {externalModel}</button> : <ModelPicker busy={busy} />}
 
         <input
           ref={fileRef}

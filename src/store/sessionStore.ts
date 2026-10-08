@@ -87,6 +87,8 @@ interface SessionState {
   pushUser: (content: string, attachments?: SessionMsg['attachments']) => void;
   beginTurn: () => void;
   streamDelta: (d: {
+    diff?: string;
+    changes?: SessionMsg['backendChanges'];
     codeVerification?: import('../types').CodeVerificationReport;
     fileChange?: { path?: string; kind?: string; detail?: string };
     kind?: string;
@@ -414,6 +416,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    if (d.kind === 'backend_approval') return; // The existing approval dialog owns the user interaction.
+    if (d.kind === 'backend_diff' || d.kind === 'backend_changes') {
+      const messages = s.messages.slice();
+      const at = messages.map(message => message.role).lastIndexOf('assistant');
+      if (at >= 0) messages[at] = { ...messages[at], ...(d.kind === 'backend_diff' ? { backendDiff: d.diff } : { backendChanges: d.changes }) };
+      set({ messages }); return;
+    }
     if (d.kind === 'file_change' && d.fileChange?.path) {
       const messages = s.messages.slice();
       const at = messages.map(message => message.role).lastIndexOf('assistant');

@@ -21,6 +21,8 @@ const os = require('os');
 
 // 核心套件：全部为纯 Node 断言，不弹窗、不联网、可在三平台无显示环境运行。
 const CORE = [
+  'test:backends',
+  'test:backend-workflow',
   'test:soul',
   'test:session',
   'test:arrange',
@@ -218,6 +220,7 @@ const DISPLAY = ['test:agent-compact-ui', 'test:smoke', 'test:rag-ui', 'test:cod
 DISPLAY.push('test:node-inspector-ui');
 DISPLAY.push('test:token-cost-ui');
 DISPLAY.push('test:scheduling-ui');
+DISPLAY.push('test:backend-ui');
 DISPLAY.push('test:streaming-ui');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
