@@ -6,6 +6,7 @@ import Toolbar from './components/Toolbar';
 import { useProjectAutoSave } from './lib/useProjectAutoSave';
 import ActivityBar from './components/ActivityBar';
 import PluginWorkspace from './components/PluginWorkspace';
+import TaskWorkspace from './components/TaskWorkspace';
 import Canvas from './components/Canvas';
 import ProjectGate from './components/ProjectGate';
 import SidePanel from './components/side/SidePanel';
@@ -288,6 +289,7 @@ export default function App() {
       <div className="app-workbench-toolbar" hidden={appPage!=='workbench'}><Toolbar /></div>
       <div className={`app-body side-left${dockOpen && appPage==='workbench' ? ' has-dock' : ''}`}>
         {appPage==='plugins'&&<PluginWorkspace/>}
+        <TaskWorkspace hidden={appPage!=='tasks'}/>
         <div className="app-workbench-layer" data-inactive={appPage!=='workbench'} aria-hidden={appPage!=='workbench'} inert={appPage!=='workbench'}>
         <div className="app-project-navigation"><ProjectNavigation /></div>
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">

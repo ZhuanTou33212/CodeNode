@@ -16,7 +16,7 @@ function savedTheme(): 'light' | 'dark' {
 const initialPreferences = loadUiPreferences();
 
 interface UiState {
-  appPage: 'workbench' | 'plugins';
+  appPage: 'workbench' | 'plugins' | 'tasks';
   setAppPage: (page: UiState['appPage']) => void;
   pluginView: 'plugins' | 'skills';
   setPluginView: (view: UiState['pluginView']) => void;
