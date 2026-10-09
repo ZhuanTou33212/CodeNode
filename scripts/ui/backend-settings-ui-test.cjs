@@ -147,7 +147,7 @@ app.whenReady().then(async () => {
     assert.equal(persisted.backend, 'codex'); assert.equal(persisted.sandbox, 'workspace-write');
     await select('执行后端','builtin');
     await js(`[...document.querySelectorAll('[data-testid=backend-settings] button')].find(b=>b.textContent==='检测当前配置').click()`);
-    await waitFor(()=>js(`document.querySelector('[data-testid=backend-settings] [role=status]')?.textContent.includes('内置后端可用')`),'check unsaved current configuration');
+    await waitFor(()=>js(`document.querySelector('[data-testid=backend-settings] [role=status]')?.textContent.includes('CodeNode 可用')`),'check unsaved current configuration');
     assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot,'.codenode/backend.json'),'utf8')).backend,'codex','checking unsaved builtin leaves saved Codex unchanged');
     await js(`window.__codenodeUi.getState().closeSettings()`);
     await js(`window.__codenodeUi.getState().openSettings('general')`);

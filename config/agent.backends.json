@@ -19,7 +19,7 @@
     "acp"
   ],
   "labels": {
-    "builtin": "CodeNode 内置",
+    "builtin": "CodeNode",
     "codex": "Codex ACP",
     "deepseek-harness": "DeepSeek Harness ACP",
     "hermes": "Hermes Agent",

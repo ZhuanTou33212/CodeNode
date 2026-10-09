@@ -9,7 +9,7 @@ import { useBackendSwitchStore } from '../store/backendSwitchStore';
 import { useSending } from '../lib/useSending';
 
 type Backend = AgentBackendSettings['backend'];
-const shortLabel=(name:Backend)=>name==='builtin'?'内置 Agent':labels[name].replace(' ACP','').replace(' Agent','');
+const shortLabel=(name:Backend)=>labels[name].replace(' ACP','').replace(' Agent','');
 const labels = backendConfig.labels as Record<Backend, string>;
 export default function AgentSwitcher() {
   const root = useProjectStore(s => s.root);

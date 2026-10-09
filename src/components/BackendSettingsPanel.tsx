@@ -61,7 +61,7 @@ export default function BackendSettingsPanel() {
       const result = await window.codenode.backendStatus(root, { ...settings, args, ...(isAcp ? { acp: JSON.parse(acpText) } : {}) });
       if (useProjectStore.getState().root !== root) return;
       const c = result.capabilities;
-      setMessage(!result.ok || !c?.available ? result.error || c?.error || '后端不可用' : c.backend === 'builtin' ? '内置后端可用。' : `${c.backend}${c.version ? ' ' + c.version : ''} ${c.protocol||'agent protocol'} 握手成功；${c.resume?'可恢复会话。':'不支持恢复会话。'}检测不会保存配置，认证由本机 Agent 管理。`);
+      setMessage(!result.ok || !c?.available ? result.error || c?.error || '后端不可用' : c.backend === 'builtin' ? 'CodeNode 可用。' : `${c.backend}${c.version ? ' ' + c.version : ''} ${c.protocol||'agent protocol'} 握手成功；${c.resume?'可恢复会话。':'不支持恢复会话。'}检测不会保存配置，认证由本机 Agent 管理。`);
     } catch (error) { if (useProjectStore.getState().root === root) setMessage(String(error)); }
     finally { setBusy(false); }
   };

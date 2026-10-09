@@ -445,3 +445,7 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 构建、脚本检查、后端专项、原后端设置双主题测试和源码/包内 Agent 选择 UI 测试通过；验证了当前勾选、候选预览不保存、不可用禁用、确认切换、Escape、历史与草稿保留及双主题同结构。最新效果图仍在 [日间](validation/agent-switcher-preview/light.png) 和 [夜间](validation/agent-switcher-preview/dark.png)。暂存与固定路径均通过 UI 自检 19/19 及正式 asar 启动检查。
 
 已覆盖 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行。app.asar SHA-256：AD99350593F367238B1EE2B14914528172020C18741358550A8CC6E4BBCDDB45；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。使用公开 Agent 模板及已提交 Soul 打包，用户私有配置及未提交 Soul 修改保留。
+
+### 2026-10-09 自研 Agent 统一命名为 CodeNode
+
+内置自研 Agent 的显示名称在 config/agent.backends.json 集中改为 CodeNode，顶部显示 Chat CodeNode，菜单、设置选项、检测反馈与切换提示同步；内部 builtin 标识和直接模型/工具执行路径不变。构建、脚本检查、设置及包内切换双主题验证通过，截图已更新。暂存与固定包 19/19 UI 自检和实际启动自检通过；固定交付目录已覆盖，app.asar SHA-256 为 3EFD0709D7F0B3CF9F8470F73DC3741B8C7E5C534C407C632F429DB5BC575FF7，CodeNode.exe SHA-256 为 4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。只使用公开配置打包，用户私有配置和未提交 Soul 修改保留。
