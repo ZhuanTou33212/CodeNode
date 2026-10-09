@@ -427,3 +427,12 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 本轮完整构建、脚本检查与核心回归 159/159 通过；后续取消统一转发、预取消和纯 ACP 夹具清理又通过 BackendPort／后端／状态机／多后端专项与静态检查。源码与最终包内设置 UI 在日夜主题下共用结构、功能和配置，切换保留会话、草稿、模型及侧栏状态。最终包 UI 自检 19/19、实际 asar main/preload/renderer 启动检查通过。最终包通过 OpenCode 1.17.18 的真实自动推进、失败不重试、启动前遗留认领恢复，以及推理中断后的三进程重启复核；报告直接从被验收的 asar 提取 BackendPort 和配置哈希，保存于 [新版 ACP 实测证据](validation/acp-backend-port-live-2026-10-09.json)。
 
 固定交付路径 E:\CodeNode\release\win-unpacked 已更新；覆盖前确认 CodeNode 未运行，不保留旧包备份。app.asar SHA-256 为 B36CABFD71D723E277BB66869ADDF89FBA23F87B17FA24C0A49827E1FC6AA548；CodeNode.exe SHA-256 为 4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。覆盖后 19/19 自检与实际启动检查再次通过。只把公开 Agent 模板和已提交 Soul 放入交付包，本机私有配置及未提交 Soul 修改保留。
+### 2026-10-09 对话栏顶部 Agent 快捷切换
+
+对话栏顶部新增 Agent 下拉入口，不占用输入框控件行、不增加第二个对话关闭按钮。点击展开列表，选择只预览，必须点击“确认切换”才保存。有历史对话时明确显示“新建对话并切换”，保留原会话及输入草稿；运行和切换期间禁用入口，并阻止新发送和自动推进竞态。高级连接设置仍集中在设置 → 常规 → Agent 后端。
+
+连接配置按 Agent 分别保存在既有 backend.json 的 profiles 中，兼容旧单配置格式；快捷切换有项目时仅覆盖当前项目，无项目时保存本机默认。切回已有 Agent 恢复其命令、参数、模型和 ACP 配置。会话配置查询可带当前 session ID，恢复旧 ACP 会话时顶部与输入区显示该会话实际绑定的 Agent，而非误显示项目默认值。
+
+新增 test:agent-switch-ui，已纳入显示环境测试组。源码与最终包内 UI 验证了两步确认、Escape 取消、已保存配置恢复、原历史和草稿保留、运行禁用、自定义 ACP 未配置时阻止切换、高级设置跳转，以及双主题相同结构/状态。图片来自实际暂存包界面：[日间效果](validation/agent-switcher-preview/light.png)、[夜间效果](validation/agent-switcher-preview/dark.png)。构建、脚本检查、后端与画布工作流专项、既有后端设置双主题检查通过；暂存和固定交付包 UI 自检 19/19、实际 asar 启动自检通过。
+
+已覆盖 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行，不保留旧包备份。app.asar SHA-256：8BF65362B3362721B5F94DF1B8985DC61AC6A8FB8D41AFF7175A9BB00E51F1F5；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。打包仅包含公开 Agent 配置模板和已提交 Soul，本机私有配置和用户未提交 Soul 修改保留。

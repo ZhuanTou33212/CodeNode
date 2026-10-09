@@ -182,10 +182,10 @@ interface CodenodeApi {
   saveProject: (target: string, payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   loadProject: (target: string) => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   agentConfig: (
-    root: string | null
+    root: string | null, sessionId?: string | null
   ) => Promise<{
     configured: boolean;
-    backend?: { settings: import('./types').AgentBackendSettings; machine: import('./types').AgentBackendSettings; project: import('./types').AgentBackendSettings | null; scope: 'machine' | 'project' };
+    backend?: { profiles?: Partial<Record<import('./types').AgentBackendSettings['backend'],import('./types').AgentBackendSettings>>; sessionSettings?: import('./types').AgentBackendSettings; settings: import('./types').AgentBackendSettings; machine: import('./types').AgentBackendSettings; project: import('./types').AgentBackendSettings | null; scope: 'machine' | 'project' };
     model: string;
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;

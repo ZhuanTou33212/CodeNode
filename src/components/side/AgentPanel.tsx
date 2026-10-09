@@ -12,6 +12,7 @@ import { formatResumePlanNotice, summarizeResumePlan } from '../../lib/resumePla
 import { reportError } from '../../lib/reportError';
 import type { AgentAttachment } from '../../types';
 import backendConfig from '../../../config/agent.backends.json';
+import {useBackendSwitchStore} from '../../store/backendSwitchStore';
 import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
 import { PlanCard } from '../PlanCard';
@@ -136,18 +137,19 @@ function PromptComposer() {
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const pendingDraft = useSessionStore(s => s.newConversationPending);
   const projectRoot = useProjectStore(s => s.root);
+  const activeSessionId = useSessionStore(s=>s.activeId);
   const [externalModel, setExternalModel] = useState<string | null>(null);
   const [externalBackend, setExternalBackend] = useState('builtin');
   useEffect(() => {
     let alive = true;
     const refresh = () => {
-      void window.codenode?.agentConfig(projectRoot).then(config => {
-        if (alive) { const settings = config.backend?.settings; setExternalBackend(settings?.backend || 'builtin'); setExternalModel(settings && settings.backend !== 'builtin' ? settings.backend + ' · ' + (settings.model || '跟随 Agent 配置') : null); }
+      void window.codenode?.agentConfig(projectRoot,activeSessionId).then(config => {
+        if (alive) { const settings = config.backend?.sessionSettings || config.backend?.settings; setExternalBackend(settings?.backend || 'builtin'); setExternalModel(settings && settings.backend !== 'builtin' ? settings.backend + ' · ' + (settings.model || '跟随 Agent 配置') : null); }
       }).catch(() => { if (alive) setExternalModel(null); });
     };
     refresh(); window.addEventListener('codenode-backend-settings', refresh);
     return () => { alive = false; window.removeEventListener('codenode-backend-settings', refresh); };
-  }, [projectRoot]);
+  }, [projectRoot,activeSessionId]);
   const draftRevision = useSessionStore(s => s.draftRevision);
   useEffect(() => { setText(''); setAttachments([]); if (draftRevision) window.setTimeout(() => taRef.current?.focus(), 0); }, [draftRevision]);
   const [modelSearch, setModelSearch] = useState('');
@@ -170,7 +172,8 @@ function PromptComposer() {
   const setModel = useUsageStore((s) => s.setModel);
   const setEffort = useUsageStore((s) => s.setEffort);
   const loadModels = useUsageStore((s) => s.loadModels);
-  const busy = sending || streaming;
+  const backendSwitching=useBackendSwitchStore(s=>s.switching);
+  const busy = sending || streaming || backendSwitching;
   const taRef = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);

@@ -150,7 +150,7 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 ### Agent 后端
 
-在 **设置 → 常规 → Agent 后端** 选择内置执行器、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。配置保存为本机默认或项目覆盖，项目可跟随本机设置。
+在 **对话栏顶部 → Agent** 选择执行器：选中只是预览，点击“确认切换”才保存；有历史对话时使用“新建对话并切换”，保留原对话和输入草稿。运行或切换期间禁用入口。连接路径、参数、认证和 MCP 仍在 **设置 → 常规 → Agent 后端** 中配置，可选择内置执行器、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。快捷切换有项目时只保存当前项目，未选择项目时保存本机默认。每个 Agent 的连接配置分别记住，切回时恢复已有命令、参数、模型和 ACP 设置；高级设置中仍可调整配置范围，项目可跟随本机设置。
 
 | 后端 | 已安装的启动命令 | 默认参数 |
 | --- | --- | --- |

@@ -1,3 +1,4 @@
+import {useBackendSwitchStore} from './backendSwitchStore';
 import { create } from 'zustand';
 import { useProjectStore } from './projectStore';
 import { useGraphStore } from './graphStore';
@@ -182,6 +183,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return empty;
     }
     if(options?.projectRoot&&useProjectStore.getState().root!==options.projectRoot){useUiStore.getState().setToast('自动推进已取消：当前工程已切换');return empty;}
+    if(useBackendSwitchStore.getState().switching){useUiStore.getState().setToast('正在切换 Agent，请稍后发送');return empty;}
     const text = prompt.trim();
     const attachments = options?.attachments ?? [];
     // 允许「只有图片、没有文字」的消息（老行为，保持不变；空消息静默返回）

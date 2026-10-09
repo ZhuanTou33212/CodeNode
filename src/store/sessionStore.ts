@@ -71,7 +71,7 @@ interface SessionState {
   beginWorkSession: (prompt: string) => void;
   /** 用户手动新建空白画布 */
   newCanvas: () => void;
-  newConversation: () => void;
+  newConversation: (options?: { preserveDraft?: boolean }) => void;
   draftRevision: number;
   newConversationPending: boolean;
   /** 直接在当前画布上阅读并制作（不新建画布） */
@@ -377,11 +377,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   getDocument: () => snapshotGraph(),
 
-  newConversation: () => {
+  newConversation: (options) => {
     if (get().streaming) return;
     get().syncActiveGraph();
     loadGraph(emptyDoc());
-    set(state => ({ activeId: null, activePlanSessionId: null, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, memoryConversationId: uid('memory'), memoryTaskEpoch: state.memoryTaskEpoch + 1, draftRevision: state.draftRevision + 1, newConversationPending: true }));
+    set(state => ({ activeId: null, activePlanSessionId: null, messages: [], progress: null, plan: null, planUpdatedAt: null, planRunId: null, intentVerdict: null, memoryConversationId: uid('memory'), memoryTaskEpoch: state.memoryTaskEpoch + 1, draftRevision: state.draftRevision + (options?.preserveDraft ? 0 : 1), newConversationPending: true }));
   },
 
   newCanvas: () => {

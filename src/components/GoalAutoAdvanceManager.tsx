@@ -1,3 +1,4 @@
+import {useBackendSwitchStore} from '../store/backendSwitchStore';
 import { useEffect, useRef } from 'react';
 import { useChatStore } from '../store/chatStore';
 import { useGoalControlStore } from '../store/goalControlStore';
@@ -7,6 +8,7 @@ import waitConfig from '../../config/goal.wait.json';
 
 /** Runs only after a persisted wait release and an explicit Goal-level authorization. */
 export default function GoalAutoAdvanceManager() {
+  const backendSwitching=useBackendSwitchStore(s=>s.switching);
   const root = useProjectStore(state => state.root);
   const goals = useGoalControlStore(state => state.goals);
   const refresh = useGoalControlStore(state => state.refresh);
@@ -45,7 +47,7 @@ export default function GoalAutoAdvanceManager() {
 
   useEffect(() => {
     const api = window.codenode;
-    if (!root || !api?.goalAutoAdvanceClaim || !api.goalAutoAdvanceRelease || claimInFlight.current) return;
+    if (backendSwitching || !root || !api?.goalAutoAdvanceClaim || !api.goalAutoAdvanceRelease || claimInFlight.current) return;
     const maxRuns = Math.max(1, Number(waitConfig.autoAdvance.maxRunsPerGoal) || 1);
     const candidate = goals.flatMap(goal => goal.status === 'active' && goal.autoAdvanceAuthorized === true &&
       (Number(goal.autoAdvanceUsedRuns) || 0) < maxRuns
@@ -97,7 +99,7 @@ export default function GoalAutoAdvanceManager() {
       }
     };
     void start();
-  }, [root, goals, refresh]);
+  }, [root, goals, refresh, backendSwitching]);
 
   return null;
 }

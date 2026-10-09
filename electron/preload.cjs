@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('codenode', {
   listExtensions: (root) => ipcRenderer.invoke('extensions:list', root),
   saveProject: (target, payload) => ipcRenderer.invoke('project:save', target, payload),
   loadProject: (target) => ipcRenderer.invoke('project:load', target),
-  agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
+  agentConfig: (root, sessionId) => ipcRenderer.invoke('agent:config', root, sessionId),
   backendSave: (root, scope, settings) => ipcRenderer.invoke('agent:backend-save', root, scope, settings),
   backendStatus: (root, settings) => ipcRenderer.invoke('agent:backend-status', root, settings),
   backendControl: (root, settings, method, params) => ipcRenderer.invoke('agent:backend-control', root, settings, method, params),

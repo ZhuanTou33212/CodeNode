@@ -207,9 +207,11 @@ async function runSessionHook(kind, cfg, projectRoot, runId, sandboxPolicy, sign
 function register(ctx) {
   const { ipcMain, userDataDir } = ctx;
 
-  ipcMain.handle('agent:config', async (_event, projectRoot) => {
+  ipcMain.handle('agent:config', async (_event, projectRoot, sessionId) => {
     const cfg = agent.loadConfig(projectRoot);
     const backend = backendSettings.read(projectRoot, userDataDir());
+    const priorBackend=projectRoot&&sessionId?externalRuns.previousSession(projectRoot,String(sessionId)):null;
+    if(priorBackend?.session?.adapterSettings)backend.sessionSettings=priorBackend.session.adapterSettings;
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
     const store = modelStore.readUsableModels(userDataDir(), cfg);
     return {

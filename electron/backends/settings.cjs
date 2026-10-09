@@ -56,10 +56,16 @@ function readFile(file) {
   if (!fs.existsSync(file)) return null;
   return normalize(JSON.parse(fs.readFileSync(file, 'utf8')));
 }
+function readProfiles(file) {
+  if(!fs.existsSync(file))return {};
+  const value=JSON.parse(fs.readFileSync(file,'utf8')),out={};
+  for(const name of config.backends){const entry=value.profiles?.[name];if(entry?.backend===name)out[name]=normalize(entry);}
+  const selected=normalize(value);out[selected.backend]=selected;return out;
+}
 function read(root, userData) {
   const machine = readFile(fileFor(null, userData, 'machine')) || { ...config.defaults };
   const project = root ? readFile(fileFor(root, userData, 'project')) : null;
-  return { settings: project || machine, machine, project, scope: project ? 'project' : 'machine' };
+  return { settings: project || machine, machine, project, profiles:{...readProfiles(fileFor(null,userData,'machine')),...(root?readProfiles(fileFor(root,userData,'project')):{})}, scope: project ? 'project' : 'machine' };
 }
 function write(root, userData, scope, input) {
   const file = fileFor(root, userData, scope);
@@ -68,7 +74,7 @@ function write(root, userData, scope, input) {
   }
   if (input === null && scope === 'project') {
     if (fs.existsSync(file)) fs.unlinkSync(file);
-  } else atomicWriteFile(file, JSON.stringify(normalize(input), null, 2) + '\n');
+  } else {const selected=normalize(input);const profiles={...readProfiles(file),[selected.backend]:selected};atomicWriteFile(file,JSON.stringify({...selected,profiles},null,2)+'\n');}
   return read(root, userData);
 }
 module.exports = { config, normalize, read, write };
