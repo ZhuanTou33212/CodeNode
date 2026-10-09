@@ -12,6 +12,7 @@ import { useReplayStore } from './store/replayStore';
 import { getActiveVectorNode, getVectorStore, useVectorStore } from './vector/vectorStore';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
+import './trellis.css';
 
 const w = window as unknown as {
   __codenodeStore?: typeof useGraphStore;

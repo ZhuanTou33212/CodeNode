@@ -13,6 +13,8 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "test:trellis": "node scripts/core/trellis-compatibility-test.cjs",
+    "test:trellis-ui": "node scripts/run-electron.cjs scripts/ui/trellis-ui-test.cjs",
     "test:acp-full": "node scripts/core/acp-full-test.cjs",
     "test:backends": "node scripts/core/agent-backends-test.cjs",
     "test:multi-backends": "node scripts/core/multi-agent-backends-test.cjs",

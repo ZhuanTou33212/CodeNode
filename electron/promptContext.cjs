@@ -17,6 +17,7 @@ const { extractSessionMemoryOverrides } = require('./sessionMemoryOverrides.cjs'
  *   sessionOverrides?: Array<{scope?: string, kind?: string, key: string, value?: string}>,
  *   memoryIntent?: {changes?: Array<any>, overrides?: Array<any>, persistentCandidates?: Array<any>} | null,
  *   memoryConfig?: any, dynamicContextConfig?: any, userMemoryStore?: any,
+ *   trellisContext?: {text: string, tokens: number, ready: boolean}|null,
  *   buildSkillsIndex: (skills: any[]) => string,
  *   truncateCanvasSummary: (text: string, budget: number) => {text: string},
  *   truncateSkillsIndex: (text: string, budget: number) => {text: string}
@@ -27,6 +28,9 @@ function buildPromptContext(input) {
   const prompt = String(i.prompt || '');
   const memoryCfg = i.memoryConfig || {};
   const dynCfg = i.dynamicContextConfig || dynamicContext.parseDynamicContextConfig({});
+  const trellisText = i.trellisContext?.text || '';
+  const trellisTokens = compaction.estimateTextTokens(trellisText);
+  if (i.trellisContext && (!i.trellisContext.ready || (dynCfg.totalTokens > 0 && trellisTokens > dynCfg.totalTokens))) throw new Error('Trellis 必要上下文超过动态预算或资料不完整，未裁剪规则；请拆分资料');
   const userStore = i.userMemoryStore || require('./userMemory.cjs');
   const skillsIndexFull = i.buildSkillsIndex(Array.isArray(i.skills) ? i.skills : []);
   const projectEntries = Array.isArray(i.projectMemoryEntries) ? i.projectMemoryEntries : [];
@@ -89,6 +93,7 @@ function buildPromptContext(input) {
     ? dynamicContext.allocateContextBudget({
         totalTokens: dynCfg.totalTokens,
         sections: [
+          ...(trellisTokens ? [{ id: 'trellis', desiredTokens: trellisTokens, capTokens: trellisTokens, minTokens: trellisTokens, priority: 0 }] : []),
           {
             id: 'canvas',
             desiredTokens: compaction.estimateTextTokens(canvasSummary),
@@ -155,6 +160,7 @@ function buildPromptContext(input) {
   }
 
   return {
+    trellisText,
     memoryText,
     userMemoryText,
     skillsText,

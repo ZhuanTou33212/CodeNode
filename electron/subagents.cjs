@@ -1947,6 +1947,7 @@ class SubagentManager {
         confirmedSources: task.confirmedSources,
         verificationCandidate: task.verificationCandidate,
         goalContext,
+        trellisContext: this.cfg.trellisSnapshot ? require('./trellis/index.cjs').assertReady(this.cfg.trellisSnapshot, role) : null,
       });
       result = await this.agent.runAgentChat({
         cfg: childCfg,

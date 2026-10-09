@@ -100,7 +100,7 @@ function goalContextSection(context) {
 /**
  * 组装子代理的 system prompt。
  * @param {any} task 任务对象（taskId / role / objective / inputs / acceptanceCriteria / totalTimeoutMs）
- * @param {{role?: string, tools?: Array<{name: string, description?: string}>, projectSkills?: Array<any>, confirmedSources?: Array<any>, verificationCandidate?: any, goalContext?: any}} [options]
+ * @param {{role?: string, tools?: Array<{name: string, description?: string}>, projectSkills?: Array<any>, confirmedSources?: Array<any>, verificationCandidate?: any, goalContext?: any, trellisContext?: any}} [options]
  * @returns {string}
  */
 function buildSubagentPrompt(task, options) {
@@ -135,6 +135,7 @@ function buildSubagentPrompt(task, options) {
   if (projectSection) lines.push(projectSection);
   const goalSection = goalContextSection(opts.goalContext);
   if (goalSection) lines.push(goalSection);
+  if (opts.trellisContext) lines.push(opts.trellisContext.text);
 
   // 运行规则
   lines.push('\n【运行规则（硬性要求）】\n' + RUN_RULES.map((rule, index) => (index + 1) + '. ' + rule).join('\n'));

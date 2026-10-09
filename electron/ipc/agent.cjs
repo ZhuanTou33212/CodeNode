@@ -59,6 +59,7 @@ const memoryIntent = require('../memoryIntent.cjs');
 const memoryPersistence = require('../memoryPersistence.cjs');
 const sessionOverrideStore = require('../sessionOverrideStore.cjs');
 const ragSettings = require('../ragSettings.cjs');
+const trellis = require('../trellis/index.cjs');
 
 function workspaceHash(projectRoot) {
   const snapshot = require('../backends/workspaceDiff.cjs').capture(projectRoot);
@@ -265,6 +266,17 @@ function register(ctx) {
     try { if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' }; return { ok: true, value: action(path.resolve(projectRoot)) }; }
     catch (error) { return { ok: false, error: error.message || String(error) }; }
   };
+  ipcMain.handle('trellis:project', async (_event, root, conversationId) => withGoalRoot(root, project => ({ ...trellis.detectProject(project), selectedTask: trellis.selectedTask(project, conversationId) })));
+  ipcMain.handle('trellis:context', async (_event, root, taskPath) => withGoalRoot(root, project => {
+    const context = trellis.resolveContext(project, taskPath);
+    const totalTokens = agent.loadConfig(project).dynamicContext?.totalTokens;
+    if (totalTokens > 0 && context.tokens > totalTokens) {
+      context.diagnostics.push({ source: taskPath, error: '必要上下文超过当前动态预算，需拆分资料；规则不会静默裁剪' });
+      context.ready = false;
+    }
+    return { ...context, runs: trellis.taskRuns(project, taskPath) };
+  }));
+  ipcMain.handle('trellis:select', async (_event, root, conversationId, taskPath) => withGoalRoot(root, project => trellis.selectTask(project, conversationId, taskPath)));
   const fetchWaitObservation = async (root, task) => {
     const provider=String(task.waitCondition?.provider||'manual');
     const scope=observation=>({...observation,id:String(task.id)+':'+String(observation.id||Date.now())});
@@ -650,6 +662,9 @@ function register(ctx) {
     try {
       const cfg = agent.loadConfig(projectRoot);
       runCfg = cfg;
+      const trellisSnapshot = projectRoot ? trellis.contextForRun(projectRoot, memoryConversationId || sessionId, resumeRunId) : null;
+      cfg.trellisSnapshot = trellisSnapshot;
+      if (trellisSnapshot && cfg.dynamicContext?.totalTokens > 0 && trellis.assertReady(trellisSnapshot).tokens > cfg.dynamicContext.totalTokens) throw new Error('Trellis 必要上下文超过动态预算，未裁剪规则；请拆分资料');
       const piiInput = piiLib.apply(prompt || '', cfg.pii);
       if (cfg.pii && cfg.pii.mode === 'redact') prompt = piiInput.text;
       // 执行隔离策略：工具子进程 / 扩展 / 项目命令统一生效（strict 模式下能力不足会拒绝执行）
@@ -689,7 +704,7 @@ function register(ctx) {
         activeRequests.set(externalId, externalController);
         try {
           applyGoalContext();
-          const externalResult = await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
+          const externalResult = await externalRuns.runExternal({ ...payload, prompt: String(prompt || '') + (trellisSnapshot ? trellis.assertReady(trellisSnapshot).text : ''), trellisSnapshot, requestId: externalId, cfg,
             settings: savedBackend.settings, backendEpoch:binding?.epoch||null,sandboxPolicy, signal: externalController.signal,
             goalContextRevision, goalAcceptanceRevision,
             toolRegistry: externalRegistry, toolContext: externalContext,
@@ -846,6 +861,7 @@ function register(ctx) {
         goalAcceptanceRevision: goalAcceptanceRevision || null,
         sandbox: sandbox.describe(sandboxPolicy),
       });
+      trellis.recordContext(projectRoot, runId, trellisSnapshot);
       if (cfg.pii && cfg.pii.mode === 'warn' && piiInput.findings.length) {
         runStore.appendEvent(projectRoot, runId, 'pii_detected', { direction: 'input', findings: piiInput.findings });
       }
@@ -1052,6 +1068,7 @@ function register(ctx) {
       // 桌面与 CLI 共用同一个动态上下文预算，避免入口之间的提示词开销漂移。
       const promptContext = promptContextLib.buildPromptContext({
         prompt,
+        trellisContext: trellisSnapshot ? trellis.assertReady(trellisSnapshot) : null,
         sessionOverrides: activeSessionOverrides,
         memoryIntent: controller.signal.aborted ? null : memoryIntentResult,
         canvasSummary,
@@ -1281,7 +1298,7 @@ function register(ctx) {
         exposedTools: registry ? registry.toolExposure : null,
         // 「真的裁剪过」才追加 discover_tools 那条规则（暴露全部工具 ≠ 没裁剪，二者提示词必须一致）
         toolFaceTrimmed: !!(toolFace && toolFace.applied),
-      });
+      }) + promptContext.trellisText;
       const messages = resumePlan
         ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })
         : [{ role: 'system', content: systemContent }];
@@ -1613,6 +1630,7 @@ function register(ctx) {
         usage: result.usage || null,
         grounding: result.grounding || null,
         error: result.error || null,
+        codeVerification: result.codeVerification || null,
         streamRestarts: result.streamRestarts || 0,
       });
       if (goalAdmission) settleGoalTask(terminalState === 'COMPLETED' && !result.error ? 'completed' : terminalState === 'CANCELLED' ? 'cancelled' : 'failed', result);

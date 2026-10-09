@@ -1,0 +1,7 @@
+.trellis-task-panel { margin: 4px 12px; border: 1px solid var(--glass-border); border-radius: 8px; color: var(--glass-text); background: var(--glass-sheet); font-size: 12px; }
+.trellis-task-panel summary { cursor: pointer; padding: 7px; overflow-wrap: anywhere; }
+.trellis-task-content { padding: 0 8px 8px; max-height: 40vh; overflow: auto; }
+.trellis-task-content p { margin: 6px 0; }
+.trellis-task-content select { max-width: 100%; color: inherit; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 4px; }
+.trellis-task-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; margin: 4px; padding: 6px; }
+.trellis-task-content button { margin: 6px 0; color: inherit; background: var(--glass-control); border: 1px solid var(--glass-border); border-radius: 4px; }

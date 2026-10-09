@@ -145,6 +145,9 @@ interface CodenodeApi {
   saveGraph: (payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   openGraph: () => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   chooseProject: () => Promise<{ ok: boolean; root?: string }>;
+  trellisProject: (root: string, conversationId: string) => Promise<{ok: boolean; value?: import('./lib/trellisTypes').TrellisProject; error?: string}>;
+  trellisContext: (root: string, taskPath: string) => Promise<{ok: boolean; value?: import('./lib/trellisTypes').TrellisContext; error?: string}>;
+  trellisSelect: (root: string, conversationId: string, taskPath: string | null) => Promise<{ok: boolean; value?: string | null; error?: string}>;
   createProject: () => Promise<{ ok: boolean; filePath?: string; root?: string; error?: string }>;
   listProject: (root: string) => Promise<{ ok: boolean; files?: ProjectFileDto[]; error?: string }>;
   readProjectFile: (

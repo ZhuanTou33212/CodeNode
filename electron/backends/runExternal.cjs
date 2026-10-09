@@ -78,6 +78,7 @@ async function runExternal(input, deps = {}) {
       goalId: input.goalId || null, goalTaskId: input.taskId || null, goalContextRevision: input.goalContextRevision || null,
       goalAcceptanceRevision: input.goalAcceptanceRevision || null, goalWriteScope: input.goalWriteScope || [],
       cost: 'unknown', hardBudget: false })) throw new Error('无法保存后端运行记录，执行未启动');
+    require('../trellis/index.cjs').recordContext(root, runId, input.trellisSnapshot);
     emit({ kind: 'start' });
     emit({ kind: 'state', state: 'RUNNING', previous: null, sequence: 0 });
     const before = diff.capture(root);

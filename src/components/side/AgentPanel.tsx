@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import TrellisTaskPanel from '../TrellisTaskPanel';
 import { useProjectStore } from '../../store/projectStore';
 import { projectNameOf } from '../../lib/recentProjects';
 import { useGraphStore } from '../../store/graphStore';
@@ -261,6 +262,7 @@ function PromptComposer() {
 
   return (
     <>
+      {!selectedNode && <TrellisTaskPanel />}
       {pendingDraft && !selectedNode && <div className="composer-project-context">新对话 · {projectNameOf(projectRoot || '当前项目')}</div>}
     <div
       className={`pp-composer${dragOver ? ' is-dragover' : ''}`}

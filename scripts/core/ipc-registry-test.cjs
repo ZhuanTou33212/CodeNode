@@ -24,6 +24,7 @@ const EXPECTED = {
     'project:save', 'project:load', 'extensions:list', 'extensions:add',
   ],
   'agent.cjs': [
+    'trellis:project', 'trellis:context', 'trellis:select',
     'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:editing-save', 'agent:execution-save', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:scheduling-save',
     'goal:list', 'goal:create', 'goal:update', 'goal:auto-advance-claim', 'goal:auto-advance-release', 'goal:task-create', 'goal:task-update', 'goal:run-review', 'goal:run-review-confirm',

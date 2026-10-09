@@ -26,6 +26,7 @@ docs/eval-reports/
 .codenode/conversation.jsonl
 .codenode/scalars.json
 .codenode/session-overrides.json
+.codenode/trellis.json
 .codenode/runs/
 .codenode/metrics/
 

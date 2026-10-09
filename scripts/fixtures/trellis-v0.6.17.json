@@ -1,0 +1,13 @@
+{
+  "reference": {"repository": "https://github.com/mindfold-ai/Trellis", "revision": "f089cb3286071199e84118dee86b6d76aab032f1", "version": "0.6.17", "note": "Synthetic fixture independently authored against observed task.json and JSONL structure; not copied upstream content."},
+  "taskPath": ".trellis/tasks/10-10-demo",
+  "files": {
+    ".trellis/tasks/10-10-demo/task.json": "{\"id\":\"demo\",\"name\":\"demo\",\"title\":\"兼容测试任务\",\"status\":\"in_progress\",\"parent\":null,\"children\":[],\"meta\":{\"unknown\":\"preserve\"}}\n",
+    ".trellis/tasks/10-10-demo/prd.md": "# DEMO_PRD\n- [ ] Verify the actual artifact\n",
+    ".trellis/tasks/10-10-demo/implement.jsonl": "{\"_example\":true,\"file\":\"placeholder\"}\n{\"file\":\".trellis/spec/backend/implementation.md\",\"reason\":\"builder rules\"}\n",
+    ".trellis/tasks/10-10-demo/check.jsonl": "{\"file\":\".trellis/spec/backend/verification.md\",\"reason\":\"verification rules\"}\n",
+    ".trellis/spec/index.md": "# BASE_RULES\nKeep evidence and source references.\n",
+    ".trellis/spec/backend/implementation.md": "# BUILDER_RULES\nImplement within the task scope.\n",
+    ".trellis/spec/backend/verification.md": "# CHECK_RULES\nRun independent checks.\n"
+  }
+}

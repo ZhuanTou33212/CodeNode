@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('codenode', {
   saveGraph: (data) => ipcRenderer.invoke('graph:save', data),
   openGraph: () => ipcRenderer.invoke('graph:open'),
   chooseProject: () => ipcRenderer.invoke('project:choose'),
+  trellisProject: (root, conversationId) => ipcRenderer.invoke('trellis:project', root, conversationId),
+  trellisContext: (root, taskPath) => ipcRenderer.invoke('trellis:context', root, taskPath),
+  trellisSelect: (root, conversationId, taskPath) => ipcRenderer.invoke('trellis:select', root, conversationId, taskPath),
   // S8：统一事件流的按 run 回放（时间线 + 摘要）
   replayEvents: (root, options) => ipcRenderer.invoke('agent:events', root, options),
   // §4.2：Run 级文件回滚 —— 先取只读计划（逐项 restore/delete/skip + 原因），确认后再执行
