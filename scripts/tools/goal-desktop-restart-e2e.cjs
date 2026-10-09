@@ -128,7 +128,7 @@ async function runElectronPhase() {
   assert.equal(goalStore.read(project).revision, revision, 'second list call is idempotent before user review writes its audit record');
   await window.webContents.executeJavaScript(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
   await window.webContents.executeJavaScript(`window.__codenodeUi.getState().setSideTab('agent')`);
-  await window.webContents.executeJavaScript(`document.querySelector('[aria-label="打开目标管理"]').click()`);
+  await window.webContents.executeJavaScript(`document.querySelector('[aria-label="切换到总览"]').click()`);
   const panelDeadline=Date.now()+10000;
   while(Date.now()<panelDeadline){
     if(await window.webContents.executeJavaScript("!!document.querySelector('.goal-control-panel .goal-toolbar select')"))break;

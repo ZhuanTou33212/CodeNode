@@ -54,7 +54,7 @@ function fileFor(root, userData, scope) {
 }
 function readFile(file) {
   if (!fs.existsSync(file)) return null;
-  return normalize(JSON.parse(fs.readFileSync(file, 'utf8')));
+  const value=JSON.parse(fs.readFileSync(file,'utf8'));return value.inheritMachine?null:normalize(value);
 }
 function readProfiles(file) {
   if(!fs.existsSync(file))return {};
@@ -75,14 +75,23 @@ function read(root, userData) {
   }
   return { settings: project || machine, machine, project, profiles,availability, scope: project ? 'project' : 'machine' };
 }
-function write(root, userData, scope, input) {
+function write(root, userData, scope, input, options={}) {
   const file = fileFor(root, userData, scope);
   for (const target of [path.dirname(file), file]) {
     if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error('设置路径不可为符号链接');
   }
+  const prior=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{};
+  const bindings=Object.assign(Object.create(null),prior.conversationBindings||{});
+  if(options.conversationId&&(scope!=='project'||!input||!/^[A-Za-z0-9_-]{1,120}$/.test(String(options.conversationId))))throw new Error('对话 Agent 切换需要有效的项目对话编号');
   if (input === null && scope === 'project') {
-    if (fs.existsSync(file)) fs.unlinkSync(file);
-  } else {const selected=normalize(input);const profiles={...readProfiles(file),[selected.backend]:selected};atomicWriteFile(file,JSON.stringify({...selected,profiles},null,2)+'\n');}
+    if(Object.keys(bindings).length)atomicWriteFile(file,JSON.stringify({...read(null,userData).machine,conversationBindings:bindings,inheritMachine:true},null,2)+'\n');else if (fs.existsSync(file)) fs.unlinkSync(file);
+  } else {const selected=normalize(input);const profiles={...readProfiles(file),[selected.backend]:selected};if(options.conversationId)bindings[String(options.conversationId)]={epoch:require('node:crypto').randomUUID(),settings:selected};atomicWriteFile(file,JSON.stringify({...selected,profiles,...(Object.keys(bindings).length?{conversationBindings:bindings}:{})},null,2)+'\n');}
   return read(root, userData);
 }
-module.exports = { config, normalize, read, write };
+function conversationBinding(root,conversationId){
+ if(!root||!conversationId)return null;const file=fileFor(root,null,'project');if(!fs.existsSync(file))return null;
+ const bindings=JSON.parse(fs.readFileSync(file,'utf8')).conversationBindings||{};
+ const binding=Object.hasOwn(bindings,String(conversationId))?bindings[String(conversationId)]:null;
+ return binding&&typeof binding.epoch==='string'?{epoch:binding.epoch,settings:normalize(binding.settings)}:null;
+}
+module.exports = { config, normalize, read, write,conversationBinding };

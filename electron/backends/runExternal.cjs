@@ -18,11 +18,11 @@ function sessionFromRun(root, id) {
   const finish = [...events].reverse().find(event => event.type === 'run_finish');
   return { start, session, finish };
 }
-function previousSession(root, sessionId) {
-  if (!sessionId) return null;
+function previousSession(root, sessionId,options={}) {
+  if (!sessionId&&!options.conversationId) return null;
   for (const run of runStore.listRuns(root, 200)) {
     const record = sessionFromRun(root, run.runId);
-    if (record && record.start.planSessionId === sessionId && (record.session?.threadId || record.session?.sessionId)) return record;
+    if (record && (record.start.planSessionId === sessionId||options.conversationId&&record.start.memoryConversationId===options.conversationId) && (options.epoch==null||record.start.backendEpoch===options.epoch) && (record.session?.threadId || record.session?.sessionId)) return record;
   }
   return null;
 }
@@ -47,7 +47,7 @@ async function runExternal(input, deps = {}) {
   if (resumeRunId && !plan) return { ok: false, error: '不能把内置检查点恢复到外部 Agent 后端' };
   if (plan && (!plan.ok || plan.mode === 'complete')) return { ok: false, error: plan.error || plan.reason };
   if (plan?.requiresReview && resumeForce !== true) return { ok: false, needsReview: true, plan };
-  const previous = resumeRunId ? sessionFromRun(root, resumeRunId) : previousSession(root, sessionId);
+  const previous = resumeRunId ? sessionFromRun(root, resumeRunId) : previousSession(root, sessionId,{conversationId:input.memoryConversationId,epoch:input.backendEpoch});
   if (!resumeRunId && previous && (!previous.finish || previous.finish.stopReason === 'backend_result_unknown')) {
     return { ok: false, needsReview: true, plan: resumePlan(root, previous.start.runId, new Set()) };
   }
@@ -72,6 +72,7 @@ async function runExternal(input, deps = {}) {
   try {
     input.onStart?.();
     if (!runStore.startRun(root, runId, { prompt: String(input.prompt || '').slice(0, 4000), backend: backendName,
+      memoryConversationId:input.memoryConversationId||null,backendEpoch:resumeRunId?previous?.start?.backendEpoch||null:input.backendEpoch||null,
       model: adapterSettings.model || backendName, nodeId: input.nodeId || null, planSessionId: sessionId || null,
       resumedFrom: resumeRunId || null, cwd: path.resolve(root), permissions,
       goalId: input.goalId || null, goalTaskId: input.taskId || null, goalContextRevision: input.goalContextRevision || null,

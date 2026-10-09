@@ -237,7 +237,8 @@
     "test:rag-live-versions": "node scripts/core/rag-live-versions-test.cjs",
     "test:backend-port": "node scripts/core/backend-port-test.cjs",
     "test:agent-switch-ui": "node scripts/run-electron.cjs scripts/ui/agent-switcher-ui-test.cjs",
-    "test:workspace-ux-ui": "node scripts/run-electron.cjs scripts/ui/workspace-ux-ui-test.cjs"
+    "test:workspace-ux-ui": "node scripts/run-electron.cjs scripts/ui/workspace-ux-ui-test.cjs",
+    "test:agent-handoff": "node scripts/core/agent-handoff-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

@@ -137,18 +137,19 @@ function PromptComposer() {
   const pendingDraft = useSessionStore(s => s.newConversationPending);
   const projectRoot = useProjectStore(s => s.root);
   const activeSessionId = useSessionStore(s=>s.activeId);
+  const conversationId=useSessionStore(s=>s.memoryConversationId);
   const [externalModel, setExternalModel] = useState<string | null>(null);
   const [externalBackend, setExternalBackend] = useState('builtin');
   useEffect(() => {
     let alive = true;
     const refresh = () => {
-      void window.codenode?.agentConfig(projectRoot,activeSessionId).then(config => {
+      void window.codenode?.agentConfig(projectRoot,activeSessionId,conversationId).then(config => {
         if (alive) { const settings = config.backend?.sessionSettings || config.backend?.settings; setExternalBackend(settings?.backend || 'builtin'); setExternalModel(settings && settings.backend !== 'builtin' ? settings.backend + ' · ' + (settings.model || '跟随 Agent 配置') : null); }
       }).catch(() => { if (alive) setExternalModel(null); });
     };
     refresh(); window.addEventListener('codenode-backend-settings', refresh);
     return () => { alive = false; window.removeEventListener('codenode-backend-settings', refresh); };
-  }, [projectRoot,activeSessionId]);
+  }, [projectRoot,activeSessionId,conversationId]);
   const draftRevision = useSessionStore(s => s.draftRevision);
   useEffect(() => { setText(''); setAttachments([]); if (draftRevision) window.setTimeout(() => taRef.current?.focus(), 0); }, [draftRevision]);
   const [modelSearch, setModelSearch] = useState('');

@@ -207,11 +207,12 @@ async function runSessionHook(kind, cfg, projectRoot, runId, sandboxPolicy, sign
 function register(ctx) {
   const { ipcMain, userDataDir } = ctx;
 
-  ipcMain.handle('agent:config', async (_event, projectRoot, sessionId) => {
+  ipcMain.handle('agent:config', async (_event, projectRoot, sessionId, conversationId) => {
     const cfg = agent.loadConfig(projectRoot);
     const backend = backendSettings.read(projectRoot, userDataDir());
-    const priorBackend=projectRoot&&sessionId?externalRuns.previousSession(projectRoot,String(sessionId)):null;
-    if(priorBackend?.session?.adapterSettings)backend.sessionSettings=priorBackend.session.adapterSettings;
+    const priorBackend=projectRoot&&sessionId?externalRuns.previousSession(projectRoot,String(sessionId),{conversationId}):null;
+    const binding=backendSettings.conversationBinding(projectRoot,conversationId||sessionId);
+    if(binding)backend.sessionSettings=binding.settings;else if(priorBackend?.session?.adapterSettings)backend.sessionSettings=priorBackend.session.adapterSettings;
     const soul = agent.parseSoul(agent.loadSoul(cfg, projectRoot));
     const store = modelStore.readUsableModels(userDataDir(), cfg);
     return {
@@ -232,10 +233,10 @@ function register(ctx) {
     };
   });
 
-  ipcMain.handle('agent:backend-save', async (_event, projectRoot, scope, input) => {
+  ipcMain.handle('agent:backend-save', async (_event, projectRoot, scope, input, options) => {
     try {
       if (activeRequests.size) return { ok: false, error: 'Agent 正在运行，请结束后修改后端' };
-      return { ok: true, ...backendSettings.write(projectRoot, userDataDir(), scope, input) };
+      return { ok: true, ...backendSettings.write(projectRoot, userDataDir(), scope, input, options||{}) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
   ipcMain.handle('agent:backend-status', async (_event, projectRoot, input) => {
@@ -661,8 +662,10 @@ function register(ctx) {
       if (requestId && (activeRequests.has(requestId) || activeRequests.has(runStore.normalizeRunId(requestId)))) return { ok: false, error: '重复的 Agent requestId' };
       if (activeRequests.size >= maxConcurrentRuns) return { ok: false, error: '当前 Agent 正在执行其他任务，请稍后再试（并发上限 ' + maxConcurrentRuns + '）' };
       const savedBackend = backendSettings.read(projectRoot, userDataDir());
+      const binding=backendSettings.conversationBinding(projectRoot,memoryConversationId||sessionId);
+      if(binding)savedBackend.settings=binding.settings;
       const restoredBackend = resumeRunId && externalRuns.sessionFromRun(projectRoot, resumeRunId);
-      const sessionBackend = !resumeRunId && sessionId && externalRuns.previousSession(projectRoot, sessionId);
+      const sessionBackend = !resumeRunId && sessionId && externalRuns.previousSession(projectRoot, sessionId,{conversationId:memoryConversationId,epoch:binding?.epoch});
       if (externalRuns.isProjectActive(projectRoot)) return { ok: false, error: '当前项目已有外部 Agent 执行，请等待结束' };
       if (restoredBackend || sessionBackend || savedBackend.settings.backend !== 'builtin') {
         if (activeRequests.size) return { ok: false, error: '请先结束当前 Agent 任务再启动外部后端' };
@@ -687,7 +690,7 @@ function register(ctx) {
         try {
           applyGoalContext();
           const externalResult = await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
-            settings: savedBackend.settings, sandboxPolicy, signal: externalController.signal,
+            settings: savedBackend.settings, backendEpoch:binding?.epoch||null,sandboxPolicy, signal: externalController.signal,
             goalContextRevision, goalAcceptanceRevision,
             toolRegistry: externalRegistry, toolContext: externalContext,
             readEditorText: async file => { const result = await externalBridge.request('editor_read', { path: file }); return result?.content; },
@@ -831,7 +834,7 @@ function register(ctx) {
       await runSessionHook('start', cfg, projectRoot, runId, sandboxPolicy, null);
       const runGoalAdmission = /** @type {{goalId:string,taskId:string,runId:string}|null} */ (goalAdmission);
       runStore.startRun(projectRoot, runId, {
-        backend: 'builtin',
+        backend: 'builtin',memoryConversationId:memoryConversationId||null,backendEpoch:binding?.epoch||null,
         prompt: String((resumePlan && resumePlan.prompt) || prompt || '').slice(0, 4000),
         model: cfg.model,
         nodeId: nodeId || null,

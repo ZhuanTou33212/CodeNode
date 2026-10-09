@@ -150,7 +150,7 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 ### Agent 后端
 
-在 **对话栏顶部 → Chat／Agent 名称** 选择执行器：选中只是预览，点击“确认切换”才保存；有历史对话时使用“新建对话并切换”，保留原对话和输入草稿。运行或切换期间禁用入口。Agent 菜单只用于切换，不再放重复的连接设置入口；菜单以勾选标记当前 Agent；缺少本机启动命令或未配置的条目置灰显示“不可用”，只做命令探测、不发模型请求；完整连接仍在设置中检测。连接路径、参数、认证和 MCP 仍在 **设置 → 常规 → Agent 后端** 中配置，可选择 CodeNode（自研 Agent）、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。快捷切换有项目时只保存当前项目，未选择项目时保存本机默认。每个 Agent 的连接配置分别记住，切回时恢复已有命令、参数、模型和 ACP 设置；高级设置中仍可调整配置范围，项目可跟随本机设置。
+在 **对话栏顶部 → Chat／Agent 名称** 选择执行器：选中只是预览，点击“确认切换”才保存；切换保留同一条对话、消息、输入草稿和画布，下条消息由新 Agent 接手。运行或切换期间禁用入口。Agent 菜单只用于切换，不再放重复的连接设置入口；菜单以勾选标记当前 Agent；缺少本机启动命令或未配置的条目置灰显示“不可用”，只做命令探测、不发模型请求；完整连接仍在设置中检测。连接路径、参数、认证和 MCP 仍在 **设置 → 常规 → Agent 后端** 中配置，可选择 CodeNode（自研 Agent）、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。快捷切换有项目时只保存当前项目，未选择项目时保存本机默认。每个 Agent 的连接配置分别记住，切回时恢复已有命令、参数、模型和 ACP 设置；高级设置中仍可调整配置范围，项目可跟随本机设置。
 
 | 后端 | 已安装的启动命令 | 默认参数 |
 | --- | --- | --- |
@@ -174,7 +174,7 @@ CodeNode 不下载 Agent、不使用 npx 自动安装。启动命令从 PATH/Win
 
 “检测当前配置”只验证当前命令和参数的 ACP 初始化，不写入设置或发模型请求。旧默认 `codex`／已保存的 Codex CLI 路径改为适配器命令，DeepSeek 的旧 `--profile sdk` 改为 `--profile acp`，保存后持久化为设置版本 2；其他自定义命令保留，需要用户确认它支持 ACP。旧 app-server/SDK Run 保留历史，但不能通过 ACP 恢复原线程。请复核旧 Run 和项目差异后新建 ACP 会话；不会静默转换会话 ID 或重放副作用。
 
-共享会话按 owner/工程续用精确 ACP session ID；隔离 Task 新建会话。结果未知时必须复核后显式恢复。Run 保存协议、会话、权限、状态、事件和项目文件指纹；代码修改必须通过独立本地校验。`max_tokens` 等非完成终态记为失败，不能充当完成证据。Goal admission、预算、写入范围、重启未知状态及验收证据规则继续生效。
+界面对话与 ACP 内部会话分别管理。显式切换 Agent 会在项目 backend.json 持久化对话绑定与切换代次，不重建界面对话；同一切换代次续用精确 ACP session ID，跨 Agent 或切换回来时使用新内部会话，并把可见历史与当前画布作为上下文交接。切到 CodeNode 直接走自研模型循环，后续不会被旧外部会话接管。隔离 Task 新建内部会话。结果未知时必须复核后显式恢复。Run 保存协议、会话、权限、状态、事件和项目文件指纹；代码修改必须通过独立本地校验。`max_tokens` 等非完成终态记为失败，不能充当完成证据。Goal admission、预算、写入范围、重启未知状态及验收证据规则继续生效。
 
 所有外部后端共用 **ACP 权限请求策略**：只读拒绝扩权请求，写入逐次询问。客户端文件读写在项目边界内运行，提交前检查文件指纹、编辑器草稿和 Task 写入范围；终端复用本地沙箱策略。Agent 原生工具不由 CodeNode 全面拦截，ACP 权限不等于操作系统隔离，外部用量/费用可能未知。
 
@@ -187,11 +187,11 @@ CodeNode 不下载 Agent、不使用 npx 自动安装。启动命令从 PATH/Win
 
 ### 目标管理与节点删除
 
-对话栏顶部的 **目标** 按钮打开独立管理面板，数字表示待处理事项。聊天区只在绑定任务时显示简短目标提示，支持解除绑定。面板优先展示任务，自动推进、范围/预算、经验及验收配置按需展开；关闭面板保留未保存草稿，切换主题保留对话、输入、模型和面板状态。
+工作台顶部 **总览／对话** 按钮切换两张独立页面。总览使用整个工作区展示目标数量、进度、待处理任务、目标列表及详细验收；对话页保留画布与聊天，仅在绑定任务时显示简短目标提示。两页都保持挂载，来回切换保留消息、输入草稿、画布、模型和未保存的目标表单。当前页面持久化于共用 UI 配置，也可在设置 → 常规 → 布局调整。
 
 删除整个节点：点击节点标题或边框后按 Delete／Backspace／X；Ctrl+Z 撤销。节点内部画布的 Delete 只删除选中图形；输入框与目标管理控件聚焦时不会删除画布节点。底部状态栏显示实际多选数量和当前删除对象；新增、加载、撤销和重做会同步视觉选区与实际选区。
 
-[新版日间效果](docs/validation/workspace-ux-preview/light.png) · [新版夜间效果](docs/validation/workspace-ux-preview/dark.png)。`npm run test:workspace-ux-ui` 使用实际鼠标与键盘事件验证上述行为；打包验收证据见 [acceptance.json](docs/validation/workspace-ux-preview/acceptance.json)。
+[总览效果](docs/validation/overview-handoff-preview/light.png) · [对话效果](docs/validation/overview-handoff-preview/conversation-light.png)。`npm run test:workspace-ux-ui` 使用实际鼠标与键盘事件验证上述行为；打包验收证据见 [acceptance.json](docs/validation/workspace-ux-preview/acceptance.json)。
 
 ## 许可证
 

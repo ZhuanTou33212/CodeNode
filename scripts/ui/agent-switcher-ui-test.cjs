@@ -30,6 +30,9 @@ app.whenReady().then(async()=>{
   await js(`(()=>{const t=document.querySelector('.pp-input');const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(t,${JSON.stringify(draft)});t.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   assert.equal(await js("document.querySelector('.pp-input').value"),draft);
   win.webContents.setBackgroundThrottling(false);
+  const conversationId=await js('window.__codenodeSession.getState().memoryConversationId');
+  const beforeMessages=await js('JSON.stringify(window.__codenodeSession.getState().messages)');
+  const graphBefore=await js('JSON.stringify(window.__codenodeStore.getState().nodes)');
   const oldSession=await js('window.__codenodeSession.getState().activeId');
   const model=await js('window.__codenodeUi.getState().sideTab');
   await js("document.querySelector('[aria-label=\"选择 Agent\"]').click()");
@@ -47,11 +50,12 @@ app.whenReady().then(async()=>{
     win.showInactive();await sleep(150);const shot=await win.webContents.capturePage(region,{stayHidden:true,stayAwake:true});fs.writeFileSync(path.join(shots,theme+'.png'),shot.toPNG());win.hide();
   }
   await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");assert.equal(await js("!!document.querySelector('.agent-switch-menu')"),false);assert.equal(settings.read(project,process.env.CODENODE_USER_DATA_DIR).settings.backend,'builtin');
-  await js("document.querySelector('[aria-label=\"选择 Agent\"]').click()");await click('OpenCode');assert.equal(settings.read(project,process.env.CODENODE_USER_DATA_DIR).settings.backend,'builtin','preview cannot switch');assert.equal(await js("document.querySelector('[data-backend=builtin]').getAttribute('aria-checked')"),'true','checkmark remains on current Agent');await click('新建对话并切换');
+  await js("document.querySelector('[aria-label=\"选择 Agent\"]').click()");await click('OpenCode');assert.equal(settings.read(project,process.env.CODENODE_USER_DATA_DIR).settings.backend,'builtin','preview cannot switch');assert.equal(await js("document.querySelector('[data-backend=builtin]').getAttribute('aria-checked')"),'true','checkmark remains on current Agent');await click('确认切换');
   await wait(()=>js("document.querySelector('[aria-label=\"选择 Agent\"]').textContent.includes('OpenCode')&&!document.querySelector('[aria-label=\"选择 Agent\"]').disabled"),'confirmed switch');
   assert.equal(settings.read(project,process.env.CODENODE_USER_DATA_DIR).settings.backend,'opencode');assert.equal(settings.read(project,process.env.CODENODE_USER_DATA_DIR).settings.model,'saved-model');assert.deepEqual(settings.read(project,process.env.CODENODE_USER_DATA_DIR).settings.args,[fixture]);
-  assert.equal(await js('window.__codenodeSession.getState().activeId'),null);assert.equal(await js(`window.__codenodeSession.getState().sessions[${JSON.stringify(oldSession)}].messages.some(m=>m.content.includes('整理这个项目'))`),true,'old conversation retained');
-  assert.equal(await js("document.querySelector('.pp-input').value"),draft,'draft survives explicit fresh conversation');
+  assert.equal(await js('window.__codenodeSession.getState().activeId'),oldSession,'switch keeps same conversation');assert.equal(await js(`window.__codenodeSession.getState().messages.some(m=>m.content.includes('整理这个项目'))`),true,'old conversation retained');
+  assert.equal(await js("document.querySelector('.pp-input').value"),draft,'draft survives Agent switch');assert.equal(await js('window.__codenodeSession.getState().memoryConversationId'),conversationId);assert.equal(await js('JSON.stringify(window.__codenodeSession.getState().messages)'),beforeMessages);assert.equal(await js('JSON.stringify(window.__codenodeStore.getState().nodes)'),graphBefore);assert.equal(settings.conversationBinding(project,conversationId).settings.backend,'opencode');
+  await js("document.querySelector('[aria-label=\"选择 Agent\"]').click()");await click('CodeNode');await click('确认切换');await wait(()=>js("document.querySelector('.agent-switch-name').textContent==='CodeNode'&&!document.querySelector('[aria-label=\"选择 Agent\"]').disabled"),'switch back to CodeNode');assert.equal(await js('window.__codenodeSession.getState().activeId'),oldSession);assert.equal(await js('JSON.stringify(window.__codenodeSession.getState().messages)'),beforeMessages);
   await js('window.__codenodeSession.setState({streaming:true})');await sleep(100);assert.equal(await js("document.querySelector('[aria-label=\"选择 Agent\"]').disabled"),true,'running disables switch');await js('window.__codenodeSession.setState({streaming:false})');
   await wait(()=>js("!document.querySelector('[aria-label=\"选择 Agent\"]').disabled"),'idle');
   await js("document.querySelector('[aria-label=\"选择 Agent\"]').click()");assert.equal(await js("document.querySelector('[data-backend=acp]').disabled"),true,'unconfigured custom connection cannot be selected');assert.equal(await js("document.querySelector('[data-backend=codex]').disabled"),!settings.read(project,process.env.CODENODE_USER_DATA_DIR).availability.codex.installed);

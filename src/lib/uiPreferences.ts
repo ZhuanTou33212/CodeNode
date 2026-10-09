@@ -2,6 +2,7 @@ import defaults from '../../config/ui.defaults.json';
 import outputUi from '../../config/ui.output.json';
 export const CANVAS_ACTIONS = defaults.menuActions;
 export interface UiPreferences {
+  workbenchView: 'overview'|'conversation';
   menuWidth: number; menuRowHeight: number; showShortcuts: boolean; showGroupLabels: boolean;
   hideDisabledActions: boolean; navigationOpen: boolean; conversationOpen: boolean; autoCollapseSidebars: boolean;
   visibleActions: string[];
@@ -14,7 +15,7 @@ export interface UiPreferences {
 }
 export const UI_PREFERENCES_KEY = 'codenode.uiPreferences';
 const { menuActions: _menuActions, ...defaultPreferences } = defaults;
-export const DEFAULT_UI_PREFERENCES: UiPreferences = { ...defaultPreferences, visibleActions: CANVAS_ACTIONS.map(action => action.id) };
+export const DEFAULT_UI_PREFERENCES: UiPreferences = { ...defaultPreferences,workbenchView:defaultPreferences.workbenchView as 'overview'|'conversation', visibleActions: CANVAS_ACTIONS.map(action => action.id) };
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   const raw = value && typeof value === 'object' ? value as Partial<UiPreferences> : {};
   const next = { ...DEFAULT_UI_PREFERENCES };
@@ -27,6 +28,7 @@ export function normalizeUiPreferences(value: unknown): UiPreferences {
   next.menuWidth = bound(raw.menuWidth,200,360,next.menuWidth);
   next.menuRowHeight = bound(raw.menuRowHeight,28,44,next.menuRowHeight);
   next.typewriterCharsPerSecond = bound(raw.typewriterCharsPerSecond,outputUi.charactersPerSecond.min,outputUi.charactersPerSecond.max,next.typewriterCharsPerSecond);
+  next.workbenchView=raw.workbenchView==='overview'?'overview':'conversation';
   next.visibleActions = Array.isArray(raw.visibleActions) ? [...new Set(raw.visibleActions.filter(id => typeof id === 'string' && CANVAS_ACTIONS.some(action => action.id === id)))] : [...next.visibleActions];
   if(Array.isArray(raw.visibleActions)&&raw.visibleActions.length&&Number(raw.preferenceVersion||0)<2&&!next.visibleActions.includes('workflow'))next.visibleActions.push('workflow');
   if(Array.isArray(raw.visibleActions)&&raw.visibleActions.length&&Number(raw.preferenceVersion||0)<3&&!next.visibleActions.includes('properties'))next.visibleActions.push('properties');

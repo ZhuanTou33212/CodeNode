@@ -1,3 +1,4 @@
+import {WorkbenchViewSwitcher} from './GoalOverview';
 import { useSessionStore } from '../store/sessionStore';
 import { useReactFlow } from '@xyflow/react';
 import { useEffect, useLayoutEffect, type CSSProperties } from 'react';
@@ -115,6 +116,7 @@ export default function Toolbar() {
         </div>
       </details>
 
+      <WorkbenchViewSwitcher/>
       <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
         <button
           className="toolbar-vector"

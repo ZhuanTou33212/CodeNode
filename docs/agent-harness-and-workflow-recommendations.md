@@ -462,3 +462,14 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 最终包内交互、目标控件、自检 19/19 和实际启动通过；固定目录 E:\CodeNode\release\win-unpacked 已覆盖，覆盖前确认 CodeNode 未运行。app.asar SHA-256：7385512B43EC85F03B619CB7DEDDB62549FFD6E7401333F5E009C564BC7CA6F8；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。原私有配置及未提交 Soul 修改保留，交付仅含公开模板与已提交 Soul。
 
 最终包 [原始交互验收摘要](validation/workspace-ux-preview/acceptance.json)、[日间截图](validation/workspace-ux-preview/light.png) 和 [夜间截图](validation/workspace-ux-preview/dark.png) 保留为交付证据；截图使用隔离演示工程。
+
+
+### 2026-10-09 同对话 Agent 接手与总览／对话页面
+
+按用户新要求，切换 Agent 不再 newConversation，不清空消息、草稿、画布、activeId 或 memoryConversationId。保留确认步骤和运行中禁用。项目 backend.json 按对话持久化当前 Agent 设置与随机切换代次；界面查询显示当前对话绑定的 Agent，任务 IPC 按绑定选后端。切换到 CodeNode 不再被旧 ACP 会话自动接管。相同代次继续精确 ACP session；跨 Agent 或切换回来建立新的内部会话，使用当前可见历史和画布上下文交接，不能把旧协议 ID 用于另一后端。显式恢复某个 Run 仍遵守原后端、原会话及复核门禁。项目恢复跟随本机默认不会删除已明确绑定的对话。
+
+目标管理从弹出面板升级为整个工作区的独立总览页面，顶部提供总览／对话按钮。总览显示目标计数、进行中和待处理任务、目标列表、详情与独立验收；对话保留画布和消息。两页常驻，仅切换可见性与交互，保留输入、消息、画布和未保存的目标表单；主题切换使用同一控件结构和状态。页面选择集中于 config/ui.defaults.json 与 UI preferences，持久化并提供设置 → 常规 → 布局入口。工作台／文件／插件仍由一级图标栏切换。
+
+新增 test:agent-handoff 纳入离线核心套件，用真实 ACP stdio 夹具验证同一界面对话的历史／画布交接、代次绑定、相同 Agent 精确恢复、跨 Agent/切回来新内部会话和绑定持久化；该夹具不是跨供应商真实模型质量比较。包内 Agent UI 检查确认切换后 activeId、memoryConversationId、消息和草稿保持原值，切回 CodeNode 仍保留原对话。页面检查验证总览和对话独立、配置持久化、目标表单/对话草稿保留和双主题同功能。核心完整回归 160/160、构建和脚本检查通过；源码/包内目标控件、Agent 切换、目标重启复核、调用链及页面交互通过。
+
+[日间总览](validation/overview-handoff-preview/light.png)、[夜间总览](validation/overview-handoff-preview/dark.png)、[日间对话](validation/overview-handoff-preview/conversation-light.png)、[夜间对话](validation/overview-handoff-preview/conversation-dark.png) 来自最终暂存包的隔离演示工程。[包内验收摘要](validation/overview-handoff-preview/acceptance.json) 绑定交付 app.asar。固定路径 E:\CodeNode\release\win-unpacked 已覆盖，覆盖前确认 CodeNode 未运行；暂存和固定路径 UI 自检 19/19、实际 asar 启动自检通过。app.asar SHA-256 为 CF6C55FF8934767A7825115D478C9B86CB355D7DE9CB68AE4AABF6CCA9A9715C，CodeNode.exe SHA-256 为 4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。私有 Agent 配置及用户 Soul 修改保留，包只包含公开配置模板和已提交 Soul。

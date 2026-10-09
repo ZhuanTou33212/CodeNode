@@ -14,7 +14,7 @@ const labels = backendConfig.labels as Record<Backend, string>;
 export default function AgentSwitcher() {
   const root = useProjectStore(s => s.root);
   const sessionId = useSessionStore(s => s.activeId);
-  const hasHistory = useSessionStore(s => s.messages.some(m => m.role === 'user'));
+  const conversationId=useSessionStore(s=>s.memoryConversationId);
   const streaming = useSessionStore(s => s.streaming);
   const sending = useSending();
   const switching = useBackendSwitchStore(s => s.switching);
@@ -33,7 +33,7 @@ export default function AgentSwitcher() {
   useEffect(() => {
     let alive = true;
     setOpen(false); setLoading(true); setError('');
-    const refresh = () => void window.codenode?.agentConfig(root, sessionId).then(result => {
+    const refresh = () => void window.codenode?.agentConfig(root, sessionId,conversationId).then(result => {
       if (!alive) return;
       const current = result.backend?.sessionSettings || result.backend?.settings;
       setSelected(current?.backend || 'builtin'); setTarget(current?.backend || 'builtin');
@@ -42,7 +42,7 @@ export default function AgentSwitcher() {
     }).catch(() => { if(alive)setError('读取 Agent 配置失败，请在设置中检查连接。'); }).finally(() => {if(alive)setLoading(false);});
     refresh(); window.addEventListener('codenode-backend-settings',refresh);
     return () => {alive=false;window.removeEventListener('codenode-backend-settings',refresh);};
-  }, [root,sessionId]);
+  }, [root,sessionId,conversationId]);
   useEffect(() => {if(busy)setOpen(false);},[busy]);
   useLayoutEffect(() => {
     if(!open)return;
@@ -66,12 +66,11 @@ export default function AgentSwitcher() {
     useBackendSwitchStore.setState({switching:true});setError('');
     try {
       const next=profiles[target]||{...backendConfig.defaults,backend:target,executable:(backendConfig.commands as Record<Backend,string>)[target],args:(backendConfig.defaultArgs as Partial<Record<Backend,string[]>>)[target]||[]};
-      const result=await api.backendSave(root,root?'project':'machine',next as AgentBackendSettings);
+      const result=await api.backendSave(root,root?'project':'machine',next as AgentBackendSettings,root?{conversationId}:undefined);
       if(!result.ok)throw new Error(result.error||'切换失败');
       if(useProjectStore.getState().root!==root)return;
-      if(hasHistory)useSessionStore.getState().newConversation({preserveDraft:true});
       setSelected(target);setOpen(false);window.dispatchEvent(new Event('codenode-backend-settings'));
-      useUiStore.getState().setToast(`已切换到 ${labels[target]}${hasHistory?'，原对话已保留':''}`);
+      useUiStore.getState().setToast(`已切换到 ${labels[target]}，下条消息生效`);
     } catch(e) {setOpen(true);setError(e instanceof Error?e.message:String(e));}
     finally{useBackendSwitchStore.setState({switching:false});}
   };
@@ -89,9 +88,9 @@ export default function AgentSwitcher() {
         {backendConfig.backends.map(name=>{const backend=name as Backend,unavailable=availability[backend]?.installed===false;return <button key={backend} data-backend={backend} role="radio" aria-checked={selected===backend} disabled={unavailable} title={availability[backend]?.reason} className={target===backend&&target!==selected?'is-selected':''} onClick={()=>setTarget(backend)}><span>{shortLabel(backend)}{unavailable&&<span className="agent-unavailable"> · 不可用</span>}</span><span aria-hidden="true">{selected===backend?'✓':''}</span></button>;})}
       </div>
       {target!==selected&&<div className="agent-switch-confirm">
-        <p>{!configured?'请先在高级设置中填写 ACP 命令和参数。':hasHistory?'切换会开启新对话，原对话和输入草稿会保留。':'选中不会立即切换，确认后用于下一次任务。'}</p>
+        <p>{!configured?'请先在高级设置中填写 ACP 命令和参数。':'保留当前对话和草稿，下条消息由新 Agent 接手。'}</p>
         {error&&<p role="status">{error}</p>}
-        <button className="agent-switch-apply" disabled={target===selected||busy||!configured} onClick={()=>void apply()}>{hasHistory?'新建对话并切换':'确认切换'}</button>
+        <button className="agent-switch-apply" disabled={target===selected||busy||!configured} onClick={()=>void apply()}>确认切换</button>
       </div>}
     </div></div>,document.body)}
   </div>;

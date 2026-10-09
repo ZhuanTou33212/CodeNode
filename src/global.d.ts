@@ -182,7 +182,7 @@ interface CodenodeApi {
   saveProject: (target: string, payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   loadProject: (target: string) => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   agentConfig: (
-    root: string | null, sessionId?: string | null
+    root: string | null, sessionId?: string | null, conversationId?: string | null
   ) => Promise<{
     configured: boolean;
     backend?: { availability?: Partial<Record<import('./types').AgentBackendSettings['backend'],{installed:boolean;reason?:string}>>; profiles?: Partial<Record<import('./types').AgentBackendSettings['backend'],import('./types').AgentBackendSettings>>; sessionSettings?: import('./types').AgentBackendSettings; settings: import('./types').AgentBackendSettings; machine: import('./types').AgentBackendSettings; project: import('./types').AgentBackendSettings | null; scope: 'machine' | 'project' };
@@ -203,7 +203,7 @@ interface CodenodeApi {
   ragSave: (root: string | null, settings: { enabled?: boolean; strictValidation?: boolean; provider: string; model: string; base: string; dim: number; dimensions: string; backend: string; milvusAddress?:string;milvusCollection?:string;milvusToken?:string;key?: string; bm25K1: number; bm25B: number; vectorWeight: number }) => Promise<{ ok: boolean; error?: string; rebuildRequired?: boolean }>;
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
-  backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
+  backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null,options?:{conversationId?:string}) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
   backendControl: (root: string | null, settings: import('./types').AgentBackendSettings, method: string, params?: Record<string, unknown>) => Promise<{ ok: boolean; error?: string; value?: any }>;
   backendStatus: (root: string | null, settings?: import('./types').AgentBackendSettings) => Promise<{ ok: boolean; error?: string; checkedSettings?: import('./types').AgentBackendSettings; capabilities?: { backend: string; available: boolean; authenticated?: boolean | null; protocolVersion?: string; protocol?: string; version?: string; resume?:boolean; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
   goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[];recoveredAdmissions?:{count:number;recovered:any[]}}}>;

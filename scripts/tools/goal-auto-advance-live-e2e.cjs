@@ -99,7 +99,7 @@ async function desktop() {
   await js('window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false})');
   await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
   await js('window.__codenodeUi.getState().setSideOpen(true)');
-  await js(`document.querySelector('[aria-label="打开目标管理"]').click()`);
+  await js(`document.querySelector('[aria-label="切换到总览"]').click()`);
   const getGoal = id => goals.read(project).goals.find(g => g.id === id);
   const getTask = id => getGoal(id).tasks[0];
   const list = () => js(`(async()=>{const result=await window.codenode.goalList(${JSON.stringify(project)});document.querySelector('.goal-toolbar button')?.click();return result;})()`);

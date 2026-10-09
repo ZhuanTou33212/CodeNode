@@ -33,8 +33,8 @@ app.whenReady().then(async () => {
     await js(`window.__codenodeSession.getState().newCanvas()`);
     await js(`window.__codenodeSession.getState().pushUser('保留会话')`);
     await js(`window.__codenodeUi.getState().setSideOpen(true)`);
-    await js(`document.querySelector('[aria-label="打开目标管理"]').click()`);
-    await waitFor(() => js('!document.querySelector("#goal-management-panel").hidden'), 'Goal panel');
+    await js(`document.querySelector('[aria-label="切换到总览"]').click()`);
+    await waitFor(() => js('!document.querySelector(".workspace-overview-layer").hidden'), 'Goal panel');
     const goal = await js(`window.codenode.goalCreate(${JSON.stringify(projectRoot)}, {title:'UI Goal',criteria:['验收通过']})`);
     assert.equal(goal.ok, true);
     const task = await js(`window.codenode.goalTaskCreate(${JSON.stringify(projectRoot)}, ${JSON.stringify(goal.value.id)}, {title:'UI Task', criteriaIds:[${JSON.stringify(goal.value.criteria[0].id)}], writeScope:['src']})`);
@@ -116,6 +116,7 @@ app.whenReady().then(async () => {
       assert.equal(await goalSurface(), goalBefore); assert.equal(await view(), before);
     }
     await js(`window.__codenodeUi.setState({theme:${JSON.stringify(themeBefore)}})`);
+    await js(`document.querySelector('[aria-label="切换到对话"]').click()`);
     await js(`window.__codenodeUi.getState().openSettings('general')`);
     await waitFor(() => js('!!document.querySelector("[aria-label=执行后端]")'), 'backend controls');
     await waitFor(() => js('!document.querySelector("[aria-label=执行后端]").disabled'), 'loaded settings');

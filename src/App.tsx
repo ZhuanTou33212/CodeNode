@@ -1,3 +1,4 @@
+import GoalOverview from './components/GoalOverview';
 import { useEffect, useLayoutEffect } from 'react';
 import { themeTokens } from './lib/themeTokens';
 import { useReactFlow } from '@xyflow/react';
@@ -73,6 +74,8 @@ export default function App() {
   const appPage = useUiStore(s => s.appPage);
   const sideOpen = useUiStore((s) => s.sideOpen);
   const sideTab = useUiStore(s => s.sideTab);
+  const workbenchView=useUiStore(s=>s.preferences.workbenchView);
+  const overview=workbenchView==='overview'&&!['project','preview'].includes(sideTab);
   const theme = useUiStore((s) => s.theme);
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -139,6 +142,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if(useUiStore.getState().preferences.workbenchView==='overview')return;
       if (useUiStore.getState().settingsOpen || useUiStore.getState().modelManagerOpen) return;
       const mod = e.ctrlKey || e.metaKey;
 
@@ -287,7 +291,8 @@ export default function App() {
         <div className="app-workbench-layer" data-inactive={appPage!=='workbench'} aria-hidden={appPage!=='workbench'} inert={appPage!=='workbench'}>
         <div className="app-project-navigation"><ProjectNavigation /></div>
         <main className={`workspace-main workspace-${sideTab}`} aria-label="工作区">
-<div className="workspace-content">
+<div className="workspace-overview-layer" hidden={!overview}><GoalOverview/></div>
+<div className="workspace-content" hidden={overview} inert={overview}>
             {(sideTab === 'project' || sideTab === 'preview') && <FileWorkspace />}
             {sideTab === 'node' && sideOpen && <div className="node-inspector-dock"><SidePanel /></div>}
             <div className="workspace-canvas" aria-hidden={sideTab === 'project' || sideTab === 'preview'}><Canvas /></div>

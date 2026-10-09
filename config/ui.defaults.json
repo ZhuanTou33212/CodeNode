@@ -78,5 +78,6 @@
   "autoSaveDelayMs": 1200,
   "preferenceVersion": 4,
   "typewriterEnabled": true,
-  "typewriterCharsPerSecond": 60
+  "typewriterCharsPerSecond": 60,
+  "workbenchView": "conversation"
 }

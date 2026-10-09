@@ -23,6 +23,7 @@ const os = require('os');
 const CORE = [
   'test:backends',
   'test:backend-port',
+  'test:agent-handoff',
   'test:multi-backends',
   'test:acp-full',
   'test:goal-store',
