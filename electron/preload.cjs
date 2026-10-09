@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('codenode', {
   goalList: root => ipcRenderer.invoke('goal:list', root),
   goalCreate: (root, input) => ipcRenderer.invoke('goal:create', root, input),
   goalUpdate: (root, goalId, patch) => ipcRenderer.invoke('goal:update', root, goalId, patch),
+  goalAutoAdvanceClaim: (root, goalId, taskId) => ipcRenderer.invoke('goal:auto-advance-claim', root, goalId, taskId),
+  goalAutoAdvanceRelease: (root, goalId, taskId, claimId, reason) => ipcRenderer.invoke('goal:auto-advance-release', root, goalId, taskId, claimId, reason),
   goalTaskCreate: (root, goalId, input) => ipcRenderer.invoke('goal:task-create', root, goalId, input),
   goalTaskUpdate: (root, goalId, taskId, patch) => ipcRenderer.invoke('goal:task-update', root, goalId, taskId, patch),
   goalRunReview: (root, goalId, taskId, runId) => ipcRenderer.invoke('goal:run-review', root, goalId, taskId, runId),

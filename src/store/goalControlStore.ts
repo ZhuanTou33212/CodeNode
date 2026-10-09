@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useProjectStore } from './projectStore';
 
-type GoalItem={id:string;title:string;objective:string;scope:string;exclusions:string;status:string;criteriaRevision:number;criteria:any[];tasks:any[];decisions:any[];evidence:any[];context:any;complete:boolean;qualified:boolean;budget:any};
+type GoalItem={id:string;title:string;objective:string;scope:string;exclusions:string;status:string;criteriaRevision:number;criteria:any[];tasks:any[];decisions:any[];evidence:any[];context:any;complete:boolean;qualified:boolean;budget:any;autoAdvanceAuthorized?:boolean;autoAdvanceUsedRuns?:number};
 let waitRefreshTimer:ReturnType<typeof setTimeout>|null=null;
 function scheduleWaitRefresh(root:string,goals:GoalItem[]){
   if(waitRefreshTimer)clearTimeout(waitRefreshTimer);

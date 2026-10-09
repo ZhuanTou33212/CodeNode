@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 
 const agent = require('../agent.cjs');
 const agentBackends = require('../backends/index.cjs');
@@ -112,6 +113,8 @@ const { auditLog } = require('./project.cjs');
 /** 正在运行的 Agent 请求：requestId/runId → AbortController（「停止思考」与中断恢复判定都用它） */
 const activeRequests = new Map();
 const activeGoalRuns = new Set();
+const activeAutoAdvanceClaims = new Map();
+const activeGoalWaitPolls = new Map();
 /** @type {((event: any, payload: any) => Promise<any>) | null} */
 let registeredChatHandler = null;
 
@@ -245,15 +248,52 @@ function register(ctx) {
     try { if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' }; return { ok: true, value: action(path.resolve(projectRoot)) }; }
     catch (error) { return { ok: false, error: error.message || String(error) }; }
   };
-  ipcMain.handle('goal:list', async (_event, projectRoot) => withGoalRoot(projectRoot, root => {
-    const activeRunIds=new Set([...activeRequests.keys(),...activeGoalRuns]);
+  const fetchWaitObservation = async (root, task) => {
+    const provider=String(task.waitCondition?.provider||'manual');
+    const scope=observation=>({...observation,id:String(task.id)+':'+String(observation.id||Date.now())});
+    if(provider==='github-actions'){
+      let fetcher=ctx.githubActionsFetch||globalThis.fetch;
+      try{const electronRuntime=require('electron');if(!ctx.githubActionsFetch&&electronRuntime?.net?.fetch)fetcher=electronRuntime.net.fetch.bind(electronRuntime.net);}catch{}
+      return scope(await githubActionsWait.check(root,task.waitCondition,{fetch:fetcher}));
+    }
+    if(provider==='agent-eval')return scope(agentEvalWait.check(root,task.waitCondition));
+    throw new Error('Task 没有配置可查询的外部等待状态源');
+  };
+  const pollDueExternalWaits = async root => {
+    const existing=activeGoalWaitPolls.get(root);if(existing)return existing;
+    const poll=(async()=>{
+      const now=Date.now(),data=goalStore.read(root),limit=Math.max(1,Math.floor(Number(require('../../config/goal.wait.json').autoAdvance.maxWaitChecksPerRefresh)||1));
+      const due=data.goals.flatMap(goal=>goal.tasks.filter(task=>goal.status==='active'&&task.status==='waiting'&&['github-actions','agent-eval'].includes(String(task.waitCondition?.provider||''))&&(!Number.isFinite(Date.parse(task.waitCondition.nextCheckAt||''))||Date.parse(task.waitCondition.nextCheckAt)<=now)).map(task=>({goalId:goal.id,task}))).slice(0,limit);
+      const observations=await Promise.all(due.map(async({goalId,task})=>{try{return{goalId,task,observation:await fetchWaitObservation(root,task)};}catch(error){const minute=Math.floor(Date.now()/60000),retry=Number(task.waitCondition?.retryCount)||0;return{goalId,task,observation:{id:'wait-check-error:'+task.id+':'+retry+':'+minute,source:task.waitCondition?.provider||'external_status',status:'check_error',matched:false,revision:task.waitCondition?.commitSha||'',detail:String(error?.message||error).slice(0,300),checkedAt:new Date().toISOString()}};}}));
+      for(const{goalId,task,observation}of observations){try{goalStore.observeWait(root,goalId,task.id,observation);}catch{}}
+      return observations.length;
+    })();
+    activeGoalWaitPolls.set(root,poll);try{return await poll;}finally{if(activeGoalWaitPolls.get(root)===poll)activeGoalWaitPolls.delete(root);}
+  };
+  ipcMain.handle('goal:list', async (_event, projectRoot) => {
+    const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value,now=Date.now(),claimLease=Math.max(1000,Number(require('../../config/goal.wait.json').autoAdvance.claimLeaseMs)||30000);
+    for(const[claimId,claim]of activeAutoAdvanceClaims){if(claim.root===root&&!claim.dispatchedAt&&now-claim.claimedAt>claimLease){try{goalStore.releaseAutoAdvanceClaim(root,claim.goalId,claim.taskId,claimId,'claim_lease_expired_before_dispatch');}catch{}activeAutoAdvanceClaims.delete(claimId);}}
     goalStore.releaseDueTimeWaits(root);
+    await pollDueExternalWaits(root);
+    const activeRunIds=new Set([...activeRequests.keys(),...activeGoalRuns]);
     runStore.recoverInterrupted(root,activeRunIds);
     const recoveredAdmissions=goalStore.reconcileAdmissions(root,activeRunIds);
-    const data=goalStore.read(root);return{revision:data.revision,goals:data.goals.map(goal=>{const audit=goalStore.audit(root,goal.id);return{...audit.goal,...audit,decisions:data.decisions.filter(item=>item.goalId===goal.id)};}),decisions:data.decisions,admissions:data.admissions,settlements:data.settlements,recoveredAdmissions};
-  }));
+    const liveClaims=new Set([...activeAutoAdvanceClaims].filter(([,claim])=>claim.root===root).map(([claimId])=>claimId));
+    const recoveredAutoAdvanceClaims=goalStore.reconcileAutoAdvanceClaims(root,liveClaims);
+    const data=goalStore.read(root);return{ok:true,value:{revision:data.revision,goals:data.goals.map(goal=>{const audit=goalStore.audit(root,goal.id);return{...audit.goal,...audit,decisions:data.decisions.filter(item=>item.goalId===goal.id)};}),decisions:data.decisions,admissions:data.admissions,settlements:data.settlements,recoveredAdmissions,recoveredAutoAdvanceClaims}};
+  });
   ipcMain.handle('goal:create', async (_event, projectRoot, input) => withGoalRoot(projectRoot, root => goalStore.createGoal(root,input||{})));
   ipcMain.handle('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
+  ipcMain.handle('goal:auto-advance-claim', async (_event, projectRoot, goalId, taskId) => {
+    const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value;
+    if(activeRequests.size)return{ok:false,error:'Agent 正在运行，自动推进会在当前 Run 结束后重试'};
+    if([...activeAutoAdvanceClaims.values()].some(claim=>claim.root===root))return{ok:false,error:'该工程已有自动推进认领正在处理'};
+    try{const claimId=randomUUID(),claim=goalStore.claimAutoAdvance(root,goalId,taskId,claimId),requestId='auto-'+randomUUID();activeAutoAdvanceClaims.set(claimId,{root,goalId:String(goalId),taskId:String(taskId),requestId,claimedAt:Date.now(),dispatchedAt:null});return{ok:true,value:{...claim,requestId}};}catch(error){return{ok:false,error:String(error?.message||error)};}
+  });
+  ipcMain.handle('goal:auto-advance-release', async (_event, projectRoot, goalId, taskId, claimId, reason) => {
+    const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value;
+    try{const released=goalStore.releaseAutoAdvanceClaim(root,goalId,taskId,claimId,reason);const claim=activeAutoAdvanceClaims.get(String(claimId||''));if(claim?.root===root)activeAutoAdvanceClaims.delete(String(claimId));return{ok:true,value:released};}catch(error){return{ok:false,error:String(error?.message||error)};}
+  });
   ipcMain.handle('goal:task-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.createTask(root,goalId,input||{})));
   ipcMain.handle('goal:task-update', async (_event, projectRoot, goalId, taskId, patch) => withGoalRoot(projectRoot, root => goalStore.updateTask(root,goalId,taskId,patch||{})));
   ipcMain.handle('goal:run-review', async (_event, projectRoot, goalId, taskId, runId) => withGoalRoot(projectRoot, root => goalStore.runReview(root,goalId,taskId,runId)));
@@ -305,12 +345,7 @@ function register(ctx) {
       if(task.status!=='waiting'||!['github-actions','agent-eval'].includes(provider))return{ok:false,error:'Task 没有配置可查询的外部等待状态源'};
       const next=Date.parse(task.waitCondition.nextCheckAt||'');
       if(Number.isFinite(next)&&next>Date.now())return{ok:false,error:(provider==='github-actions'?'GitHub Actions':'Agent Eval')+' 尚未到下次检查时间',nextCheckAt:task.waitCondition.nextCheckAt};
-      let observation;
-      if(provider==='github-actions'){
-        let fetcher=ctx.githubActionsFetch||globalThis.fetch;
-        try{const electronRuntime=require('electron');if(!ctx.githubActionsFetch&&electronRuntime?.net?.fetch)fetcher=electronRuntime.net.fetch.bind(electronRuntime.net);}catch{}
-        observation=await githubActionsWait.check(root,task.waitCondition,{fetch:fetcher});
-      }else observation=agentEvalWait.check(root,task.waitCondition);
+      const observation=await fetchWaitObservation(root,task);
       const record=goalStore.observeWait(root,goal.id,task.id,observation);
       return{ok:true,value:{observation:record.observation,matched:record.matched,nextCheckAt:record.nextCheckAt||null,status:record.observation.status}};
     }catch(error){return{ok:false,error:String(error?.message||error)};}
@@ -514,7 +549,14 @@ function register(ctx) {
   });
 
   registeredChatHandler = async (event, payload) => {
-    let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact, goalId, taskId } = payload || {};
+    let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact, goalId, taskId, autoAdvanceClaimId } = payload || {};
+    let autoAdvanceClaim=null;
+    if(autoAdvanceClaimId){
+      autoAdvanceClaim=activeAutoAdvanceClaims.get(String(autoAdvanceClaimId));
+      if(!autoAdvanceClaim||autoAdvanceClaim.root!==path.resolve(String(projectRoot||''))||autoAdvanceClaim.goalId!==String(goalId||'')||autoAdvanceClaim.taskId!==String(taskId||'')||autoAdvanceClaim.requestId!==String(requestId||''))return{ok:false,error:'自动推进认领与当前 Goal、Task、工程或 requestId 不匹配'};
+      try{const stored=goalStore.read(autoAdvanceClaim.root).goals.find(item=>item.id===autoAdvanceClaim.goalId);if(stored?.autoAdvanceAuthorized!==true)return{ok:false,error:'Goal 自动推进授权已撤销'};}catch(error){return{ok:false,error:String(error?.message||error)};}
+      autoAdvanceClaim.dispatchedAt=Date.now();
+    }
     const sender = event.sender;
     let runId = null;
     /** @type {any|null} */
@@ -563,8 +605,9 @@ function register(ctx) {
     const admitGoalTask = (admissionRunId) => {
       if (!goalId && !taskId) return null;
       applyGoalContext();
-      const admission = goalStore.admit(projectRoot, goalId, taskId, admissionRunId);
+      const admission = goalStore.admit(projectRoot, goalId, taskId, admissionRunId, autoAdvanceClaimId?{autoAdvanceClaimId:String(autoAdvanceClaimId)}:{});
       goalAdmission = { goalId: String(goalId), taskId: String(taskId), runId: String(admissionRunId) };
+      if(autoAdvanceClaimId)activeAutoAdvanceClaims.delete(String(autoAdvanceClaimId));
       activeGoalRuns.add(String(admissionRunId));
       goalScopeBefore = require('../backends/workspaceDiff.cjs').capture(projectRoot);
       return admission;

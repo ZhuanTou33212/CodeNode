@@ -4471,6 +4471,10 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .goal-task[aria-pressed=true] { background:var(--glass-selected); }
 .goal-summary { display:grid; gap:4px; }
 .goal-summary p,.goal-summary small,.goal-item small,.goal-task-detail small { margin:0; color:var(--glass-muted); overflow-wrap:anywhere; }
+.goal-auto-advance-setting { display:flex; align-items:center; gap:7px; flex-wrap:wrap; color:var(--glass-text); }
+.goal-auto-advance-setting input { accent-color:var(--glass-accent); }
+.goal-auto-advance-setting small { margin-left:auto; }
+.goal-auto-advance-note { max-width:760px; }
 .goal-item { display:grid; gap:3px; padding:5px 0; }
 .goal-item > div input { flex:1; }
 .goal-run-review { display:grid; gap:6px; margin:6px 0; }

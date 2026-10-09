@@ -77,7 +77,7 @@ interface ChatState {
   inflight: ReturnType<typeof createInflightRegistry<AbortController>>;
   send: (
     prompt: string,
-    options?: { resumeRunId?: string; resumeForce?: boolean; attachments?: AgentAttachment[] }
+    options?: { resumeRunId?: string; resumeForce?: boolean; attachments?: AgentAttachment[]; projectRoot?: string; goalId?: string; taskId?: string; requestId?: string; autoAdvanceClaimId?: string }
   ) => Promise<{ reply: string; reasoning: string; tools: ToolRecord[] }>;
   /** 停止请求：不传 id 时停「最近一个已受理」的请求；传 id 精确停那一条 */
   stop: (requestId?: string) => void;
@@ -181,6 +181,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       useUiStore.getState().setToast('需要 Electron 环境');
       return empty;
     }
+    if(options?.projectRoot&&useProjectStore.getState().root!==options.projectRoot){useUiStore.getState().setToast('自动推进已取消：当前工程已切换');return empty;}
     const text = prompt.trim();
     const attachments = options?.attachments ?? [];
     // 允许「只有图片、没有文字」的消息（老行为，保持不变；空消息静默返回）
@@ -220,16 +221,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const memoryConversationId = useSessionStore.getState().memoryConversationId;
     const memoryTaskEpoch = useSessionStore.getState().memoryTaskEpoch;
     const selectedGoal = useGoalControlStore.getState();
-    const goalBinding = !options?.resumeRunId && selectedGoal.selectedGoalId && selectedGoal.selectedTaskId
-      ? { goalId: selectedGoal.selectedGoalId, taskId: selectedGoal.selectedTaskId }
-      : {};
+    const goalBinding = !options?.resumeRunId && options?.goalId && options?.taskId
+      ? { goalId: options.goalId, taskId: options.taskId }
+      : !options?.resumeRunId && selectedGoal.selectedGoalId && selectedGoal.selectedTaskId
+        ? { goalId: selectedGoal.selectedGoalId, taskId: selectedGoal.selectedTaskId }
+        : {};
     useSessionStore.getState().beginPlanRun(planSessionId);
     ss.pushUser(userText, attachments);
     ss.beginTurn();
 
-    const requestId = 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    const requestId = options?.requestId || 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     const controller = new AbortController();
-    const requestRoot = useProjectStore.getState().root;
+    const requestRoot = options?.projectRoot || useProjectStore.getState().root;
     const us = useUsageStore.getState();
     const accepted = inflight.begin(requestId, controller, userText.slice(0, 80));
     if (!accepted) {
@@ -261,6 +264,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         canvasSummary: summarizeDoc(ctx),
         nodeId: null,
         requestId,
+        autoAdvanceClaimId: options?.autoAdvanceClaimId,
         sessionId: planSessionId || undefined,
         memoryConversationId: memoryConversationId || undefined,
         memoryTaskEpoch,

@@ -10,5 +10,11 @@
     "successExitCode": 0,
     "requireCleanWorktree": true,
     "requireAllRequiredTasks": true
+  },
+  "autoAdvance": {
+    "enabledByDefault": false,
+    "maxRunsPerGoal": 3,
+    "claimLeaseMs": 30000,
+    "maxWaitChecksPerRefresh": 5
   }
 }

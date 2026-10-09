@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const goal = require('../../electron/goalStore.cjs');
 const runStore = require('../../electron/runStore.cjs');
+const waitConfig = require('../../config/goal.wait.json');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-goal-store-'));
 try {
@@ -110,6 +111,71 @@ try {
   assert.equal(released.length,1);assert.equal(goal.read(root).goals.find(g=>g.id===created.id).tasks.find(t=>t.id===timeTask.id).status,'ready');
   const revisionAfterRelease=goal.read(root).revision;
   assert.deepEqual(goal.releaseDueTimeWaits(root),[]);assert.equal(goal.read(root).revision,revisionAfterRelease,'time release is idempotent');
+
+  const autoGoal=goal.createGoal(root,{title:'Explicitly authorized wait continuation',criteria:['one bounded run']});
+  assert.equal(autoGoal.autoAdvanceAuthorized,false,'automatic model runs are off by default');
+  assert.equal(autoGoal.autoAdvanceUsedRuns,0);
+  const autoTask=goal.createTask(root,autoGoal.id,{title:'Continue after wait'});
+  goal.updateTask(root,autoGoal.id,autoTask.id,{waitCondition:{kind:'time',description:'release once',nextCheckAt:new Date(Date.now()-1000).toISOString()}});
+  goal.releaseDueTimeWaits(root);
+  const readyAutoTask=goal.read(root).goals.find(item=>item.id===autoGoal.id).tasks.find(item=>item.id===autoTask.id);
+  assert.equal(readyAutoTask.autoAdvance.status,'ready','only a matched wait release creates the one-shot marker');
+  assert.throws(()=>goal.claimAutoAdvance(root,autoGoal.id,autoTask.id,'auto-claim-disabled-001'),/尚未授权/);
+  goal.updateGoal(root,autoGoal.id,{autoAdvanceAuthorized:true});
+  const autoClaim=goal.claimAutoAdvance(root,autoGoal.id,autoTask.id,'auto-claim-authorized-001');
+  assert.equal(autoClaim.usedRuns,1);
+  assert.throws(()=>goal.admit(root,autoGoal.id,autoTask.id,'auto-run-without-claim'),/自动推进认领/,'a pending auto claim cannot be bypassed by another run');
+  goal.updateGoal(root,autoGoal.id,{autoAdvanceAuthorized:false});
+  assert.throws(()=>goal.admit(root,autoGoal.id,autoTask.id,'auto-run-after-revocation',{autoAdvanceClaimId:autoClaim.claimId}),/授权已撤销/,'revoking authorization before admission blocks the claimed start');
+  goal.updateGoal(root,autoGoal.id,{autoAdvanceAuthorized:true});
+  goal.admit(root,autoGoal.id,autoTask.id,'auto-run-authorized',{autoAdvanceClaimId:autoClaim.claimId});
+  goal.settle(root,'auto-run-authorized',{status:'failed',usage:{total_tokens:1},costKnown:true,costUsd:0});
+  const autoSettled=goal.read(root).goals.find(item=>item.id===autoGoal.id).tasks.find(item=>item.id===autoTask.id);
+  assert.equal(autoSettled.autoAdvance.status,'settled');assert.equal(autoSettled.autoAdvance.runStatus,'failed');
+  assert.throws(()=>goal.claimAutoAdvance(root,autoGoal.id,autoTask.id,'auto-claim-retry-001'),/没有等待条件释放/,'failed automatic runs are never retried from the same wait');
+
+  const pausedAutoGoal=goal.createGoal(root,{title:'Paused auto continuation',criteria:['remain paused']});goal.updateGoal(root,pausedAutoGoal.id,{autoAdvanceAuthorized:true});
+  const pausedAutoTask=goal.createTask(root,pausedAutoGoal.id,{title:'Do not start while paused'});
+  goal.updateTask(root,pausedAutoGoal.id,pausedAutoTask.id,{waitCondition:{kind:'time',description:'pause gate',nextCheckAt:new Date(Date.now()-1000).toISOString()}});goal.releaseDueTimeWaits(root);goal.updateGoal(root,pausedAutoGoal.id,{status:'paused'});
+  assert.throws(()=>goal.claimAutoAdvance(root,pausedAutoGoal.id,pausedAutoTask.id,'auto-claim-paused-001'),/active Goal/,'paused Goals block automatic starts');
+  goal.updateGoal(root,pausedAutoGoal.id,{status:'active'});
+  const pausedReleasedClaim=goal.claimAutoAdvance(root,pausedAutoGoal.id,pausedAutoTask.id,'auto-claim-resumed-001');
+  goal.releaseAutoAdvanceClaim(root,pausedAutoGoal.id,pausedAutoTask.id,pausedReleasedClaim.claimId,'test_no_dispatch');
+
+  const budgetAutoGoal=goal.createGoal(root,{title:'Budget auto continuation',criteria:['respect token budget'],maxTokens:1});goal.updateGoal(root,budgetAutoGoal.id,{autoAdvanceAuthorized:true});
+  const budgetTask=goal.createTask(root,budgetAutoGoal.id,{title:'Consume budget'});goal.admit(root,budgetAutoGoal.id,budgetTask.id,'auto-budget-consumer');goal.settle(root,'auto-budget-consumer',{status:'failed',usage:{total_tokens:1},costKnown:true,costUsd:0});
+  const budgetWait=goal.createTask(root,budgetAutoGoal.id,{title:'Wait behind exhausted budget'});goal.updateTask(root,budgetAutoGoal.id,budgetWait.id,{waitCondition:{kind:'time',description:'budget gate',nextCheckAt:new Date(Date.now()-1000).toISOString()}});goal.releaseDueTimeWaits(root);
+  assert.throws(()=>goal.claimAutoAdvance(root,budgetAutoGoal.id,budgetWait.id,'auto-claim-budget-001'),/自动推进资格：stopped.*预算已用尽/,'exhausted Goal budgets block automatic starts');
+
+  const abandonedAutoGoal=goal.createGoal(root,{title:'Restart before auto admission',criteria:['no blind retry']});goal.updateGoal(root,abandonedAutoGoal.id,{autoAdvanceAuthorized:true});
+  const abandonedAutoTask=goal.createTask(root,abandonedAutoGoal.id,{title:'Claim interrupted before send'});goal.updateTask(root,abandonedAutoGoal.id,abandonedAutoTask.id,{waitCondition:{kind:'time',description:'release then restart',nextCheckAt:new Date(Date.now()-1000).toISOString()}});goal.releaseDueTimeWaits(root);
+  goal.claimAutoAdvance(root,abandonedAutoGoal.id,abandonedAutoTask.id,'auto-claim-restart-001');
+  assert.equal(goal.reconcileAutoAdvanceClaims(root,new Set()).count,1,'an unadmitted persisted claim becomes terminal after restart');
+  assert.equal(goal.read(root).goals.find(item=>item.id===abandonedAutoGoal.id).tasks.find(item=>item.id===abandonedAutoTask.id).autoAdvance.status,'failed');
+
+  const capGoal=goal.createGoal(root,{title:'Auto run cap',criteria:['stop at configured cap']});goal.updateGoal(root,capGoal.id,{autoAdvanceAuthorized:true});
+  for(let index=0;index<waitConfig.autoAdvance.maxRunsPerGoal;index++){
+    const cappedTask=goal.createTask(root,capGoal.id,{title:'Capped wait '+index});
+    goal.updateTask(root,capGoal.id,cappedTask.id,{waitCondition:{kind:'time',description:'one release',nextCheckAt:new Date(Date.now()-1000).toISOString()}});
+    goal.releaseDueTimeWaits(root);
+    const token='auto-claim-cap-'+String(index).padStart(4,'0');
+    goal.claimAutoAdvance(root,capGoal.id,cappedTask.id,token);
+    goal.releaseAutoAdvanceClaim(root,capGoal.id,cappedTask.id,token,'test_no_dispatch');
+  }
+  const overCapTask=goal.createTask(root,capGoal.id,{title:'Beyond cap'});
+  goal.updateTask(root,capGoal.id,overCapTask.id,{waitCondition:{kind:'time',description:'one release',nextCheckAt:new Date(Date.now()-1000).toISOString()}});goal.releaseDueTimeWaits(root);
+  assert.throws(()=>goal.claimAutoAdvance(root,capGoal.id,overCapTask.id,'auto-claim-cap-overflow'),/Run 上限/);
+
+  const unknownAutoGoal=goal.createGoal(root,{title:'Unknown auto result',criteria:['human review required']});goal.updateGoal(root,unknownAutoGoal.id,{autoAdvanceAuthorized:true});
+  const unknownAutoTask=goal.createTask(root,unknownAutoGoal.id,{title:'Interrupted auto run'});
+  goal.updateTask(root,unknownAutoGoal.id,unknownAutoTask.id,{waitCondition:{kind:'time',description:'release before interruption',nextCheckAt:new Date(Date.now()-1000).toISOString()}});goal.releaseDueTimeWaits(root);
+  const unknownClaim=goal.claimAutoAdvance(root,unknownAutoGoal.id,unknownAutoTask.id,'auto-claim-interrupted-001');
+  runStore.startRun(root,'auto-run-interrupted',{backend:'builtin',prompt:'one authorized auto run'});
+  goal.admit(root,unknownAutoGoal.id,unknownAutoTask.id,'auto-run-interrupted',{autoAdvanceClaimId:unknownClaim.claimId});
+  goal.reconcileAdmissions(root,new Set());
+  const unknownAuto=goal.read(root).goals.find(item=>item.id===unknownAutoGoal.id).tasks.find(item=>item.id===unknownAutoTask.id);
+  assert.equal(unknownAuto.executionStatus,'unknown');assert.equal(unknownAuto.autoAdvance.status,'unknown');
+  assert.throws(()=>goal.claimAutoAdvance(root,unknownAutoGoal.id,unknownAutoTask.id,'auto-claim-unknown-retry'),/没有等待条件释放/,'an unknown Run requires the existing manual review path and is never auto-retried');
 
   goal.addDecision(root, created.id, { question: 'Choose deployment', options: ['A', 'B'], taskIds: [first.id] });
   assert.equal(goal.canRun(root, created.id, first.id).decision, 'needs-user');

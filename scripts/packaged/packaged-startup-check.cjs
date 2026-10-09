@@ -21,9 +21,9 @@ app.whenReady().then(async () => {
     fs.writeFileSync(path.join(project, 'demo.cnode'), JSON.stringify({ nodes: [], edges: [] }));
     await win.webContents.executeJavaScript(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
     await new Promise(resolve => setTimeout(resolve, 700));
-    const rendered = await win.webContents.executeJavaScript(`({canvas:!!document.querySelector('.canvas-wrap'),composer:!!document.querySelector('.pp-composer'),body:!!document.querySelector('.ap-body'),goalRunReview:typeof window.codenode?.goalRunReview==='function'&&typeof window.codenode?.goalRunReviewConfirm==='function'})`);
-    if (!rendered.canvas || !rendered.composer || !rendered.body || !rendered.goalRunReview) throw new Error(JSON.stringify(rendered));
-    console.log('PACKAGED STARTUP: PASS (actual app.asar main, preload, renderer, Goal Run-review IPC, workspace and conversation composer)');
+    const rendered = await win.webContents.executeJavaScript(`({canvas:!!document.querySelector('.canvas-wrap'),composer:!!document.querySelector('.pp-composer'),body:!!document.querySelector('.ap-body'),goalRunReview:typeof window.codenode?.goalRunReview==='function'&&typeof window.codenode?.goalRunReviewConfirm==='function',goalAutoAdvance:typeof window.codenode?.goalAutoAdvanceClaim==='function'&&typeof window.codenode?.goalAutoAdvanceRelease==='function'})`);
+    if (!rendered.canvas || !rendered.composer || !rendered.body || !rendered.goalRunReview || !rendered.goalAutoAdvance) throw new Error(JSON.stringify(rendered));
+    console.log('PACKAGED STARTUP: PASS (actual app.asar main, preload, renderer, Goal review/auto-advance IPC, workspace and conversation composer)');
   } finally { win.destroy(); }
   app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

@@ -207,6 +207,8 @@ interface CodenodeApi {
   goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[];recoveredAdmissions?:{count:number;recovered:any[]}}}>;
   goalCreate: (root:string|null,input:{title:string;objective?:string;scope?:string;exclusions?:string;criteria?:string[];maxTokens?:number;maxCostUsd?:number})=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalUpdate: (root:string|null,goalId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalAutoAdvanceClaim: (root:string|null,goalId:string,taskId:string)=>Promise<{ok:boolean;error?:string;value?:{goalId:string;taskId:string;title:string;objective:string;claimId:string;requestId:string;waitObservationId:string;usedRuns:number;maxRuns:number}}>;
+  goalAutoAdvanceRelease: (root:string|null,goalId:string,taskId:string,claimId:string,reason?:string)=>Promise<{ok:boolean;error?:string;value?:boolean}>;
   goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalTaskUpdate: (root:string|null,goalId:string,taskId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalRunReview: (root:string|null,goalId:string,taskId:string,runId:string)=>Promise<{ok:boolean;error?:string;value?:{runId:string;status:string;state?:string|null;backend:string;startedAt?:string|null;finishedAt?:string|null;stopReason?:string|null;changesAvailable:boolean;changesComplete:boolean;changeScope:string;totalFiles:number;truncated:boolean;files:Array<{path:string;kind:string;before:string|null;after:string|null}>;projectFingerprint:string;projectSnapshotComplete:boolean}}>;
@@ -426,6 +428,7 @@ interface CodenodeApi {
     canvasSummary?: string;
     nodeId?: string | null;
     requestId?: string;
+    autoAdvanceClaimId?: string;
     modelId?: string;
     model?: string;
     reasoningEffort?: string;

@@ -338,22 +338,24 @@ ACP 权限请求不采信 Agent 自报的工具类别作为授权依据。只读
 
 Goal/Task 表单保存目标、排除项、必需验收条件、预算、依赖和读取/写入范围。Task 可声明读取与写入范围。当前写入范围在执行后比较文件差异，越界或无法完整读取项目快照会把 Task run 标为失败，文件保留供审阅；这不是执行前的硬沙箱，也不代表读取范围已由操作系统强制限制。用户未声明写入范围时不会声称进行了范围限制。
 
-按角色生成的上下文用于主 Agent 和子 Agent：探查角色只收项目规范；实现角色收规范、任务材料与经用户确认的经验；验证和审查角色收规范及任务材料；画布角色收规范和任务材料，并将上下文修订写入 Run。新经验先以候选保存，只有用户显式确认后才对实现角色可见；候选内容仍由用户提交，尚未接入自动建议生成。待处理业务决定、阻塞/未知 Task 和费用预算待复核项汇入跨 Goal 侧栏队列。time wait 到期后应用定时刷新并把 Task 释放为 ready；外部状态观察保留手动确认入口，未满足时使用指数退避，不会自动重复启动模型 Run。周期醒来不自动创建模型执行，用户仍需发起下一步。
+按角色生成的上下文用于主 Agent 和子 Agent：探查角色只收项目规范；实现角色收规范、任务材料与经用户确认的经验；验证和审查角色收规范及任务材料；画布角色收规范和任务材料，并将上下文修订写入 Run。新经验先以候选保存，只有用户显式确认后才对实现角色可见；通过独立检查的 Run 可生成有限的测试方法候选，更广泛的架构经验仍需用户整理。待处理业务决定、阻塞/未知 Task 和费用预算待复核项汇入跨 Goal 侧栏队列。time wait 到期后应用定时刷新，GitHub Actions 与 Agent Eval 按退避时间只读轮询，并只释放匹配的 Task。自动推进默认关闭；用户在 Goal 面板授权后，条件匹配才会尝试启动该 Task，且受每个 Goal 的次数上限、依赖、决定、运行状态和预算约束。未授权时由用户手动发起下一步。
 
 ### 本轮验证与边界
 
 协议夹具测试覆盖 ACP 初始化/会话/权限拒绝/授权与 DeepSeek SDK 的 initialize、prompt、assistant、tool/call、tool/result、终态通知。Goal 单测覆盖预算与准入、活动 Run、依赖循环、等待条件、业务决定、按角色筛选上下文、验收证据、文件快照失效、条件修订、声明写入范围，以及未知 Run 的复核绑定、直接状态/等待/决定绕过拒绝和复核后指纹失效。Electron UI 验证了 Goal 控件和后端控件在日夜主题结构一致，且主题切换保留会话、草稿、模型和侧栏状态。
 
-本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（157/157）；另行通过 `npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练、`npm run test:backend-ui` 双主题 UI 测试及 Agent Eval provider/IPC/报告绑定专项。最终固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI/asar 自检为 14/14，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `548D24AD6E3FDA1857390DE0E77D3FE6825F9890D3FCE2CBA22530F174EB031D`。Windows `rcedit` 在本机不可用，因此交付沿用原有 CodeNode 0.13.0 品牌 `CodeNode.exe`（SHA-256 `7B6E5D42317C316E8469DF32BD306711B62E8547F0795C3CB3564C2A09F8F057`），新功能位于 app.asar；两个 executable 均未签名。
+本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（157/157）；最后的 Goal UI 文案调整后再次通过 `npm run build` 与 `npm run test:backend-ui`。`npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练，以及 Agent Eval provider/IPC/报告绑定专项也已通过。最新固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI 自检为 17/17，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `657E5C1E3D4CD6D344C9E1B2C7D455FE5F78F50D75746C9421BADC40D55A18DD`。本机 `rcedit` 无法写回 exe 元数据，因此构建时关闭该编辑步骤，并沿用原 CodeNode 0.13.0 `CodeNode.exe`（SHA-256 `7B6E5D42317C316E8469DF32BD306711B62E8547F0795C3CB3564C2A09F8F057`）；exe 保持不变，新功能位于新版 app.asar；两个 executable 均未签名。
 
 | 路线项 | 当前覆盖 | 尚需的证据 |
 | --- | --- | --- |
 | P0 后端与设置 | builtin、Codex、DeepSeek Harness、Hermes、OpenCode、OpenClaw 可选；ACP/SDK fixture、Hermes/OpenCode/DeepSeek 短文本请求、OpenClaw 临时 Gateway session、OpenCode 临时源码修改及权限拒绝/取消/恢复、打包自检通过 | Codex 原生 sandbox 故障；Hermes 文件工具初始化错误；OpenClaw 全局安装及真实模型/文件任务/权限闭环；DeepSeek 源码任务与逐会话取消/权限闭环；实际 OS 沙箱边界 |
 | P1 Goal/Task/Evidence | 持久化、准入、预算、决定版本、环境/文件/验收版本绑定证据、重启未知状态已实现；`npm run test:goal-desktop-restart` 通过两个 Electron 主进程完成重启后的 Run 复核与 UI 重排；直接 IPC、`ready` 状态、定时等待和未解决业务决定都不能绕过未知 Run 复核；项目指纹变化会使复核失效 | 该 E2E 操作项已完成。RunStore 保存文件路径和前后 SHA-256，不保存旧源码正文；界面如实标注这一点并提供打开当前文件入口，外部副作用仍需用户核对 |
 | P1 角色上下文 | 主 Agent 与五类子 Agent 都按角色筛选规范/材料/确认经验，实际子代理提示注入已测试，Run 记录上下文版本 | 真实模型角色任务与人工质量比较 |
-| P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、指数退避已实现；GitHub Actions 按精确 SHA 查询，Agent Eval 按精确 SHA/数据集/模式读取本地完成报告；只有匹配状态满足条件才释放 Task；两个 provider 均有 IPC/UI 与 fixture 验证；provider 只观察，不创建模型 Run | 尚未接入外部 LoopX/远程实验跟踪；等待满足后经用户授权的周期自动推进尚未实现 |
+| P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、指数退避已实现；GitHub Actions 按精确 SHA 查询，Agent Eval 按精确 SHA/数据集/模式读取本地完成报告；Goal 刷新按退避时间只读轮询这两个 provider，匹配后只释放对应 Task；自动推进默认关闭，需在 Goal 面板明确授权，每个 Goal 最多自动尝试 3 次，且仍检查 Goal 状态、依赖、决定、unknown Run 与预算；每次等待释放只产生一次认领，失败、重启前未 admission 或 unknown Run 都不自动重试 | 外部 LoopX/远程实验跟踪未接入；真实模型多轮闭环仍需实测 |
 | P2 经验回写 | 基于新鲜、独立通过的测试证据自动生成局部测试方法候选；记录来源 Run、Task、证据 ID、文件指纹和验收修订；UI 标明自动建议；重复结算幂等；未确认前不注入实现上下文，用户显式确认后才可用 | 当前自动建议限于“修改这些文件后运行该测试命令”的可验证事实；从模型总结、架构规律或重复故障中提炼更一般经验尚未实现 |
 | 阶段 E 后端比较 | 有离线 fixture、Hermes/OpenCode 文本 smoke 与一次 OpenCode 文件任务（Hermes 文件任务在本机 runtime 报 Internal error，未改文件） | 同任务多轮、相同验收标准下的成功率/用量/成本/恢复率比较未完成 |
+
+等待自动推进现在由项目 Goal 持久化授权控制，默认关闭；时间等待与 GitHub Actions、Agent Eval 会按下次检查时间和指数退避唤醒，未满足条件期间只做只读观察，不启动模型。匹配后只为对应 Task 生成一次性认领；主进程再次检查授权、Goal active 状态、依赖、决定、预算及 unknown Run，每个 Goal 最多自动尝试 3 次。失败、未 admission 的重启恢复和 unknown Run 都不会自动重试。`test:goal-store` 与 `test:goal-ipc-recovery` 覆盖状态机、外部轮询、重复认领、暂停/预算门禁、授权撤销和失败后不重试；桌面 UI 测试覆盖默认关闭、授权持久化及双主题状态一致。真实模型自动启动的端到端闭环仍待实测。
 
 ### 2026-10-09 ACP 权限、取消与恢复实测补充
 

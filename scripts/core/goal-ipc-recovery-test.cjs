@@ -45,6 +45,26 @@ try{
   assert.equal(goal.read(ciRoot).goals.find(g=>g.id===ciGoal.id).tasks.find(t=>t.id===ciTask.id).status,'ready');
   assert.equal(ciFetchCalls,1,'the real Goal IPC handler uses the read-only provider once');
 
+  const scheduledGoal=goal.createGoal(ciRoot,{title:'Scheduled wait and authorized continuation',criteria:['matched external result']});
+  goal.updateGoal(ciRoot,scheduledGoal.id,{autoAdvanceAuthorized:true});
+  const scheduledTask=goal.createTask(ciRoot,scheduledGoal.id,{title:'Continue after CI'});
+  goal.updateTask(ciRoot,scheduledGoal.id,scheduledTask.id,{waitCondition:{kind:'external_status',provider:'github-actions',description:'Poll exact commit without model runs',expected:'success',commitSha:ciSha,nextCheckAt:new Date(Date.now()-1000).toISOString()}});
+  const scheduledList=await list({},ciRoot);
+  assert.equal(scheduledList.ok,true);
+  const scheduledReady=scheduledList.value.goals.find(item=>item.id===scheduledGoal.id).tasks.find(item=>item.id===scheduledTask.id);
+  assert.equal(scheduledReady.status,'ready');assert.equal(scheduledReady.autoAdvance.status,'ready','scheduled external observation creates one claimable marker');
+  assert.equal(ciFetchCalls,2,'periodic Goal refresh performs the due read-only provider check');
+  const claimHandler=handlers.get('goal:auto-advance-claim');
+  const autoClaim=await claimHandler({},ciRoot,scheduledGoal.id,scheduledTask.id);
+  assert.equal(autoClaim.ok,true);assert.equal(autoClaim.value.title,'Continue after CI');
+  assert.equal((await claimHandler({},ciRoot,scheduledGoal.id,scheduledTask.id)).ok,false,'concurrent claims cannot start a duplicate automatic Run');
+  const autoChat=await handlers.get('agent:chat')({}, {projectRoot:ciRoot,goalId:scheduledGoal.id,taskId:scheduledTask.id,requestId:'wrong-request-id',autoAdvanceClaimId:autoClaim.value.claimId,prompt:'must not dispatch'});
+  assert.equal(autoChat.ok,false);assert.match(autoChat.error,/不匹配/,'the main chat handler binds a claim to its exact project, Goal, Task, and requestId');
+  const releaseHandler=handlers.get('goal:auto-advance-release');
+  assert.equal((await releaseHandler({},ciRoot,scheduledGoal.id,scheduledTask.id,autoClaim.value.claimId,'ui_test_release')).value,true);
+  assert.equal(goal.read(ciRoot).goals.find(item=>item.id===scheduledGoal.id).tasks.find(item=>item.id===scheduledTask.id).autoAdvance.status,'failed');
+  assert.equal((await claimHandler({},ciRoot,scheduledGoal.id,scheduledTask.id)).ok,false,'a failed one-shot claim is not retried');
+
   const evalSha='abcdef0123456789abcdef0123456789abcdef01';
   const evalGoal=goal.createGoal(root,{title:'Agent Eval wait IPC',criteria:['Agent Eval report is complete']});
   const evalTask=goal.createTask(root,evalGoal.id,{title:'Wait for Agent Eval'});

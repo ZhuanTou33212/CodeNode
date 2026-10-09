@@ -68,6 +68,7 @@ app.whenReady().then(async () => {
     ok('asar 可加载 ACP 与 DeepSeek Harness adapters', packagedBackends.createBackend('hermes', { backend: 'hermes', sandbox: 'read-only' }).constructor.name === 'AcpBackend' && packagedBackends.createBackend('deepseek-harness', { backend: 'deepseek-harness', sandbox: 'read-only' }).constructor.name === 'DeepSeekHarnessBackend');
     const packagedGoalStore = require(path.join(ASAR, 'electron', 'goalStore.cjs'));
     ok('asar 可加载 Goal admission、重启恢复、证据与等待调度', typeof packagedGoalStore.admit === 'function' && typeof packagedGoalStore.reconcileAdmissions === 'function' && typeof packagedGoalStore.recordEvidence === 'function' && typeof packagedGoalStore.releaseDueTimeWaits === 'function' && typeof packagedGoalStore.confirmExperience === 'function');
+    ok('asar 包含默认关闭、单次认领与失败终止的自动推进状态机', typeof packagedGoalStore.claimAutoAdvance === 'function' && typeof packagedGoalStore.releaseAutoAdvanceClaim === 'function' && typeof packagedGoalStore.reconcileAutoAdvanceClaims === 'function');
     ok('asar 包含未知 Run 的差异复核与重排门', typeof packagedGoalStore.runReview === 'function' && typeof packagedGoalStore.confirmRunReview === 'function');
 
     // asar 内 .js/.css 用相对路径引用，file:// 读不到；把同一份 asar 内资源实体化到临时目录，
@@ -76,6 +77,7 @@ app.whenReady().then(async () => {
     const assetNames = fs.readdirSync(assetsDir);
     const rendererBundles=assetNames.filter(name=>name.endsWith('.js')).map(name=>fs.readFileSync(path.join(assetsDir,name),'utf8'));
     ok('asar 渲染包包含 Run 复核与 Agent Eval 等待控件',rendererBundles.some(bundle=>bundle.includes('确认复核并重新排队')&&bundle.includes('我已查看 Run 差异并核对外部副作用')&&bundle.includes('Agent Eval commit SHA')&&bundle.includes('查询 Agent Eval 报告')));
+    ok('asar 渲染包包含显式自动推进授权与应用级调度器',rendererBundles.some(bundle=>bundle.includes('等待条件满足后自动推进')&&bundle.includes('自动启动 Task')));
     const distTmp = path.join(tmp, 'dist');
     fs.mkdirSync(path.join(distTmp, 'assets'), { recursive: true });
     fs.writeFileSync(path.join(distTmp, 'index.html'), rawHtml);
@@ -141,6 +143,8 @@ app.whenReady().then(async () => {
     ok('Agent 输入框位于对话栏底部', geom.hasInput && geom.hasSend && geom.composerInside, JSON.stringify(geom));
     ok('工作区没有重复顶部页签', !geom.duplicateWorkspaceTabs);
     ok('对话区占据主要高度', geom.bodyH > geom.composerH, `body=${geom.bodyH} composer=${geom.composerH}`);
+    const autoAdvanceApi=await js(`({claim:typeof window.codenode.goalAutoAdvanceClaim==='function',release:typeof window.codenode.goalAutoAdvanceRelease==='function'})`);
+    ok('打包 preload 暴露自动推进 claim/release IPC',autoAdvanceApi.claim&&autoAdvanceApi.release,JSON.stringify(autoAdvanceApi));
 
     await js(`(()=>{ window.__codenodeUi.getState().setSideTab('project'); return true; })()`);
     await sleep(400);

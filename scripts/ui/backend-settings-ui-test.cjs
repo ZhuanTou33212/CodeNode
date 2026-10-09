@@ -63,6 +63,11 @@ app.whenReady().then(async () => {
     await js(`document.querySelector('.goal-toolbar button').click()`);
     await sleep(100);
     await waitFor(() => js(`document.querySelector('.goal-control-panel')?.innerText.includes('UI Task') && document.querySelector('.goal-control-panel')?.innerText.includes('UI confirmed workflow') && document.querySelector('.goal-control-panel')?.innerText.includes('自动建议')`), 'Goal, Task, and generated experience rendering');
+    assert.equal(await js(`document.querySelector('[aria-label="等待条件满足后自动推进"]')?.checked`),false,'the desktop Goal toggle starts unchecked');
+    await js(`document.querySelector('[aria-label="等待条件满足后自动推进"]').click()`);
+    await waitFor(()=>js(`window.codenode.goalList(${JSON.stringify(projectRoot)}).then(result=>result.value?.goals.find(item=>item.id===${JSON.stringify(goal.value.id)})?.autoAdvanceAuthorized===true)`),'persisted Goal auto-advance authorization');
+    const authorizedGoal=await js(`window.codenode.goalList(${JSON.stringify(projectRoot)})`);
+    assert.equal(authorizedGoal.value.goals.find(item=>item.id===goal.value.id).autoAdvanceAuthorized,true,'the explicit desktop toggle persists in the project Goal');
     await js(`[...document.querySelectorAll('.goal-control-panel button')].find(b=>b.textContent==='确认写入项目经验').click()`);
     const confirmedContext = await js(`window.codenode.goalContextForRole(${JSON.stringify(projectRoot)}, ${JSON.stringify(goal.value.id)}, ${JSON.stringify(task.value.id)}, 'implement')`);
     assert.equal(confirmedContext.value.context.confirmedExperience[0].content, 'UI confirmed workflow');
@@ -100,7 +105,7 @@ app.whenReady().then(async () => {
     await waitFor(()=>js(`document.querySelector('.goal-control-panel')?.innerText.includes('查询 Agent Eval 报告')`),'Agent Eval check button');
     await win.webContents.executeJavaScript(`const textarea=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(textarea,'后端测试草稿');textarea.dispatchEvent(new Event('input',{bubbles:true}))`);
     const view = () => js(`JSON.stringify({id:window.__codenodeSession.getState().activeId,messages:window.__codenodeSession.getState().messages,draft:document.querySelector('.pp-input').value,model:document.querySelector('.pp-model')?.textContent,sideOpen:window.__codenodeUi.getState().sideOpen,sideTab:window.__codenodeUi.getState().sideTab})`);
-    const goalSurface = () => js(`JSON.stringify([...document.querySelectorAll('.goal-control-panel input,.goal-control-panel textarea,.goal-control-panel select,.goal-control-panel button,.goal-control-panel summary')].map(n=>[n.tagName,n.getAttribute('aria-label'),n.textContent,n.value||'',n.disabled]))`);
+    const goalSurface = () => js(`JSON.stringify([...document.querySelectorAll('.goal-control-panel input,.goal-control-panel textarea,.goal-control-panel select,.goal-control-panel button,.goal-control-panel summary')].map(n=>[n.tagName,n.getAttribute('aria-label'),n.textContent,n.value||'',n.checked||false,n.disabled]))`);
     await sleep(80); const before = await view(); const goalBefore = await goalSurface(); const themeBefore = await js('window.__codenodeUi.getState().theme');
     for (const theme of ['light', 'dark']) {
       await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`); await sleep(80);

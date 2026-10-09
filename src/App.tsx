@@ -24,6 +24,7 @@ import ToolDialog from './components/ToolDialog';
 import ModelManager from './components/ModelManager';
 import WorkbenchDock from './components/WorkbenchDock';
 import GlobalSettings from './components/GlobalSettings';
+import GoalAutoAdvanceManager from './components/GoalAutoAdvanceManager';
 import { getActiveVectorNode } from './vector/vectorStore';
 
 function isTypingTarget(): boolean {
@@ -299,6 +300,7 @@ export default function App() {
       <div hidden={appPage!=='workbench'} className="app-workbench-status"><StatusBar /></div>
       </div></div>
       <ToolDialog />
+      <GoalAutoAdvanceManager />
       <GlobalSettings />
       <ModelManager />
     </div>
