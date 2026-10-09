@@ -6,7 +6,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const config = require('../../config/agent.backends.json');
-const { AcpBackend } = require('../../electron/backends/acp.cjs');
+const {createBackend}=require('../../electron/backends/index.cjs');
 const { resolveCommand } = require('../../electron/backends/stdioRpc.cjs');
 const { redact } = require('../../electron/redaction.cjs');
 
@@ -107,7 +107,7 @@ async function main() {
     }
     assert.equal(ready, true, 'isolated Gateway health endpoint responds');
 
-    const backend = new AcpBackend({
+    const backend = createBackend('openclaw',{
       ...config.defaults,
       backend: 'openclaw',
       executable,
@@ -117,7 +117,7 @@ async function main() {
     const controller = new AbortController();
     let sessionCreated = false;
     const before = fs.readdirSync(workspace);
-    const result = await backend.start({
+    const result = await backend.submit({
       projectRoot: workspace,
       prompt: 'This prompt must not be sent.',
       history: [], canvasSummary: '', signal: controller.signal,

@@ -1,0 +1,51 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {createBackend}=require('../../electron/backends/index.cjs');
+const {METHODS,assertBackendPort}=require('../../electron/backends/backendPort.cjs');
+const settings=require('../../electron/backends/settings.cjs');
+const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'codenode-port-test-')));
+const fixture=path.resolve(__dirname,'../fixtures/acp-port.cjs');
+const options={backend:'acp',executable:process.execPath,args:[fixture],sandbox:'workspace-write'};
+const ports=[];
+const make=()=>{const port=createBackend('acp',options);ports.push(port);return port;};
+const wait=async fn=>{const end=Date.now()+5000;while(Date.now()<end){const value=fn();if(value)return value;await new Promise(r=>setTimeout(r,10));}throw new Error('Port event timed out');};
+async function main(){
+ assert.throws(()=>assertBackendPort({start(){}}),error=>/** @type {any} */(error).code==='INVALID_BACKEND_PORT');
+ for(const name of settings.config.backends){const port=createBackend(name,{...options,backend:name});assert(METHODS.every(method=>typeof port[method]==='function'));assert.equal(port.describe().transport,name==='builtin'?'builtin':'acp');await port.close();}
+ const legacy=settings.normalize({...settings.config.defaults,backend:'codex',executable:'codex',args:['app-server']});assert.equal(legacy.executable,'codex-acp');assert.deepEqual(legacy.args,[]);assert.equal(settings.normalize({...legacy,settingsVersion:undefined,executable:'C:/Codex/bin/codex.exe'}).executable,'codex-acp');
+ assert.deepEqual(settings.normalize({...settings.config.defaults,backend:'deepseek-harness',args:['--profile','sdk']}).args,['--profile','acp']);
+ assert.deepEqual(settings.normalize({...settings.config.defaults,backend:'deepseek-harness',args:[]}).args,['--profile','acp']);
+ assert.throws(()=>settings.normalize({...settings.config.defaults,backend:'acp'}),/可执行/);
+ const abortedController=new AbortController();abortedController.abort();const native=createBackend('builtin');const aborted=await native.submit({id:'aborted-before-start',projectRoot:root,signal:abortedController.signal});assert.equal(aborted.state,'CANCELLED');assert.equal(aborted.error,null);assert.equal(aborted.aborted,true);await native.close();
+ const port=make();const events=[];port.subscribe(event=>events.push(event));port.subscribe(()=>{throw new Error('observer isolation');});
+ await Promise.all([port.start({projectRoot:root}),port.start({projectRoot:root})]);await port.health({projectRoot:root});
+ const calls=()=>fs.readFileSync(path.join(root,'.codenode/port-protocol.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+ assert.equal(calls().filter(c=>c.method==='initialize').length,1);assert(!calls().some(c=>c.method==='session/prompt'),'start/health never infer');
+ await assert.rejects(port.start({projectRoot:path.dirname(root)}),/跨工程/);
+ const pending=port.submit({id:'approval-task',projectRoot:root,prompt:'permission'},{ownerId:'alice'});
+ const request=await wait(()=>events.find(e=>e.type==='authorization'&&e.data.authorizationId));
+ assert.equal(port.status('approval-task',{ownerId:'bob'}).state,'not_found');assert.equal(port.status('approval-task',{ownerId:'alice'}).state,'input_required');
+ assert.throws(()=>port.respondAuthorization('approval-task',request.data.authorizationId,'once',{ownerId:'bob'}),/不属于/);
+ assert.throws(()=>port.respondAuthorization('wrong-task',request.data.authorizationId,'once',{ownerId:'alice'}),/不属于/);
+ assert.throws(()=>port.respondAuthorization('approval-task',request.data.authorizationId,'always',{ownerId:'alice'}),/授权决定/);
+ port.respondAuthorization('approval-task',request.data.authorizationId,'once',{ownerId:'alice'});
+ assert.equal((await pending).content,'ALLOWED');assert(events.every(e=>!Object.hasOwn(e.data,'requestId')),'port request IDs cannot overwrite host chat requestId');assert.equal(port.status('approval-task',{ownerId:'alice'}).state,'completed');
+ assert.throws(()=>port.respondAuthorization('approval-task',request.data.authorizationId,'once',{ownerId:'alice'}),/已处理/);
+ await assert.rejects(port.submit({id:'approval-task',projectRoot:root,prompt:'again'}),/重复/);
+ const input=port.submit({id:'input-task',projectRoot:root,prompt:'input'},{ownerId:'alice'});
+ const inputRequest=await wait(()=>events.find(e=>e.type==='input'));port.respondInput('input-task',inputRequest.data.inputRequestId,{name:'alice'},{ownerId:'alice'});
+ assert.equal((await input).content,'INPUT_alice');assert(calls().some(c=>c.method==='session/load'),'shared continuity resumes the same owner session');
+ const isolated=await port.submit({id:'isolated-task',continuity:'isolated',projectRoot:root,prompt:'hello'},{ownerId:'alice'});assert.equal(isolated.state,'COMPLETED');
+ assert.equal(calls().filter(c=>c.method==='session/new').length,2);
+ const cancel=port.submit({id:'cancel-task',projectRoot:root,prompt:'permission'},{ownerId:'alice'});
+ await wait(()=>events.some(e=>e.taskId==='cancel-task'&&e.type==='authorization'));
+ await assert.rejects(port.cancel('cancel-task',{ownerId:'bob'}),/不属于/);await port.cancel('cancel-task',{ownerId:'alice'});
+ assert.equal((await cancel).state,'CANCELLED');assert.equal(port.pending.size,0);
+ assert.equal((await port.submit({id:'truncated',projectRoot:root,prompt:'truncated'})).state,'FAILED','max_tokens is not completion');
+ await port.close();await port.close();assert.equal(port.status().state,'closed');await assert.rejects(port.submit({id:'after-close'}),/关闭/);
+ // Legacy records are reviewable but never loaded through a different protocol.
+ const store=require('../../electron/runStore.cjs');store.startRun(root,'legacy',{backend:'codex',prompt:'old'});store.appendEvent(root,'legacy','backend_session',{protocol:'app-server',threadId:'old-thread'});store.finishRun(root,'legacy','interrupted',{state:'CANCELLED'});
+ const denied=await require('../../electron/backends/runExternal.cjs').runExternal({projectRoot:root,requestId:'legacy-resume',resumeRunId:'legacy',resumeForce:true,settings:options});assert.equal(denied.stopReason,'legacy_session_protocol');assert.equal(store.readRun(root,'legacy-resume').length,0);
+ console.log('BACKEND PORT: PASS (method conformance, idempotent readiness, real ACP, normalized events, scoped approvals/input, cancellation, continuity, duplicate/closed guards, legacy migration)');
+}
+main().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{for(const port of ports)await port.close();if(path.dirname(root)===fs.realpathSync(os.tmpdir())&&path.basename(root).startsWith('codenode-port-test-'))fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});});

@@ -1,34 +1,17 @@
 'use strict';
-const { CodexBackend } = require('./codex.cjs');
 const { AcpBackend } = require('./acp.cjs');
-const { DeepSeekHarnessBackend } = require('./deepseekHarness.cjs');
-
+const { BackendPort, assertBackendPort } = require('./backendPort.cjs');
+const config = require('../../config/agent.backends.json');
 class BuiltinBackend {
-  constructor() { this.controller = null; this.result = null; this.listener = (delta) => {}; }
-  async capabilities() {
-    return { backend: 'builtin', available: true, conversation: true, events: true, approvals: true,
-      interrupt: true, resume: true, customTools: true, hardBudget: true, usage: true };
-  }
-  start(input) {
-    this.controller = input.controller || new AbortController();
-    const abort = () => this.controller?.abort();
-    input.signal?.addEventListener('abort', abort, { once: true });
-    if (input.signal?.aborted) abort();
-    const onDelta = input.onDelta || this.listener;
-    this.result = require('../agent.cjs').runAgentChat({ ...input, signal: this.controller.signal, onDelta })
-      .finally(() => input.signal?.removeEventListener('abort', abort));
-    return this.result;
-  }
-  events(onDelta) { this.listener = onDelta; return () => { this.listener = () => {}; }; }
-  respondToApproval(request, accepted) { return request.resolve(accepted === true); }
-  async interrupt() { this.controller?.abort(); return this.result; }
-  resume(input) { return this.start(input); }
+  constructor(){this.controller=null;}
+  capabilitySnapshot(){return {conversation:true,events:true,approvals:true,interrupt:true,resume:true,customTools:true,hardBudget:true,usage:true};}
+  run(input){const controller=input.controller||new AbortController();this.controller=controller;const abort=()=>controller.abort();input.signal?.addEventListener('abort',abort,{once:true});if(input.signal?.aborted)abort();return require('../agent.cjs').runAgentChat({...input,signal:controller.signal}).finally(()=>input.signal?.removeEventListener('abort',abort));}
+  async interrupt(){this.controller?.abort();}
+  async close(){this.controller=null;}
 }
-function createBackend(name, settings, deps) {
-  if (name === 'builtin') return new BuiltinBackend();
-  if (name === 'codex') return new CodexBackend(settings, deps);
-  if (name === 'deepseek-harness') return new DeepSeekHarnessBackend(settings, deps);
-  if (['hermes', 'opencode', 'openclaw'].includes(name)) return new AcpBackend(settings, deps);
-  throw new Error('未知 Agent 后端：' + name);
+function createBackend(name,settings={},deps={}){
+  if(!config.backends.includes(name))throw new Error('未知 Agent 后端：'+name);
+  const normalized=require('./settings.cjs').normalize({...config.defaults,...settings,backend:name});
+  return assertBackendPort(new BackendPort(name,normalized,name==='builtin'?new BuiltinBackend():new AcpBackend({...normalized,turnTimeoutMs:settings.turnTimeoutMs},deps)));
 }
-module.exports = { createBackend, BuiltinBackend };
+module.exports={createBackend,BuiltinBackend};

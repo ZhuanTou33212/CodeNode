@@ -7,15 +7,20 @@ const config = require('../../config/agent.backends.json');
 function normalize(input) {
   if (!input || !config.backends.includes(input.backend)) throw new Error('未知 Agent 后端');
   if (!config.sandboxModes.includes(input.sandbox)) throw new Error('不支持的 Codex 工作目录权限');
-  const executable = String(input.executable || config.commands[input.backend] || '').trim();
+  let executable = String(input.executable || config.commands[input.backend] || '').trim();
+  // Migrate only known legacy defaults. Custom commands remain explicit user configuration.
+  if(input.backend==='codex' && (executable==='codex'||(input.settingsVersion!==2&&/^codex(?:\.exe)?$/i.test(executable.split(/[\\/]/).pop()||'')))) executable=config.commands.codex;
   if (input.backend !== 'builtin' && (!executable || /[\r\n\0]/.test(executable))) throw new Error('请填写可执行命令或绝对路径');
   if (path.isAbsolute(executable) && process.platform === 'win32' && !/\.(?:exe|mjs|js|py)$/i.test(executable)) throw new Error('Windows 自定义程序路径格式不受支持');
-  const args = Array.isArray(input.args) ? input.args : config.defaultArgs[input.backend] || [];
+  let args = Array.isArray(input.args) ? input.args.slice() : config.defaultArgs[input.backend] || [];
+  if(input.backend==='codex' && args[0]==='app-server') args=[];
+  if(input.backend==='deepseek-harness'&&input.settingsVersion!==2&&!args.length)args=config.defaultArgs['deepseek-harness'].slice();
+  if(input.backend==='deepseek-harness') args=args.map((arg,index)=>index>0&&args[index-1]==='--profile'&&arg==='sdk'?'acp':arg);
   if (args.length > 32 || args.some(arg => typeof arg !== 'string' || arg.length > 2048 || /[\0]/.test(arg))) throw new Error('启动参数无效');
   if (args.some(arg => /^--?(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret)(?:=|$)/i.test(arg))) {
     throw new Error('启动参数不能保存明文密钥或口令；请使用 Agent 自身的凭据配置或安全文件选项');
   }
-  return { backend: input.backend, executable, args: args.slice(), model: String(input.model || '').trim().slice(0, 200),
+  return { transport:input.backend==='builtin'?'builtin':'acp', settingsVersion:2, backend: input.backend, executable, args: args.slice(), model: String(input.model || '').trim().slice(0, 200),
     provider: String(input.provider || config.defaults.provider).trim().slice(0, 100), home: String(input.home || '').trim().slice(0, 2048), sandbox: input.sandbox,
     reasoningEffort: String(input.reasoningEffort || '').trim().slice(0, 40), ...(input.acp ? { acp: normalizeAcp(input.acp) } : {}) };
 }

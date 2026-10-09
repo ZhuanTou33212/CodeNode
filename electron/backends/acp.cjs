@@ -24,7 +24,7 @@ class AcpBackend {
   emit(delta) { this.listener(delta); }
   command() {
     const command = this.settings.executable || config.commands[this.settings.backend];
-    const args = this.settings.args?.length ? this.settings.args : config.defaultArgs[this.settings.backend] || [];
+    const args = Array.isArray(this.settings.args) ? this.settings.args : config.defaultArgs[this.settings.backend] || [];
     return { command, args: [...args] };
   }
   async sessionRequest(method, params) {
@@ -37,13 +37,14 @@ class AcpBackend {
     }
   }
   async connect(cwd) {
+    if(this.rpc) return {protocolVersion:1,agentCapabilities:this.capabilityInfo,agentInfo:this.agentInfo};
     const { command, args } = this.command();
-    this.rpc = new (this.deps.StdioRpc || StdioRpc)(command, args, cwd, this.deps);
+    this.rpc = new (this.deps.StdioRpc || StdioRpc)(command, args, cwd, {...this.deps,env:{...this.deps.env,...(this.settings.home?{DSH_HOME:this.settings.home}:{})}});
     this.rpc.on('notification', message => this.notification(message));
     this.rpc.on('request', message => { void this.dispatch(message); });
     this.rpc.on('disconnect', error => this.fail(error));
     const result = await this.rpc.request('initialize', { protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true, session: { configOptions: { boolean: {} } } },
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true, elicitation: { form: {} }, session: { configOptions: { boolean: {} } } },
       clientInfo: { name: 'codenode', title: 'CodeNode', version: require('../../package.json').version } });
     if (result.protocolVersion !== 1) throw new Error('Agent ACP 协议版本不兼容：' + result.protocolVersion);
     this.capabilityInfo = result.agentCapabilities || {};
@@ -51,6 +52,10 @@ class AcpBackend {
     this.authMethods = result.authMethods || [];
     return result;
   }
+  capabilitySnapshot() {
+    return {backend:this.settings.backend,protocol:'ACP',protocolVersion:1,conversation:true,events:true,approvals:true,interrupt:true,resume:this.capabilityInfo?.loadSession===true||!!this.capabilityInfo?.sessionCapabilities?.resume,usage:true,hardBudget:false,customTools:true,authMethods:this.authMethods||[],permissions:this.settings.sandbox,proxySource:this.rpc?.proxySource,cost:'unknown',version:this.agentInfo?.version||'unknown'};
+  }
+  async close(){await this.client.close();await this.bridge?.close();this.bridge=null;await this.rpc?.close();this.rpc=null;}
   async capabilities(cwd) {
     try {
       await this.connect(cwd);
@@ -62,7 +67,7 @@ class AcpBackend {
     } catch (error) { return { backend: this.settings.backend, available: false, error: error.message }; }
     finally { await this.rpc?.close(); this.rpc = null; }
   }
-  async start(input) {
+  async run(input) {
     if(input.onDelta)this.events(input.onDelta);
     this.input = input; this.cwd = input.projectRoot; this.sessionId = null; this.messages = new Map(); this.tools = new Map(); this.toolCalls = []; this.diffText = ''; this.stopping = false;
     this.reasoning = ''; this.usage = null; this.sessionInfo = {};
@@ -125,20 +130,30 @@ class AcpBackend {
       await this.rpc?.close(); this.rpc = null;
     }
   }
-  resume(input) { return this.start(input); }
+
   content() { return [...this.messages.values()].join(''); }
   finish(stopReason) {
     if (!this.settle) return;
     const settle = this.settle; this.settle = null; clearTimeout(this.timer);
     const aborted = stopReason === 'cancelled';
     settle({ content: this.content(), reasoning: this.reasoning, toolCalls: this.toolCalls, usage: this.usage,
-      state: aborted ? 'CANCELLED' : ['end_turn', 'completed', 'max_tokens'].includes(stopReason) ? 'COMPLETED' : 'FAILED',
-      aborted, error: null, stopReason, backendSession: { sessionId: this.sessionId } });
+      state: aborted ? 'CANCELLED' : ['end_turn', 'completed'].includes(stopReason) ? 'COMPLETED' : 'FAILED',
+      aborted, error: !aborted&&!['end_turn','completed'].includes(stopReason)?'ACP 回合未完成：'+stopReason:null, stopReason, backendSession: { sessionId: this.sessionId } });
   }
   fail(error) { if (this.settle) { const done = this.settle; this.settle = null; done({ content: this.content(), toolCalls: this.toolCalls, state: 'FAILED', error: error.message, stopReason: 'backend_result_unknown' }); } }
   async dispatch(message) {
     try {
       if (message.method === 'session/request_permission') return await this.permission(message);
+      if(message.method==='elicitation/create'){
+        const p=message.params||{};
+        if(p.sessionId&&p.sessionId!==this.sessionId)throw new Error('未知 ACP 会话');
+        if(p.mode&&p.mode!=='form')return await this.rpc.respond(message.id,{action:'cancel'});
+        const response=await this.input.askUser?.(String(p.message||'Agent 请求补充信息')+'\n需要的字段：'+JSON.stringify(p.requestedSchema||{}),[]);
+        let content=response; if(typeof response==='string'){try{content=JSON.parse(response);}catch{const keys=Object.keys(p.requestedSchema?.properties||{});content=keys.length===1&&p.requestedSchema.properties[keys[0]].type==='string'?{[keys[0]]:response}:null;}}
+        const properties=p.requestedSchema?.properties||{};
+        const valid=content&&typeof content==='object'&&!Array.isArray(content)&&(p.requestedSchema?.required||[]).every(key=>Object.hasOwn(content,key))&&Object.entries(content).every(([key,value])=>{const item=properties[key];return Object.hasOwn(properties,key)&&item&&(!item.enum||item.enum.includes(value))&&(!item.type||item.type==='integer'?(!item?.type||Number.isInteger(value)):typeof value===item.type);});
+        return await this.rpc.respond(message.id,valid?{action:'accept',content}:{action:'cancel'});
+      }
       const known = ['fs/read_text_file', 'fs/write_text_file', 'terminal/create', 'terminal/output', 'terminal/wait_for_exit', 'terminal/kill', 'terminal/release'];
       if (!known.includes(message.method)) return await this.rpc.respondError(message.id, -32601, 'Method not found: ' + message.method);
       await this.rpc.respond(message.id, await this.client.handle(message.method, message.params || {}));
@@ -223,11 +238,12 @@ class AcpBackend {
       // permission request and lets the remote runtime continue with allowed reads.
       option = p.options?.find(item => item.kind === 'reject_once' || item.kind === 'reject_always');
       if (!option) return this.rpc.respond(message.id, { outcome: { outcome: 'cancelled' } });
+      this.emit({kind:'backend_approval',phase:'denied',accepted:false});
     } else if (!this.stopping) {
       this.emit({ kind: 'backend_approval', phase: 'requested' });
-      const accepted = await this.input.confirm('HIGH', this.settings.backend + ' ACP 权限请求',
+      const accepted = await this.input.confirm?.('HIGH', this.settings.backend + ' ACP 权限请求',
         JSON.stringify({ title: p.title, description: p.description, subject: redact(subject), toolCall: redact(toolCall), options: p.options }, null, 2));
-      this.emit({ kind: 'backend_approval', phase: 'resolved', accepted });
+      this.emit({ kind: 'backend_approval', phase: accepted?'resolved':'denied', accepted });
       if (this.stopping || this.input.signal?.aborted) return this.rpc.respond(message.id, { outcome: { outcome: 'cancelled' } });
       if (accepted) option = p.options?.find(item => item.kind === 'allow_once') || option;
       else option = p.options?.find(item => item.kind === 'reject_once') || option;

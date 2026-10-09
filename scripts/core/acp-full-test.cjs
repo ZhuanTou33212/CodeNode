@@ -16,7 +16,7 @@ async function main() {
   registry.registerDescriptor({ name: 'fixture_read', description: 'Read fixture', inputSchema: { type: 'object', properties: {} }, readOnly: true, capabilities: [] }, async () => ({ ok: true, data: { text: 'MCP_OK' } }));
   const context = new AgentToolContext({ projectRoot: root, role: 'supervisor' });
   const events = []; const backend = new AcpBackend(settings);
-  const result = await backend.start({ projectRoot: root, prompt: 'Check', toolRegistry: registry, toolContext: context, sandboxPolicy: { mode: 'off' },
+  const result = await backend.run({ projectRoot: root, prompt: 'Check', toolRegistry: registry, toolContext: context, sandboxPolicy: { mode: 'off' },
     attachments: [{ dataUrl: 'data:image/png;base64,aGk=' }, { dataUrl: 'data:audio/wav;base64,aGk=' }], acpContent: [{ type: 'resource', resource: { uri: 'fixture://context', text: 'context' } }],
     readEditorText: async file => file.endsWith('source.txt') ? 'draft\nunsaved\nthird' : null, confirm: async () => true, onDelta: d => events.push(d) });
   assert.equal(result.state, 'COMPLETED', result.error); assert.equal(result.content, 'FULL_ACP_OK'); assert.equal(result.reasoning, 'Fixture thought');

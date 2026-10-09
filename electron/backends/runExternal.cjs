@@ -13,7 +13,7 @@ function projectKey(root) { const key = path.resolve(root); return process.platf
 function sessionFromRun(root, id) {
   const events = runStore.readRun(root, id);
   const start = events.find(event => event.type === 'run_start');
-  if (!['codex', 'deepseek-harness', 'hermes', 'opencode', 'openclaw'].includes(start?.backend)) return null;
+  if (!require('../../config/agent.backends.json').acpBackends.includes(start?.backend)) return null;
   const session = [...events].reverse().find(event => event.type === 'backend_session');
   const finish = [...events].reverse().find(event => event.type === 'run_finish');
   return { start, session, finish };
@@ -52,15 +52,11 @@ async function runExternal(input, deps = {}) {
     return { ok: false, needsReview: true, plan: resumePlan(root, previous.start.runId, new Set()) };
   }
   const backendName = previous?.start?.backend || settings.backend;
-  if ((input.attachments?.length || input.acpContent?.length) && !['hermes', 'opencode', 'openclaw'].includes(backendName)) return { ok: false, error: '该外部后端不支持附件内容' };
+  if(previous && previous.session?.protocol!=='acp')return {ok:false,error:'旧 app-server/SDK 会话不能跨协议恢复；请复核原 Run 后新建 ACP 会话',stopReason:'legacy_session_protocol'};
   const adapterSettings = previous?.session?.adapterSettings || settings;
   if (resumeRunId && previous?.start?.backend !== settings.backend && !previous?.session?.adapterSettings) return { ok: false, error: '恢复必须使用原 Agent 后端：' + String(previous?.start?.backend || 'unknown') };
   const backend = (deps.createBackend || backendFactory.createBackend)(backendName, adapterSettings, deps);
-  const permissions = backendName === 'codex'
-    ? { owner: 'codex-app-server', sandbox: adapterSettings.sandbox, approvalPolicy: require('../../config/agent.backends.json').approvalPolicies[adapterSettings.sandbox] || 'agent-managed' }
-    : backendName === 'deepseek-harness'
-      ? { owner: 'deepseek-harness-profile', profile: 'sdk', home: adapterSettings.home || process.env.DSH_HOME || null, approvalApi: false }
-      : { owner: 'acp-agent-runtime', requestPolicy: adapterSettings.sandbox, osSandboxEnforcedByCodeNode: false };
+  const permissions = {owner:'acp-agent-runtime',transport:'acp',requestPolicy:adapterSettings.sandbox,osSandboxEnforcedByCodeNode:false};
   const runId = runStore.normalizeRunId(requestId);
   if (runStore.readRun(root, runId).length) return { ok: false, runId, error: '该请求编号已有执行记录，请查看原运行结果，避免重复执行' };
   const machine = createStateMachine({ onTransition: info => emit({ kind: 'state', state: info.to, previous: info.from, sequence: info.sequence, reason: info.reason }) });
@@ -86,13 +82,12 @@ async function runExternal(input, deps = {}) {
     const before = diff.capture(root);
     const contextFingerprint = crypto.createHash('sha256').update(JSON.stringify([...before.entries].sort())).digest('hex');
     runStore.appendEvent(root, runId, 'backend_context', { contextRevision: input.document?.root?.revision || 0, contextFingerprint, complete: before.complete });
-    const result = await backend.start({ ...input, backendSession: previous?.session,
-      onSession: session => { if (!runStore.appendEvent(root, runId, 'backend_session', session)) throw new Error('无法持久化 Codex 会话，停止执行'); },
-      onDelta: delta => {
-        if (delta.kind === 'state') return;
-        if (delta.kind === 'backend_approval') machine.go(delta.phase === 'requested' ? 'WAITING_USER' : 'RUNNING', delta.phase);
-        emit(delta);
-      }, confirm });
+    const port=require('./backendPort.cjs');port.assertBackendPort(backend);
+    const unsubscribe=backend.subscribe(event=>{const delta=port.toAgentDelta(event);if(delta.kind==='state')return;if(delta.kind==='backend_approval')machine.go(delta.phase==='requested'?'WAITING_USER':'RUNNING',delta.phase);emit(delta);});
+    let result;
+    try{result = await backend.submit({ ...input, onDelta:undefined, backendSession: previous?.session,
+      onSession: session => { if (!runStore.appendEvent(root, runId, 'backend_session', session)) throw new Error('无法持久化 ACP 会话，停止执行'); },
+      confirm });}finally{unsubscribe();await backend.close();}
     const changes = diff.compare(before, diff.capture(root));
     const goalScopeViolations = goalScope.violations(changes.files, input.goalWriteScope);
     const goalScopeUnverified = Array.isArray(input.goalWriteScope) && input.goalWriteScope.length > 0 && !changes.complete;

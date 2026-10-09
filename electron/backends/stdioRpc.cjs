@@ -34,6 +34,8 @@ function resolveCommand(command) {
       if (fs.existsSync(scripts)) {
         const content = fs.readFileSync(scripts, 'utf8');
         const nodeScript = content.match(/"%dp0%\\node_modules\\([^" ]+\.(?:js|mjs))"/i);
+        const nativeScript=content.match(/"%dp0%\\node_modules\\([^" ]+\.exe)"/i);
+        if(nativeScript){const candidate=path.join(dir,'node_modules',nativeScript[1]);if(fs.existsSync(candidate))return {command:candidate,prefix:[]};}
         if (nodeScript) { const candidate = path.join(dir, 'node_modules', nodeScript[1]); if (fs.existsSync(candidate)) return { command: process.execPath, prefix: [candidate] }; }
       }
       const hermes = path.join(dir, 'hermes.exe'); if (command === 'hermes' && fs.existsSync(hermes)) return { command: hermes, prefix: [] };

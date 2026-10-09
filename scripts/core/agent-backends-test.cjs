@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
-const { RpcClient } = require('../../electron/backends/rpc.cjs');
-const { CodexBackend } = require('../../electron/backends/codex.cjs');
+const { StdioRpc } = require('../../electron/backends/stdioRpc.cjs');
+const { AcpBackend } = require('../../electron/backends/acp.cjs');
+const {BackendPort}=require('../../electron/backends/backendPort.cjs');
 const { BuiltinBackend } = require('../../electron/backends/index.cjs');
 const settings = require('../../electron/backends/settings.cjs');
 const external = require('../../electron/backends/runExternal.cjs');
@@ -14,12 +15,12 @@ const { capture, compare } = require('../../electron/backends/workspaceDiff.cjs'
 const { launchEnvironment } = require('../../electron/backends/network.cjs');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-backends-')));
 const userData = path.join(root, '.userdata');
-const fixture = path.join(__dirname, '../fixtures/codex-app-server.cjs');
-class FixtureRpc extends RpcClient {
-  constructor(command, cwd) { super(command, cwd, { spawn: (_file, _args, options) => spawn(process.execPath, [fixture], options) }); }
+const fixture = path.join(__dirname, '../fixtures/acp-workflow.cjs');
+class FixtureRpc extends StdioRpc {
+  constructor(command, args, cwd) { super(process.execPath, [fixture], cwd, { spawn: (_file, _args, options) => spawn(process.execPath, [fixture], options) }); }
 }
 const selected = { ...settings.config.defaults, backend: 'codex', executable: process.execPath, sandbox: 'workspace-write' };
-const create = () => new CodexBackend(selected, { RpcClient: FixtureRpc, executableVersion: async () => settings.config.protocolVersion });
+const create = () => new BackendPort('codex',selected,new AcpBackend(selected,{StdioRpc:FixtureRpc}));
 const cfg = { editing: { autoVerify: true, blockOnFailure: true, lintCommand: 'node -e "process.exit(0)"', testCommand: 'node math.test.cjs' } };
 function waitFor(predicate, message, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -61,22 +62,20 @@ async function main() {
   assert.throws(() => settings.normalize({ ...selected, sandbox: 'danger-full-access' }));
   assert.throws(() => settings.normalize({ ...selected, backend: 'openclaw', args: ['acp', '--token', 'sample-secret'] }), /不能保存明文密钥/);
   assert.throws(() => settings.normalize({ ...selected, backend: 'openclaw', args: ['acp', '--password=sample-secret'] }), /不能保存明文密钥/);
-  const invalid = new CodexBackend(selected, { executableVersion: async () => '999.0.0' });
-  assert.equal((await invalid.capabilities(root)).available, false);
   const agent = require('../../electron/agent.cjs');
   const original = agent.runAgentChat;
   const value = /** @type {any} */ ({ content: 'unchanged', usage: { total_tokens: 9 }, state: 'COMPLETED' });
   let count = 0;
   agent.runAgentChat = async input => { count++; assert.equal(input.cfg.test, true); return value; };
-  try { assert.equal(await new BuiltinBackend().start({ cfg: { test: true } }), value); assert.equal(count, 1); }
+  try { assert.equal(await require('../../electron/backends/index.cjs').createBackend('builtin').submit({ cfg: { test: true } }), value); assert.equal(count, 1); }
   finally { agent.runAgentChat = original; }
   console.log('BACKEND TEST STAGE: builtin delegation');
-  assert.equal((await create().capabilities(root)).available, true);
+  const probe=create();try{assert.equal((await probe.health({projectRoot:root})).available,true);}finally{await probe.close();}
   console.log('BACKEND TEST STAGE: Codex capabilities');
   const readOnlyRoot = path.join(root, 'readonly-project'); fs.mkdirSync(readOnlyRoot);
-  const readOnly = new CodexBackend({ ...selected, sandbox: 'read-only' }, { RpcClient: FixtureRpc, executableVersion: async () => settings.config.protocolVersion });
+  const readOnly = new AcpBackend({ ...selected, sandbox: 'read-only' }, {StdioRpc:FixtureRpc});
   const deniedEvents = [];
-  await readOnly.start({ projectRoot: readOnlyRoot, prompt: 'resume-edit', confirm: async () => true, onDelta: event => deniedEvents.push(event) });
+  await readOnly.run({ projectRoot: readOnlyRoot, prompt: 'resume-edit', confirm: async () => true, onDelta: event => deniedEvents.push(event) });
   assert.equal(fs.existsSync(path.join(readOnlyRoot, 'math.cjs')), false, 'Read-only must decline escalation even after a dialog accepts');
   assert(deniedEvents.some(event => event.kind === 'backend_approval' && event.phase === 'denied'));
   console.log('BACKEND TEST STAGE: read-only permission');
@@ -93,7 +92,7 @@ async function main() {
   const firstPending = external.runExternal({ ...common, requestId: 'first', prompt: 'interrupt-test', signal: controller.signal,
     confirm: async () => false }, { createBackend: create });
   await waitFor(() => events.some(event => event.kind === 'backend_approval' && event.phase === 'denied'), 'Codex fixture did not request and receive a denial');
-  await waitFor(() => external.sessionFromRun(root, 'first')?.session?.turnId === 'turn-1', 'Codex turn handle was not persisted before cancellation');
+  await waitFor(() => external.sessionFromRun(root, 'first')?.session?.sessionId === 'acp-workflow', 'Codex turn handle was not persisted before cancellation');
   controller.abort();
   const first = await firstPending;
   assert.equal(first.state, 'CANCELLED');
@@ -103,7 +102,7 @@ async function main() {
   assert(!events.some(e => e.kind === 'command'), 'Protocol fields must not overwrite host event kind');
   console.log('BACKEND TEST STAGE: cancelled run persisted');
   const record = external.sessionFromRun(root, 'first');
-  assert.equal(record.session.threadId, 'thread-fixture'); assert.equal(record.session.turnId, 'turn-1');
+  assert.equal(record.session.sessionId,'acp-workflow');assert.equal(record.session.protocol,'acp');
   const plan = external.resumePlan(root, 'first', new Set());
   assert.equal(plan.requiresReview, true);
   const review = await external.runExternal({ ...common, requestId: 'review', prompt: 'resume-edit', resumeRunId: 'first', confirm: async () => true }, { createBackend: create });
@@ -116,7 +115,7 @@ async function main() {
       return { ok: true, output, exitCode: 0 };
     } });
   assert.equal(resumed.ok, true); assert.equal(resumed.reply, '修改完成');
-  assert.equal(resumed.usage.total_tokens, 13, 'Cumulative usage must exclude the previous turn');
+  assert.equal(resumed.usage.total_tokens, 13, 'ACP usage should remain per-turn');
   assert.equal(resumed.codeVerification.verified, true); assert.equal(checks, 2);
   console.log('BACKEND TEST STAGE: resumed run verified');
   assert(resumed.changes.files.some(file => file.path === 'math.cjs' && file.before !== file.after));
@@ -140,10 +139,7 @@ async function main() {
   assert.match(fs.readFileSync(path.join(root, 'math.cjs'), 'utf8'), /module\.exports/, 'out-of-scope changes stay available for review');
   assert.equal(runStore.summarizeRun(runStore.readRun(root, 'resumed')).stateHistoryValid, true);
   const calls = fs.readFileSync(path.join(root, '.codenode/fixture-rpc.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-  const read = calls.findIndex(c => c.method === 'thread/read');
-  const resume = calls.findIndex(c => c.method === 'thread/resume');
-  assert(read >= 0 && resume > read); assert(calls.some(c => c.method === 'turn/interrupt'));
-  assert.equal(calls.find(c => c.method === 'turn/start').params.sandboxPolicy.writableRoots[0], root);
+  assert(calls.some(c=>c.method==='session/load'));assert(calls.some(c=>c.method==='session/cancel'));assert.equal(calls.find(c=>c.method==='session/new').params.cwd,root);
   const disconnected = await external.runExternal({ ...common, requestId: 'disconnected', sessionId: 'other', prompt: 'disconnect-test', confirm: async () => false }, { createBackend: create });
   assert.equal(disconnected.stopReason, 'backend_result_unknown');
   const blocked = await external.runExternal({ ...common, requestId: 'blocked', prompt: 'resume-edit', resumeRunId: 'disconnected', resumeForce: true, confirm: async () => true }, { createBackend: create });
@@ -157,5 +153,5 @@ async function main() {
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   const resolved = path.resolve(root);
-  if (path.dirname(resolved) === fs.realpathSync(os.tmpdir()) && path.basename(resolved).startsWith('codenode-backends-')) fs.rmSync(resolved, { recursive: true, force: true });
+  if (path.dirname(resolved) === fs.realpathSync(os.tmpdir()) && path.basename(resolved).startsWith('codenode-backends-')) fs.rmSync(resolved, { recursive: true, force: true, maxRetries:10, retryDelay:200 });
 });

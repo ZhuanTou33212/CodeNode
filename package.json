@@ -234,7 +234,8 @@
     "test:rag-scan-worker": "node scripts/core/rag-scan-worker-test.cjs",
     "test:rag-packaged-worker": "node scripts/run-electron.cjs scripts/packaged/rag-packaged-worker-test.cjs",
     "test:rag-evidence-history": "node scripts/core/rag-evidence-history-test.cjs",
-    "test:rag-live-versions": "node scripts/core/rag-live-versions-test.cjs"
+    "test:rag-live-versions": "node scripts/core/rag-live-versions-test.cjs",
+    "test:backend-port": "node scripts/core/backend-port-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

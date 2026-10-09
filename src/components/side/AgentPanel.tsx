@@ -198,7 +198,7 @@ function PromptComposer() {
   };
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
-  const isAcp = ['hermes', 'opencode', 'openclaw'].includes(externalBackend);
+  const isAcp = backendConfig.acpBackends.includes(externalBackend);
   const canVision = !selectedNode && (isAcp || !externalModel && model?.vision === true);
 
   useEffect(() => {

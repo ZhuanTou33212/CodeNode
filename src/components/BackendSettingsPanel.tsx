@@ -17,7 +17,7 @@ export default function BackendSettingsPanel() {
   const [argsText, setArgsText] = useState('');
   const [acpText, setAcpText] = useState('{}');
   const [agentInfo, setAgentInfo] = useState<any>(null);
-  const isAcp = ['hermes', 'opencode', 'openclaw'].includes(settings.backend);
+  const isAcp = backendConfig.acpBackends.includes(settings.backend);
   useEffect(() => {
     let alive = true;
     setBusy(true); setMessage('');
@@ -61,9 +61,7 @@ export default function BackendSettingsPanel() {
       const result = await window.codenode.backendStatus(root, { ...settings, args, ...(isAcp ? { acp: JSON.parse(acpText) } : {}) });
       if (useProjectStore.getState().root !== root) return;
       const c = result.capabilities;
-      setMessage(!result.ok || !c?.available ? result.error || c?.error || '后端不可用' : c.backend === 'builtin' ? '内置后端可用。' : c.backend==='codex'
-        ? `Codex ${c.protocolVersion} 协议可用；${c.authenticated ? '已检测到登录账户' : '未检测到登录账户，请先在本机 codex login'}。${c.proxySource === 'windows-system' ? '模型连接跟随 Windows 手动系统代理。' : ''}${c.commandSandbox?.lastSetupError ? '最近的 Windows 沙箱初始化错误：' + c.commandSandbox.lastSetupError.code + '。' : ''}费用未知，无逐请求硬费用上限。`
-        : `${c.backend}${c.version ? ' ' + c.version : ''} ${c.protocol||'agent protocol'} 握手成功；${c.resume?'可恢复会话。':'不支持恢复会话。'}检测不会保存配置，认证由本机 Agent 管理。`);
+      setMessage(!result.ok || !c?.available ? result.error || c?.error || '后端不可用' : c.backend === 'builtin' ? '内置后端可用。' : `${c.backend}${c.version ? ' ' + c.version : ''} ${c.protocol||'agent protocol'} 握手成功；${c.resume?'可恢复会话。':'不支持恢复会话。'}检测不会保存配置，认证由本机 Agent 管理。`);
     } catch (error) { if (useProjectStore.getState().root === root) setMessage(String(error)); }
     finally { setBusy(false); }
   };
@@ -86,12 +84,9 @@ export default function BackendSettingsPanel() {
     <label className="settings-row"><span>执行后端</span><select aria-label="执行后端" value={settings.backend} disabled={disabled} onChange={e => { const backend=e.target.value as AgentBackendSettings['backend']; setSettings(s=>({...s,backend,executable:backendCommands[backend]||'',args:backendArgs[backend]||[]})); setArgsText(JSON.stringify(backendArgs[backend]||[],null,2)); }}>{backendConfig.backends.map(backend => <option value={backend} key={backend}>{backendConfig.labels[backend as keyof typeof backendConfig.labels]}</option>)}</select></label>
     {settings.backend !== 'builtin' && <>
       <label className="settings-row"><span>启动命令或可执行文件</span><input aria-label="后端启动命令" value={settings.executable} disabled={disabled} onChange={e => setSettings(s => ({ ...s, executable: e.target.value }))} /></label>
-      {settings.backend !== 'codex' && <label className="settings-row"><span>启动参数（JSON 数组）</span><textarea aria-label="后端启动参数" value={argsText} disabled={disabled} rows={3} onChange={e => setArgsText(e.target.value)} /></label>}
-      {['codex', 'deepseek-harness'].includes(settings.backend) && <>
-        <label className="settings-row"><span>{settings.backend === 'deepseek-harness' ? 'Harness profile home' : 'Codex 模型（留空跟随 Codex）'}</span><input aria-label={settings.backend === 'deepseek-harness' ? 'Harness home' : 'Codex 模型'} value={settings.backend === 'deepseek-harness' ? settings.home : settings.model} disabled={disabled} onChange={e => setSettings(s => settings.backend === 'deepseek-harness' ? ({ ...s, home: e.target.value }) : ({ ...s, model: e.target.value }))} /></label>
-        {settings.backend === 'deepseek-harness' && <><label className="settings-row"><span>Provider</span><input aria-label="Harness provider" value={settings.provider} disabled={disabled} onChange={e => setSettings(s => ({ ...s, provider: e.target.value }))} /></label><label className="settings-row"><span>Model</span><input aria-label="Harness model" value={settings.model} disabled={disabled} onChange={e => setSettings(s => ({ ...s, model: e.target.value }))} /></label></>}
-      </>}
-      {['codex', 'hermes', 'opencode', 'openclaw'].includes(settings.backend) && <label className="settings-row"><span>{settings.backend === 'codex' ? '项目文件权限（Codex 沙箱）' : 'ACP 权限请求策略'}</span><select aria-label={settings.backend === 'codex' ? 'Codex 项目文件权限' : 'ACP 权限请求策略'} value={settings.sandbox} disabled={disabled} onChange={e => setSettings(s => ({ ...s, sandbox: e.target.value as AgentBackendSettings['sandbox'] }))}><option value="read-only">只读／拒绝扩权请求</option><option value="workspace-write">允许项目修改／逐次审批</option></select></label>}
+      {<label className="settings-row"><span>启动参数（JSON 数组）</span><textarea aria-label="后端启动参数" value={argsText} disabled={disabled} rows={3} onChange={e => setArgsText(e.target.value)} /></label>}
+      {settings.backend==='deepseek-harness' && <label className="settings-row"><span>Harness home（留空跟随 Agent）</span><input aria-label="Harness home" value={settings.home} disabled={disabled} onChange={e=>setSettings(s=>({...s,home:e.target.value}))}/></label>}
+      {isAcp && <label className="settings-row"><span>{'ACP 权限请求策略'}</span><select aria-label="ACP 权限请求策略" value={settings.sandbox} disabled={disabled} onChange={e => setSettings(s => ({ ...s, sandbox: e.target.value as AgentBackendSettings['sandbox'] }))}><option value="read-only">只读／拒绝扩权请求</option><option value="workspace-write">允许项目修改／逐次审批</option></select></label>}
       {isAcp && <>
         <label className="settings-row"><span>ACP 模型（留空跟随 Agent）</span><input aria-label="ACP 模型" value={settings.model} disabled={disabled} onChange={e => setSettings(s => ({ ...s, model: e.target.value }))} /></label>
         <label className="settings-row"><span>ACP 会话配置（JSON）</span><textarea aria-label="ACP 会话配置" rows={6} value={acpText} disabled={disabled} onChange={e => setAcpText(e.target.value)} /></label>
@@ -100,7 +95,7 @@ export default function BackendSettingsPanel() {
         <div className="settings-row"><button disabled={disabled} onClick={() => void control('inspect')}>读取 ACP 可选项</button><button disabled={disabled} onClick={() => void control('authenticate')}>执行 ACP 认证</button></div>
         {agentInfo && <details><summary>Agent 提供的可选项</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ authMethods: agentInfo.authMethods, modes: agentInfo.modes, models: agentInfo.models, configOptions: agentInfo.configOptions }, null, 2)}</pre></details>}
       </>}
-      <p className="settings-scope">{settings.backend === 'codex' ? `Codex 支持协议 ${backendConfig.supportedProtocolVersions.join(' / ')}。` : settings.backend === 'hermes' || settings.backend === 'opencode' || settings.backend === 'openclaw' ? '通过 ACP stdio 接入本机 CLI 和它自己的登录配置；OpenClaw 需 Gateway 可用。只读策略拒绝 ACP 权限请求，写入策略逐次询问；ACP 声明不能替代操作系统沙箱。' : 'DeepSeek Harness SDK 使用独立 DSH_HOME、sdk profile 与 provider/model；需要安装 dsh SDK runtime。执行权限由该 Harness profile 管理，SDK 不提供逐会话取消接口，停止会结束专属 runtime 进程。'} {settings.backend === 'deepseek-harness' ? 'CodeNode 不会把通用项目权限选项伪装成 Harness 沙箱。' : '外部 Agent 的原生工具由对应 runtime 管理；CodeNode 会核对运行前后的项目文件差异。'} 费用与外部 token 用量不一定可得，CodeNode 硬费用预算不覆盖外部执行。画布提供上下文，不接管 Agent 的原生会话工具。</p>
+      <p className="settings-scope">所有外部 Agent 统一通过 ACP stdio 接入。Codex 使用已安装的 codex-acp 适配器；DeepSeek 使用 dsh --profile acp；自定义 ACP 可填写现有命令和参数。登录、模型默认值和原生工具由 Agent 自身管理，不自动下载。只读策略拒绝权限扩权请求，写入策略逐次询问；ACP 权限不是操作系统沙箱。外部费用可能未知，CodeNode 会独立核对文件差异与验收结果。</p>
     </>}
     <div className="settings-row"><button onClick={() => void save()} disabled={disabled || scope === 'project' && !root}>保存后端</button><button onClick={() => void check()} disabled={disabled}>检测当前配置</button>{root && <button onClick={() => void save(true)} disabled={disabled}>项目跟随本机默认</button>}</div>
     {message && <p className="settings-scope" role="status">{message}</p>}

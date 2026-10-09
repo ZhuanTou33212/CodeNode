@@ -322,6 +322,8 @@ MCP 可用于把 CodeNode 的领域能力提供给 Agent；它本身不替代会
 
 ## 12. 主流 Agent 接入与 Goal 运行门禁（2026-10-09）
 
+> 以下为阶段记录；当前接入方式以本文末“统一 ACP 与 BackendPort 迁移”及 README 为准，旧 app-server/SDK 的实测证据不代表新版 ACP 已实测。
+
 ### 外部 Agent 覆盖
 
 设置中的可选后端现为 CodeNode 内置、Codex app-server、DeepSeek Harness、Hermes Agent、OpenCode、OpenClaw。这里的接入目标是用户已安装的本机 Agent：CodeNode 不下载或安装它们；默认命令从 PATH/Windows npm global 解析，也可填写已有 executable 路径，并通过该 Agent 自己的配置、登录和环境变量运行。设置保存为本机默认或项目覆盖；DeepSeek Harness 另需指向已存在的 `DSH_HOME` profile。点“检测当前配置”会验证当前未保存的命令和参数，并执行协议初始化握手；检测不写入设置，也不发送模型 prompt；握手通过只证明连接可用，不等于代码任务闭环。Hermes、OpenCode、OpenClaw 使用 ACP v1 stdio；DeepSeek Harness 使用其官方 SDK JSON-RPC profile。外部 Run 在原项目目录执行，CodeNode 记录运行前后差异和会话恢复信息。
@@ -410,3 +412,18 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 范围：本次验证 Windows 桌面上的 OpenCode、时间等待以及文本任务自动推进；不代表所有外部 Agent、GitHub Actions/Agent Eval 外部状态真实闭环、美元预算或操作系统隔离均已实测，也不替代具体业务 Task 的独立验收。其余角色质量比较、阶段 E、外部实验跟踪和一般经验提炼保持原状态。
 
 交付已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行；固定包与实测暂存包 app.asar SHA-256 均为 `B2FCA2BD28D8B2710CE9F0FC3BB3ACF8C72EB96BC8F1B52B03896C3A23C5F046`，`CodeNode.exe` SHA-256 为 `4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB`。覆盖后 19/19 UI 自检与实际 asar 启动自检通过；打包配置仅含公开 Agent 模板和已提交 Soul，保留本地私有配置及用户 Soul 修改。
+
+
+### 2026-10-09 统一 ACP 与 BackendPort 迁移
+
+按用户要求参考 QwenAudio/qwen-audio-agent 的协议中立 [BackendPort 契约](https://github.com/QwenAudio/qwen-audio-agent/blob/main/server/src/backend/backend-port.mjs) 与 [ACP 接入说明](https://github.com/QwenAudio/qwen-audio-agent/blob/main/docs/backends/overview.md)，将现有外部调用链统一为 ACP v1 stdio。Codex 改用已安装 codex-acp，DeepSeek 改用 dsh --profile acp；Hermes/OpenCode/OpenClaw 共用同一 ACP 客户端，增加自定义 ACP 命令入口。旧专用协议实现及夹具已移除，配置、检测、管理、聊天、画布工作流、取消和精确会话恢复一起迁移。
+
+统一接口包含 describe/start/health/submit/status/cancel/respondAuthorization/respondInput/subscribe/close。start/health 只握手、不推理；submit 产生 owner 范围内的 Task，状态与审批/输入回复严格绑定 Task/owner，一次授权不扩大到以后任务。事件按消息、活动、权限、输入和产物分类，保留现有渲染桥接；请求编号不能覆盖聊天 requestId。关闭时释放待处理请求与专属协议进程；共享/隔离会话、重复提交、跨工程复用及旧协议恢复均有明确门禁。
+
+内置执行器也走 BackendPort，内部保留本机模型循环；Goal、独立验收和文件范围逻辑未移到模型侧。旧默认 Codex CLI 配置和 DeepSeek sdk 参数迁移到 ACP 启动入口，设置保存为版本 2；旧线程/SDK 会话只可查看历史，必须复核后新建 ACP 会话。ACP 的 max_tokens 不再记作完成。所有外部后端共用同一组日夜主题控件和持久化设置，原生 CLI、登录配置及缺失依赖不由 CodeNode 自动安装。
+
+测试新增 test:backend-port，并纳入默认离线套件；真实 stdin/stdout 夹具覆盖初始化幂等、Task 生命周期、owner 边界、权限/输入、取消、共享/隔离会话、事件、重复/关闭门禁、旧配置迁移和旧记录拒绝重放。现有文件任务的权限拒绝、中断恢复、指纹、独立校验和画布工作流测试已切换为 ACP。OpenCode 真实模型自动推进、失败和重启路径通过；本机 codex-acp/dsh 不在可解析命令中，未下载第三方 Agent，不声称这两条模型请求实测通过。
+
+本轮完整构建、脚本检查与核心回归 159/159 通过；后续取消统一转发、预取消和纯 ACP 夹具清理又通过 BackendPort／后端／状态机／多后端专项与静态检查。源码与最终包内设置 UI 在日夜主题下共用结构、功能和配置，切换保留会话、草稿、模型及侧栏状态。最终包 UI 自检 19/19、实际 asar main/preload/renderer 启动检查通过。最终包通过 OpenCode 1.17.18 的真实自动推进、失败不重试、启动前遗留认领恢复，以及推理中断后的三进程重启复核；报告直接从被验收的 asar 提取 BackendPort 和配置哈希，保存于 [新版 ACP 实测证据](validation/acp-backend-port-live-2026-10-09.json)。
+
+固定交付路径 E:\CodeNode\release\win-unpacked 已更新；覆盖前确认 CodeNode 未运行，不保留旧包备份。app.asar SHA-256 为 B36CABFD71D723E277BB66869ADDF89FBA23F87B17FA24C0A49827E1FC6AA548；CodeNode.exe SHA-256 为 4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。覆盖后 19/19 自检与实际启动检查再次通过。只把公开 Agent 模板和已提交 Soul 放入交付包，本机私有配置及未提交 Soul 修改保留。

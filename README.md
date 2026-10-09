@@ -150,35 +150,39 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 ### Agent 后端
 
-在 **设置 → 常规 → Agent 后端** 选择 CodeNode 内置执行器、Codex app-server、DeepSeek Harness、Hermes Agent、OpenCode 或 OpenClaw。配置可保存为本机默认或当前项目覆盖，项目也可恢复跟随本机。默认使用内置执行器，已有模型配置和工具行为沿用原逻辑。
+在 **设置 → 常规 → Agent 后端** 选择内置执行器、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。配置保存为本机默认或项目覆盖，项目可跟随本机设置。
 
-Codex 首版兼容经本机 schema 核对的 `0.135.0`、`0.160.0` 协议版本；依次自动查找 PATH 原生程序、桌面版自带运行时及 npm 安装的原生程序，也可指定可执行文件绝对路径。“检测当前配置”会检查当前填写配置的协议握手与账户状态，不写入设置；登录信息仍由本机 Codex 管理，握手成功不能代替模型可访问性验证。Codex 模型留空时使用其本机配置，工作目录固定为所选项目。默认只读，允许修改项目文件需在设置中选择；后端审批只对当前请求有效，中断等待真实终态，连接丢失与中断未确认会标记结果未知。
+| 后端 | 已安装的启动命令 | 默认参数 |
+| --- | --- | --- |
+| Codex | `codex-acp` | 空；需要已有 Codex CLI 和本机登录 |
+| DeepSeek Harness | `dsh` | `--profile acp`；可选已有 `DSH_HOME` |
+| Hermes | `hermes` | `acp` |
+| OpenCode | `opencode` | `acp` |
+| OpenClaw | `openclaw` | `acp`；需要可用 Gateway |
+| 自定义 ACP | 用户填写现有命令或绝对路径 | 用户填写 JSON 参数数组 |
 
-Windows 上未设置显式 `HTTP_PROXY`／`HTTPS_PROXY`／`ALL_PROXY` 时，模型子进程会继承已启用的手动系统代理与可表达的绕过列表；已有代理环境变量优先，不修改系统代理或 Codex 账户配置。PAC 自动代理需为子进程配置代理环境。只读模式允许沙箱内命令，拒绝扩权请求；项目写入模式沿用逐次信任审批。检测结果同时提示原生 Windows 沙箱最近的初始化错误，不能把协议握手当成文件命令已可用。
+CodeNode 不下载 Agent、不使用 npx 自动安装。启动命令从 PATH/Windows npm global 解析，支持本机可执行文件及 npm JS/native shim；不拼接 shell 命令。模型留空跟随 Agent 原生配置，认证、Skills 与原生工具由 Agent 自身管理。Windows 手动系统代理在没有显式代理环境变量时仅注入本轮子进程；不改系统或账户设置。
 
-对话与画布文件任务共用这个入口。运行记录保存后端、协议、线程、执行、目录和权限；从运行列表恢复时先复核副作用并查询原执行状态，原执行仍在运行或状态无法核实时阻止重复启动。外部后端提供的补丁和独立扫描获得的文件内容指纹可在文件变更卡片中查看，代码修改复用本地独立校验。
+后端统一契约参考 [qwen-audio-agent BackendPort](https://github.com/QwenAudio/qwen-audio-agent/blob/main/server/src/backend/backend-port.mjs)：
 
-DeepSeek Harness 通过官方 stdio SDK JSON-RPC profile。安装 `deepseek-harness-sdk` runtime（包含 `dsh`），并设置有效的 `DSH_HOME`；SDK profile 管理执行权限，协议没有逐会话取消或权限请求方法，停止会关闭该专属 runtime。Hermes、OpenCode、OpenClaw 通过 ACP stdio 接入并复用各自账号配置；OpenClaw 需要正常运行的 Gateway。所有外部后端在启动前都会检测协议握手，缺少 CLI、配置或依赖时会显示具体错误。
+- `describe`：身份、传输与能力；`start`：幂等准备连接，不发送模型 prompt；`health`：当前可用性。
+- `submit`：提交一个 Task；`status`：运行时或 owner 范围内的 Task 状态；`cancel`：取消指定 Task。
+- `respondAuthorization`／`respondInput`：回复当前 Task/owner 对应的待处理请求，拒绝跨 Task/owner、未知或重复回复。
+- `subscribe`：订阅带 Task/owner 的 message/state/activity/authorization/input/artifact 事件；`close`：幂等释放连接与待处理请求。
 
-外部 Agent 的工具和沙箱由对应 runtime/profile 控制，CodeNode 工具注册表不能拦截其全部操作。ACP 只读模式拒绝所有权限请求；写入模式对每个 ACP 权限请求逐次询问。ACP 请求类型由 Agent 提供，不能代替操作系统沙箱，也不能证明 Agent 不会绕过权限请求直接操作文件。CodeNode 在运行前后扫描项目文件指纹并展示 Agent 报告的补丁；修改代码后复用独立本地校验，缺少有效校验时不把代码修改标成验收通过。外部用量与费用不一定可得，不承诺 CodeNode 硬费用预算或自动副作用回滚。
+内置执行器也通过 BackendPort 提交，内部继续使用 CodeNode 模型与工具循环。ACP 客户端共用初始化、会话创建/加载/恢复、文本及多媒体 prompt、权限、取消、配置和错误处理。后台调用实际使用上述契约，原 Codex app-server 与 DeepSeek SDK JSON-RPC 适配器已删除。
 
-Hermes、OpenCode、OpenClaw 的 ACP v1 接口支持项目内文本读写、编辑器未保存内容、终端创建/输出/等待/终止/释放、Agent 管理的认证、模型/模式与 select/boolean 配置项，以及图片、音频、嵌入资源和资源链接。发送附件前检查 Agent 的 `promptCapabilities`；缺少能力时明确报错。工具补丁、终端、多媒体、计划、命令、模式、配置、会话信息与用量事件会保存并显示；未知客户端方法返回 JSON-RPC `-32601`。文件写入逐次审批，提交前复核文件 SHA256、编辑器草稿与 Task 范围；终端使用既有沙箱执行策略，输出按 UTF-8 字节截断，会话取消/结束时清理进程。
+“检测当前配置”只验证当前命令和参数的 ACP 初始化，不写入设置或发模型请求。旧默认 `codex`／已保存的 Codex CLI 路径改为适配器命令，DeepSeek 的旧 `--profile sdk` 改为 `--profile acp`，保存后持久化为设置版本 2；其他自定义命令保留，需要用户确认它支持 ACP。旧 app-server/SDK Run 保留历史，但不能通过 ACP 恢复原线程。请复核旧 Run 和项目差异后新建 ACP 会话；不会静默转换会话 ID 或重放副作用。
 
-在 **Agent 后端 → ACP 会话配置** 保存 `authMethodId`、`modeId`、`configValues`、`mcpServers`、`codeNodeTools`，点击“读取 ACP 可选项”查询本机 Agent 的实际可用值，点击“执行 ACP 认证”调用 Agent 自身认证流程。模型也可直接填写，运行前检查其配置选项或模型列表。需要交互终端的认证和 URL/form elicitation 没有声明客户端支持，仍由 Agent 自身登录入口处理；本接口以稳定的 ACP v1 为目标，不宣称覆盖 v2 草案或全部可选扩展。`session/list/delete/close/logout` 管理接口按 Agent 能力声明调用；所有控制请求限制在固定方法集合内。
+共享会话按 owner/工程续用精确 ACP session ID；隔离 Task 新建会话。结果未知时必须复核后显式恢复。Run 保存协议、会话、权限、状态、事件和项目文件指纹；代码修改必须通过独立本地校验。`max_tokens` 等非完成终态记为失败，不能充当完成证据。Goal admission、预算、写入范围、重启未知状态及验收证据规则继续生效。
 
-ACP 会话可通过临时、仅监听本机且需要每轮随机令牌的 MCP stdio relay 接入 CodeNode 工具注册表，复用角色、能力、审批、取消和工具配置门禁，支持实际画布读取/修改及项目工具。令牌不写入后端配置，结束后立即失效。只读后端或有明确 Task 写入范围的 MCP 上下文只授予只读工具；有限范围 Task 的 ACP 文件写入按范围执行，任意终端命令被拒绝。额外 MCP stdio/HTTP/SSE 服务器需本机已安装并由 Agent 声明相应传输能力；凭据保存在 Agent 自身配置，不写入 CodeNode 明文设置。OpenClaw 有额外 MCP 时不再省略 `mcpServers`，Gateway 不接受该字段会明确失败，不静默丢弃工具。外部 `/compact` 与 CodeNode 子 Agent 委派仍使用内置执行器。DeepSeek Harness 的运行与权限由显式选择的 SDK profile 决定。
+所有外部后端共用 **ACP 权限请求策略**：只读拒绝扩权请求，写入逐次询问。客户端文件读写在项目边界内运行，提交前检查文件指纹、编辑器草稿和 Task 写入范围；终端复用本地沙箱策略。Agent 原生工具不由 CodeNode 全面拦截，ACP 权限不等于操作系统隔离，外部用量/费用可能未知。
 
-ACP 配置示例（可选项以“读取 ACP 可选项”的实际返回为准）：
+在 **ACP 会话配置** 持久化 `authMethodId`、`modeId`、`configValues`、`mcpServers` 和 `codeNodeTools`。“读取 ACP 可选项”查询实际可用值，认证和控制按 Agent 声明能力执行。图片、音频、资源发送前检查能力；未知客户端方法返回 `-32601`。form elicitation 支持结构化字段回复，单个字符串字段可直接输入文本；URL 认证或交互式终端登录由 Agent 自身处理。需要 CodeNode 画布与项目工具时，可显式启用本轮 MCP relay，复用现有角色、能力、范围、审批和取消门禁。
 
-```json
-{"authMethodId":"login","modeId":"code","configValues":{"model":"my-model","fast":true},"mcpServers":[],"codeNodeTools":true}
-```
+离线验收：`npm run test:backend-port`、`test:backends`、`test:multi-backends`、`test:acp-full` 和 `test:backend-workflow`。双主题与设置持久化：`test:backend-ui`。显式真实模型验收：`test:goal-auto-live`（OpenCode 自动推进）、`test:backend-live`（Codex ACP）、`test:backend-live-deepseek`（DeepSeek ACP）及 `test:backend-live-workflow`（隔离源码任务）；要求已有 Agent 和凭据，可能产生模型用量，不进入离线 CI。
 
-`npm run test:acp-full` 使用独立协议进程覆盖文件/终端、认证/配置、多媒体事件、未知方法错误和真实 MCP relay 工具调用；不下载第三方 Agent。协议依据 [ACP v1 官方规范](https://agentclientprotocol.com/protocol/v1/overview) 与 [官方 v1 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/schema/v1/schema.json)。
-
-离线协议与画布闭环：`npm run test:backends`、`npm run test:multi-backends`、`npm run test:backend-workflow`、`npm run test:goal-store`；主题与持久化：`npm run test:backend-ui`；使用本机 Codex 登录执行真实只读任务：`npm run test:backend-live`；对已安装 Hermes/OpenCode 发真实短提示词/隔离源码任务：`npm run test:backend-live-agents`、`npm run test:backend-live-workflow`（真实请求需可用凭据，可能产生模型用量，使用临时工作目录，不进入离线 CI）。协议依据 [OpenAI app-server 文档](https://learn.chatgpt.com/docs/app-server)、[Hermes ACP 集成说明](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/programmatic-integration.md)、[OpenCode ACP 文档](https://opencode.ai/v2/docs/cli/acp/) 和 [DeepSeek Harness SDK 协议](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sdk/protocol/README.md)。
-
-`npm run test:backend-connection` 单独验证真实模型连接，不代替文件任务验收。本机系统代理继承后该检查通过；Windows 原生文件任务仍受 Codex 沙箱初始化错误 `helper_sandbox_lock_failed` 阻塞，完整 P0 验收尚未完成。CodeNode 不自动降低沙箱权限或修改 Codex 全局目录 ACL。
+参考：[qwen-audio-agent 后端接入](https://github.com/QwenAudio/qwen-audio-agent/blob/main/docs/backends/overview.md)、[ACP v1](https://agentclientprotocol.com/protocol/v1/overview)。本机 OpenCode 的真实模型路径已验证，缺少本机 codex-acp/dsh 不会被标记为实测通过。
 
 ## 许可证
 

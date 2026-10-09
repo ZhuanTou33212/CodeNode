@@ -60,12 +60,12 @@ app.whenReady().then(async () => {
     const rawHtml = fs.readFileSync(indexInAsar, 'utf8'); // 走 Electron 的 asar 感知 fs
     console.log('asar 内入口可读: ' + rawHtml.length + ' 字节');
     const packagedConfig = JSON.parse(fs.readFileSync(path.join(ASAR, 'config', 'agent.backends.json'), 'utf8'));
-    ok('asar 包含六种已注册后端', JSON.stringify(packagedConfig.backends) === JSON.stringify(['builtin', 'codex', 'deepseek-harness', 'hermes', 'opencode', 'openclaw']));
+    ok('asar 包含内置和统一 ACP 后端', JSON.stringify(packagedConfig.backends) === JSON.stringify(['builtin', 'codex', 'deepseek-harness', 'hermes', 'opencode', 'openclaw','acp']));
     const waitConfig=JSON.parse(fs.readFileSync(path.join(ASAR,'config','goal.wait.json'),'utf8'));
     const evalWait=require(path.join(ASAR,'electron','goalWaitProviders','agentEval.cjs'));
     ok('asar 包含按 SHA/数据集绑定的 Agent Eval 报告状态源',waitConfig.providers.includes('agent-eval')&&typeof evalWait.check==='function');
     const packagedBackends = require(path.join(ASAR, 'electron', 'backends', 'index.cjs'));
-    ok('asar 可加载 ACP 与 DeepSeek Harness adapters', packagedBackends.createBackend('hermes', { backend: 'hermes', sandbox: 'read-only' }).constructor.name === 'AcpBackend' && packagedBackends.createBackend('deepseek-harness', { backend: 'deepseek-harness', sandbox: 'read-only' }).constructor.name === 'DeepSeekHarnessBackend');
+    ok('asar 外部后端统一 ACP BackendPort',packagedConfig.acpBackends.every(name=>{const port=packagedBackends.createBackend(name,{backend:name,executable:'fixture',sandbox:'read-only'});return port.describe().transport==='acp'&&require(path.join(ASAR,'electron/backends/backendPort.cjs')).METHODS.every(method=>typeof port[method]==='function');}));
     const packagedGoalStore = require(path.join(ASAR, 'electron', 'goalStore.cjs'));
     ok('asar 可加载 Goal admission、重启恢复、证据与等待调度', typeof packagedGoalStore.admit === 'function' && typeof packagedGoalStore.reconcileAdmissions === 'function' && typeof packagedGoalStore.recordEvidence === 'function' && typeof packagedGoalStore.releaseDueTimeWaits === 'function' && typeof packagedGoalStore.confirmExperience === 'function');
     ok('asar 包含默认关闭、单次认领与失败终止的自动推进状态机', typeof packagedGoalStore.claimAutoAdvance === 'function' && typeof packagedGoalStore.releaseAutoAdvanceClaim === 'function' && typeof packagedGoalStore.reconcileAutoAdvanceClaims === 'function');

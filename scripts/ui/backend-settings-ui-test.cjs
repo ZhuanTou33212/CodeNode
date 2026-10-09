@@ -119,7 +119,7 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript(`(() => { const control=document.querySelector(${JSON.stringify('[aria-label="' + label + '"]')});control.value=${JSON.stringify(value)};control.dispatchEvent(new Event('change',{bubbles:true})); })()`);
       await sleep(80);
     };
-    for(const backend of ['hermes','opencode','openclaw']){
+    for(const backend of ['codex','deepseek-harness','hermes','opencode','openclaw','acp']){
       await select('执行后端',backend);
       assert.equal(await js(`!!document.querySelector('[aria-label="ACP 权限请求策略"]')`),true,backend+' exposes its permission request setting');
       assert.equal(await js(`!!document.querySelector('[aria-label="ACP 会话配置"]')`),true,backend+' exposes its persisted ACP configuration');
@@ -127,7 +127,7 @@ app.whenReady().then(async () => {
       for(const theme of ['light','dark']){await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(60);assert.equal(await js(`document.querySelector('[aria-label="ACP 权限请求策略"]').value`),'workspace-write');}
     }
     await select('后端配置范围', 'project'); await select('执行后端', 'codex');
-    await select('Codex 项目文件权限', 'workspace-write');
+    await select('ACP 权限请求策略', 'workspace-write');
     const controls = () => js(`JSON.stringify([...document.querySelectorAll('[data-testid=backend-settings] select,[data-testid=backend-settings] input')].map(n=>[n.getAttribute('aria-label'),n.value,n.disabled]))`);
     const expected = await controls();
     for (const theme of ['light', 'dark']) {

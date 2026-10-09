@@ -2,9 +2,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const config = require('../../config/agent.backends.json');
-const { DeepSeekHarnessBackend } = require('../../electron/backends/deepseekHarness.cjs');
+const {createBackend}=require('../../electron/backends/index.cjs');
 const { redact } = require('../../electron/redaction.cjs');
 
 function snapshot(root) {
@@ -33,18 +32,15 @@ async function main() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
   try {
-    execFileSync(executable, ['--profile', 'sdk', '--dump-default-config'], {
-      cwd: workspace, env, encoding: 'utf8', windowsHide: true, timeout: 30000, stdio: 'ignore',
-    });
-    const backend = new DeepSeekHarnessBackend({
-      backend: 'deepseek-harness', executable, args: ['--profile', 'sdk'], home,
+    const backend = createBackend('deepseek-harness',{
+      backend: 'deepseek-harness', executable, args: ['--profile', 'acp'], home,
       provider: 'deepseek-official', model: 'deepseek-v4-flash',
     }, { env });
-    const capabilities = await backend.capabilities(workspace);
-    if (!capabilities.available) throw new Error(capabilities.error || 'DeepSeek Harness SDK initialize 失败');
+    const capabilities = await backend.health({projectRoot:workspace});
+    if (!capabilities.available) throw new Error(capabilities.error || 'DeepSeek Harness ACP initialize 失败');
     const before = snapshot(workspace);
     const startedAt = Date.now();
-    const result = await backend.start({ projectRoot: workspace,
+    const result = await backend.submit({ projectRoot: workspace,
       prompt: 'Reply with exactly DSH_REAL_TEXT_SMOKE_OK. Do not call tools and do not edit files.',
       history: [], canvasSummary: '', signal: controller.signal, onDelta: () => {}, confirm: async () => false });
     const summary = {

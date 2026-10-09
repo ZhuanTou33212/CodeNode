@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
 const config=require('../../config/agent.backends.json');
-const {AcpBackend}=require('../../electron/backends/acp.cjs');
+const {createBackend}=require('../../electron/backends/index.cjs');
 const {capture,compare}=require('../../electron/backends/workspaceDiff.cjs');
 const {redact}=require('../../electron/redaction.cjs');
 
@@ -19,13 +19,13 @@ async function main(){
   try{
     for(const name of backends){
       const settings={...config.defaults,backend:name,sandbox:'read-only',turnTimeoutMs:45000};
-      const backend=new AcpBackend(settings);
+      const backend=createBackend(name,settings);
       const controller=new AbortController();
       const watchdog=setTimeout(()=>controller.abort(),60000);
       const before=capture(root),startedAt=Date.now();
       let result;
       try{
-        result=await backend.start({projectRoot:root,prompt:'Do not call tools or access files. Reply with exactly CODENODE_'+name.toUpperCase()+'_OK.',history:[],signal:controller.signal,confirm:async()=>false,onDelta:()=>{}});
+        result=await backend.submit({projectRoot:root,prompt:'Do not call tools or access files. Reply with exactly CODENODE_'+name.toUpperCase()+'_OK.',history:[],signal:controller.signal,confirm:async()=>false,onDelta:()=>{}});
       }catch(error){result={state:'FAILED',error:error?.message||String(error)};}
       finally{clearTimeout(watchdog);}
       const changes=compare(before,capture(root));

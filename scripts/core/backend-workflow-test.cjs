@@ -6,16 +6,16 @@ const os = require('os');
 const Module = /** @type {any} */ (require('module'));
 const { EventEmitter } = require('events');
 const { spawn, execFileSync } = require('child_process');
-const { RpcClient } = require('../../electron/backends/rpc.cjs');
-const { CodexBackend } = require('../../electron/backends/codex.cjs');
+const { StdioRpc } = require('../../electron/backends/stdioRpc.cjs');
+const { AcpBackend } = require('../../electron/backends/acp.cjs');
+const {BackendPort}=require('../../electron/backends/backendPort.cjs');
 const backendFactory = require('../../electron/backends/index.cjs');
 const originalFactory = backendFactory.createBackend;
-const fixture = path.join(__dirname, '../fixtures/codex-app-server.cjs');
-class FixtureRpc extends RpcClient {
-  constructor(command, cwd) { super(command, cwd, { spawn: (_f, _a, options) => spawn(process.execPath, [fixture], options) }); }
+const fixture = path.join(__dirname, '../fixtures/acp-workflow.cjs');
+class FixtureRpc extends StdioRpc {
+  constructor(command, args, cwd) { super(process.execPath, [fixture], cwd, { spawn: (_f, _a, options) => spawn(process.execPath, [fixture], options) }); }
 }
-backendFactory.createBackend = (name, settings) => name === 'codex' ? new CodexBackend(settings,
-  { RpcClient: FixtureRpc, executableVersion: async () => '0.135.0' }) : originalFactory(name, settings);
+backendFactory.createBackend = (name, settings) => name === 'codex' ? new BackendPort(name,settings,new AcpBackend(settings,{StdioRpc:FixtureRpc})) : originalFactory(name, settings);
 const ipc = /** @type {any} */ (new EventEmitter()); const handlers = new Map();
 ipc.handle = (name, fn) => handlers.set(name, fn);
 const oldLoad = Module._load;
@@ -48,7 +48,7 @@ const sender = { id: 42, isDestroyed: () => false, send: (channel, payload) => {
     if (payload.kind === 'start' || payload.kind === 'backend_approval' || (payload.kind === 'state' && ['RUNNING','WAITING_USER','CANCELLED'].includes(payload.state))) console.log('BACKEND WORKFLOW EVENT: ' + payload.kind + (payload.phase ? ':' + payload.phase : '') + (payload.state ? ':' + payload.state : '')); }
   if (channel === 'agent:delta' && payload.kind === 'backend_approval' && payload.phase === 'denied' && !approve && !stopScheduled) {
     stopScheduled = true;
-    void waitFor(() => require('../../electron/backends/runExternal.cjs').sessionFromRun(root, stoppedRun)?.session?.turnId,
+    void waitFor(() => require('../../electron/backends/runExternal.cjs').sessionFromRun(root, stoppedRun)?.session?.sessionId,
       'Codex turn handle was not persisted before workflow cancellation')
       .then(() => handlers.get('agent:stop')({ sender }, stoppedRun))
       .catch(error => { stopFailure = error; void handlers.get('agent:stop')({ sender }, stoppedRun); });
@@ -94,7 +94,7 @@ async function main() {
   assert(events.some(e => e.kind === 'backend_approval' && e.phase === 'denied'));
   assert(events.some(e => e.kind === 'code_verification' && e.codeVerification.verified));
   const session = require('../../electron/backends/runExternal.cjs').sessionFromRun(root, 'workflow-resume').session;
-  assert.equal(session.threadId, 'thread-fixture'); assert.equal(session.turnId, 'turn-2');
+  assert.equal(session.sessionId,'acp-workflow');assert.equal(session.protocol,'acp');
   assert.equal(agentIpc.activeRequests.size, 0);
   console.log('BACKEND WORKFLOW: PASS (project workflow IPC → real agent handler → protocol process → deny → stop → persisted resume → measured file diff → independent shell test)');
 }

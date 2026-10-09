@@ -241,7 +241,7 @@ function register(ctx) {
       const saved = backendSettings.read(projectRoot, userDataDir());
       const checkedSettings = input == null ? saved.settings : backendSettings.normalize(input);
       const backend = agentBackends.createBackend(checkedSettings.backend, checkedSettings);
-      return { ok: true, ...saved, checkedSettings, capabilities: await backend.capabilities(projectRoot || userDataDir()) };
+      return { ok: true, ...saved, checkedSettings, capabilities: await backend.health({projectRoot:projectRoot || userDataDir()}).finally(()=>backend.close()) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
   ipcMain.handle('agent:backend-control', async (_event, projectRoot, input, method, params) => {
@@ -249,19 +249,13 @@ function register(ctx) {
     try {
       if (activeRequests.size) throw new Error('请先结束当前 Agent 任务');
       const settings = backendSettings.normalize(input);
-      if (!['hermes', 'opencode', 'openclaw'].includes(settings.backend)) throw new Error('当前后端不是 ACP');
+      if (!require('../../config/agent.backends.json').acpBackends.includes(settings.backend)) throw new Error('当前后端不是 ACP');
       if (!['inspect', 'authenticate', 'logout', 'session/list', 'session/delete', 'session/close'].includes(method)) throw new Error('不支持的管理方法');
-      backend = new (require('../backends/acp.cjs').AcpBackend)(settings);
-      await backend.connect(projectRoot || userDataDir());
-      if (method === 'inspect') {
-        const info = await backend.sessionRequest('session/new', { cwd: projectRoot || userDataDir(), ...(settings.backend === 'openclaw' ? {} : { mcpServers: [] }) });
-        if (info.sessionId && backend.capabilityInfo.sessionCapabilities?.close) await backend.rpc.request('session/close', { sessionId: info.sessionId });
-        return { ok: true, value: { ...info, authMethods: backend.authMethods, agentCapabilities: backend.capabilityInfo } };
-      }
-      if (['session/delete', 'session/close'].includes(method) && typeof params?.sessionId !== 'string') throw new Error('缺少会话编号');
-      return { ok: true, value: await backend.control(method, params || {}) };
+      backend=agentBackends.createBackend(settings.backend,settings);
+      if(['session/delete','session/close'].includes(method)&&typeof params?.sessionId!=='string')throw new Error('缺少会话编号');
+      return {ok:true,value:await backend.control(method,params||{},{projectRoot:projectRoot||userDataDir()})};
     } catch (error) { return { ok: false, error: error.message }; }
-    finally { await backend?.rpc?.close(); }
+    finally { await backend?.close(); }
   });
 
   const withGoalRoot = (projectRoot, action) => {
@@ -695,7 +689,7 @@ function register(ctx) {
             goalContextRevision, goalAcceptanceRevision,
             toolRegistry: externalRegistry, toolContext: externalContext,
             readEditorText: async file => { const result = await externalBridge.request('editor_read', { path: file }); return result?.content; },
-            onDelta: sendDelta, confirm: externalBridge.confirm, goalWriteScope, onStart: () => admitGoalTask(externalId) });
+            onDelta: sendDelta, confirm: externalBridge.confirm, askUser: externalBridge.askUser, goalWriteScope, onStart: () => admitGoalTask(externalId) });
           if (goalAdmission) settleGoalTask(externalResult?.state === 'COMPLETED' ? 'completed' : externalResult?.state === 'CANCELLED' ? 'cancelled' : 'failed', externalResult);
           return { ...externalResult, document: externalModel.doc };
         } finally {
@@ -1537,7 +1531,7 @@ function register(ctx) {
       // （`activeRequests.set(runId, controller)` 已提前到意图识别段之前：分类请求也要能取消）
       let result;
       try {
-        result = await agentBackends.createBackend('builtin').start({
+        result = await agentBackends.createBackend('builtin').submit({
           controller,
           cfg,
           soulEvolution: true,

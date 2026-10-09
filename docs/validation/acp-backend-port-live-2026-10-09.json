@@ -1,0 +1,43 @@
+{
+  "backendPortSha256": "65682edf7ec4b172dab36320137eea8baf4efcb1d23ed56aca1567a51c0c657a",
+  "backendConfigSha256": "5a56ebf9adf815789dc6544868481422e30453952dfc4bb05f8c14b78531d2ee",
+  "scriptSha256": "5b4161217eb88da3b706097d9f550d22b77473309da2e3aa59381f0fda209434",
+  "managerSourceSha256": "d12f5e038aa1ecd614fbe3fa08ffd05e8ec22fdb6d2b465d2c1631b8be238a90",
+  "asarSha256": "b36cabfd71d723e277bb66869addf89fba23f87b17fa24c0a49827e1fc6aa548",
+  "passed": true,
+  "recordedAt": "2026-10-09T10:43:21.956Z",
+  "backend": "opencode",
+  "runtime": "1.17.18",
+  "package": "packaged",
+  "results": [
+    {
+      "phase": "success-failure",
+      "pid": 14252,
+      "successRunId": "auto-ad3af229-38af-4228-8c3a-e83fdf0e85ec",
+      "claimRefreshes": 6,
+      "realReplySentinel": true,
+      "successSettlement": "completed",
+      "taskWithoutEvidence": "blocked",
+      "failedSettlement": "failed",
+      "unauthorizedRuns": 0,
+      "repeatedRefreshNoRetry": true,
+      "unadmittedClaim": true
+    },
+    {
+      "phase": "interrupt",
+      "pid": 44316,
+      "preAdmissionRestartNoRetry": true,
+      "interruptedRunId": "auto-ca6a4060-b6dd-4bc7-98e1-4654fd494fb6",
+      "interruptedAfterRealModelChunk": true
+    },
+    {
+      "phase": "recover",
+      "pid": 38944,
+      "recoveredRunStatus": "interrupted",
+      "executionStatus": "unknown",
+      "taskStatus": "blocked",
+      "automaticRetry": false,
+      "totalRuns": 3
+    }
+  ]
+}

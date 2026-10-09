@@ -219,7 +219,7 @@ export interface SchedulingSettings {
   maxAttemptsPerRun: number;
 }
 export interface AgentBackendSettings {
-  backend: 'builtin' | 'codex' | 'deepseek-harness' | 'hermes' | 'opencode' | 'openclaw';
+  backend: 'builtin' | 'codex' | 'deepseek-harness' | 'hermes' | 'opencode' | 'openclaw' | 'acp';
   executable: string;
   args: string[];
   model: string;

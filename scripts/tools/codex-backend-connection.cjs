@@ -5,7 +5,7 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { CodexBackend } = require('../../electron/backends/codex.cjs');
+const {createBackend}=require('../../electron/backends/index.cjs');
 const config = require('../../config/agent.backends.json');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-connection-'));
 const controller = new AbortController();
@@ -13,7 +13,7 @@ const timer = setTimeout(() => controller.abort(), 90000);
 const startedAt = Date.now();
 const events = [];
 let session;
-new CodexBackend(config.defaults).start({ projectRoot: root, signal: controller.signal, reasoningEffort: 'low',
+createBackend('codex').submit({ projectRoot: root, signal: controller.signal, reasoningEffort: 'low',
   prompt: 'Reply with exactly CODENODE_CONNECTION_OK. Do not use tools or subagents.',
   confirm: async () => false, onSession: value => { session = value; }, onDelta: event => { events.push(event.kind); },
 }).then(result => {
