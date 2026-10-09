@@ -61,6 +61,9 @@ app.whenReady().then(async () => {
     console.log('asar 内入口可读: ' + rawHtml.length + ' 字节');
     const packagedConfig = JSON.parse(fs.readFileSync(path.join(ASAR, 'config', 'agent.backends.json'), 'utf8'));
     ok('asar 包含六种已注册后端', JSON.stringify(packagedConfig.backends) === JSON.stringify(['builtin', 'codex', 'deepseek-harness', 'hermes', 'opencode', 'openclaw']));
+    const waitConfig=JSON.parse(fs.readFileSync(path.join(ASAR,'config','goal.wait.json'),'utf8'));
+    const evalWait=require(path.join(ASAR,'electron','goalWaitProviders','agentEval.cjs'));
+    ok('asar 包含按 SHA/数据集绑定的 Agent Eval 报告状态源',waitConfig.providers.includes('agent-eval')&&typeof evalWait.check==='function');
     const packagedBackends = require(path.join(ASAR, 'electron', 'backends', 'index.cjs'));
     ok('asar 可加载 ACP 与 DeepSeek Harness adapters', packagedBackends.createBackend('hermes', { backend: 'hermes', sandbox: 'read-only' }).constructor.name === 'AcpBackend' && packagedBackends.createBackend('deepseek-harness', { backend: 'deepseek-harness', sandbox: 'read-only' }).constructor.name === 'DeepSeekHarnessBackend');
     const packagedGoalStore = require(path.join(ASAR, 'electron', 'goalStore.cjs'));
@@ -72,7 +75,7 @@ app.whenReady().then(async () => {
     const assetsDir = path.join(ASAR, 'dist', 'assets');
     const assetNames = fs.readdirSync(assetsDir);
     const rendererBundles=assetNames.filter(name=>name.endsWith('.js')).map(name=>fs.readFileSync(path.join(assetsDir,name),'utf8'));
-    ok('asar 渲染包包含 Run 差异复核与显式重排确认',rendererBundles.some(bundle=>bundle.includes('确认复核并重新排队')&&bundle.includes('我已查看 Run 差异并核对外部副作用')));
+    ok('asar 渲染包包含 Run 复核与 Agent Eval 等待控件',rendererBundles.some(bundle=>bundle.includes('确认复核并重新排队')&&bundle.includes('我已查看 Run 差异并核对外部副作用')&&bundle.includes('Agent Eval commit SHA')&&bundle.includes('查询 Agent Eval 报告')));
     const distTmp = path.join(tmp, 'dist');
     fs.mkdirSync(path.join(distTmp, 'assets'), { recursive: true });
     fs.writeFileSync(path.join(distTmp, 'index.html'), rawHtml);

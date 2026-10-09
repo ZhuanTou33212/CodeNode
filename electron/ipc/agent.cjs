@@ -23,6 +23,7 @@ const backendSettings = require('../backends/settings.cjs');
 const externalRuns = require('../backends/runExternal.cjs');
 const goalStore = require('../goalStore.cjs');
 const githubActionsWait = require('../goalWaitProviders/githubActions.cjs');
+const agentEvalWait = require('../goalWaitProviders/agentEval.cjs');
 const goalScope = require('../goalScope.cjs');
 const piiLib = require('../pii.cjs');
 const toolkit = require('../tools/toolkit.cjs');
@@ -300,12 +301,16 @@ function register(ctx) {
       const root=scoped.value,data=goalStore.read(root),goal=data.goals.find(item=>item.id===String(goalId));
       const task=goal?.tasks.find(item=>item.id===String(taskId));
       if(!goal||!task)return{ok:false,error:'Goal 或 Task 不存在'};
-      if(task.status!=='waiting'||task.waitCondition?.provider!=='github-actions')return{ok:false,error:'Task 没有配置 GitHub Actions 等待条件'};
+      const provider=String(task.waitCondition?.provider||'manual');
+      if(task.status!=='waiting'||!['github-actions','agent-eval'].includes(provider))return{ok:false,error:'Task 没有配置可查询的外部等待状态源'};
       const next=Date.parse(task.waitCondition.nextCheckAt||'');
-      if(Number.isFinite(next)&&next>Date.now())return{ok:false,error:'GitHub Actions 尚未到下次检查时间',nextCheckAt:task.waitCondition.nextCheckAt};
-      let fetcher=ctx.githubActionsFetch||globalThis.fetch;
-      try{const electronRuntime=require('electron');if(!ctx.githubActionsFetch&&electronRuntime?.net?.fetch)fetcher=electronRuntime.net.fetch.bind(electronRuntime.net);}catch{}
-      const observation=await githubActionsWait.check(root,task.waitCondition,{fetch:fetcher});
+      if(Number.isFinite(next)&&next>Date.now())return{ok:false,error:(provider==='github-actions'?'GitHub Actions':'Agent Eval')+' 尚未到下次检查时间',nextCheckAt:task.waitCondition.nextCheckAt};
+      let observation;
+      if(provider==='github-actions'){
+        let fetcher=ctx.githubActionsFetch||globalThis.fetch;
+        try{const electronRuntime=require('electron');if(!ctx.githubActionsFetch&&electronRuntime?.net?.fetch)fetcher=electronRuntime.net.fetch.bind(electronRuntime.net);}catch{}
+        observation=await githubActionsWait.check(root,task.waitCondition,{fetch:fetcher});
+      }else observation=agentEvalWait.check(root,task.waitCondition);
       const record=goalStore.observeWait(root,goal.id,task.id,observation);
       return{ok:true,value:{observation:record.observation,matched:record.matched,nextCheckAt:record.nextCheckAt||null,status:record.observation.status}};
     }catch(error){return{ok:false,error:String(error?.message||error)};}

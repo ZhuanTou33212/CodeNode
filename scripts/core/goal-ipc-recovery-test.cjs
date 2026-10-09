@@ -44,7 +44,24 @@ try{
   assert.equal(waitResult.ok,true);assert.equal(waitResult.value.status,'success');assert.equal(waitResult.value.matched,true);
   assert.equal(goal.read(ciRoot).goals.find(g=>g.id===ciGoal.id).tasks.find(t=>t.id===ciTask.id).status,'ready');
   assert.equal(ciFetchCalls,1,'the real Goal IPC handler uses the read-only provider once');
-  console.log('GOAL IPC RECOVERY: PASS (real handler recovers interrupted Run/admission and checks GitHub CI; both paths are idempotent)');
+
+  const evalSha='abcdef0123456789abcdef0123456789abcdef01';
+  const evalGoal=goal.createGoal(root,{title:'Agent Eval wait IPC',criteria:['Agent Eval report is complete']});
+  const evalTask=goal.createTask(root,evalGoal.id,{title:'Wait for Agent Eval'});
+  goal.updateTask(root,evalGoal.id,evalTask.id,{waitCondition:{kind:'external_status',provider:'agent-eval',description:'Real report for the exact commit',expected:'success',commitSha:evalSha,datasetVersion:'agent-eval-v1',mode:'offline'}});
+  const reports=path.join(root,'docs','eval-reports');fs.mkdirSync(reports,{recursive:true});
+  const startedAt=new Date(Date.now()+1000).toISOString();
+  fs.writeFileSync(path.join(reports,`agent-eval-${evalSha.slice(0,7)}-offline-20261009-123456.json`),JSON.stringify({
+    datasetVersion:'agent-eval-v1',mode:'offline',git:{commit:evalSha.slice(0,7),fullCommit:evalSha,dirty:false},startedAt,
+    finishedAt:new Date(Date.parse(startedAt)+1000).toISOString(),model:'scripted-test',exitCode:0,
+    taskSet:[{id:'required-probe',required:true}],tasks:[{id:'required-probe',required:true,status:'pass'}],
+    totals:{total:1,run:1,passed:1,failed:0,skipped:0,requiredFailed:0,successRate:1},harness:{selfChecks:[{pass:true}]},
+  }));
+  const evalResult=await handlers.get('goal:wait-check')({},root,evalGoal.id,evalTask.id);
+  assert.equal(evalResult.ok,true);assert.equal(evalResult.value.matched,true);assert.equal(evalResult.value.observation.source,'agent-eval');
+  assert.equal(evalResult.value.observation.evaluation.requiredPassed,1);
+  assert.equal(goal.read(root).goals.find(item=>item.id===evalGoal.id).tasks.find(item=>item.id===evalTask.id).status,'ready');
+  console.log('GOAL IPC RECOVERY: PASS (interrupted Run recovery, exact-SHA GitHub Actions and Agent Eval report waits)');
 }finally{
   const resolved=path.resolve(root);
   if(path.dirname(resolved)===fs.realpathSync(os.tmpdir())&&path.basename(resolved).startsWith('codenode-goal-ipc-recovery-'))fs.rmSync(resolved,{recursive:true,force:true,maxRetries:10,retryDelay:200});

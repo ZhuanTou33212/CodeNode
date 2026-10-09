@@ -86,7 +86,9 @@ function stamp() {
 function gitInfo() {
   const run = (args) => {
     try {
-      const res = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', timeout: 15000 });
+      // The desktop sandbox may check out the repo as a different SID.  Scope
+      // Git's trust exception to this exact eval root; never edit global config.
+      const res = spawnSync('git', ['-c', 'safe.directory=' + path.resolve(ROOT), ...args], { cwd: ROOT, encoding: 'utf8', timeout: 15000 });
       return res.status === 0 ? String(res.stdout || '').trim() : '';
     } catch {
       return '';

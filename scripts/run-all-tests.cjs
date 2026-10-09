@@ -27,6 +27,7 @@ const CORE = [
   'test:goal-scope',
   'test:goal-ipc-recovery',
   'test:goal-github-actions',
+  'test:agent-eval-wait',
   'test:backend-workflow',
   'test:soul',
   'test:session',

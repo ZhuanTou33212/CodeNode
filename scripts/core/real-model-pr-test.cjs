@@ -184,6 +184,8 @@ try {
   const noKeyReports = fs.existsSync(reportDir) ? fs.readdirSync(reportDir) : [];
   const noKeyReport = noKeyReports.map((f) => path.join(reportDir, f)).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(f, 'utf8')))[0];
   check('[D] 无 Key 的报告里全部任务标 skipped 且 exitCode 非 0（报告与进程一致，不允许报告看起来是绿的）', Boolean(noKeyReport) && noKeyReport.tasks.every((t) => t.status === 'skipped') && noKeyReport.exitCode !== 0, JSON.stringify({ exitCode: noKeyReport && noKeyReport.exitCode, statuses: noKeyReport && noKeyReport.tasks.map((t) => t.status) }));
+  const expectedHead=spawnSync('git',['-c','safe.directory='+ROOT,'rev-parse','HEAD'],{cwd:ROOT,encoding:'utf8',timeout:15000}).stdout?.trim()||'';
+  check('[D] 评测报告绑定真实完整 HEAD（不因 sandbox SID 被误记为 nogit）',Boolean(expectedHead)&&noKeyReport?.git?.fullCommit===expectedHead&&noKeyReport.git.commit===expectedHead.slice(0,7),JSON.stringify({expectedHead,reported:noKeyReport?.git?.fullCommit,short:noKeyReport?.git?.commit}));
   check('[D] 无 Key 的报告里子集任务就是 --subset=pr 那 3 个（子集解析真的生效）', Boolean(noKeyReport) && noKeyReport.tasks.map((t) => t.id).sort().join(',') === prSubset.slice().sort().join(','), noKeyReport && noKeyReport.tasks.map((t) => t.id).join(','));
 
   // 真机管线（真实 HTTP + 真实 SSE + 真实预算判定 + 真实报告落盘）：用**独立进程**的 mock OpenAI 兼容服务器。

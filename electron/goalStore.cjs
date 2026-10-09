@@ -7,6 +7,7 @@ const {execFileSync}=require('child_process');
 const {atomicWriteFile}=require('./atomicFile.cjs');
 const {capture}=require('./backends/workspaceDiff.cjs');
 const {redact}=require('./redaction.cjs');
+const waitConfig=require('../config/goal.wait.json');
 const FILE='goals.json';
 const MAX_BYTES=8*1024*1024;
 const goalStates=new Set(['active','paused','stopped','completed','archived']);
@@ -72,7 +73,29 @@ function updateTask(root,goalId,taskId,patch={}){return mutate(root,d=>{
   safeScope(t.readScope,'读取');safeScope(t.writeScope,'写入');
   if(t.criteriaIds.some(cid=>!g.criteria.some(c=>c.id===cid)))throw new Error('Task 引用了不存在的验收条件');
   if(t.decisionIds.some(did=>!d.decisions.some(item=>item.id===did&&item.goalId===g.id)))throw new Error('Task 引用了不存在的业务决定');
-  if(patch.waitCondition!==undefined){if(patch.waitCondition===null)t.waitCondition=null;else{const w=patch.waitCondition;if(!w||typeof w!=='object'||!['external_status','time','user_input','other'].includes(w.kind))throw new Error('等待条件类型无效');const provider=String(w.provider||'manual');if(!['manual','github-actions'].includes(provider))throw new Error('等待状态源无效');if(provider==='github-actions'&&w.kind!=='external_status')throw new Error('GitHub Actions 只支持 external_status 等待');const commitSha=String(w.commitSha||'').trim();if(commitSha&&!/^[0-9a-f]{40}$/i.test(commitSha))throw new Error('GitHub Actions 等待需要完整 40 位 commit SHA');t.waitCondition={kind:w.kind,description:text(w.description,'等待条件'),expected:String(w.expected||'').slice(0,1000),nextCheckAt:w.nextCheckAt?new Date(w.nextCheckAt).toISOString():null,provider,...(commitSha?{commitSha:commitSha.toLowerCase()}:{}),retryCount:0};t.status='waiting';}}
+  if(patch.waitCondition!==undefined){
+    if(patch.waitCondition===null)t.waitCondition=null;
+    else{
+      const w=patch.waitCondition;
+      if(!w||typeof w!=='object'||!['external_status','time','user_input','other'].includes(w.kind))throw new Error('等待条件类型无效');
+      const provider=String(w.provider||'manual');
+      if(!waitConfig.providers.includes(provider))throw new Error('等待状态源无效');
+      if((provider==='github-actions'||provider==='agent-eval')&&w.kind!=='external_status')throw new Error('该报告 provider 只支持 external_status 等待');
+      const commitSha=String(w.commitSha||'').trim();
+      if(commitSha&&!/^[0-9a-f]{40}$/i.test(commitSha))throw new Error('外部报告等待需要完整 40 位 commit SHA');
+      let mode,datasetVersion;
+      if(provider==='agent-eval'){
+        if(!commitSha)throw new Error('Agent Eval 等待需要固定的完整 commit SHA');
+        mode=String(w.mode||waitConfig.agentEval.defaultMode);
+        if(!waitConfig.agentEval.modes.includes(mode))throw new Error('Agent Eval 模式无效');
+        datasetVersion=text(w.datasetVersion||waitConfig.agentEval.defaultDatasetVersion,'评测数据集版本',100);
+        if(!/^[A-Za-z0-9._-]+$/.test(datasetVersion))throw new Error('评测数据集版本格式无效');
+        if(w.expected&&String(w.expected)!=='success')throw new Error('Agent Eval 等待状态只能是 success');
+      }
+      t.waitCondition={kind:w.kind,description:text(w.description,'等待条件'),expected:provider==='github-actions'||provider==='agent-eval'?'success':String(w.expected||'').slice(0,1000),nextCheckAt:w.nextCheckAt?new Date(w.nextCheckAt).toISOString():null,provider,...(commitSha?{commitSha:commitSha.toLowerCase()}:{}),...(provider==='agent-eval'?{mode,datasetVersion}:{}),createdAt:new Date().toISOString(),retryCount:0};
+      t.status='waiting';
+    }
+  }
   if(patch.status!=null){
     if(!taskStates.has(patch.status))throw new Error('Task 状态无效');
     if(patch.status==='completed'&&!taskProof(root,g,t))throw new Error('Task 缺少当前有效的验收证据，不能标记完成');
@@ -167,5 +190,10 @@ function confirmExperience(root,goalId,itemId){return mutate(root,d=>{const g=fi
 function contextForRole(root,goalId,taskId,role){const d=read(root),g=findGoal(d,goalId),t=taskId?findTask(g,taskId):null;const common={goal:{id:g.id,title:g.title,objective:g.objective,scope:g.scope,exclusions:g.exclusions},task:t?{id:t.id,title:t.title,objective:t.objective,readScope:t.readScope,writeScope:t.writeScope,criteriaIds:t.criteriaIds,dependsOn:t.dependsOn,waitCondition:t.waitCondition||null}:null,decisions:d.decisions.filter(x=>x.goalId===g.id&&x.status==='resolved'&&(!t||!x.taskIds.length||x.taskIds.includes(t.id))).map(x=>({id:x.id,revision:x.revision||1,question:x.question,value:x.value,reason:x.reason,resolvedAt:x.resolvedAt})),versions:{criteriaRevision:g.criteriaRevision,contextRevision:d.revision}};const selected=role==='explore'?['rules']:role==='implement'?['rules','taskMaterial','confirmedExperience']:role==='verify'||role==='review'?['rules','taskMaterial']:role==='canvas'?['rules','taskMaterial']:[];common.context=Object.fromEntries(selected.map(k=>[k,g.context[k].filter(x=>x.confirmed!==false)]));return common;}
 function observeWait(root,goalId,taskId,observation){return mutate(root,d=>{const g=findGoal(d,goalId),t=findTask(g,taskId),idempotency=String(observation.id||'');if(!idempotency)throw new Error('等待观察需要稳定 id');const old=d.waitObservations.find(x=>x.id===idempotency);if(old)return unchanged(old);const now=new Date(),record={id:idempotency,goalId:g.id,taskId:t.id,condition:t.waitCondition||null,observation:redactWait(observation),observedAt:now.toISOString(),matched:observation.matched===true};d.waitObservations.unshift(record);if(t.status==='waiting'&&record.matched){t.status='ready';t.waitCondition=null;t.updatedAt=record.observedAt;}else if(t.status==='waiting'&&t.waitCondition&&t.waitCondition.kind!=='user_input'){const retryCount=(Number(t.waitCondition.retryCount)||0)+1,delayMs=Math.min(60000*Math.pow(2,Math.min(retryCount-1,6)),60*60*1000);t.waitCondition.retryCount=retryCount;t.waitCondition.nextCheckAt=new Date(now.getTime()+delayMs).toISOString();t.waitCondition.lastObservation=record.observation;t.updatedAt=record.observedAt;record.nextCheckAt=t.waitCondition.nextCheckAt;record.retryCount=retryCount;}return record;}).result;}
 function releaseDueTimeWaits(root,now=Date.now()){const timestamp=Number(now),data=read(root);const due=data.goals.some(g=>g.tasks.some(t=>t.status==='waiting'&&t.waitCondition?.kind==='time'&&Date.parse(t.waitCondition.nextCheckAt||'')<=timestamp));if(!due)return[];return mutate(root,d=>{const released=[];for(const g of d.goals)for(const t of g.tasks){if(t.status!=='waiting'||t.waitCondition?.kind!=='time'||Date.parse(t.waitCondition.nextCheckAt||'')>timestamp)continue;const observedAt=new Date(timestamp).toISOString(),idempotency='time:'+t.id+':'+t.waitCondition.nextCheckAt;let observation=d.waitObservations.find(x=>x.id===idempotency);if(!observation){observation={id:idempotency,goalId:g.id,taskId:t.id,condition:t.waitCondition,observation:{source:'time-scheduler',status:'due',matched:true,revision:String(t.updatedAt)},observedAt,matched:true};d.waitObservations.unshift(observation);}t.status='ready';t.waitCondition=null;t.updatedAt=observedAt;g.updatedAt=observedAt;released.push({goalId:g.id,taskId:t.id,waitObservationId:idempotency});}return released.length?released:unchanged(released);}).result;}
-function redactWait(value){let detailsUrl=null;try{const parsed=new URL(String(value.detailsUrl||''));if(parsed.protocol==='https:'&&parsed.hostname==='github.com')detailsUrl=parsed.toString().slice(0,1000);}catch{}return{source:String(value.source||'').slice(0,300),status:String(value.status||'').slice(0,100),matched:value.matched===true,revision:String(value.revision||'').slice(0,200),runId:String(value.runId||'').slice(0,80),detailsUrl,checkedAt:String(value.checkedAt||'').slice(0,40),workflowCount:Number.isFinite(value.workflowCount)?value.workflowCount:null};}
+function redactWait(value){
+  let detailsUrl=null;try{const parsed=new URL(String(value.detailsUrl||''));if(parsed.protocol==='https:'&&parsed.hostname==='github.com')detailsUrl=parsed.toString().slice(0,1000);}catch{}
+  const raw=value.evaluation&&typeof value.evaluation==='object'?value.evaluation:null;
+  const evaluation=raw?{mode:String(raw.mode||'').slice(0,20),datasetVersion:String(raw.datasetVersion||'').slice(0,100),model:redact(String(raw.model||'')).slice(0,200),total:Number.isFinite(raw.total)?raw.total:null,run:Number.isFinite(raw.run)?raw.run:null,passed:Number.isFinite(raw.passed)?raw.passed:null,failed:Number.isFinite(raw.failed)?raw.failed:null,skipped:Number.isFinite(raw.skipped)?raw.skipped:null,requiredTotal:Number.isFinite(raw.requiredTotal)?raw.requiredTotal:null,requiredPassed:Number.isFinite(raw.requiredPassed)?raw.requiredPassed:null,requiredMissing:Array.isArray(raw.requiredMissing)?raw.requiredMissing.map(item=>String(item).slice(0,100)).slice(0,50):[],exitCode:Number.isInteger(raw.exitCode)?raw.exitCode:null,dirty:raw.dirty===true,reportFile:path.basename(String(raw.reportFile||'')).slice(0,240)}:null;
+  return{source:String(value.source||'').slice(0,300),status:String(value.status||'').slice(0,100),matched:value.matched===true,revision:String(value.revision||'').slice(0,200),runId:String(value.runId||'').slice(0,240),detailsUrl,checkedAt:String(value.checkedAt||'').slice(0,40),workflowCount:Number.isFinite(value.workflowCount)?value.workflowCount:null,...(evaluation?{evaluation}:{})};
+}
 module.exports={read,createGoal,updateGoal,createTask,updateTask,runReview,confirmRunReview,addDecision,resolveDecision,recordEvidence,recordRunEvidence,audit,canRun,admit,settle,reconcileAdmissions,addContext,confirmExperience,contextForRole,observeWait,releaseDueTimeWaits,evidenceStatus,environment,fingerprint};

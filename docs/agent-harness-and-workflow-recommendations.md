@@ -344,14 +344,14 @@ Goal/Task 表单保存目标、排除项、必需验收条件、预算、依赖�
 
 协议夹具测试覆盖 ACP 初始化/会话/权限拒绝/授权与 DeepSeek SDK 的 initialize、prompt、assistant、tool/call、tool/result、终态通知。Goal 单测覆盖预算与准入、活动 Run、依赖循环、等待条件、业务决定、按角色筛选上下文、验收证据、文件快照失效、条件修订、声明写入范围，以及未知 Run 的复核绑定、直接状态/等待/决定绕过拒绝和复核后指纹失效。Electron UI 验证了 Goal 控件和后端控件在日夜主题结构一致，且主题切换保留会话、草稿、模型和侧栏状态。
 
-本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（156/156）；另行通过 `npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练、`npm run test:backend-ui` 双主题 UI 测试及 `npm run check:js`。最终固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI/asar 自检为 13/13，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `66163A21CD496F29AEB9BDE51570AA497A8BF485F9F0DAA4F746B3A31BEC2F0F`。Windows `rcedit` 在本机不可用，因此交付沿用原有 CodeNode 0.13.0 品牌 `CodeNode.exe`（SHA-256 `7B6E5D42317C316E8469DF32BD306711B62E8547F0795C3CB3564C2A09F8F057`），新功能位于 app.asar；两个 executable 均未签名。
+本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（157/157）；另行通过 `npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练、`npm run test:backend-ui` 双主题 UI 测试及 Agent Eval provider/IPC/报告绑定专项。最终固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI/asar 自检为 14/14，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `548D24AD6E3FDA1857390DE0E77D3FE6825F9890D3FCE2CBA22530F174EB031D`。Windows `rcedit` 在本机不可用，因此交付沿用原有 CodeNode 0.13.0 品牌 `CodeNode.exe`（SHA-256 `7B6E5D42317C316E8469DF32BD306711B62E8547F0795C3CB3564C2A09F8F057`），新功能位于 app.asar；两个 executable 均未签名。
 
 | 路线项 | 当前覆盖 | 尚需的证据 |
 | --- | --- | --- |
 | P0 后端与设置 | builtin、Codex、DeepSeek Harness、Hermes、OpenCode、OpenClaw 可选；ACP/SDK fixture、Hermes/OpenCode/DeepSeek 短文本请求、OpenClaw 临时 Gateway session、OpenCode 临时源码修改及权限拒绝/取消/恢复、打包自检通过 | Codex 原生 sandbox 故障；Hermes 文件工具初始化错误；OpenClaw 全局安装及真实模型/文件任务/权限闭环；DeepSeek 源码任务与逐会话取消/权限闭环；实际 OS 沙箱边界 |
 | P1 Goal/Task/Evidence | 持久化、准入、预算、决定版本、环境/文件/验收版本绑定证据、重启未知状态已实现；`npm run test:goal-desktop-restart` 通过两个 Electron 主进程完成重启后的 Run 复核与 UI 重排；直接 IPC、`ready` 状态、定时等待和未解决业务决定都不能绕过未知 Run 复核；项目指纹变化会使复核失效 | 该 E2E 操作项已完成。RunStore 保存文件路径和前后 SHA-256，不保存旧源码正文；界面如实标注这一点并提供打开当前文件入口，外部副作用仍需用户核对 |
 | P1 角色上下文 | 主 Agent 与五类子 Agent 都按角色筛选规范/材料/确认经验，实际子代理提示注入已测试，Run 记录上下文版本 | 真实模型角色任务与人工质量比较 |
-| P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、外部状态观察/指数退避已实现；GitHub Actions 可按精确 commit SHA 查询，只有该 SHA 的最新 workflow runs 全部成功才释放等待 Task；IPC、UI 和真实 GitHub API 均有验证；查询由用户手动触发，不自动启动模型 | 实验数据源尚未接入；等待条件满足后经用户授权的周期自动推进尚未实现 |
+| P2 决定队列与等待 | 跨 Goal 队列、幂等决策、时间等待释放、指数退避已实现；GitHub Actions 按精确 SHA 查询，Agent Eval 按精确 SHA/数据集/模式读取本地完成报告；只有匹配状态满足条件才释放 Task；两个 provider 均有 IPC/UI 与 fixture 验证；provider 只观察，不创建模型 Run | 尚未接入外部 LoopX/远程实验跟踪；等待满足后经用户授权的周期自动推进尚未实现 |
 | P2 经验回写 | 基于新鲜、独立通过的测试证据自动生成局部测试方法候选；记录来源 Run、Task、证据 ID、文件指纹和验收修订；UI 标明自动建议；重复结算幂等；未确认前不注入实现上下文，用户显式确认后才可用 | 当前自动建议限于“修改这些文件后运行该测试命令”的可验证事实；从模型总结、架构规律或重复故障中提炼更一般经验尚未实现 |
 | 阶段 E 后端比较 | 有离线 fixture、Hermes/OpenCode 文本 smoke 与一次 OpenCode 文件任务（Hermes 文件任务在本机 runtime 报 Internal error，未改文件） | 同任务多轮、相同验收标准下的成功率/用量/成本/恢复率比较未完成 |
 
@@ -366,6 +366,8 @@ OpenClaw 兼容实测使用 npm 隔离安装的 Node 兼容版本 `2026.2.2-3` �
 Goal 等待机制新增只读 GitHub Actions provider：根据项目 `origin` 仅接受 `github.com`，以显式完整 commit SHA 或当前 `HEAD` 请求 workflow-runs REST API，忽略其他 SHA，并按每个 workflow 的最新 attempt 汇总；只有所有匹配 workflow 均完成且结论为 success 才把对应 Task 释放为 ready。未完成/失败状态会写入带 SHA、run ID 和 GitHub 详情 URL 的观察记录并使用现有指数退避；下次检查时间未到时 IPC 会拒绝重复查询。私有仓库可用进程环境中的 `GH_TOKEN` 或 `GITHUB_TOKEN`，token 不落盘。该 provider 不创建模型 Run。[GitHub Actions workflow-runs REST API](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository) 是状态来源。
 
 新增 `npm run test:goal-github-actions` 用固定 API 响应验证 repository/commit 过滤、workflow attempt 汇总、鉴权头、失败和退避；`goal:wait-check` IPC 另以注入的 fetch fixture 走完任务释放。Goal 面板允许用户选择 GitHub Actions、可选填写完整 commit SHA、查看最近状态；首查默认 HEAD。实时检查使用 Electron `net.fetch`，并验证全局 Git 配置不会被修改。
+
+新增 Agent Eval 报告等待源：只读项目 `docs/eval-reports/agent-eval-*.json`，按完整 commit SHA、数据集版本和 `model`/`offline` 模式精确匹配，并忽略等待条件创建前的旧报告。成功要求报告绑定同一 clean commit、退出码为 0、所有必需任务通过且评测自身检查全通过；部分子集、坏报告、脏工作树或失败报告都不会释放 Task。Goal 面板保存这些匹配条件并展示必需任务通过数与报告名，用户手动查询；provider 不运行评测、不发起模型请求。`npm run test:agent-eval-wait` 和 `test:goal-ipc-recovery` 覆盖报告匹配、过期/失败状态及 IPC 释放。`agent-eval.cjs` 的 Git 读取使用仅限当前仓库的命令级 `safe.directory`，不改全局 Git 配置；`test:real-model-pr` 验证报告 fullCommit 与 HEAD 完全一致。
 
 Electron `net.fetch` 对远端 commit `fda3239` 的只读探测返回两个 workflow failure，证明 provider 能读取真实外部状态；失败不会释放 Task。远端日志随后定位到 macOS `workflow-state` 测试把真实路径别名误判为越界、Linux smoke 仍查找旧 `.side-badge` 选择器；这两项已修正。commit `060f3df` 的 CI 中 Ubuntu 与 Windows 通过；macOS 两项后端测试超时。commit `f24289b` 修正取消竞态后，macOS 已能完成中断，但恢复文件任务仍在确认前被边界拒绝，独立代码校验因此为空。日志显示没有进入 `tools:confirm`；结合 `resolveInRoot` 先比较绝对路径前缀再做 realpath，最终定位到 `os.tmpdir()` 与子进程 `cwd` 在 macOS 上使用了不同临时目录别名。两项测试现将临时项目根规范为 `fs.realpathSync` 后的真实路径；工作流用例也会在加载确认桥前移除继承的自动应答测试模式。本机后端专项与 `npm run check:js` 通过；commit `43bee0b` 的 CodeNode CI（run `37852323277`）中 Ubuntu、Windows、macOS 验证及三平台打包全部通过，同次推送的 production-gate（run `37852323397`）也通过。
 

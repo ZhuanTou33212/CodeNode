@@ -1,0 +1,14 @@
+{
+  "providers": ["manual", "github-actions", "agent-eval"],
+  "agentEval": {
+    "reportDirectory": "docs/eval-reports",
+    "defaultDatasetVersion": "agent-eval-v1",
+    "defaultMode": "model",
+    "modes": ["model", "offline"],
+    "maxReportBytes": 8388608,
+    "maxCandidateReports": 500,
+    "successExitCode": 0,
+    "requireCleanWorktree": true,
+    "requireAllRequiredTasks": true
+  }
+}
