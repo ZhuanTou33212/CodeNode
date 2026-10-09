@@ -153,6 +153,12 @@ interface CodenodeApi {
   trellisApply: (root: string, id: string, action: string) => Promise<{ok: boolean; value?: import('./lib/trellisTypes').TrellisProposal; error?: string}>;
   trellisProposalRead: (root: string, id: string) => Promise<{ok: boolean; value?: import('./lib/trellisTypes').TrellisProposal; error?: string}>;
   trellisCanvas: (root: string, taskPath: string) => Promise<{ok: boolean; value?: import('./types').Graph; error?: string}>;
+  trellisCliInfo: () => Promise<import('./lib/trellisCliTypes').TrellisCliInfo>;
+  trellisCliBrowse: (kind:'repository'|'executable') => Promise<{canceled:boolean;path:string|null}>;
+  trellisCliSave: (input:import('./lib/trellisCliTypes').TrellisCliSettings) => Promise<{ok:boolean;value?:import('./lib/trellisCliTypes').TrellisCliSettings;error?:string}>;
+  trellisConnectPrepare: (root:string,input:{developer:string}) => Promise<{ok:boolean;value?:import('./lib/trellisCliTypes').TrellisConnectPlan;error?:string}>;
+  trellisConnectRead: (root:string,id:string,source:string) => Promise<{ok:boolean;value?:{source:string;content:string;truncated:boolean};error?:string}>;
+  trellisConnectApply: (root:string,id:string) => Promise<{ok:boolean;value?:import('./lib/trellisCliTypes').TrellisConnectPlan;error?:string}>;
   createProject: () => Promise<{ ok: boolean; filePath?: string; root?: string; error?: string }>;
   listProject: (root: string) => Promise<{ ok: boolean; files?: ProjectFileDto[]; error?: string }>;
   readProjectFile: (

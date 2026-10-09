@@ -1,0 +1,13 @@
+{
+  "defaults": {"executable":"trellis","developer":""},
+  "localEntries": ["packages/cli/bin/trellis.js","bin/trellis.js"],
+  "requiredFlags": ["--codex","--yes","--user","--skip-existing"],
+  "initArgs": ["init","--codex","--yes","--skip-existing"],
+  "probeTimeoutMs": 10000,
+  "initTimeoutMs": 120000,
+  "killGraceMs": 1500,
+  "maxOutputBytes": 262144,
+  "maxFiles": 1000,
+  "maxTotalBytes": 16777216,
+  "previewBytes": 65536
+}

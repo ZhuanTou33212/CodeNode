@@ -27,6 +27,8 @@ const EXPECTED = {
     'trellis:project', 'trellis:context', 'trellis:select',
     'trellis:write-info', 'trellis:propose', 'trellis:apply', 'trellis:canvas',
     'trellis:proposal-read',
+    'trellis:cli-info','trellis:cli-save','trellis:connect-prepare','trellis:connect-read','trellis:connect-apply',
+    'trellis:cli-browse',
     'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:editing-save', 'agent:execution-save', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:scheduling-save',
     'goal:list', 'goal:create', 'goal:update', 'goal:auto-advance-claim', 'goal:auto-advance-release', 'goal:task-create', 'goal:task-update', 'goal:run-review', 'goal:run-review-confirm',

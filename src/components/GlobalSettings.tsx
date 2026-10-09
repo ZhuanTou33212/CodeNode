@@ -9,6 +9,7 @@ import BackendSettingsPanel from './BackendSettingsPanel';
 import SchedulingSettingsPanel from './SchedulingSettingsPanel';
 import outputUi from '../../config/ui.output.json';
 import CostSettingsPanel from './CostSettingsPanel';
+import TrellisCliSettings from './TrellisCliSettings';
 
 
 export default function GlobalSettings() {
@@ -41,6 +42,7 @@ export default function GlobalSettings() {
       {([['navigationOpen','默认显示左侧栏'],['conversationOpen','默认显示对话栏'],['autoCollapseSidebars','窄窗口自动收起侧栏']] as const).map(([key,label]) => <label className="settings-row" key={key}><span>{label}</span><input type="checkbox" checked={preferences[key]} onChange={e => updatePreferences({[key]:e.target.checked})}/></label>)}
       <AgentExecutionSettings />
       <BackendSettingsPanel />
+      <TrellisCliSettings />
       <SchedulingSettingsPanel />
       <h3>回复显示</h3>
       <label className="settings-row"><span>逐字显示 Agent 回复</span><input aria-label="逐字显示 Agent 回复" type="checkbox" checked={preferences.typewriterEnabled} onChange={event => updatePreferences({typewriterEnabled:event.target.checked})} /></label>

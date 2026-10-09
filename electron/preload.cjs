@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('codenode', {
   trellisApply: (root, id, action) => ipcRenderer.invoke('trellis:apply', root, id, action),
   trellisProposalRead: (root, id) => ipcRenderer.invoke('trellis:proposal-read', root, id),
   trellisCanvas: (root, taskPath) => ipcRenderer.invoke('trellis:canvas', root, taskPath),
+  trellisCliInfo: () => ipcRenderer.invoke('trellis:cli-info'),
+  trellisCliBrowse: kind => ipcRenderer.invoke('trellis:cli-browse', kind),
+  trellisCliSave: input => ipcRenderer.invoke('trellis:cli-save', input),
+  trellisConnectPrepare: (root,input) => ipcRenderer.invoke('trellis:connect-prepare', root,input),
+  trellisConnectRead: (root,id,source) => ipcRenderer.invoke('trellis:connect-read', root,id,source),
+  trellisConnectApply: (root,id) => ipcRenderer.invoke('trellis:connect-apply', root,id),
   // S8：统一事件流的按 run 回放（时间线 + 摘要）
   replayEvents: (root, options) => ipcRenderer.invoke('agent:events', root, options),
   // §4.2：Run 级文件回滚 —— 先取只读计划（逐项 restore/delete/skip + 原因），确认后再执行

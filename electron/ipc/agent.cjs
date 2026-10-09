@@ -268,7 +268,10 @@ function register(ctx) {
     try { if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' }; return { ok: true, value: action(path.resolve(projectRoot)) }; }
     catch (error) { return { ok: false, error: error.message || String(error) }; }
   };
-  ipcMain.handle('trellis:project', async (_event, root, conversationId) => withGoalRoot(root, project => ({ ...trellis.detectProject(project), selectedTask: trellis.selectedTask(project, conversationId) })));
+  ipcMain.handle('trellis:project', async (_event, root, conversationId) => withGoalRoot(root, project => {
+    const recovery=require('../trellis/cli.cjs').reconcile(project),detected=trellis.detectProject(project);
+    return {...detected,diagnostics:[...detected.diagnostics,...recovery],selectedTask:trellis.selectedTask(project,conversationId)};
+  }));
   ipcMain.handle('trellis:context', async (_event, root, taskPath) => withGoalRoot(root, project => {
     const context = trellis.resolveContext(project, taskPath);
     const totalTokens = agent.loadConfig(project).dynamicContext?.totalTokens;
@@ -290,6 +293,27 @@ function register(ctx) {
   ipcMain.handle('trellis:apply', async (_event, root, id, action) => withGoalRoot(root, project => require('../trellis/writes.cjs').applyProposal(project, id, action)));
   ipcMain.handle('trellis:proposal-read', async (_event, root, id) => withGoalRoot(root, project => require('../trellis/writes.cjs').readProposal(project, id)));
   ipcMain.handle('trellis:canvas', async (_event, root, taskPath) => withGoalRoot(root, project => require('../trellis/canvas.cjs').createGraph(project, taskPath)));
+  ipcMain.handle('trellis:cli-info', async () => require('../trellis/cli.cjs').probe(userDataDir()));
+  ipcMain.handle('trellis:cli-browse', async (event,kind) => {
+    const {dialog,BrowserWindow}=require('electron');const owner=BrowserWindow.fromWebContents(event.sender);
+    if(!owner)return {canceled:true,path:null};
+    /** @type {import('electron').OpenDialogOptions} */
+    const options=kind==='repository'?{title:'选择本地 Trellis 仓库',properties:['openDirectory']}:{title:'选择 Trellis 可执行入口',properties:['openFile'],filters:[{name:'CLI 入口',extensions:['exe','cmd','js','mjs','cjs']}]};
+    const result=await dialog.showOpenDialog(owner,options);return {canceled:result.canceled,path:result.filePaths[0]||null};
+  });
+  ipcMain.handle('trellis:cli-save', async (_event,input) => {
+    try{return {ok:true,value:require('../trellis/cli.cjs').saveSettings(userDataDir(),input)}}catch(error){return {ok:false,error:String(error.message||error)}}
+  });
+  ipcMain.handle('trellis:connect-prepare', async (_event,root,input) => {
+    if(activeRequests.size)return {ok:false,error:'请先结束 Agent 运行，再初始化项目资料'};
+    const checked=withGoalRoot(root,project=>project);if(!checked.ok)return checked;
+    try{return {ok:true,value:await require('../trellis/cli.cjs').prepare(checked.value,userDataDir(),input)}}catch(error){return {ok:false,error:String(error.message||error)}}
+  });
+  ipcMain.handle('trellis:connect-read', async (_event,root,id,source) => withGoalRoot(root,project=>require('../trellis/cli.cjs').readPreview(project,id,source)));
+  ipcMain.handle('trellis:connect-apply', async (_event,root,id) => {
+    if(activeRequests.size)return {ok:false,error:'请先结束 Agent 运行，再接入项目资料'};
+    return withGoalRoot(root,project=>require('../trellis/cli.cjs').apply(project,id));
+  });
   const fetchWaitObservation = async (root, task) => {
     const provider=String(task.waitCondition?.provider||'manual');
     const scope=observation=>({...observation,id:String(task.id)+':'+String(observation.id||Date.now())});

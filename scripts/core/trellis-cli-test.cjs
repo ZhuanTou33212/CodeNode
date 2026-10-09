@@ -1,0 +1,32 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const cli=require('../../electron/trellis/cli.cjs'),{internal}=require('../../electron/trellis/writes.cjs');
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'codenode-trellis-cli-'));
+const make=name=>{const dir=path.join(root,name);fs.mkdirSync(dir);return dir};
+async function main(){try{
+  const user=make('user'),project=make('project');
+  const local=path.join(root,'Trellis local/packages/cli/bin');fs.mkdirSync(local,{recursive:true});
+  const entry=path.join(local,'trellis.js');fs.copyFileSync(path.join(__dirname,'../fixtures/trellis-local-cli.cjs'),entry);
+  cli.saveSettings(user,{executable:path.join(root,'Trellis local'),developer:'tester'});
+  const info=await cli.probe(user);assert.equal(info.supported,true,info.error);assert.match(info.version,/0.6.17/);
+  assert.equal(cli.readSettings(user).developer,'tester');
+  const shim=path.join(root,'trellis.cmd');fs.writeFileSync(shim,'@echo off\n"%dp0%\\Trellis local\\packages\\cli\\bin\\trellis.js" %*\n');assert.equal(cli.commandOf(shim).prefix[0],entry);
+  fs.writeFileSync(path.join(project,'AGENTS.md'),'KEEP USER RULES');fs.writeFileSync(path.join(project,'.gitignore'),'KEEP USER IGNORE');
+  const plan=await cli.prepare(project,user,{developer:'tester'});
+  assert.equal(fs.existsSync(path.join(project,'.trellis')),false,'preview never initializes target');
+  assert.ok(plan.files.some(file=>file.source==='spec/index.md'));assert.ok(!plan.files.some(file=>file.source.includes('.codex')));
+  assert.match(cli.readPreview(project,plan.id,'spec/index.md').content,/Local CLI/);
+  assert.throws(()=>cli.readPreview(project,plan.id,'../../../AGENTS.md'),/预览/);
+  const applied=cli.apply(project,plan.id);assert.equal(applied.status,'applied');assert.equal(cli.apply(project,plan.id).status,'applied');
+  assert.equal(fs.readFileSync(path.join(project,'AGENTS.md'),'utf8'),'KEEP USER RULES');assert.equal(fs.readFileSync(path.join(project,'.gitignore'),'utf8'),'KEEP USER IGNORE');assert.equal(fs.existsSync(path.join(project,'.codex')),false);
+  assert.match(fs.readFileSync(path.join(project,'.trellis/.gitignore'),'utf8'),/\.developer/);
+  await assert.rejects(()=>cli.prepare(project,user,{developer:'tester'}),/已有/);
+  const conflictProject=make('conflict'),conflict=await cli.prepare(conflictProject,user,{developer:'tester'});fs.mkdirSync(path.join(conflictProject,'.trellis'));assert.throws(()=>cli.apply(conflictProject,conflict.id),/停止导入/);
+  const changedProject=make('changed'),changed=await cli.prepare(changedProject,user,{developer:'tester'});fs.writeFileSync(path.join(internal(changedProject,'connect/'+changed.id),'shared/spec/index.md'),'EXTERNAL EDIT');assert.throws(()=>cli.apply(changedProject,changed.id),/暂存文件/);
+  const recoveryProject=make('recovery'),recovery=await cli.prepare(recoveryProject,user,{developer:'tester'}),directory=internal(recoveryProject,'connect/'+recovery.id);recovery.status='applying';fs.writeFileSync(path.join(directory,'plan.json'),JSON.stringify(recovery));fs.renameSync(path.join(directory,'shared'),path.join(recoveryProject,'.trellis'));
+  delete require.cache[require.resolve('../../electron/trellis/cli.cjs')];const restarted=require('../../electron/trellis/cli.cjs');assert.deepEqual(restarted.reconcile(recoveryProject),[]);assert.equal(restarted.readPlan(recoveryProject,recovery.id).status,'applied','project reopening reconciles interrupted commit without re-running CLI');
+  cli.saveSettings(user,{executable:'missing-trellis-cli',developer:'tester'});assert.equal((await cli.probe(user)).found,false);
+  assert.throws(()=>cli.saveSettings(user,{executable:'trellis; echo bad',developer:'tester'}),/绝对/);
+  console.log('TRELLIS CLI: PASS (local built repo, CMD path, safe subprocess, persisted preferences, isolated preview, shared-only import, conflicts, recovery, missing CLI)');
+}finally{fs.rmSync(root,{recursive:true,force:true})}}
+main().catch(error=>{console.error(error);process.exitCode=1});

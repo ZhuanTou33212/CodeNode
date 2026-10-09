@@ -1,0 +1,11 @@
+import {useEffect,useState} from 'react';
+import {useSessionStore} from '../store/sessionStore';
+import defaults from '../../config/trellis.cli.json';
+export default function TrellisCliSettings(){
+  const [settings,setSettings]=useState({...defaults.defaults}),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
+  const streaming=useSessionStore(s=>s.streaming);
+  useEffect(()=>{let alive=true;setBusy(true);void window.codenode?.trellisCliInfo().then(info=>{if(alive){setSettings(info.settings);setMessage(info.found?'检测到 '+info.version:info.error)}}).catch(error=>{if(alive)setMessage(String(error))}).finally(()=>{if(alive)setBusy(false)});return()=>{alive=false}},[]);
+  const browse=async(kind:'repository'|'executable')=>{try{const result=await window.codenode!.trellisCliBrowse(kind);if(result.path)setSettings({...settings,executable:result.path})}catch(error){setMessage(String(error))}};
+  const save=async()=>{setBusy(true);setMessage('');try{const result=await window.codenode!.trellisCliSave(settings);if(!result.ok)throw Error(result.error);const info=await window.codenode!.trellisCliInfo();setMessage(info.supported?'已保存并检测到 '+info.version:info.error);window.dispatchEvent(new Event('codenode-trellis-cli-settings'));}catch(error){setMessage(String(error))}finally{setBusy(false)}};
+  return <section className="trellis-cli-settings"><h3>本机 Trellis</h3><label className="settings-row"><span>CLI 命令或本地路径</span><input aria-label="Trellis CLI 路径" value={settings.executable} disabled={busy||streaming} onChange={event=>setSettings({...settings,executable:event.target.value})}/></label><div className="settings-row"><button disabled={busy||streaming} onClick={()=>void browse('executable')}>选择可执行文件</button><button disabled={busy||streaming} onClick={()=>void browse('repository')}>选择本地仓库</button></div><label className="settings-row"><span>默认开发者名称</span><input aria-label="Trellis 默认开发者" value={settings.developer} disabled={busy||streaming} onChange={event=>setSettings({...settings,developer:event.target.value})}/></label><p className="settings-scope">自动查找 PATH 与 npm 全局安装。也可填写可执行文件、npm 的 CMD／JS 入口，或已构建的 Trellis 仓库目录。设置保存在本机，所有项目及昼夜主题共用。</p><button disabled={busy||streaming} onClick={()=>void save()}>保存并检测 Trellis</button>{message&&<p role="status" className="settings-scope">{message}</p>}</section>;
+}

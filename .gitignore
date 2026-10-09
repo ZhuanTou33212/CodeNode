@@ -29,6 +29,7 @@ docs/eval-reports/
 .codenode/trellis.json
 .codenode/trellis-transactions/
 .codenode/trellis-canvas/
+.codenode/trellis-connect/
 .codenode/runs/
 .codenode/metrics/
 
