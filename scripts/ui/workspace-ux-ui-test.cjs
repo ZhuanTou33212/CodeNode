@@ -28,12 +28,19 @@ app.whenReady().then(async()=>{
   await js(`window.__codenodeVectorNode(${JSON.stringify(id)}).getState().selectIds([${JSON.stringify(shape)}])`);
   await key('Delete');assert.equal(await js(`window.__codenodeVectorNode(${JSON.stringify(id)}).getState().objects.some(o=>o.id===${JSON.stringify(shape)})`),false,'inner Delete removes a shape');
   assert.equal(await js('window.__codenodeStore.getState().nodes.length'),1,'inner Delete retains its node');
-  await key('Delete');assert.equal(await js('window.__codenodeStore.getState().nodes.length'),1,'empty inner selection cannot delete its owner');
+  await key('Delete');assert.equal(await js('window.__codenodeStore.getState().nodes.length'),1,'second Delete after shape removal cannot delete owner');
+  await click(node+' .wf-vector-stage');assert.equal(await js('window.__codenodeStore.getState().selectedIds[0]'),id);
+  await key('Delete');assert.equal(await js('window.__codenodeStore.getState().nodes.length'),0,'Del on empty inner canvas deletes the selected outer node');
+  await js('document.querySelector(".react-flow__pane").focus()');await key('Z',['control']);await wait(()=>js('window.__codenodeStore.getState().nodes.length===1'),'undo empty-canvas deletion');
   for(const deletionKey of ['Delete','Backspace','X']){
     await click(node+' .wf-vector-label');assert.equal(await js('!!document.activeElement.closest(".vs-scope")'),false,'title takes node-level focus');
     await key(deletionKey);assert.equal(await js('window.__codenodeStore.getState().nodes.length'),0,deletionKey+' deletes node from title');
     await key('Z',['control']);await wait(()=>js('window.__codenodeStore.getState().nodes.length===1'),'undo node deletion');
   }
+  await js("document.querySelector('.pp-input').focus()");
+  const dragPoint=await js(`(()=>{const r=document.querySelector(${JSON.stringify(node+' .wf-vector-label')}).getBoundingClientRect();return{x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}})()`);
+  win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...dragPoint});win.webContents.sendInputEvent({type:'mouseMove',x:dragPoint.x+50,y:dragPoint.y+25});win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,x:dragPoint.x+50,y:dragPoint.y+25});await sleep(220);
+  await key('Delete');assert.equal(await js('window.__codenodeStore.getState().nodes.length'),0,'dragging from input focus then Del deletes outer node');await key('Z',['control']);await wait(()=>js('window.__codenodeStore.getState().nodes.length===1'),'undo drag deletion');
   await js(`window.__codenodeStore.getState().addNode({id:'other-node',type:'task',position:{x:30,y:30},data:{label:'任务节点',prompt:''}});window.__codenodeStore.getState().setSelectedIds([${JSON.stringify(id)},'other-node']);`);
   await wait(()=>js("document.querySelector('.status-bar').textContent.includes('选中 2')"),'multi-selection count');
   await js('const p=document.querySelector(".react-flow__pane");p.tabIndex=0;p.focus()');await key('Delete');assert.equal(await js('window.__codenodeStore.getState().nodes.length'),0,'multi-selection Delete');await key('Z',['control']);

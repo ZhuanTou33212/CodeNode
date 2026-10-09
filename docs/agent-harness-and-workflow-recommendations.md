@@ -473,3 +473,12 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 新增 test:agent-handoff 纳入离线核心套件，用真实 ACP stdio 夹具验证同一界面对话的历史／画布交接、代次绑定、相同 Agent 精确恢复、跨 Agent/切回来新内部会话和绑定持久化；该夹具不是跨供应商真实模型质量比较。包内 Agent UI 检查确认切换后 activeId、memoryConversationId、消息和草稿保持原值，切回 CodeNode 仍保留原对话。页面检查验证总览和对话独立、配置持久化、目标表单/对话草稿保留和双主题同功能。核心完整回归 160/160、构建和脚本检查通过；源码/包内目标控件、Agent 切换、目标重启复核、调用链及页面交互通过。
 
 [日间总览](validation/overview-handoff-preview/light.png)、[夜间总览](validation/overview-handoff-preview/dark.png)、[日间对话](validation/overview-handoff-preview/conversation-light.png)、[夜间对话](validation/overview-handoff-preview/conversation-dark.png) 来自最终暂存包的隔离演示工程。[包内验收摘要](validation/overview-handoff-preview/acceptance.json) 绑定交付 app.asar。固定路径 E:\CodeNode\release\win-unpacked 已覆盖，覆盖前确认 CodeNode 未运行；暂存和固定路径 UI 自检 19/19、实际 asar 启动自检通过。app.asar SHA-256 为 CF6C55FF8934767A7825115D478C9B86CB355D7DE9CB68AE4AABF6CCA9A9715C，CodeNode.exe SHA-256 为 4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。私有 Agent 配置及用户 Soul 修改保留，包只包含公开配置模板和已提交 Soul。
+
+
+### 2026-10-09 内部空白选区的 Del 删除修正
+
+针对用户再次反馈 Del 无法删除节点，复现并确认内部画布快捷键在无图形选中时仍吞掉 Delete/Backspace。此前验收只允许标题/边框删除整节点，内部空白路径被设计成空操作，与界面外层节点选中标记不一致。本轮按实际选区分流：内部图形选中时只删图形，内部空白且仅外层节点选中时删除整个节点；删图形后清理外层选区，第二次 Delete 不会意外删整节点。文字编辑、正在画线或编辑对象时不触发外层删除。底部提示同步更新。
+
+实际鼠标／键盘专项覆盖内部空白 Del、删除图形后重复 Del 保护、标题 Delete/Backspace/X、拖动节点后 Delete、输入保护、连线、多选和撤销，源码与最终包均通过，日夜主题检查通过；graph undo、构建、静态检查通过。暂存与固定交付路径自检 19/19 及实际启动通过。证据见 [包内交互摘要](validation/delete-routing-2026-10-09.json)。
+
+已覆盖 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行。app.asar SHA-256：FBB231C9897E0FCEF665FED8A577905EDC555C172FF42499ED6549AE8DF1E629；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。仅用公开模板与已提交 Soul 打包，保留用户私有配置和未提交 Soul 改动。

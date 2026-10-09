@@ -189,7 +189,7 @@ CodeNode 不下载 Agent、不使用 npx 自动安装。启动命令从 PATH/Win
 
 工作台顶部 **总览／对话** 按钮切换两张独立页面。总览使用整个工作区展示目标数量、进度、待处理任务、目标列表及详细验收；对话页保留画布与聊天，仅在绑定任务时显示简短目标提示。两页都保持挂载，来回切换保留消息、输入草稿、画布、模型和未保存的目标表单。当前页面持久化于共用 UI 配置，也可在设置 → 常规 → 布局调整。
 
-删除整个节点：点击节点标题或边框后按 Delete／Backspace／X；Ctrl+Z 撤销。节点内部画布的 Delete 只删除选中图形；输入框与目标管理控件聚焦时不会删除画布节点。底部状态栏显示实际多选数量和当前删除对象；新增、加载、撤销和重做会同步视觉选区与实际选区。
+删除整个节点：点击节点标题或边框后按 Delete／Backspace／X；Ctrl+Z 撤销。节点内部有图形选中时，Delete 只删图形；点击内部空白且只选中外层节点时，Delete 删除整节点。删完图形会清理外层选区，避免连续按键误删整节点；输入框与目标管理控件聚焦时不会删除画布节点。底部状态栏显示实际多选数量和当前删除对象；新增、加载、撤销和重做会同步视觉选区与实际选区。
 
 [总览效果](docs/validation/overview-handoff-preview/light.png) · [对话效果](docs/validation/overview-handoff-preview/conversation-light.png)。`npm run test:workspace-ux-ui` 使用实际鼠标与键盘事件验证上述行为；打包验收证据见 [acceptance.json](docs/validation/workspace-ux-preview/acceptance.json)。
 

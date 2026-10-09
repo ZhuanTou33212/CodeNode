@@ -156,7 +156,14 @@ function useNodeHotkeys(store: VectorStore, active: boolean, nodeId: string) {
             return;
           }
         }
-        s.deleteSelected();
+        const graph=useGraphStore.getState();
+        if(s.selectedIds.length){
+          s.deleteSelected();
+          // A second Delete must not unexpectedly delete the entire owner after its last shape.
+          graph.setSelectedIds(graph.selectedIds.filter(id=>id!==nodeId));
+        }else if(!s.editingId&&!s.penPts&&graph.selectedIds.includes(nodeId)){
+          graph.deleteNodes([nodeId]);
+        }
         return;
       }
       if (e.key === 'Escape') {
