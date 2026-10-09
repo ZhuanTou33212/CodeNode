@@ -324,7 +324,7 @@ MCP 可用于把 CodeNode 的领域能力提供给 Agent；它本身不替代会
 
 ### 外部 Agent 覆盖
 
-设置中的可选后端现为 CodeNode 内置、Codex app-server、DeepSeek Harness、Hermes Agent、OpenCode、OpenClaw。这里的接入目标是用户已安装的本机 Agent：CodeNode 不下载或安装它们；默认命令从 PATH/Windows npm global 解析，也可填写已有 executable 路径，并通过该 Agent 自己的配置、登录和环境变量运行。设置保存为本机默认或项目覆盖；DeepSeek Harness 另需指向已存在的 `DSH_HOME` profile。点“检测已保存后端”会执行协议初始化握手，不发送模型 prompt；握手通过只证明连接可用，不等于代码任务闭环。Hermes、OpenCode、OpenClaw 使用 ACP v1 stdio；DeepSeek Harness 使用其官方 SDK JSON-RPC profile。外部 Run 在原项目目录执行，CodeNode 记录运行前后差异和会话恢复信息。
+设置中的可选后端现为 CodeNode 内置、Codex app-server、DeepSeek Harness、Hermes Agent、OpenCode、OpenClaw。这里的接入目标是用户已安装的本机 Agent：CodeNode 不下载或安装它们；默认命令从 PATH/Windows npm global 解析，也可填写已有 executable 路径，并通过该 Agent 自己的配置、登录和环境变量运行。设置保存为本机默认或项目覆盖；DeepSeek Harness 另需指向已存在的 `DSH_HOME` profile。点“检测当前配置”会验证当前未保存的命令和参数，并执行协议初始化握手；检测不写入设置，也不发送模型 prompt；握手通过只证明连接可用，不等于代码任务闭环。Hermes、OpenCode、OpenClaw 使用 ACP v1 stdio；DeepSeek Harness 使用其官方 SDK JSON-RPC profile。外部 Run 在原项目目录执行，CodeNode 记录运行前后差异和会话恢复信息。
 
 ACP 权限请求不采信 Agent 自报的工具类别作为授权依据。只读策略拒绝所有权限请求；项目写入策略对请求逐次展示并询问用户。ACP 桥不构成操作系统沙箱，所以文件范围或权限请求不能代替子进程级隔离。DeepSeek SDK 协议没有逐会话取消或审批请求；CodeNode 为每个执行使用专属 runtime，停止会请求关闭该 runtime。SDK profile 和 `$DSH_HOME` 承担它自己的工具、凭据、权限与持久化设置。
 
@@ -344,7 +344,7 @@ Goal/Task 表单保存目标、排除项、必需验收条件、预算、依赖�
 
 协议夹具测试覆盖 ACP 初始化/会话/权限拒绝/授权与 DeepSeek SDK 的 initialize、prompt、assistant、tool/call、tool/result、终态通知。Goal 单测覆盖预算与准入、活动 Run、依赖循环、等待条件、业务决定、按角色筛选上下文、验收证据、文件快照失效、条件修订、声明写入范围，以及未知 Run 的复核绑定、直接状态/等待/决定绕过拒绝和复核后指纹失效。Electron UI 验证了 Goal 控件和后端控件在日夜主题结构一致，且主题切换保留会话、草稿、模型和侧栏状态。
 
-本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（157/157）；最后的 Goal UI 文案调整后再次通过 `npm run build` 与 `npm run test:backend-ui`。`npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练，以及 Agent Eval provider/IPC/报告绑定专项也已通过。最新固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI 自检为 17/17，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `657E5C1E3D4CD6D344C9E1B2C7D455FE5F78F50D75746C9421BADC40D55A18DD`。本机 `rcedit` 无法写回 exe 元数据，因此构建时关闭该编辑步骤，并沿用原 CodeNode 0.13.0 `CodeNode.exe`（SHA-256 `7B6E5D42317C316E8469DF32BD306711B62E8547F0795C3CB3564C2A09F8F057`）；exe 保持不变，新功能位于新版 app.asar；两个 executable 均未签名。
+本轮 `npm run verify` 的构建、脚本检查和核心测试全部通过（157/157）；最后的 Goal UI 文案调整后再次通过 `npm run build` 与 `npm run test:backend-ui`。`npm run test:goal-desktop-restart` 的双 Electron 进程复核/重排演练，以及 Agent Eval provider/IPC/报告绑定专项也已通过。最新固定交付路径 `E:\CodeNode\release\win-unpacked` 的 packaged UI 自检为 18/18，实际 asar main/preload 启动检查通过；`app.asar` SHA-256 为 `C481973BF18AB0301A024493B811FA573D64E8CBC17B138B624F64051B293549`。本机 `rcedit` 无法写回 exe 元数据，因此构建时关闭该编辑步骤，保留替换前固定包的 `CodeNode.exe`（SHA-256 `4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB`）；该 exe 的资源元数据为 Electron 44.4.1，固定启动文件名不变，应用版本和新功能由 app.asar 提供；exe 未签名。
 
 | 路线项 | 当前覆盖 | 尚需的证据 |
 | --- | --- | --- |
@@ -382,6 +382,10 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 本机 `node` 为 24.11.0，系统 OpenClaw `2026.2.2-3` 仍因缺少 `undici/lib/cache/memory-cache-store` 无法启动。此前隔离安装同版后用临时 Gateway 验证 ACP `session/new`，没有发 prompt。2026-10-09 重跑 `npm run test:backend-live-openclaw` 时，失败于启动 Gateway 之前的全局 `openclaw --version`，仍是同一个缺失模块；没有模型请求，脚本清理了临时目录。尝试安装最新 OpenClaw 时，其包要求 Node `>=24.16.0 <25` 或 `>=26.1.0`，npm tarball 校验不稳定；全局安装、Node 和用户配置没有改动，默认 OpenClaw 配置的修改时间仍为 2026-02-04，测试进程均已退出。DeepSeek SDK/runtime `0.1.5rc1` 的隔离文本推理也通过，`npm run test:backend-live-deepseek` 提供复现命令；本机当前没有 `dsh` runtime 或 `DEEPSEEK_API_KEY` 环境变量，因此没有重跑真实请求。两者仍缺少真实源码任务证据。
 
 协议请求和恢复能工作不等于权限已在操作系统边界执行。ACP Agent 可以使用其自身配置允许的文件/命令工具；DeepSeek SDK profile 也由 Harness profile 管理权限。本项目的变更指纹和写入范围检查发生在执行后，不能阻止越界副作用。Codex 本机 `helper_sandbox_lock_failed` 尚未排除，期间未继续修改 ACL。P0 仍缺稳定的执行隔离及 Hermes、DeepSeek Harness、OpenClaw 的真实源码任务、权限及中断恢复验收。P2 等待周期已实现为默认关闭且需 Goal 级授权，状态/预算/未知 Run 门禁和专项测试通过；授权后的真实模型自动启动闭环尚未实测。外部 LoopX/远程实验跟踪和阶段 E 的重复实测比较仍未完成，因此本目标不能标记为全部完成。
+
+### 2026-10-09 本机 Agent 接口修复
+
+用户明确本轮只要求连接已有 Agent 的接口，不要求在此机下载、安装或修复第三方 runtime；协议 fixture 是接口的自动化验收，历史真实运行结果作为可选环境诊断保留。本轮修复：连接检测接受当前未保存配置，经同一设置校验器验证后只做能力握手；保存设置仍由保存按钮单独完成；保存/继承后同步启动参数草稿，防止检测误用前一个 profile 的参数。Hermes、OpenCode、OpenClaw 的 ACP 权限选择控件已从错误的 Codex/DeepSeek 条件内移出，三种后端均可配置只读或逐次审批。DeepSeek adapter 每轮清空旧错误/receipt，并在 initialize 后检查取消信号，取消时不发送 session/prompt；ACP adapter 新轮重置 session ID，避免连接失败继承旧会话而被误标为执行结果未知。真实协议进程夹具和 UI 测试覆盖未保存配置不落盘、敏感参数提前拒绝、失败后复用成功、初始化后取消零 prompt 及双主题 ACP 控件状态。用户已有 CLI 的安装、更新、凭据和内部运行环境由用户管理，CodeNode 本轮不下载或修复它们。本轮完整 verify 157/157、源码设置 UI 与包内设置 UI 的未保存检测/权限控件/双主题测试均通过；固定交付包 18/18 自检和正式 asar 启动通过。
 
 ### 2026-10-09 Codex Windows sandbox 只读诊断
 

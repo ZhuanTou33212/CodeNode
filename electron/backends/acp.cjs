@@ -60,7 +60,7 @@ class AcpBackend {
   }
   async start(input) {
     if(input.onDelta)this.events(input.onDelta);
-    this.input = input; this.cwd = input.projectRoot; this.messages = new Map(); this.tools = new Map(); this.toolCalls = []; this.diffText = ''; this.stopping = false;
+    this.input = input; this.cwd = input.projectRoot; this.sessionId = null; this.messages = new Map(); this.tools = new Map(); this.toolCalls = []; this.diffText = ''; this.stopping = false;
     const abort = () => { void this.interrupt(); };
     input.signal?.addEventListener('abort', abort, { once: true });
     try {

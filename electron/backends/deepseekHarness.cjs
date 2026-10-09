@@ -21,13 +21,14 @@ class DeepSeekHarnessBackend {
   }
   async capabilities(cwd){try{await this.connect(cwd);return{backend:'deepseek-harness',available:true,authenticated:null,protocol:'DeepSeek Harness SDK JSON-RPC',version:this.serverInfo?.version||'unknown',conversation:true,events:true,approvals:false,interrupt:false,resume:true,usage:false,hardBudget:false,customTools:false,permissions:'runtime-profile',cost:'unknown',home:this.settings.home||process.env.DSH_HOME||null};}catch(error){return{backend:'deepseek-harness',available:false,error:error.message};}finally{await this.rpc?.close();this.rpc=null;}}
   async start(input){
-    this.input=input;this.listener=input.onDelta||this.listener;this.messages=[];this.tools=[];this.statuses=[];this.running=false;this.usage=null;
+    this.input=input;this.listener=input.onDelta||this.listener;this.messages=[];this.tools=[];this.statuses=[];this.running=false;this.usage=null;this.error=null;this.messageId=null;
     this.sessionId=input.backendSession?.sessionId||('codenode-'+crypto.randomUUID());
     const abort=()=>{void this.interrupt();};input.signal?.addEventListener('abort',abort,{once:true});
     try{
       if(input.signal?.aborted)return{content:'',state:'CANCELLED',aborted:true,stopReason:'cancelled'};
       await this.connect(input.projectRoot);
       input.onSession?.({backend:'deepseek-harness',protocol:'dsh-sdk-jsonrpc',protocolVersion:this.serverInfo?.version||'unknown',sessionId:this.sessionId,cwd:input.projectRoot,model:this.settings.model||'deepseek-v4-flash',adapterSettings:this.settings,permissions:{sandbox:'runtime-profile',network:'runtime-profile'}});
+      if(input.signal?.aborted)return{content:'',state:'CANCELLED',aborted:true,stopReason:'cancelled',backendSession:{sessionId:this.sessionId}};
       this.emit({kind:'state',state:'RUNNING',previous:null,sequence:0});
       const text=String(input.prompt||'')+(input.canvasSummary?'\n\n当前画布上下文：\n'+input.canvasSummary:'');
       const wait=new Promise(resolve=>{this.settle=resolve;});

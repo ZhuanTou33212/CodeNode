@@ -119,6 +119,12 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript(`(() => { const control=document.querySelector(${JSON.stringify('[aria-label="' + label + '"]')});control.value=${JSON.stringify(value)};control.dispatchEvent(new Event('change',{bubbles:true})); })()`);
       await sleep(80);
     };
+    for(const backend of ['hermes','opencode','openclaw']){
+      await select('执行后端',backend);
+      assert.equal(await js(`!!document.querySelector('[aria-label="ACP 权限请求策略"]')`),true,backend+' exposes its permission request setting');
+      await select('ACP 权限请求策略','workspace-write');
+      for(const theme of ['light','dark']){await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(60);assert.equal(await js(`document.querySelector('[aria-label="ACP 权限请求策略"]').value`),'workspace-write');}
+    }
     await select('后端配置范围', 'project'); await select('执行后端', 'codex');
     await select('Codex 项目文件权限', 'workspace-write');
     const controls = () => js(`JSON.stringify([...document.querySelectorAll('[data-testid=backend-settings] select,[data-testid=backend-settings] input')].map(n=>[n.getAttribute('aria-label'),n.value,n.disabled]))`);
@@ -138,13 +144,21 @@ app.whenReady().then(async () => {
     await waitFor(() => js(`document.querySelector('[data-testid=backend-settings] [role=status]')?.textContent.includes('已保存')`), 'saved');
     const persisted = JSON.parse(fs.readFileSync(path.join(projectRoot, '.codenode/backend.json'), 'utf8'));
     assert.equal(persisted.backend, 'codex'); assert.equal(persisted.sandbox, 'workspace-write');
+    await select('执行后端','builtin');
+    await js(`[...document.querySelectorAll('[data-testid=backend-settings] button')].find(b=>b.textContent==='检测当前配置').click()`);
+    await waitFor(()=>js(`document.querySelector('[data-testid=backend-settings] [role=status]')?.textContent.includes('内置后端可用')`),'check unsaved current configuration');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot,'.codenode/backend.json'),'utf8')).backend,'codex','checking unsaved builtin leaves saved Codex unchanged');
     await js(`window.__codenodeUi.getState().closeSettings()`);
     await js(`window.__codenodeUi.getState().openSettings('general')`);
     await waitFor(() => js('document.querySelector("[aria-label=执行后端]")?.value === "codex"'), 'reload persistence');
     assert.equal(await js('document.querySelector("[aria-label=后端配置范围]").value'), 'project');
+    const machineFixture=await js(`window.codenode.backendSave(${JSON.stringify(projectRoot)},'machine',{backend:'hermes',executable:'codenode-fixture-missing-hermes',args:['acp','--machine-profile'],sandbox:'read-only'})`);
+    assert.equal(machineFixture.ok,true);
     await js(`[...document.querySelectorAll('[data-testid=backend-settings] button')].find(b=>b.textContent==='项目跟随本机默认').click()`);
-    await waitFor(() => js('document.querySelector("[aria-label=执行后端]")?.value === "builtin"'), 'inherit defaults');
+    await waitFor(() => js('document.querySelector("[aria-label=执行后端]")?.value === "hermes"'), 'inherit defaults');
+    assert.deepEqual(JSON.parse(await js(`document.querySelector('[aria-label="后端启动参数"]').value`)),['acp','--machine-profile'],'inheriting machine configuration also replaces the argument draft used for connection checks');
     assert.equal(fs.existsSync(path.join(projectRoot, '.codenode/backend.json')), false);
+    await js(`window.codenode.backendSave(${JSON.stringify(projectRoot)},'machine',{backend:'builtin',executable:'',args:[],sandbox:'read-only'})`);
     await js(`window.__codenodeUi.getState().closeSettings()`); assert.equal(await view(), before);
     console.log('BACKEND SETTINGS UI: PASS (real IPC save/reload/inherit, Goal panel and backend controls shared in both themes, session/draft/model/sidebar preserved)');
     app.exit(0);

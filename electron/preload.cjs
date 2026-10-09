@@ -35,7 +35,7 @@ contextBridge.exposeInMainWorld('codenode', {
   loadProject: (target) => ipcRenderer.invoke('project:load', target),
   agentConfig: (root) => ipcRenderer.invoke('agent:config', root),
   backendSave: (root, scope, settings) => ipcRenderer.invoke('agent:backend-save', root, scope, settings),
-  backendStatus: root => ipcRenderer.invoke('agent:backend-status', root),
+  backendStatus: (root, settings) => ipcRenderer.invoke('agent:backend-status', root, settings),
   goalList: root => ipcRenderer.invoke('goal:list', root),
   goalCreate: (root, input) => ipcRenderer.invoke('goal:create', root, input),
   goalUpdate: (root, goalId, patch) => ipcRenderer.invoke('goal:update', root, goalId, patch),

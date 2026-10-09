@@ -236,11 +236,12 @@ function register(ctx) {
       return { ok: true, ...backendSettings.write(projectRoot, userDataDir(), scope, input) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
-  ipcMain.handle('agent:backend-status', async (_event, projectRoot) => {
+  ipcMain.handle('agent:backend-status', async (_event, projectRoot, input) => {
     try {
       const saved = backendSettings.read(projectRoot, userDataDir());
-      const backend = agentBackends.createBackend(saved.settings.backend, saved.settings);
-      return { ok: true, ...saved, capabilities: await backend.capabilities(projectRoot || userDataDir()) };
+      const checkedSettings = input == null ? saved.settings : backendSettings.normalize(input);
+      const backend = agentBackends.createBackend(checkedSettings.backend, checkedSettings);
+      return { ok: true, ...saved, checkedSettings, capabilities: await backend.capabilities(projectRoot || userDataDir()) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
 

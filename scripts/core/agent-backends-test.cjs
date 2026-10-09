@@ -46,6 +46,14 @@ async function main() {
   console.log('BACKEND TEST STAGE: proxy/settings');
   assert.equal(settings.read(root, userData).settings.backend, 'builtin');
   settings.write(root, userData, 'machine', selected);
+  const handlers=new Map();
+  require('../../electron/ipc/agent.cjs').register({ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},userDataDir:()=>userData});
+  const storedBytes=fs.readFileSync(path.join(userData,'backend.json'),'utf8');
+  const preview=await handlers.get('agent:backend-status')({},root,{...settings.config.defaults,backend:'builtin'});
+  assert.equal(preview.ok,true);assert.equal(preview.capabilities.backend,'builtin','connection check uses unsaved selected settings instead of saved Codex');
+  assert.equal(preview.settings.backend,'codex');assert.equal(preview.checkedSettings.backend,'builtin');
+  assert.equal(fs.readFileSync(path.join(userData,'backend.json'),'utf8'),storedBytes,'connection check never overwrites saved settings');
+  assert.equal((await handlers.get('agent:backend-status')({},root,{...selected,backend:'openclaw',args:['acp','--token','secret']})).ok,false,'preview rejects credential-bearing args before starting a runtime');
   settings.write(root, userData, 'project', { ...selected, sandbox: 'read-only' });
   assert.equal(settings.read(root, userData).settings.sandbox, 'read-only');
   settings.write(root, userData, 'project', null);

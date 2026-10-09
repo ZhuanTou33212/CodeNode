@@ -30,6 +30,11 @@ async function main(){
   assert.equal(acpResult.state,'COMPLETED');assert.match(acpResult.content,/ACP_RUNTIME_OK/);
   assert.equal(acpResult.backendSession.sessionId,'acp-fixture');
   assert(deltas.some(d=>d.kind==='content'));assert(deltas.some(d=>d.kind==='tool_result')===false);
+  let failConnect=false;
+  const reusedAcp=new AcpBackend(acpSettings,{StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){if(failConnect)throw new Error('fixture connection failed');super(c,a,w,o);}}});
+  assert.equal((await reusedAcp.start({projectRoot:root,prompt:'First session',confirm:async()=>false})).state,'COMPLETED');
+  failConnect=true;
+  assert.equal((await reusedAcp.start({projectRoot:root,prompt:'New connection',confirm:async()=>false})).stopReason,'backend_start_failed','old ACP session cannot misclassify a new connection failure as an unknown dispatched run');
   const openclawSessionParams=path.join(root,'openclaw-session-params.json');
   const openclaw=new AcpBackend({...acpSettings,backend:'openclaw'},
     {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_SESSION_PARAMS:openclawSessionParams}})}}});
@@ -63,6 +68,17 @@ async function main(){
   const maxTokens=new DeepSeekHarnessBackend({...config.defaults,backend:'deepseek-harness',executable:'node',home},
     {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_PROTOCOL:'dsh',DSH_STOP_REASON:'max-tokens'}})}}});
   assert.equal((await maxTokens.start({projectRoot:root,prompt:'Max tokens'})).state,'COMPLETED','SDK max-token termination is a completed partial response');
+  let nextReason='error';
+  const reused=new DeepSeekHarnessBackend({...config.defaults,backend:'deepseek-harness',executable:'node',home},
+    {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_PROTOCOL:'dsh',DSH_STOP_REASON:nextReason}})}}});
+  assert.equal((await reused.start({projectRoot:root,prompt:'Fail first'})).state,'FAILED');
+  nextReason='completed';
+  assert.equal((await reused.start({projectRoot:root,prompt:'Next independent turn'})).state,'COMPLETED','previous SDK failure cannot contaminate a later run on the same adapter');
+  const promptMarker=path.join(root,'cancelled-dsh-prompt.txt');const cancelController=new AbortController();
+  const cancelled=new DeepSeekHarnessBackend({...config.defaults,backend:'deepseek-harness',executable:'node',home},
+    {StdioRpc:class extends FixtureRpc{constructor(c,a,w,o){super(c,a,w,{...o,env:{...o.env,FIXTURE_PROTOCOL:'dsh',FIXTURE_DSH_PROMPT_FILE:promptMarker}})}}});
+  assert.equal((await cancelled.start({projectRoot:root,prompt:'Must not dispatch',signal:cancelController.signal,onSession:()=>cancelController.abort()})).state,'CANCELLED');
+  assert.equal(fs.existsSync(promptMarker),false,'cancellation after SDK initialize prevents dispatching a model prompt');
   const missing=await new DeepSeekHarnessBackend({...config.defaults,backend:'deepseek-harness',executable:'node',home:''},{env:{DSH_HOME:''}}).capabilities(root);
   assert.equal(missing.available,false);assert.match(missing.error,/DSH_HOME/);
   assert.equal(require('../../electron/backends/index.cjs').createBackend('hermes',acpSettings) instanceof AcpBackend,true);
