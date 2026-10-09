@@ -139,14 +139,13 @@ function PromptComposer() {
   const projectRoot = useProjectStore(s => s.root);
   const activeSessionId = useSessionStore(s=>s.activeId);
   const conversationId=useSessionStore(s=>s.memoryConversationId);
-  const [externalModel, setExternalModel] = useState<string | null>(null);
   const [externalBackend, setExternalBackend] = useState('builtin');
   useEffect(() => {
     let alive = true;
     const refresh = () => {
       void window.codenode?.agentConfig(projectRoot,activeSessionId,conversationId).then(config => {
-        if (alive) { const settings = config.backend?.sessionSettings || config.backend?.settings; setExternalBackend(settings?.backend || 'builtin'); setExternalModel(settings && settings.backend !== 'builtin' ? settings.backend + ' · ' + (settings.model || '跟随 Agent 配置') : null); }
-      }).catch(() => { if (alive) setExternalModel(null); });
+        if (alive) { const settings = config.backend?.sessionSettings || config.backend?.settings; setExternalBackend(settings?.backend || 'builtin'); }
+      }).catch(() => { if (alive) setExternalBackend('builtin'); });
     };
     refresh(); window.addEventListener('codenode-backend-settings', refresh);
     return () => { alive = false; window.removeEventListener('codenode-backend-settings', refresh); };
@@ -203,7 +202,7 @@ function PromptComposer() {
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
   const isAcp = backendConfig.acpBackends.includes(externalBackend);
-  const canVision = !selectedNode && (isAcp || !externalModel && model?.vision === true);
+  const canVision = !selectedNode && (isAcp || externalBackend === 'builtin' && model?.vision === true);
 
   useEffect(() => {
     void loadModels();
@@ -340,7 +339,7 @@ function PromptComposer() {
 
       {/* 控件行：模型 / 推理强度 / 发送（紧凑一行，保证输入框常驻面板底部） */}
       <div className="pp-controls">
-        {externalModel ? <button type="button" className="pp-model" disabled={busy} onClick={() => useUiStore.getState().openSettings('general')} title="在 Agent 后端设置中选择模型">{externalModel}</button> : <ModelPicker busy={busy} />}
+        {externalBackend === 'builtin' && <ModelPicker busy={busy} />}
 
         <input
           ref={fileRef}
