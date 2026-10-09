@@ -28,14 +28,43 @@ function createGoal(root,input={}){const now=new Date().toISOString();const crit
 function updateGoal(root,goalId,patch={}){if(patch.status==='completed')return completeGoal(root,goalId);return mutate(root,d=>{const g=findGoal(d,goalId);if(patch.status!=null){if(!goalStates.has(patch.status))throw new Error('Goal 状态无效');const transitions={active:['paused','stopped'],paused:['active','stopped'],stopped:['archived'],completed:['archived'],archived:[]};if(patch.status!==g.status&&!transitions[g.status]?.includes(patch.status))throw new Error('Goal 状态不能从 '+g.status+' 切换到 '+patch.status);g.status=patch.status;if(patch.status==='stopped')g.stopReason=text(patch.stopReason||'用户主动停止 Goal','停止原因',2000);else if(patch.status==='active'||patch.status==='paused')g.stopReason=null;}if(patch.autoAdvanceAuthorized!==undefined){if(typeof patch.autoAdvanceAuthorized!=='boolean')throw new Error('自动推进授权必须是布尔值');g.autoAdvanceAuthorized=patch.autoAdvanceAuthorized;}for(const key of ['title','objective','scope','exclusions'])if(patch[key]!=null)g[key]=text(patch[key],'Goal '+key,key==='title'?300:8000);if(patch.criteria!=null){const revision=g.criteriaRevision+1;const criteria=criteriaList(patch.criteria,revision);if(!criteria.some(c=>c.required))throw new Error('Goal 必须至少包含一个必需验收条件');g.criteriaRevision=revision;g.criteria=criteria;for(const e of evidenceFor(d,g.id))if(e.criterionId&&!g.criteria.some(c=>c.id===e.criterionId&&c.revision===e.criterionRevision))e.invalidatedAt=new Date().toISOString();}if(patch.maxTokens!==undefined)g.budget.maxTokens=Number.isFinite(patch.maxTokens)&&patch.maxTokens>0?Math.floor(patch.maxTokens):null;if(patch.maxCostUsd!==undefined)g.budget.maxCostUsd=Number.isFinite(patch.maxCostUsd)&&patch.maxCostUsd>0?patch.maxCostUsd:null;g.updatedAt=new Date().toISOString();return g;}).result;}
 function taskGraph(goal){const map=new Map(goal.tasks.map(t=>[t.id,t]));const visit=(task,stack=new Set())=>{if(stack.has(task.id))throw new Error('Task 依赖不能形成循环');stack.add(task.id);for(const dep of task.dependsOn||[]){const d=map.get(dep);if(!d)throw new Error('Task 依赖不存在：'+dep);visit(d,new Set(stack));}};for(const task of goal.tasks)visit(task);}
 function safeScope(scopes,label){if(scopes.some(value=>path.isAbsolute(value)||value.split(/[\\/]/).includes('..')))throw new Error('Task '+label+'范围必须是项目相对路径');}
+function canvasPoint(value){if(value==null)return null;if(!value||!Number.isFinite(value.x)||!Number.isFinite(value.y)||Math.abs(value.x)>100000||Math.abs(value.y)>100000)throw new Error('Task 画布位置无效');return{x:Math.round(value.x),y:Math.round(value.y)};}
 function createTask(root,goalId,input={}){return mutate(root,d=>{
   const g=findGoal(d,goalId);if(g.status!=='active')throw new Error('只有 active Goal 可以新增 Task');
   const now=new Date().toISOString();
-  const task={id:id(),title:text(input.title,'Task 标题',300),objective:text(input.objective||input.title,'Task 目标'),status:'todo',dependsOn:Array.isArray(input.dependsOn)?[...new Set(input.dependsOn.map(String))]:[],owner:String(input.owner||'main').slice(0,100),readScope:Array.isArray(input.readScope)?[...new Set(input.readScope.map(String))]:[],writeScope:Array.isArray(input.writeScope)?[...new Set(input.writeScope.map(String))]:[],criteriaIds:Array.isArray(input.criteriaIds)?[...new Set(input.criteriaIds.map(String))]:[],decisionIds:Array.isArray(input.decisionIds)?[...new Set(input.decisionIds.map(String))]:[],runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
+  const task={id:id(),title:text(input.title,'Task 标题',300),objective:text(input.objective||input.title,'Task 目标'),status:'todo',dependsOn:Array.isArray(input.dependsOn)?[...new Set(input.dependsOn.map(String))]:[],owner:String(input.owner||'main').slice(0,100),readScope:Array.isArray(input.readScope)?[...new Set(input.readScope.map(String))]:[],writeScope:Array.isArray(input.writeScope)?[...new Set(input.writeScope.map(String))]:[],criteriaIds:Array.isArray(input.criteriaIds)?[...new Set(input.criteriaIds.map(String))]:[],decisionIds:Array.isArray(input.decisionIds)?[...new Set(input.decisionIds.map(String))]:[],canvasPosition:canvasPoint(input.canvasPosition),runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
   safeScope(task.readScope,'读取');safeScope(task.writeScope,'写入');
   if(task.criteriaIds.some(cid=>!g.criteria.some(c=>c.id===cid)))throw new Error('Task 引用了不存在的验收条件');
   if(task.decisionIds.some(did=>!d.decisions.some(item=>item.id===did&&item.goalId===g.id)))throw new Error('Task 引用了不存在的业务决定');
   g.tasks.push(task);taskGraph(g);return task;
+}).result;}
+/** Persist a proposed task graph in one transaction; no partial graph is visible on failure. */
+function createTaskBatch(root,goalId,steps,expectedRevision){return mutate(root,d=>{
+  const g=findGoal(d,goalId);
+  if(Number.isInteger(expectedRevision)&&d.revision!==expectedRevision)throw new Error('Goal 在规划期间被其他会话修改，请刷新任务图后重新确认');
+  if(g.status!=='active')throw new Error('只有 active Goal 可以导入任务图');
+  if(!Array.isArray(steps)||!steps.length||steps.length>30)throw new Error('一次只能导入 1 至 30 个 Task');
+  const keys=steps.map(step=>String(step?.key||''));
+  if(keys.some(key=>!key||key.length>80)||new Set(keys).size!==keys.length)throw new Error('规划步骤编号无效或重复');
+  const ids=new Map(keys.map(key=>[key,id()]));
+  const now=new Date().toISOString(),required=g.criteria.filter(c=>c.required).map(c=>c.id);
+  const created=steps.map((step,index)=>{
+    const deps=Array.isArray(step.dependsOn)?[...new Set(step.dependsOn.map(String))]:[];
+    if(deps.some(dep=>!ids.has(dep)&&!g.tasks.some(t=>t.id===dep)))throw new Error('步骤 '+keys[index]+' 引用了不存在的前置任务');
+    const task={id:ids.get(keys[index]),title:text(step.title,'Task 标题',300),objective:text(step.objective||step.title,'Task 目标'),status:'todo',dependsOn:deps.map(dep=>ids.get(dep)||dep),owner:'main',readScope:Array.isArray(step.readScope)?[...new Set(step.readScope.map(String))]:[],writeScope:Array.isArray(step.writeScope)?[...new Set(step.writeScope.map(String))]:[],criteriaIds:required,decisionIds:[],runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
+    safeScope(task.readScope,'读取');safeScope(task.writeScope,'写入');
+    return task;
+  });
+  g.tasks.push(...created);taskGraph(g);g.updatedAt=now;
+  return created;
+}).result;}
+/** Planned tasks may be removed; completed or attempted tasks retain their audit trail. */
+function deletePlannedTask(root,goalId,taskId,expectedRevision){return mutate(root,d=>{
+  const g=findGoal(d,goalId),t=findTask(g,taskId);
+  if(Number.isInteger(expectedRevision)&&d.revision!==expectedRevision)throw new Error('Goal 已由其他会话更新，请刷新后再删除');
+  if(g.status!=='active'||!['todo','ready'].includes(t.status)||t.executionStatus||(t.runIds||[]).length||t.waitCondition||t.autoAdvance||(g.evidence||[]).some(e=>e.taskId===t.id)||d.admissions.some(a=>a.taskId===t.id))throw new Error('已有执行或证据的 Task 不能删除');
+  if(g.tasks.some(other=>other.id!==t.id&&(other.dependsOn||[]).includes(t.id)))throw new Error('先移除下游依赖连线，再删除这个 Task');
+  g.tasks=g.tasks.filter(item=>item.id!==t.id);g.updatedAt=new Date().toISOString();return {id:t.id};
 }).result;}
 function pendingUnknownSettlement(data,goalId,taskId){return data.settlements.find(item=>item.goalId===goalId&&item.taskId===taskId&&item.status==='unknown')||null;}
 function freshUnknownRunReview(root,data,goal,task){const pending=pendingUnknownSettlement(data,goal.id,task.id),snapshot=fingerprint(root);const review=(task.runReviews||[]).find(item=>item.runId===pending?.runId&&item.projectFingerprint===snapshot.hash&&item.projectSnapshotComplete===snapshot.complete);return{pending,snapshot,review};}
@@ -67,8 +96,12 @@ function confirmRunReview(root,goalId,taskId,runId,expectedFingerprint){return m
 }).result;}
 function updateTask(root,goalId,taskId,patch={}){return mutate(root,d=>{
   const g=findGoal(d,goalId),t=findTask(g,taskId);
+  if(Number.isInteger(patch.expectedRevision)&&d.revision!==patch.expectedRevision)throw new Error('Goal 已由其他会话更新，请刷新后再编辑');
+  const contractChange=['title','objective','owner','readScope','writeScope','criteriaIds','decisionIds','dependsOn'].some(key=>patch[key]!=null);
+  if(contractChange&&(t.status==='in_progress'||t.status==='completed'||d.admissions.some(a=>a.taskId===t.id&&!a.settledAt)))throw new Error('执行中或已完成的 Task 不能直接修改任务合同；请先结束执行，必要时新增后续 Task');
   if(t.executionStatus==='unknown'&&((patch.status!=null&&!['blocked','cancelled'].includes(patch.status))||(patch.waitCondition&&patch.waitCondition!==null)))requireUnknownRunReview(root,d,g,t);
   for(const key of ['title','objective','owner'])if(patch[key]!=null)t[key]=text(patch[key],'Task '+key,8000);
+  if(patch.canvasPosition!==undefined)t.canvasPosition=canvasPoint(patch.canvasPosition);
   for(const key of ['readScope','writeScope','criteriaIds','decisionIds','dependsOn'])if(patch[key]!=null){if(!Array.isArray(patch[key]))throw new Error(key+' 必须是数组');t[key]=[...new Set(patch[key].map(String))];}
   safeScope(t.readScope,'读取');safeScope(t.writeScope,'写入');
   if(t.criteriaIds.some(cid=>!g.criteria.some(c=>c.id===cid)))throw new Error('Task 引用了不存在的验收条件');
@@ -203,4 +236,4 @@ function redactWait(value){
   const evaluation=raw?{mode:String(raw.mode||'').slice(0,20),datasetVersion:String(raw.datasetVersion||'').slice(0,100),model:redact(String(raw.model||'')).slice(0,200),total:Number.isFinite(raw.total)?raw.total:null,run:Number.isFinite(raw.run)?raw.run:null,passed:Number.isFinite(raw.passed)?raw.passed:null,failed:Number.isFinite(raw.failed)?raw.failed:null,skipped:Number.isFinite(raw.skipped)?raw.skipped:null,requiredTotal:Number.isFinite(raw.requiredTotal)?raw.requiredTotal:null,requiredPassed:Number.isFinite(raw.requiredPassed)?raw.requiredPassed:null,requiredMissing:Array.isArray(raw.requiredMissing)?raw.requiredMissing.map(item=>String(item).slice(0,100)).slice(0,50):[],exitCode:Number.isInteger(raw.exitCode)?raw.exitCode:null,dirty:raw.dirty===true,reportFile:path.basename(String(raw.reportFile||'')).slice(0,240)}:null;
   return{source:String(value.source||'').slice(0,300),status:String(value.status||'').slice(0,100),matched:value.matched===true,revision:String(value.revision||'').slice(0,200),runId:String(value.runId||'').slice(0,240),detailsUrl,checkedAt:String(value.checkedAt||'').slice(0,40),workflowCount:Number.isFinite(value.workflowCount)?value.workflowCount:null,...(evaluation?{evaluation}:{})};
 }
-module.exports={read,createGoal,updateGoal,createTask,updateTask,runReview,confirmRunReview,addDecision,resolveDecision,recordEvidence,recordRunEvidence,audit,canRun,admit,claimAutoAdvance,releaseAutoAdvanceClaim,reconcileAutoAdvanceClaims,settle,reconcileAdmissions,addContext,confirmExperience,contextForRole,observeWait,releaseDueTimeWaits,evidenceStatus,environment,fingerprint};
+module.exports={read,createGoal,updateGoal,createTask,createTaskBatch,deletePlannedTask,updateTask,runReview,confirmRunReview,addDecision,resolveDecision,recordEvidence,recordRunEvidence,audit,canRun,admit,claimAutoAdvance,releaseAutoAdvanceClaim,reconcileAutoAdvanceClaims,settle,reconcileAdmissions,addContext,confirmExperience,contextForRole,observeWait,releaseDueTimeWaits,evidenceStatus,environment,fingerprint};

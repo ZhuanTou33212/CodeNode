@@ -1,0 +1,33 @@
+.goal-task-graph { display:grid; gap:12px; padding:12px; border:1px solid var(--glass-border); border-radius:10px; background:var(--glass-control); color:var(--glass-text); }
+.goal-task-graph-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; }
+.goal-task-graph-toolbar span { flex:1; min-width:180px; color:var(--glass-muted); }
+.goal-task-graph :is(button,input,textarea) { border:1px solid var(--glass-border); border-radius:7px; background:var(--glass-sheet); color:var(--glass-text); padding:7px 9px; font:inherit; }
+.goal-task-graph button { cursor:pointer; }
+.goal-task-graph button:disabled { opacity:.5; cursor:not-allowed; }
+.goal-task-graph-canvas { width:100%; height:310px; border:1px solid var(--glass-border); border-radius:8px; overflow:hidden; background:var(--glass-surface); }
+.goal-task-graph-canvas .react-flow__controls button { background:var(--glass-sheet); color:var(--glass-text); fill:var(--glass-text); }
+.goal-task-graph-canvas .react-flow__edge-path { stroke:var(--glass-accent); stroke-width:2; }
+.goal-task-graph-canvas .react-flow__handle { width:9px; height:9px; background:var(--glass-accent); }
+.goal-task-graph-canvas .react-flow__node { width:195px; }
+.goal-graph-node { display:grid; gap:4px; width:100%; min-height:66px; box-sizing:border-box; padding:10px 12px; border:1px solid var(--glass-border); border-radius:9px; background:var(--glass-sheet); color:var(--glass-text); box-shadow:var(--glass-shadow); text-align:left; }
+.goal-graph-node strong { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.goal-graph-node span { font-size:10px; color:var(--glass-muted); }
+.goal-graph-node small { font-size:10px; line-height:1.35; color:var(--glass-muted); overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.goal-graph-node.status-in_progress { border-color:var(--stage-running); box-shadow:0 0 0 2px color-mix(in srgb,var(--stage-running) 35%,transparent),0 0 18px color-mix(in srgb,var(--stage-running) 30%,transparent); }
+.goal-graph-node.status-completed { border-color:var(--stage-done); background:color-mix(in srgb,var(--glass-sheet) 89%,var(--stage-done) 11%); }
+.goal-graph-node.status-failed,.goal-graph-node.status-blocked { border-color:var(--stage-failed); }
+.goal-graph-node.is-selected { outline:2px solid var(--glass-accent); outline-offset:2px; }
+.goal-graph-create { display:flex; gap:8px; }
+.goal-graph-create input { flex:1; min-width:0; }
+.goal-graph-editor { display:grid; gap:8px; border-top:1px solid var(--glass-border); padding-top:10px; font-size:12px; }
+.goal-graph-editor label { display:grid; gap:4px; color:var(--glass-muted); }
+.goal-graph-editor label :is(input,textarea) { width:100%; box-sizing:border-box; color:var(--glass-text); }
+.goal-graph-editor > div { display:flex; flex-wrap:wrap; gap:8px; }
+.goal-graph-proposal { padding:10px; border:1px solid var(--glass-border); border-radius:8px; background:var(--glass-sheet); font-size:12px; }
+.goal-graph-proposal ol { margin:8px 0; padding-left:22px; max-height:220px; overflow:auto; }
+.goal-graph-proposal li { margin:7px 0; }
+.goal-graph-proposal li span,.goal-graph-proposal li small { display:block; overflow-wrap:anywhere; color:var(--glass-muted); }
+.goal-graph-proposal button { margin-right:8px; }
+.goal-graph-message { margin:0; color:var(--glass-muted); font-size:12px; }
+@media (max-width:650px) { .goal-task-graph-canvas { height:260px; } .goal-task-graph-toolbar span { flex-basis:100%; } }
+@media (prefers-reduced-motion:reduce) { .goal-graph-node.status-in_progress { animation:none; } }

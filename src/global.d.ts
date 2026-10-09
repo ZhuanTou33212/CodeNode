@@ -112,6 +112,15 @@ interface ModelSpecDto {
   enabled?: boolean;
 }
 
+interface GoalPlanStep {
+  key: string;
+  title: string;
+  objective: string;
+  acceptance: string;
+  dependsOn: string[];
+  writeScope: string[];
+}
+
 interface WorkflowStateDto {
   revision: number;
   graphDigest: string;
@@ -226,7 +235,10 @@ interface CodenodeApi {
   goalAutoAdvanceClaim: (root:string|null,goalId:string,taskId:string)=>Promise<{ok:boolean;error?:string;value?:{goalId:string;taskId:string;title:string;objective:string;claimId:string;requestId:string;waitObservationId:string;usedRuns:number;maxRuns:number}}>;
   goalAutoAdvanceRelease: (root:string|null,goalId:string,taskId:string,claimId:string,reason?:string)=>Promise<{ok:boolean;error?:string;value?:boolean}>;
   goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalTaskBatchCreate: (root:string|null,goalId:string,steps:GoalPlanStep[],expectedRevision?:number)=>Promise<{ok:boolean;error?:string;value?:any[]}>;
+  goalTaskDeletePlanned: (root:string|null,goalId:string,taskId:string,expectedRevision?:number)=>Promise<{ok:boolean;error?:string;value?:{id:string}}>;
   goalTaskUpdate: (root:string|null,goalId:string,taskId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalPlanPropose: (root:string|null,request:{kind:'goal'|'plan';goalId?:string;objective?:string;modelId?:string|null})=>Promise<{ok:boolean;error?:string;value?:{steps:GoalPlanStep[]};model?:string}>;
   goalRunReview: (root:string|null,goalId:string,taskId:string,runId:string)=>Promise<{ok:boolean;error?:string;value?:{runId:string;status:string;state?:string|null;backend:string;startedAt?:string|null;finishedAt?:string|null;stopReason?:string|null;changesAvailable:boolean;changesComplete:boolean;changeScope:string;totalFiles:number;truncated:boolean;files:Array<{path:string;kind:string;before:string|null;after:string|null}>;projectFingerprint:string;projectSnapshotComplete:boolean}}>;
   goalRunReviewConfirm: (root:string|null,goalId:string,taskId:string,runId:string,projectFingerprint:string)=>Promise<{ok:boolean;error?:string;value?:{runId:string;projectFingerprint:string;projectSnapshotComplete:boolean;reviewedAt:string}}>;
   goalDecisionCreate: (root:string|null,goalId:string,input:{question:string;options:string[];taskIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;

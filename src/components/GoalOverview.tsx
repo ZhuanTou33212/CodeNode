@@ -5,7 +5,7 @@ import { useUiStore } from '../store/uiStore';
 import GoalControlPanel from './side/GoalControlPanel';
 const stateName:Record<string,string>={active:'进行中',completed:'已完成',paused:'已暂停',stopped:'已停止',archived:'已归档'};
 export default function GoalOverview(){
- const root=useProjectStore(s=>s.root),{goals,selectedGoalId,select,refresh,error}=useGoalControlStore();
+ const root=useProjectStore(s=>s.root),{goals,selectedGoalId,select,refresh,error,pendingDraft,clearDraft}=useGoalControlStore();
  const [editor,setEditor]=useState(false),[creating,setCreating]=useState(false);
  const editorRef=useRef<HTMLElement>(null),returnFocus=useRef<HTMLElement|null>(null);
  const detail=goals.find(g=>g.id===selectedGoalId);
@@ -15,8 +15,9 @@ export default function GoalOverview(){
   ...(g.tasks||[]).filter(t=>['blocked','failed'].includes(t.status)||t.executionStatus==='unknown').map(t=>({goal:g,id:t.id,taskId:t.id as string|null,text:t.title,label:t.executionStatus==='unknown'?'待复核':t.status==='failed'?'执行失败':'有阻塞'})),
  ]);
  const openEditor=(goalId:string|null,taskId:string|null=null)=>{returnFocus.current=document.activeElement as HTMLElement;setCreating(!goalId);if(goalId)select(goalId,taskId);setEditor(true);};
- const close=()=>{setEditor(false);returnFocus.current?.focus();};
+ const close=()=>{setEditor(false);clearDraft();returnFocus.current?.focus();};
  useEffect(()=>{setEditor(false);setCreating(false);},[root]);
+ useEffect(()=>{if(pendingDraft!==null&&root)openEditor(null);},[pendingDraft,root]);
  useEffect(()=>{
   if(!editor)return;
   editorRef.current?.querySelector<HTMLButtonElement>('[aria-label="关闭目标编辑"]')?.focus();
@@ -31,9 +32,9 @@ export default function GoalOverview(){
    {visible.length===0?<div className="overview-empty"><p>还没有目标</p><span>可以从一个功能、一项修复或一个项目计划开始。</span><button onClick={()=>openEditor(null)}>创建第一个目标</button></div>:<div className="overview-goal-list" aria-label="项目目标列表">{visible.map(g=>{const done=g.tasks.filter(t=>t.status==='completed').length;return <button key={g.id} data-goal-id={g.id} onClick={()=>openEditor(g.id)}><span className={'overview-state-dot status-'+g.status}/><span className="overview-row-copy"><strong>{g.title}</strong><small>{g.objective}</small></span><span className="overview-row-progress">{done}/{g.tasks.length} 任务</span><span className="overview-row-status">{stateName[g.status]||g.status}</span><span aria-hidden="true">›</span></button>;})}</div>}
   </section>
   {error&&<p role="status">{error}</p>}
-  <div className="overview-editor-mask" hidden={!editor} onPointerDown={e=>{if(e.target===e.currentTarget)close();}}><section ref={editorRef} className="overview-goal-editor" role="dialog" aria-modal="true" aria-label={creating?'新建目标':'目标详情'}>
+  <div className="overview-editor-mask" hidden={!editor} onPointerDown={e=>{if(e.target===e.currentTarget)close();}}><section ref={editorRef} className={`overview-goal-editor${creating?'':' with-goal-graph'}`} role="dialog" aria-modal="true" aria-label={creating?'新建目标':'目标详情'}>
    <header><div><h2>{creating?'新建目标':detail?.title||'目标详情'}</h2><span>{creating?'先写清目标与完成标准':'任务、决定与验收'}</span></div><button aria-label="关闭目标编辑" onClick={close}>×</button></header>
-   <div className="overview-editor-scroll"><GoalControlPanel key={root||'no-project'} creating={creating} onCreated={()=>{setCreating(false);setEditor(false);}}/></div>
+   <div className="overview-editor-scroll"><GoalControlPanel key={root||'no-project'} creating={creating} onCreated={()=>{clearDraft();setCreating(false);setEditor(true);}}/></div>
   </section></div>
  </section>;
 }

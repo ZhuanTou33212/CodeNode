@@ -10,6 +10,7 @@ import { createInflightRegistry } from '../lib/inflight';
 import { describeFailure } from '../lib/reportError';
 import type { ResumePlanLike } from '../lib/resumePlan';
 import type { AgentAttachment, ToolRecord } from '../types';
+import { addPlanToCanvas } from '../lib/planCanvas';
 
 /**
  * #7 并发/竞态发送：`inflight` 是**按 requestId 索引的集合**（修复前是单值
@@ -194,6 +195,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // 于是 RunsPanel 的续跑可以直接插进第二个请求（它的 finally 会把旧请求的 requestId 清掉）。
     if (!checkSendGuard({ inflightCount: inflight.size(), hasText: true, attachmentCount: attachments.length }).allow) {
       useUiStore.getState().setToast(GUARD_MESSAGES.busy);
+      return empty;
+    }
+
+    // Planning commands use the read-only planner. They do not start a normal Agent Run.
+    if (/^\/(plan|goal)(?:\s|$)/i.test(text)) {
+      const match=text.match(/^\/(plan|goal)(?:\s+([\s\S]*))?$/i);
+      const command=match?.[1]?.toLowerCase(),objective=(match?.[2]||'').trim();
+      const root=useProjectStore.getState().root;
+      if (!root) { useUiStore.getState().setToast('先打开项目，再创建计划或目标'); return empty; }
+      if (command==='goal') {
+        useGoalControlStore.getState().startDraft(objective);
+        useUiStore.getState().updatePreferences({ workbenchView:'overview' });
+        return empty;
+      }
+      if (!objective) { useUiStore.getState().setToast('请在 /plan 后写明要规划的任务'); return empty; }
+      if (attachments.length) { useUiStore.getState().setToast('/plan 暂不接受图片附件，请描述规划目标'); return empty; }
+      const sessionId=useSessionStore.getState().activeId;
+      try {
+        useUiStore.getState().setToast('正在生成只读计划…');
+        const planned=await api.goalPlanPropose(root,{kind:'plan',objective,modelId:useUsageStore.getState().modelId});
+        if (useProjectStore.getState().root!==root || useSessionStore.getState().activeId!==sessionId || inflight.size()>0) {
+          useUiStore.getState().setToast('规划期间会话或 Agent 运行状态已变化，未改动画布');
+          return empty;
+        }
+        if (!planned.ok||!planned.value) throw new Error(planned.error||'规划失败');
+        if (!useSessionStore.getState().current()) useSessionStore.getState().startOnCurrent(objective);
+        const currentSession=useSessionStore.getState().activeId;
+        const count=addPlanToCanvas(planned.value.steps,`plan-command:${currentSession||'canvas'}:${Date.now()}`);
+        useUiStore.getState().setToast(`已生成 ${count} 个可编辑任务节点；核对内容和连线后可点击运行`);
+      } catch (error) { useUiStore.getState().setToast('规划失败：'+String((error as Error).message||error)); }
       return empty;
     }
 

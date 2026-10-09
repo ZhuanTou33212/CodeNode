@@ -1,6 +1,9 @@
 import { useEffect } from 'react';
 import { useSessionStore } from '../store/sessionStore';
 import { useProjectStore } from '../store/projectStore';
+import { useGraphStore } from '../store/graphStore';
+import { useUiStore } from '../store/uiStore';
+import { addPlanToCanvas, planItemsToSteps } from '../lib/planCanvas';
 
 /**
  * PlanCard —— 任务清单卡片（`update_plan` 工具的计划）
@@ -16,6 +19,9 @@ export function PlanCard() {
   const plan = useSessionStore((s) => s.plan);
   const updatedAt = useSessionStore((s) => s.planUpdatedAt);
   const sessionId = useSessionStore((s) => s.activeId);
+  const runId = useSessionStore((s) => s.planRunId);
+  const streaming = useSessionStore((s) => s.streaming);
+  const alreadyImported = useGraphStore((s) => s.nodes.some(node => node.data.planSourceId === `${sessionId}:${runId || 'current'}`));
   const hasCachedPlan = useSessionStore((s) => !!(s.activeId && s.plansBySessionId[s.activeId]));
   const projectRoot = useProjectStore((s) => s.root);
   useEffect(() => {
@@ -59,6 +65,11 @@ export function PlanCard() {
           <span className="ap-plan-progress-bar" style={{ width: `${plan.length ? Math.round((done / plan.length) * 100) : 0}%` }} />
         </span>
       </div>
+      <button type="button" className="ap-plan-canvas-action" disabled={streaming || alreadyImported} onClick={() => {
+        if (!sessionId || !plan) return;
+        const count = addPlanToCanvas(planItemsToSteps(plan), `${sessionId}:${runId || 'current'}`);
+        useUiStore.getState().setToast(count ? `已生成 ${count} 个可编辑画布节点，请核对连线后再运行` : '本次计划已在画布中');
+      }}>{alreadyImported ? '已生成画布节点' : '生成可编辑工作流'}</button>
       <ol className="ap-plan-items">
         {plan.map((item) => (
           <li key={item.id} className={`ap-plan-item st-${item.status}`}>

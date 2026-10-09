@@ -361,7 +361,34 @@ function register(ctx) {
     try{const released=goalStore.releaseAutoAdvanceClaim(root,goalId,taskId,claimId,reason);const claim=activeAutoAdvanceClaims.get(String(claimId||''));if(claim?.root===root)activeAutoAdvanceClaims.delete(String(claimId));return{ok:true,value:released};}catch(error){return{ok:false,error:String(error?.message||error)};}
   });
   ipcMain.handle('goal:task-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.createTask(root,goalId,input||{})));
+  ipcMain.handle('goal:task-batch-create', async (_event, projectRoot, goalId, steps, expectedRevision) => withGoalRoot(projectRoot, root => goalStore.createTaskBatch(root,goalId,steps,expectedRevision)));
+  ipcMain.handle('goal:task-delete-planned', async (_event, projectRoot, goalId, taskId, expectedRevision) => withGoalRoot(projectRoot, root => goalStore.deletePlannedTask(root,goalId,taskId,expectedRevision)));
   ipcMain.handle('goal:task-update', async (_event, projectRoot, goalId, taskId, patch) => withGoalRoot(projectRoot, root => goalStore.updateTask(root,goalId,taskId,patch||{})));
+  ipcMain.handle('goal:plan-propose', async (event, projectRoot, request) => {
+    try {
+      const sender=event?.sender;
+      if(!sender||sender.isDestroyed()||(event.senderFrame&&sender.mainFrame&&event.senderFrame!==sender.mainFrame))throw new Error('仅允许主窗口请求规划');
+      if(!projectRoot||!fs.statSync(projectRoot).isDirectory())throw new Error('请先选择项目');
+      const root=fs.realpathSync(projectRoot);
+      if(activeRequests.size||externalRuns.isProjectActive(root))throw new Error('其他 Agent 正在运行，请等待结束后规划');
+      const kind=request?.kind==='goal'?'goal':'plan';
+      let objective=String(request?.objective||'').trim(),context='';
+      if(kind==='goal'){
+        const goal=goalStore.read(root).goals.find(item=>item.id===String(request?.goalId||''));
+        if(!goal||goal.status!=='active')throw new Error('只能为进行中的 Goal 规划任务');
+        objective=goal.objective;
+        context=JSON.stringify({scope:goal.scope,exclusions:goal.exclusions,criteria:goal.criteria.map(c=>c.text),existingTasks:goal.tasks.map(t=>({title:t.title,status:t.status}))});
+      }
+      const planner=require('../goalPlanProposal.cjs');
+      const baseCfg=agent.loadConfig(null),cfg={...agent.loadConfig(root),maxTokens:4096,modelTaskType:'planning'};
+      const sel=request?.modelId?modelStore.findModel(userDataDir(),baseCfg,String(request.modelId)):null;
+      if(sel){if(sel.apiBase)cfg.apiBase=sel.apiBase;if(sel.apiKey)cfg.apiKey=sel.apiKey;if(sel.model)cfg.model=sel.model;if(sel.protocol)cfg.protocol=sel.protocol;if(sel.auth)cfg.auth=sel.auth;if(sel.endpoint)cfg.endpoint=sel.endpoint;if(sel.apiVersion)cfg.apiVersion=sel.apiVersion;if(sel.azureDeployment)cfg.azureDeployment=sel.azureDeployment;if(sel.maxTokensField)cfg.maxTokensField=sel.maxTokensField;}
+      const files=fs.readdirSync(root,{withFileTypes:true}).filter(entry=>!['.git','.codenode','node_modules','release','out'].includes(entry.name)).slice(0,60).map(entry=>entry.name+(entry.isDirectory()?'/':''));
+      const response=await agent.chatCompletion(cfg,planner.messages({objective,context:context+'\n项目顶层条目：'+files.join(', ')}),{timeoutMs:90000});
+      if(!response?.content)throw new Error('规划模型没有返回内容；请检查 CodeNode 模型连接');
+      return {ok:true,value:planner.parseProposal(response.content),model:response.actualModel||cfg.model};
+    }catch(error){return{ok:false,error:String(error?.message||error)};}
+  });
   ipcMain.handle('goal:run-review', async (_event, projectRoot, goalId, taskId, runId) => withGoalRoot(projectRoot, root => goalStore.runReview(root,goalId,taskId,runId)));
   ipcMain.handle('goal:run-review-confirm', async (_event, projectRoot, goalId, taskId, runId, projectFingerprint) => withGoalRoot(projectRoot, root => goalStore.confirmRunReview(root,goalId,taskId,runId,projectFingerprint)));
   ipcMain.handle('goal:decision-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.addDecision(root,goalId,input||{})));
