@@ -93,8 +93,6 @@ export default function AgentSwitcher() {
         {error&&<p role="status">{error}</p>}
         <button className="agent-switch-apply" disabled={target===selected||busy||!configured} onClick={()=>void apply()}>{hasHistory?'新建对话并切换':'确认切换'}</button>
       </div>}
-      <div className="agent-switch-footer"><button className="agent-switch-settings" onClick={()=>{setOpen(false);useUiStore.getState().openSettings('general');}}>连接设置…</button>
-      </div>
     </div></div>,document.body)}
   </div>;
 }

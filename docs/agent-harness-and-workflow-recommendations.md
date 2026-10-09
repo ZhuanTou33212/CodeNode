@@ -449,3 +449,16 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 ### 2026-10-09 自研 Agent 统一命名为 CodeNode
 
 内置自研 Agent 的显示名称在 config/agent.backends.json 集中改为 CodeNode，顶部显示 Chat CodeNode，菜单、设置选项、检测反馈与切换提示同步；内部 builtin 标识和直接模型/工具执行路径不变。构建、脚本检查、设置及包内切换双主题验证通过，截图已更新。暂存与固定包 19/19 UI 自检和实际启动自检通过；固定交付目录已覆盖，app.asar SHA-256 为 3EFD0709D7F0B3CF9F8470F73DC3741B8C7E5C534C407C632F429DB5BC575FF7，CodeNode.exe SHA-256 为 4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。只使用公开配置打包，用户私有配置和未提交 Soul 修改保留。
+
+
+### 2026-10-09 目标面板与节点删除交互整理
+
+移除 Agent 选择菜单中重复的连接设置入口，连接配置仍统一在全局设置。长期目标的整套表单移出聊天区，改为顶部目标按钮打开独立管理面板，并显示待处理数量；绑定任务时仅在对话中显示简短提示，可明确解除绑定。任务优先显示，其余管理项折叠；关闭不销毁表单草稿，项目切换才重建项目表单。
+
+修正删除焦点路由：画布节点内部通过指针捕获阶段明确选中其键盘所属节点，防止内部事件阻断后出现无选区；点击标题/边框则取得外层节点焦点。工作台统一处理 Delete/Backspace/X，React Flow 不再同时自动删除。内部 Delete 保留整节点，只删除图形；输入框或目标控件聚焦时拒绝外层删除。保留连线删除与撤销。新增节点同步 selectedId/selectedIds/视觉标记，多选状态栏使用真实数量；加载、撤销、重做清理选区与视觉标记，消除“有高亮却选中 0”的假选区。
+
+新增 test:workspace-ux-ui 并纳入显示组，用实际指针/按键验证两层删除、三种删除键、撤销、多选数量、连线删除、输入/目标控件保护、目标面板与聊天草稿保留、绑定提示及双主题同结构。目标重启复核 E2E、原设置双主题、输入法快捷键、会话、scope-frame、graph undo 和静态检查通过。完整核心回归 158 项通过，另发现既有打包证据脚本漏声明 @electron/asar；已补齐与现有锁一致的 3.4.1 开发依赖，并复验依赖门禁通过。未安装第三方 Agent。
+
+最终包内交互、目标控件、自检 19/19 和实际启动通过；固定目录 E:\CodeNode\release\win-unpacked 已覆盖，覆盖前确认 CodeNode 未运行。app.asar SHA-256：7385512B43EC85F03B619CB7DEDDB62549FFD6E7401333F5E009C564BC7CA6F8；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。原私有配置及未提交 Soul 修改保留，交付仅含公开模板与已提交 Soul。
+
+最终包 [原始交互验收摘要](validation/workspace-ux-preview/acceptance.json)、[日间截图](validation/workspace-ux-preview/light.png) 和 [夜间截图](validation/workspace-ux-preview/dark.png) 保留为交付证据；截图使用隔离演示工程。

@@ -327,7 +327,7 @@ export default function Canvas() {
         selectionMode={SelectionMode.Full}
         multiSelectionKeyCode="Control"
         selectionKeyCode="Shift"
-        deleteKeyCode={['Delete', 'Backspace']}
+        deleteKeyCode={null}
         onMoveEnd={() => setViewport(getViewport())}
         onNodeDragStart={(e, node) => {
           commit();
@@ -411,6 +411,13 @@ export default function Canvas() {
         // 而且它会与「写回 selected 标志」形成 [] → [x] → [] 的往复更新环。
         // 选中改由 onNodeClick / onPaneClick（事件期，非渲染期）同步。
         onNodeClick={(e, node: Node) => {
+          const target=e.target as HTMLElement;
+          // Inner editing has its own selection and key handler; Ctrl-click must not deselect its owner.
+          if(target.closest?.('.vs-scope'))return;
+          if(!target.closest?.('input,textarea,select,button,a[href],[contenteditable="true"]')){
+            const owner=target.closest<HTMLElement>('.react-flow__node');
+            if(owner){if(!owner.hasAttribute('tabindex'))owner.tabIndex=0;owner.focus({preventScroll:true});}
+          }
           if (e.altKey) {
             // Alt+左键：取消该节点选中
             const st = useGraphStore.getState();

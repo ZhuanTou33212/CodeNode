@@ -266,7 +266,7 @@ function VectorNode({ id, data, selected }: NodeProps) {
           updateNodeData(id, { width: Math.max(560, Math.round(canvas.width - 80)), height: Math.max(380, Math.round(canvas.height - 80)) });
           requestAnimationFrame(() => requestAnimationFrame(() => { void fitView({ nodes: [{ id }], padding: 0.06, maxZoom: 1, duration: 150 }); }));
         }} />
-        <VectorNodeBody store={store} stageScale={stageScale} data={d} fitRef={fitRef} />
+        <VectorNodeBody nodeId={id} store={store} stageScale={stageScale} data={d} fitRef={fitRef} />
         <VectorNodeFoot store={store} accent={accent} />
       </VectorStoreContext.Provider>
 
@@ -363,11 +363,13 @@ function VectorNodeHead({
 /* ==================== 节点主体：工具栏 + 画布 + 右栏 ==================== */
 
 function VectorNodeBody({
+  nodeId,
   store,
   stageScale,
   data,
   fitRef,
 }: {
+  nodeId: string;
   store: VectorStore;
   stageScale: number;
   data: VectorNodeData;
@@ -389,6 +391,7 @@ function VectorNodeBody({
    * 真正的交互控件（输入框/按钮等）自带焦点，不抢。
    */
   const focusBodyOnPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    useGraphStore.getState().setSelectedIds([nodeId]);
     const target = event.target as HTMLElement | null;
     if (target?.closest?.('input, textarea, select, button, a[href], [contenteditable="true"]')) return;
     bodyRef.current?.focus({ preventScroll: true });
@@ -406,7 +409,7 @@ function VectorNodeBody({
       ref={bodyRef}
       className={`wf-vector-body vs-scope nowheel ${dark ? '' : 'vs-light'}`}
       tabIndex={-1}
-      onPointerDown={focusBodyOnPointerDown}
+      onPointerDownCapture={focusBodyOnPointerDown}
     >
       <VectorNodeRail store={store} />
 

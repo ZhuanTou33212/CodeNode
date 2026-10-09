@@ -161,13 +161,18 @@ export default function App() {
       // 这条规则的两端分别是「选中画布节点后删不掉」和「在画布节点里按 Delete 把节点整个删了」。
       // 画布节点会在指针按下时把焦点收回 .vs-scope（VectorNode.tsx 的 focusBodyOnPointerDown），
       // 所以这里判断焦点归属是可靠的。
-      if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
+      if (!mod && (e.key === 'Delete' || e.key === 'Backspace' || e.key.toLowerCase() === 'x')) {
+        const focused=document.activeElement as HTMLElement|null;
+        if(focused&&focused!==document.body&&!focused.closest('.canvas-wrap'))return;
         if (!isTextEditingNow() && !isVectorNodeFocus()) {
           const st = useGraphStore.getState();
           const ids = st.selectedIds.length ? st.selectedIds : st.selectedId ? [st.selectedId] : [];
-          if (ids.length) {
+          const edgeIds=st.edges.filter(edge=>edge.selected).map(edge=>edge.id);
+          if (ids.length||edgeIds.length) {
             e.preventDefault();
-            deleteNodes(ids);
+            if(ids.length)deleteNodes(ids);
+            const remaining=new Set(useGraphStore.getState().edges.map(edge=>edge.id));
+            if(edgeIds.some(id=>remaining.has(id)))st.onEdgesChange(edgeIds.filter(id=>remaining.has(id)).map(id=>({id,type:'remove'})));
             return;
           }
         }
@@ -227,11 +232,6 @@ export default function App() {
       }
 
       // 删除选中节点已在上方（矢量画布让位之前）统一处理
-      if (e.key.toLowerCase() === 'x' && !mod) {
-        e.preventDefault();
-        if (selectedId) deleteNodes([selectedId]);
-        return;
-      }
 
       if (mod && e.key.toLowerCase() === 'j') {
         // Blender 风格：Ctrl+J 把选中的节点“加入”为一个新的范围节点

@@ -230,6 +230,7 @@ DISPLAY.push('test:token-cost-ui');
 DISPLAY.push('test:scheduling-ui');
 DISPLAY.push('test:backend-ui');
 DISPLAY.push('test:agent-switch-ui');
+DISPLAY.push('test:workspace-ux-ui');
 DISPLAY.push('test:streaming-ui');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);

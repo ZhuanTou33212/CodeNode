@@ -2,6 +2,7 @@ import { useEffect, useRef, type CSSProperties } from 'react';
 import { useUiStore } from '../store/uiStore';
 import AgentPanel from './side/AgentPanel';
 import AgentSwitcher from './AgentSwitcher';
+import GoalManager, {GoalBinding} from './GoalManager';
 
 export default function ConversationPanel() {
   const open = useUiStore(state => state.conversationOpen);
@@ -24,7 +25,8 @@ export default function ConversationPanel() {
   };
   return <aside ref={panel} id="conversation-panel" className="conversation-workspace conversation-right" hidden={!open} aria-label="对话" style={{'--conversation-width': width+'px'} as CSSProperties}>
     <div className="conversation-resize" role="separator" aria-label="调整对话栏宽度" aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0} onPointerDown={resize} onDoubleClick={()=>setWidth(400)} onKeyDown={event => { if(event.key==='ArrowLeft'||event.key==='ArrowRight') { event.preventDefault(); setWidth(width+(event.key==='ArrowLeft'?16:-16)); } }} />
-    <header className="conversation-head"><strong>对话</strong><AgentSwitcher /></header>
+    <header className="conversation-head"><strong>对话</strong><div className="conversation-head-actions"><GoalManager/><AgentSwitcher /></div></header>
+    <GoalBinding/>
     <AgentPanel />
   </aside>;
 }

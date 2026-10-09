@@ -150,7 +150,7 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 
 ### Agent 后端
 
-在 **对话栏顶部 → Chat／Agent 名称** 选择执行器：选中只是预览，点击“确认切换”才保存；有历史对话时使用“新建对话并切换”，保留原对话和输入草稿。运行或切换期间禁用入口。菜单以勾选标记当前 Agent；缺少本机启动命令或未配置的条目置灰显示“不可用”，只做命令探测、不发模型请求；完整连接仍在设置中检测。连接路径、参数、认证和 MCP 仍在 **设置 → 常规 → Agent 后端** 中配置，可选择 CodeNode（自研 Agent）、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。快捷切换有项目时只保存当前项目，未选择项目时保存本机默认。每个 Agent 的连接配置分别记住，切回时恢复已有命令、参数、模型和 ACP 设置；高级设置中仍可调整配置范围，项目可跟随本机设置。
+在 **对话栏顶部 → Chat／Agent 名称** 选择执行器：选中只是预览，点击“确认切换”才保存；有历史对话时使用“新建对话并切换”，保留原对话和输入草稿。运行或切换期间禁用入口。Agent 菜单只用于切换，不再放重复的连接设置入口；菜单以勾选标记当前 Agent；缺少本机启动命令或未配置的条目置灰显示“不可用”，只做命令探测、不发模型请求；完整连接仍在设置中检测。连接路径、参数、认证和 MCP 仍在 **设置 → 常规 → Agent 后端** 中配置，可选择 CodeNode（自研 Agent）、Codex ACP、DeepSeek Harness ACP、Hermes、OpenCode、OpenClaw 或自定义 ACP Agent。所有外部后端统一走 ACP v1 stdio；界面、画布工作流和 Goal 自动推进使用同一条执行链。快捷切换有项目时只保存当前项目，未选择项目时保存本机默认。每个 Agent 的连接配置分别记住，切回时恢复已有命令、参数、模型和 ACP 设置；高级设置中仍可调整配置范围，项目可跟随本机设置。
 
 | 后端 | 已安装的启动命令 | 默认参数 |
 | --- | --- | --- |
@@ -183,6 +183,15 @@ CodeNode 不下载 Agent、不使用 npx 自动安装。启动命令从 PATH/Win
 离线验收：`npm run test:backend-port`、`test:backends`、`test:multi-backends`、`test:acp-full` 和 `test:backend-workflow`。双主题与设置持久化：`test:backend-ui`。显式真实模型验收：`test:goal-auto-live`（OpenCode 自动推进）、`test:backend-live`（Codex ACP）、`test:backend-live-deepseek`（DeepSeek ACP）及 `test:backend-live-workflow`（隔离源码任务）；要求已有 Agent 和凭据，可能产生模型用量，不进入离线 CI。
 
 参考：[qwen-audio-agent 后端接入](https://github.com/QwenAudio/qwen-audio-agent/blob/main/docs/backends/overview.md)、[ACP v1](https://agentclientprotocol.com/protocol/v1/overview)。本机 OpenCode 的真实模型路径已验证，缺少本机 codex-acp/dsh 不会被标记为实测通过。
+
+
+### 目标管理与节点删除
+
+对话栏顶部的 **目标** 按钮打开独立管理面板，数字表示待处理事项。聊天区只在绑定任务时显示简短目标提示，支持解除绑定。面板优先展示任务，自动推进、范围/预算、经验及验收配置按需展开；关闭面板保留未保存草稿，切换主题保留对话、输入、模型和面板状态。
+
+删除整个节点：点击节点标题或边框后按 Delete／Backspace／X；Ctrl+Z 撤销。节点内部画布的 Delete 只删除选中图形；输入框与目标管理控件聚焦时不会删除画布节点。底部状态栏显示实际多选数量和当前删除对象；新增、加载、撤销和重做会同步视觉选区与实际选区。
+
+[新版日间效果](docs/validation/workspace-ux-preview/light.png) · [新版夜间效果](docs/validation/workspace-ux-preview/dark.png)。`npm run test:workspace-ux-ui` 使用实际鼠标与键盘事件验证上述行为；打包验收证据见 [acceptance.json](docs/validation/workspace-ux-preview/acceptance.json)。
 
 ## 许可证
 

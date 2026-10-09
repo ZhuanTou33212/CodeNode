@@ -236,7 +236,8 @@
     "test:rag-evidence-history": "node scripts/core/rag-evidence-history-test.cjs",
     "test:rag-live-versions": "node scripts/core/rag-live-versions-test.cjs",
     "test:backend-port": "node scripts/core/backend-port-test.cjs",
-    "test:agent-switch-ui": "node scripts/run-electron.cjs scripts/ui/agent-switcher-ui-test.cjs"
+    "test:agent-switch-ui": "node scripts/run-electron.cjs scripts/ui/agent-switcher-ui-test.cjs",
+    "test:workspace-ux-ui": "node scripts/run-electron.cjs scripts/ui/workspace-ux-ui-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",
@@ -327,6 +328,7 @@
     "electron-builder": "^24.13.3",
     "typescript": "^7.0.2",
     "vite": "^8.0.0",
-    "wait-on": "^8.0.1"
+    "wait-on": "^8.0.1",
+    "@electron/asar": "3.4.1"
   }
 }

@@ -1,28 +1,19 @@
+import { useEffect, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 
 export default function StatusBar() {
-  const nodeCount = useGraphStore((s) => s.nodes.length);
-  const edgeCount = useGraphStore((s) => s.edges.length);
-  const selectedId = useGraphStore((s) => s.selectedId);
-  const toast = useUiStore((s) => s.toast);
-  const viewport = useReactFlow().getViewport();
-
-  return (
-    <footer className="status-bar">
-      <span>节点 {nodeCount}</span>
-      <span>连线 {edgeCount}</span>
-      <span>选中 {selectedId ? 1 : 0}</span>
-      <span>缩放 {Math.round(viewport.zoom * 100)}%</span>
-      {/* #25(b)：toast 是失败/降级/停止等关键状态的唯一出口，必须是 live region
-          （role=status 隐含 aria-live=polite）；容器常驻 DOM，否则读屏读不到后插入的提示。 */}
-      <span className="status-toast" role="status" aria-live="polite" aria-atomic="true">
-        {toast || ''}
-      </span>
-      <span className="status-hint">
-        中键拖动画布 · Shift+A 添加节点 · Del/X 删除 · Ctrl+Z/Y 撤销重做
-      </span>
-    </footer>
-  );
+  const nodeCount=useGraphStore(s=>s.nodes.length);
+  const edgeCount=useGraphStore(s=>s.edges.length);
+  const selectedCount=useGraphStore(s=>s.selectedIds.length);
+  const toast=useUiStore(s=>s.toast);
+  const [focus,setFocus]=useState<'text'|'vector'|'canvas'|'panel'>('canvas');
+  const viewport=useReactFlow().getViewport();
+  useEffect(()=>{
+    const update=()=>{const e=document.activeElement as HTMLElement|null;setFocus(e?.matches('input,textarea,select,[contenteditable="true"]')?'text':e?.closest('.vs-scope')?'vector':e&&e!==document.body&&!e.closest('.canvas-wrap')?'panel':'canvas');};
+    update();document.addEventListener('focusin',update);document.addEventListener('focusout',update);return()=>{document.removeEventListener('focusin',update);document.removeEventListener('focusout',update);};
+  },[]);
+  const hint=focus==='text'?'文字编辑中 · Delete / Backspace 删除文字':focus==='vector'?'节点内编辑 · Delete 删除选中图形':focus==='panel'?'点击节点标题或边框后，可用 Delete 删除节点':selectedCount?`已选中 ${selectedCount} 个节点 · Delete / X 删除 · Ctrl+Z 撤销`:'点击节点标题或边框选中 · 中键拖动画布 · Shift+A 添加节点';
+  return <footer className="status-bar"><span>节点 {nodeCount}</span><span>连线 {edgeCount}</span><span>选中 {selectedCount}</span><span>缩放 {Math.round(viewport.zoom*100)}%</span><span className="status-toast" role="status" aria-live="polite" aria-atomic="true">{toast||''}</span><span className="status-hint">{hint}</span></footer>;
 }

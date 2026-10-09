@@ -33,7 +33,8 @@ app.whenReady().then(async () => {
     await js(`window.__codenodeSession.getState().newCanvas()`);
     await js(`window.__codenodeSession.getState().pushUser('保留会话')`);
     await js(`window.__codenodeUi.getState().setSideOpen(true)`);
-    await waitFor(() => js('!!document.querySelector(".goal-control-panel")'), 'Goal panel');
+    await js(`document.querySelector('[aria-label="打开目标管理"]').click()`);
+    await waitFor(() => js('!document.querySelector("#goal-management-panel").hidden'), 'Goal panel');
     const goal = await js(`window.codenode.goalCreate(${JSON.stringify(projectRoot)}, {title:'UI Goal',criteria:['验收通过']})`);
     assert.equal(goal.ok, true);
     const task = await js(`window.codenode.goalTaskCreate(${JSON.stringify(projectRoot)}, ${JSON.stringify(goal.value.id)}, {title:'UI Task', criteriaIds:[${JSON.stringify(goal.value.criteria[0].id)}], writeScope:['src']})`);
@@ -59,15 +60,18 @@ app.whenReady().then(async () => {
     goalStore.admit(projectRoot,goal.value.id,task.value.id,'ui-generated-experience-run');
     goalStore.recordRunEvidence(projectRoot,goal.value.id,task.value.id,'ui-generated-experience-run',verifiedRun);
     goalStore.settle(projectRoot,'ui-generated-experience-run',{status:'completed',verification:verifiedRun});
-    await js(`document.querySelector('.goal-control-panel summary').click()`);
+
     await js(`document.querySelector('.goal-toolbar button').click()`);
     await sleep(100);
+    await js(`document.querySelectorAll('.goal-management-section').forEach(d=>d.open=true)`);
     await waitFor(() => js(`document.querySelector('.goal-control-panel')?.innerText.includes('UI Task') && document.querySelector('.goal-control-panel')?.innerText.includes('UI confirmed workflow') && document.querySelector('.goal-control-panel')?.innerText.includes('自动建议')`), 'Goal, Task, and generated experience rendering');
     assert.equal(await js(`document.querySelector('[aria-label="等待条件满足后自动推进"]')?.checked`),false,'the desktop Goal toggle starts unchecked');
+    await js(`document.querySelector('.goal-auto-options').open=true`);
     await js(`document.querySelector('[aria-label="等待条件满足后自动推进"]').click()`);
     await waitFor(()=>js(`window.codenode.goalList(${JSON.stringify(projectRoot)}).then(result=>result.value?.goals.find(item=>item.id===${JSON.stringify(goal.value.id)})?.autoAdvanceAuthorized===true)`),'persisted Goal auto-advance authorization');
     const authorizedGoal=await js(`window.codenode.goalList(${JSON.stringify(projectRoot)})`);
     assert.equal(authorizedGoal.value.goals.find(item=>item.id===goal.value.id).autoAdvanceAuthorized,true,'the explicit desktop toggle persists in the project Goal');
+    await js(`document.querySelectorAll('.goal-management-section').forEach(d=>d.open=true)`);
     await js(`[...document.querySelectorAll('.goal-control-panel button')].find(b=>b.textContent==='确认写入项目经验').click()`);
     const confirmedContext = await js(`window.codenode.goalContextForRole(${JSON.stringify(projectRoot)}, ${JSON.stringify(goal.value.id)}, ${JSON.stringify(task.value.id)}, 'implement')`);
     assert.equal(confirmedContext.value.context.confirmedExperience[0].content, 'UI confirmed workflow');

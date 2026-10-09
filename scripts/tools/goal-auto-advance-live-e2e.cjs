@@ -99,6 +99,7 @@ async function desktop() {
   await js('window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false})');
   await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
   await js('window.__codenodeUi.getState().setSideOpen(true)');
+  await js(`document.querySelector('[aria-label="打开目标管理"]').click()`);
   const getGoal = id => goals.read(project).goals.find(g => g.id === id);
   const getTask = id => getGoal(id).tasks[0];
   const list = () => js(`(async()=>{const result=await window.codenode.goalList(${JSON.stringify(project)});document.querySelector('.goal-toolbar button')?.click();return result;})()`);
@@ -113,6 +114,7 @@ async function desktop() {
     await js(`(()=>{const p=document.querySelector('.goal-control-panel');p.open=true;const s=p.querySelector('.goal-toolbar select');s.value=${JSON.stringify(id)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await waitFor(() => js(`document.querySelector('.goal-toolbar select')?.value===${JSON.stringify(id)} && !!document.querySelector('[aria-label="等待条件满足后自动推进"]')`), 'Goal authorization toggle');
     assert.equal(await js('document.querySelector(\'[aria-label="等待条件满足后自动推进"]\').checked'), false);
+    await js(`document.querySelector('.goal-auto-options').open=true`);
     await js('document.querySelector(\'[aria-label="等待条件满足后自动推进"]\').click()');
     await waitFor(() => getGoal(id).autoAdvanceAuthorized === true, 'persisted explicit UI authorization');
   };

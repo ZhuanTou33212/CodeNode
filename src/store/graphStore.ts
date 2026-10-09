@@ -451,8 +451,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   addNode: (node) =>
     set((s) => ({
-      nodes: [...s.nodes, withZIndex({ ...node, selected: true })],
+      nodes: [...s.nodes.map(n=>n.selected?{...n,selected:false}:n), withZIndex({ ...node, selected: true })],
       selectedId: node.id,
+      selectedIds: [node.id],
       ...withHistory(s),
     })),
 
@@ -752,10 +753,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       if (s.past.length === 0) return s;
       const prev = s.past[s.past.length - 1];
       return {
-        nodes: prev.nodes.map(withZIndex),
-        edges: prev.edges,
+        nodes: prev.nodes.map(n=>withZIndex({...n,selected:false})),
+        edges: prev.edges.map(e=>({...e,selected:false})),
         selectedId: null,
-        past: s.past.slice(0, -1),
+      selectedIds: [],        past: s.past.slice(0, -1),
         future: [...s.future, snapshot(s)],
       };
     }),
@@ -765,10 +766,10 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       if (s.future.length === 0) return s;
       const next = s.future[s.future.length - 1];
       return {
-        nodes: next.nodes.map(withZIndex),
-        edges: next.edges,
+        nodes: next.nodes.map(n=>withZIndex({...n,selected:false})),
+        edges: next.edges.map(e=>({...e,selected:false})),
         selectedId: null,
-        future: s.future.slice(0, -1),
+      selectedIds: [],        future: s.future.slice(0, -1),
         past: [...s.past, snapshot(s)],
       };
     }),
@@ -779,19 +780,19 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       edges: [],
       root: { nodes: [], edges: [] },
       selectedId: null,
-      flow: {},
+      selectedIds: [],      flow: {},
       ...withHistory(s),
     })),
 
   load: (nodes, edges) => {
     const clean = stripLegacyTypes(nodes, edges);
-    const normalized = normalizeParentChild(clean.nodes).map(withZIndex);
+    const normalized = normalizeParentChild(clean.nodes).map(n=>withZIndex({...n,selected:false}));
     set({
       nodes: normalized,
       edges: clean.edges,
       root: { nodes: normalized, edges: clean.edges },
       selectedId: null,
-      past: [],
+      selectedIds: [],      past: [],
       future: [],
       flow: {},
     });
@@ -811,7 +812,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       edges: clean.edges,
       root: { nodes: normalized, edges: clean.edges },
       selectedId: null,
-      past: [],
+      selectedIds: [],      past: [],
       future: [],
       flow: {},
     });

@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "recordedAt": "2026-10-09T14:38:02.806Z",
+  "mode": "packaged",
+  "asarSha256": "7385512b43ec85f03b619cb7deddb62549ffd6e7401333f5e009c564bc7ca6f8",
+  "checks": [
+    "native node/shape Delete separation",
+    "Backspace/X and undo",
+    "multi-selection count",
+    "wire deletion",
+    "text and goal-control focus protection",
+    "hidden goal management form",
+    "attention badge and task binding",
+    "drawer and chat drafts retained",
+    "same controls across themes",
+    "no redundant Agent settings entry"
+  ]
+}

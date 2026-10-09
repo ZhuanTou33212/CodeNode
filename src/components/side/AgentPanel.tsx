@@ -19,7 +19,6 @@ import { PlanCard } from '../PlanCard';
 import ResumePlanNotice from './ResumePlanNotice';
 import HoverPopover from './HoverPopover';
 import ModelPicker from './ModelPicker';
-import GoalControlPanel from './GoalControlPanel';
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -461,7 +460,6 @@ export default function AgentPanel() {
           <UsageMeter />
         </div>
       </div>
-      <GoalControlPanel />
 
       {/* 计划卡：任务清单来自主进程的 kind:'plan' 增量（update_plan 工具）。
           没有计划时它自己返回 null —— 不占位、不留空壳。 */}

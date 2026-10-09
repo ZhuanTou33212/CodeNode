@@ -55,7 +55,7 @@ app.whenReady().then(async()=>{
   await js('window.__codenodeSession.setState({streaming:true})');await sleep(100);assert.equal(await js("document.querySelector('[aria-label=\"选择 Agent\"]').disabled"),true,'running disables switch');await js('window.__codenodeSession.setState({streaming:false})');
   await wait(()=>js("!document.querySelector('[aria-label=\"选择 Agent\"]').disabled"),'idle');
   await js("document.querySelector('[aria-label=\"选择 Agent\"]').click()");assert.equal(await js("document.querySelector('[data-backend=acp]').disabled"),true,'unconfigured custom connection cannot be selected');assert.equal(await js("document.querySelector('[data-backend=codex]').disabled"),!settings.read(project,process.env.CODENODE_USER_DATA_DIR).availability.codex.installed);
-  await click('连接设置');await wait(()=>js("!!document.querySelector('[data-testid=backend-settings]')"),'advanced settings');
+  assert.equal(await js("!!document.querySelector('.agent-switch-settings')"),false,'Agent list has no duplicate settings entry');await js("document.querySelector('[aria-label=\"全局设置\"]').click()");await wait(()=>js("!!document.querySelector('[data-testid=backend-settings]')"),'global settings');
   assert.equal(await js('window.__codenodeSession.getState().streaming'),false);
   console.log('AGENT SWITCH UI: PASS (header placement, preview/confirmation, Escape, profile restoration, retained history/draft, running guard, custom connection setup, both themes)');
   console.log('PREVIEWS='+shots);app.exit(0);
