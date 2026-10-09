@@ -17,7 +17,7 @@ app.whenReady().then(async()=>{
       const data={revision:1,goals:[{id:'g1',title:'稳定登录',objective:'解决登录失败',scope:'src',exclusions:'',status:'active',updatedAt:new Date().toISOString(),criteriaRevision:1,criteria:[{id:'c1',text:'登录测试通过',required:true}],tasks:[
         {id:'t1',title:'定位问题',objective:'查看登录入口',status:'todo',updatedAt:new Date().toISOString(),dependsOn:[],readScope:[],writeScope:[],criteriaIds:['c1'],decisionIds:[],runIds:[]},
         {id:'t2',title:'实现修复',objective:'修改登录逻辑',status:'todo',updatedAt:new Date().toISOString(),dependsOn:['t1'],readScope:[],writeScope:['src'],criteriaIds:['c1'],decisionIds:[],runIds:[]}],decisions:[],evidence:[],context:{rules:[],taskMaterial:[],confirmedExperience:[]},budget:{},qualified:false}]};
-      let agentChatCalls=0,planCalls=0;
+      let agentChatCalls=0,planCalls=0,simulateExternalGoalEdit=false;
       window.codenode=new Proxy({
         goalList:async()=>({ok:true,value:structuredClone(data)}),
         goalCreate:async(_root,input)=>{const created={...structuredClone(data.goals[0]),id:'g2',title:input.title,objective:input.objective,status:'active',criteria:input.criteria.map((text,index)=>({id:'new-c'+index,text,required:true})),tasks:[],evidence:[],decisions:[],updatedAt:new Date().toISOString()};data.goals.unshift(created);data.revision++;return{ok:true,value:created};},
@@ -27,7 +27,7 @@ app.whenReady().then(async()=>{
         goalAudit:async(_root,goalId)=>({ok:true,value:{qualified:data.goals.find(item=>item.id===goalId).tasks.every(task=>task.status==='completed')}}),
         goalUpdate:async(_root,goalId,patch)=>{const goal=data.goals.find(item=>item.id===goalId);Object.assign(goal,patch);data.revision++;return{ok:true,value:structuredClone(goal)};},
         goalPlanPropose:async()=>{planCalls++;return{ok:true,value:{steps:[{key:'s1',title:'检查现状',objective:'读取现有实现',acceptance:'找到入口',dependsOn:[],writeScope:[]},{key:'s2',title:'完成修改',objective:'实施修复',acceptance:'检查通过',dependsOn:['s1'],writeScope:['src']}]}};},
-        agentChat:async payload=>{agentChatCalls++;const goal=data.goals.find(item=>item.id===payload.goalId),task=goal?.tasks.find(item=>item.id===payload.taskId);if(task){task.status='completed';task.lastRun={runId:'ui-run-'+agentChatCalls,status:'completed',summary:'做了什么：'+task.title,finishedAt:new Date().toISOString()};data.revision++;}return{ok:true,reply:task?'完成 '+task.title:'unused',tools:[]};},
+        agentChat:async payload=>{agentChatCalls++;const goal=data.goals.find(item=>item.id===payload.goalId),task=goal?.tasks.find(item=>item.id===payload.taskId);if(task){task.status='completed';task.lastRun={runId:'ui-run-'+agentChatCalls,status:'completed',summary:'做了什么：'+task.title,finishedAt:new Date().toISOString()};data.revision++;if(simulateExternalGoalEdit&&goal.id==='g2'&&task.id==='generated-s1'){goal.tasks.find(item=>item.id==='generated-s2').objective='另一会话修改了后续任务';data.revision++;}}return{ok:true,reply:task?'完成 '+task.title:'unused',tools:[]};},
       },{get(target,name){if(name in target)return target[name];if(String(name).startsWith('on'))return()=>()=>{};return async()=>({ok:false,models:[],files:[],tools:[],runs:[],events:[],backend:{},settings:{},goals:[]});}});
       project.setState({root:${JSON.stringify(root)}});
       ui.getState().updatePreferences({workbenchView:'overview'});
@@ -83,6 +83,14 @@ app.whenReady().then(async()=>{
       out.autoGoalPreview=document.querySelectorAll('.goal-graph-proposal li').length;
       out.autoGoalTasksBeforeConfirm=data.goals[0].tasks.length;
       out.planCallsAfterGoal=planCalls;
+      [...document.querySelectorAll('.goal-graph-proposal button')].find(button=>button.textContent.includes('确认加入')).click();
+      await until(()=>data.goals.find(item=>item.id==='g2').tasks.length===2);
+      await until(()=>document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length===2&&![...document.querySelectorAll('.goal-task-graph-toolbar button')].find(button=>button.textContent.includes('开始执行 Goal')).disabled);
+      simulateExternalGoalEdit=true;
+      [...document.querySelectorAll('.goal-task-graph-toolbar button')].find(button=>button.textContent.includes('开始执行 Goal')).click();
+      await until(()=>document.querySelector('.goal-graph-message')?.textContent.includes('另一会话修改'));
+      out.stoppedAfterExternalEdit=data.goals.find(item=>item.id==='g2').tasks.map(item=>item.status);
+      out.externalEditRunCalls=agentChatCalls-out.goalRunCalls;
       return out;
     })()`);
     assert.equal(result.nodes,2);assert.equal(result.edges,1);assert.match(result.selectedTask,/定位问题/);
@@ -92,6 +100,7 @@ app.whenReady().then(async()=>{
     assert.equal(result.planNodes,2);assert.equal(result.planEdges,1);assert.equal(result.planPending,true);
     assert.equal(result.slashPlanNodes,4);assert.equal(result.planCalls,2);assert.equal(result.agentChatCalls,4);
     assert.equal(result.goalDraft,'改善登录稳定性');assert.equal(result.autoGoalPreview,2);assert.equal(result.autoGoalTasksBeforeConfirm,0);assert.equal(result.planCallsAfterGoal,3);
+    assert.deepEqual(result.stoppedAfterExternalEdit,['completed','todo']);assert.equal(result.externalEditRunCalls,1);
     console.log('GOAL TASK GRAPH UI: PASS (Goal graph, selection, theme state, plan import, /plan, /goal)');
     app.exit(0);
   }catch(error){console.error(error);try{console.error(await win.webContents.executeJavaScript(`({body:document.body.innerText.slice(0,1200),overview:!!document.querySelector('.goal-overview'),editor:!!document.querySelector('.overview-goal-editor'),goalRow:!!document.querySelector('[data-goal-id="g1"]'),graphNodes:document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length,planAction:!!document.querySelector('.ap-plan-canvas-action'),goalDraft:!!document.querySelector('.goal-create-form')})`));}catch{}app.exit(1);}

@@ -29,6 +29,11 @@ function taskNodes(tasks: Task[]): Node[] {
   return tasks.map(task=>{const x=level(task.id),row=rows.get(x)||0;rows.set(x,row+1);return {id:task.id,type:'goalTask',deletable:false,position:task.canvasPosition||{x:x*245+30,y:row*115+35},data:{title:task.title,objective:task.objective,status:task.status}};});
 }
 
+function goalContract(goal: GoalItem): string {
+  return JSON.stringify({objective:goal.objective,scope:goal.scope,exclusions:goal.exclusions,criteriaRevision:goal.criteriaRevision,
+    tasks:goal.tasks.map((task:Task&{readScope?:string[];criteriaIds?:string[]})=>({id:task.id,title:task.title,objective:task.objective,dependsOn:task.dependsOn,readScope:task.readScope,writeScope:task.writeScope,criteriaIds:task.criteriaIds}))});
+}
+
 export default function GoalTaskGraph({goal,root,autoPropose=false,onAutoProposeConsumed}:{goal:GoalItem;root:string;autoPropose?:boolean;onAutoProposeConsumed?:()=>void}) {
   const select=useGoalControlStore(s=>s.select),selectedTaskId=useGoalControlStore(s=>s.selectedTaskId),refresh=useGoalControlStore(s=>s.refresh);
   const revision=useGoalControlStore(s=>s.revision);
@@ -95,9 +100,13 @@ export default function GoalTaskGraph({goal,root,autoPropose=false,onAutoPropose
     setRunning(true);stopAfterCurrent.current=false;setMessage('正在按依赖顺序执行 Goal Task。');
     useUiStore.getState().updatePreferences({workbenchView:'conversation'});
     const attempted=new Set<string>();
+    const initialContract=goalContract(goal);
     try{
       for(let index=0;index<goal.tasks.length&&!stopAfterCurrent.current;index++){
         if(useProjectStore.getState().root!==root)break;
+        const before=await window.codenode.goalList(root);
+        const currentGoal=before.value?.goals?.find((item:{id:string})=>item.id===goal.id) as GoalItem|undefined;
+        if(!before.ok||!currentGoal||goalContract(currentGoal)!==initialContract){setMessage('Goal 的任务或验收范围已由另一会话修改，已停止后续阶段；请刷新后重新启动。');break;}
         const gate=await window.codenode.goalCanRun(root,goal.id);
         if(!gate.ok||gate.value?.decision!=='run'||!gate.value.task){setMessage(gate.value?.reason||gate.error||'当前没有可执行任务');break;}
         const next=gate.value.task as Task;
@@ -112,7 +121,8 @@ export default function GoalTaskGraph({goal,root,autoPropose=false,onAutoPropose
       }
       const audit=await window.codenode.goalAudit(root,goal.id);
       if(audit.ok&&audit.value?.qualified&&useProjectStore.getState().root===root){
-        const completed=await window.codenode.goalUpdate(root,goal.id,{status:'completed'});
+        const alreadyCompleted=audit.value.goal?.status==='completed';
+        const completed=alreadyCompleted?{ok:true}:await window.codenode.goalUpdate(root,goal.id,{status:'completed'});
         setMessage(completed.ok?'Goal 的必需验收条件已满足，目标已完成。':completed.error||'目标尚待确认');
         await refresh(root);
       }

@@ -386,7 +386,8 @@ function register(ctx) {
       const outline=planner.projectOutline(root);
       const response=await agent.chatCompletion(cfg,planner.messages({objective,context:context+'\n项目结构（最多两层）：\n'+outline}),{timeoutMs:90000});
       if(!response?.content)throw new Error('规划模型没有返回内容；请检查 CodeNode 模型连接');
-      return {ok:true,value:planner.parseProposal(response.content),model:response.actualModel||cfg.model};
+      const parsed=planner.parseProposal(response.content);
+      return {ok:true,value:kind==='goal'?planner.withGoalAcceptanceStep(parsed):parsed,model:response.actualModel||cfg.model};
     }catch(error){return{ok:false,error:String(error?.message||error)};}
   });
   ipcMain.handle('goal:run-review', async (_event, projectRoot, goalId, taskId, runId) => withGoalRoot(projectRoot, root => goalStore.runReview(root,goalId,taskId,runId)));
