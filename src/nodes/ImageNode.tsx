@@ -110,7 +110,7 @@ function ImageNode({ id, data, selected }: NodeProps) {
 
   return (
     <div
-      className={`wf-node wf-image-node ${selected ? 'is-selected' : ''}${dragOver ? ' is-dragover' : ''}`}
+      className={`wf-node wf-image-node wf-status-${d.status || 'pending'} ${selected ? 'is-selected' : ''}${dragOver ? ' is-dragover' : ''}`}
       style={{ borderColor: `${accent}b8`, '--wf-accent': accent, width } as CSSProperties}
       onDragOver={(e) => {
         const has = Array.from(e.dataTransfer?.items || []).some(

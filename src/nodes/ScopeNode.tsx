@@ -31,7 +31,7 @@ function ScopeNode({ id, data, selected }: NodeProps) {
 
   return (
     <div
-      className={`wf-scope ${selected ? 'is-selected' : ''} ${hoverScopeId === id ? 'is-hover-target' : ''}`}
+      className={`wf-scope wf-status-${d.status || 'pending'} ${selected ? 'is-selected' : ''} ${hoverScopeId === id ? 'is-hover-target' : ''}`}
       style={scopeStyle}
     >
       <NodeResizer

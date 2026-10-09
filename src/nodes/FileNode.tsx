@@ -9,7 +9,7 @@ function FileNode({ data, selected }: NodeProps) {
   const accent = d.accent || '#f97316';
 
   return (
-    <div className={`wf-node wf-file wf-node-file ${selected ? 'is-selected' : ''}`} style={{ borderColor: `${accent}b8`, '--wf-accent': accent } as CSSProperties}>
+    <div className={`wf-node wf-file wf-node-file wf-status-${status} ${selected ? 'is-selected' : ''}`} style={{ borderColor: `${accent}b8`, '--wf-accent': accent } as CSSProperties}>
       <Handle type="target" position={Position.Left} className="wf-handle" />
       <div className="wf-node-title">
         <span className="wf-file-icon">F</span>

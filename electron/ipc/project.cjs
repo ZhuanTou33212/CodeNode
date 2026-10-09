@@ -414,7 +414,7 @@ function register(ctx) {
         const input = state.selectedInputs[node.id] || [];
         const response = await runWorkflowChat(event, {
           projectRoot: root,
-          prompt: `执行工作流节点「${String(data.label || node.id)}」：\n${prompt}\n上游结果：\n${input.map((item) => item.id + ': ' + item.output).join('\n') || '无'}\n输出名称：${String(data.outputName || data.label || node.id)}\n完成条件：${String(data.completionCondition || '返回执行结果与验证信息')}\n可能写入范围：${String(data.writeScope || '未声明')}\n完成后只返回本节点的执行结果与验证信息。`,
+          prompt: `你正在执行一个画布工作流阶段。请先理解任务，再实际使用可用工具完成它。\n\n阶段：${String(data.label || node.id)}\n任务要求：\n${prompt}\n\n上游阶段交付：\n${input.map((item) => item.id + ': ' + item.output).join('\n') || '无'}\n\n交付名称：${String(data.outputName || data.label || node.id)}\n完成条件：${String(data.completionCondition || '返回执行结果与验证信息')}\n允许或预期写入范围：${String(data.writeScope || '未声明')}\n\n任务完成后，请用通俗中文给用户一份简洁但具体的阶段总结，严格按以下标题组织：\n要解决的问题：说明本阶段要处理什么。\n做了什么：列出实际完成的关键动作和产物。\n解决方法：说明采用了什么思路、工具或步骤，为什么这样处理。\n结果与验证：说明得到什么结果、做过哪些检查及其结果；没有验证就明确写“未验证”。\n遗留事项：说明尚未解决或需要用户确认的内容；没有则写“无”。\n总结只写本轮实际执行和工具结果能够支持的事实；不要把计划说成已完成，不要猜测，也不要堆砌未解释的技术术语。`,
           history: [], canvasSummary: JSON.stringify(fullGraph.nodes.map((item) => ({ id: item.id, type: item.type, label: item.data?.label, status: item.data?.status }))),
           nodeId: node.id, requestId: 'workflow-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
           document: { root: fullGraph },

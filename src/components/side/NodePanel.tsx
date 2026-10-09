@@ -1,9 +1,14 @@
+import { useEffect, useState } from 'react';
 import { useGraphStore } from '../../store/graphStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSessionStore } from '../../store/sessionStore';
 import { useUiStore } from '../../store/uiStore';
 import type { FileData, ImageData, ScopeData } from '../../types';
 import { flattenFilePaths } from '../../lib/flow';
+import { workflowGraph, workflowSignature } from '../../lib/workflowRunState';
 import FlowList from './FlowList';
+
+type StageExecution = { phase: 'loading' | 'ready' | 'unavailable'; output?: string; error?: string };
 
 /** 标签页 1：选中节点的属性检查器（原独立「检查器」浮层的全部内容） */
 export default function NodePanel({ onOpenFile }: { onOpenFile: (relPath: string) => void }) {
@@ -14,6 +19,38 @@ export default function NodePanel({ onOpenFile }: { onOpenFile: (relPath: string
   const setToast = useUiStore((s) => s.setToast);
   const projectRoot = useProjectStore((s) => s.root);
   const tree = useProjectStore((s) => s.tree);
+  const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
+  const workflowId = useSessionStore((s) => s.activeId) || 'canvas';
+  const executionSignature = workflowSignature(workflowGraph(nodes, edges));
+  const [stageExecution, setStageExecution] = useState<StageExecution | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (!node || !projectRoot || !window.codenode?.workflowState) {
+      setStageExecution(null);
+      return () => { alive = false; };
+    }
+    if (node.data.status === 'running') {
+      setStageExecution({ phase: 'loading' });
+      return () => { alive = false; };
+    }
+    setStageExecution({ phase: 'loading' });
+    void window.codenode.workflowState(projectRoot, workflowId, {
+      action: 'read', graph: workflowGraph(nodes, edges),
+    }).then((result) => {
+      if (!alive) return;
+      if (!result.ok || !result.state) {
+        setStageExecution({ phase: 'unavailable', error: result.error || '暂时无法读取本阶段记录' });
+        return;
+      }
+      const output = result.state.outputs[node.id];
+      setStageExecution({ phase: 'ready', output: typeof output === 'string' ? output : '' });
+    }).catch((error) => {
+      if (alive) setStageExecution({ phase: 'unavailable', error: String(error?.message || error) });
+    });
+    return () => { alive = false; };
+  }, [node?.id, node?.data.status, projectRoot, workflowId, executionSignature]);
 
   // 进入编辑前记录一次快照，使“编辑节点”成为一次可撤销的节点操作
   const beginEdit = () => useGraphStore.getState().commit();
@@ -93,6 +130,29 @@ export default function NodePanel({ onOpenFile }: { onOpenFile: (relPath: string
           ))}
         </select>
       </div>
+
+      {(node.type === 'task' || node.type === 'stage' || node.type === 'tool') && (
+        <section className={`stage-execution-card is-${status}`} aria-label="本阶段 Agent 执行情况">
+          <div className="stage-execution-heading">
+            <strong>本阶段执行情况</strong>
+            <span>{status === 'running' ? '正在执行' : status === 'done' ? '已完成' : status === 'failed' ? '未完成' : status === 'blocked' ? '等待处理' : '尚未执行'}</span>
+          </div>
+          {status === 'running' ? (
+            <p>Agent 正在处理这个阶段。任务要求：{String(d.prompt || d.goal || '尚未填写任务说明')}</p>
+          ) : stageExecution?.phase === 'loading' ? (
+            <p>正在读取阶段记录…</p>
+          ) : stageExecution?.phase === 'unavailable' ? (
+            <p>{stageExecution.error}</p>
+          ) : stageExecution?.output ? (
+            <>
+              <p className="stage-execution-hint">下面是 Agent 在本阶段留下的结果与验证说明。</p>
+              <pre className="stage-execution-output">{stageExecution.output}</pre>
+            </>
+          ) : (
+            <p>还没有可查看的执行总结。任务完成后，这里会显示 Agent 解决的问题、采取的做法和验证结果。</p>
+          )}
+        </section>
+      )}
 
       {(node.type === 'task' || node.type === 'stage' || node.type === 'tool') && (
         <>

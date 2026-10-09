@@ -36,6 +36,10 @@ export default function SidePanel() {
   const messageCount = useSessionStore((s) => s.messages.length);
   const streaming = useSessionStore((s) => s.streaming);
 
+  useEffect(() => {
+    if (selectedId) setSideTab('node');
+  }, [selectedId, setSideTab]);
+
   const openFileInPreview = useCallback(() => setSideTab('preview'), [setSideTab]);
 
   /** ⌘P / Ctrl+P：跳到项目标签并聚焦过滤框 */
