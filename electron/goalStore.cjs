@@ -63,6 +63,7 @@ function deletePlannedTask(root,goalId,taskId,expectedRevision){return mutate(ro
   const g=findGoal(d,goalId),t=findTask(g,taskId);
   if(Number.isInteger(expectedRevision)&&d.revision!==expectedRevision)throw new Error('Goal 已由其他会话更新，请刷新后再删除');
   if(g.status!=='active'||!['todo','ready'].includes(t.status)||t.executionStatus||(t.runIds||[]).length||t.waitCondition||t.autoAdvance||(g.evidence||[]).some(e=>e.taskId===t.id)||d.admissions.some(a=>a.taskId===t.id))throw new Error('已有执行或证据的 Task 不能删除');
+  if(d.decisions.some(decision=>decision.goalId===g.id&&(decision.taskIds||[]).includes(t.id)))throw new Error('该 Task 关联业务决定，不能删除');
   if(g.tasks.some(other=>other.id!==t.id&&(other.dependsOn||[]).includes(t.id)))throw new Error('先移除下游依赖连线，再删除这个 Task');
   g.tasks=g.tasks.filter(item=>item.id!==t.id);g.updatedAt=new Date().toISOString();return {id:t.id};
 }).result;}

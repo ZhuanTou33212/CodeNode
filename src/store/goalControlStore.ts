@@ -3,6 +3,7 @@ import { useProjectStore } from './projectStore';
 
 export type GoalItem={id:string;title:string;objective:string;scope:string;exclusions:string;status:string;updatedAt:string;criteriaRevision:number;criteria:any[];tasks:any[];decisions:any[];evidence:any[];context:any;complete:boolean;qualified:boolean;budget:any;autoAdvanceAuthorized?:boolean;autoAdvanceUsedRuns?:number};
 let waitRefreshTimer:ReturnType<typeof setTimeout>|null=null;
+let refreshTicket=0;
 function scheduleWaitRefresh(root:string,goals:GoalItem[]){
   if(waitRefreshTimer)clearTimeout(waitRefreshTimer);
   waitRefreshTimer=null;
@@ -18,16 +19,17 @@ export const useGoalControlStore=create<GoalControlState>((set,get)=>({goals:[],
   startDraft:(objective)=>set({pendingDraft:objective}),
   clearDraft:()=>set({pendingDraft:null}),
   refresh:async(root=useProjectStore.getState().root)=>{
+    const ticket=++refreshTicket;
     if(!root||!window.codenode?.goalList){if(waitRefreshTimer)clearTimeout(waitRefreshTimer);waitRefreshTimer=null;set({goals:[],revision:0,selectedGoalId:null,selectedTaskId:null,error:''});return;}
     set({loading:true,error:''});
-    try{const result=await window.codenode.goalList(root);if(useProjectStore.getState().root!==root)return;if(!result.ok)throw new Error(result.error||'读取项目目标失败');
+    try{const result=await window.codenode.goalList(root);if(useProjectStore.getState().root!==root||ticket!==refreshTicket)return;if(!result.ok)throw new Error(result.error||'读取项目目标失败');
       const goals=(result.value?.goals||[]) as GoalItem[];const previous=get();
       const selectedGoalId=goals.some(g=>g.id===previous.selectedGoalId)?previous.selectedGoalId:goals[0]?.id||null;
       const selectedGoal=goals.find(g=>g.id===selectedGoalId);
       const selectedTask=selectedGoal?.tasks.find(t=>t.id===previous.selectedTaskId);
       const selectedTaskId=selectedTask&&!['completed','cancelled'].includes(selectedTask.status)?selectedTask.id:null;
       set({goals,revision:Number(result.value?.revision)||0,selectedGoalId,selectedTaskId,error:''});scheduleWaitRefresh(root,goals);
-    }catch(error){if(useProjectStore.getState().root===root)set({error:error instanceof Error?error.message:String(error)});}
-    finally{if(useProjectStore.getState().root===root)set({loading:false});}
+    }catch(error){if(useProjectStore.getState().root===root&&ticket===refreshTicket)set({error:error instanceof Error?error.message:String(error)});}
+    finally{if(useProjectStore.getState().root===root&&ticket===refreshTicket)set({loading:false});}
   }
 }));

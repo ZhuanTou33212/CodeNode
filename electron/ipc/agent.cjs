@@ -383,8 +383,8 @@ function register(ctx) {
       const baseCfg=agent.loadConfig(null),cfg={...agent.loadConfig(root),maxTokens:4096,modelTaskType:'planning'};
       const sel=request?.modelId?modelStore.findModel(userDataDir(),baseCfg,String(request.modelId)):null;
       if(sel){if(sel.apiBase)cfg.apiBase=sel.apiBase;if(sel.apiKey)cfg.apiKey=sel.apiKey;if(sel.model)cfg.model=sel.model;if(sel.protocol)cfg.protocol=sel.protocol;if(sel.auth)cfg.auth=sel.auth;if(sel.endpoint)cfg.endpoint=sel.endpoint;if(sel.apiVersion)cfg.apiVersion=sel.apiVersion;if(sel.azureDeployment)cfg.azureDeployment=sel.azureDeployment;if(sel.maxTokensField)cfg.maxTokensField=sel.maxTokensField;}
-      const files=fs.readdirSync(root,{withFileTypes:true}).filter(entry=>!['.git','.codenode','node_modules','release','out'].includes(entry.name)).slice(0,60).map(entry=>entry.name+(entry.isDirectory()?'/':''));
-      const response=await agent.chatCompletion(cfg,planner.messages({objective,context:context+'\n项目顶层条目：'+files.join(', ')}),{timeoutMs:90000});
+      const outline=planner.projectOutline(root);
+      const response=await agent.chatCompletion(cfg,planner.messages({objective,context:context+'\n项目结构（最多两层）：\n'+outline}),{timeoutMs:90000});
       if(!response?.content)throw new Error('规划模型没有返回内容；请检查 CodeNode 模型连接');
       return {ok:true,value:planner.parseProposal(response.content),model:response.actualModel||cfg.model};
     }catch(error){return{ok:false,error:String(error?.message||error)};}

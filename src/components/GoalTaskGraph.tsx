@@ -26,7 +26,7 @@ function taskNodes(tasks: Task[]): Node[] {
   const depth=new Map<string,number>(),visiting=new Set<string>();
   const level=(id:string):number=>{if(depth.has(id))return depth.get(id)!;if(visiting.has(id))return 0;visiting.add(id);const task=byId.get(id);const value=task?.dependsOn?.length?Math.max(...task.dependsOn.map(dep=>level(dep)))+1:0;visiting.delete(id);depth.set(id,value);return value;};
   const rows=new Map<number,number>();
-  return tasks.map(task=>{const x=level(task.id),row=rows.get(x)||0;rows.set(x,row+1);return {id:task.id,type:'goalTask',position:task.canvasPosition||{x:x*245+30,y:row*115+35},data:{title:task.title,objective:task.objective,status:task.status}};});
+  return tasks.map(task=>{const x=level(task.id),row=rows.get(x)||0;rows.set(x,row+1);return {id:task.id,type:'goalTask',deletable:false,position:task.canvasPosition||{x:x*245+30,y:row*115+35},data:{title:task.title,objective:task.objective,status:task.status}};});
 }
 
 export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
@@ -47,9 +47,10 @@ export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
   const mutate=async(action:()=>Promise<{ok:boolean;error?:string}>,success:string)=>{
     if(!editable||!window.codenode)return;
     setBusy(true);setMessage('');
-    try{const result=await action();if(useProjectStore.getState().root!==root)return;if(!result.ok)throw new Error(result.error||'更新失败');await refresh(root);setMessage(success);}catch(error){if(useProjectStore.getState().root===root)setMessage(String((error as Error).message||error));}finally{setBusy(false);}
+    try{const result=await action();if(useProjectStore.getState().root!==root)return;if(!result.ok)throw new Error(result.error||'更新失败');await refresh(root);setMessage(success);}catch(error){if(useProjectStore.getState().root===root){setMessage(String((error as Error).message||error));await refresh(root);}}finally{setBusy(false);}
   };
   const connect=(connection:Connection)=>{
+    if(!editable||busy)return;
     const {source,target}=connection;if(!source||!target||source===target)return;
     const task=(goal.tasks as Task[]).find(item=>item.id===target);
     if(!task||task.status==='completed'||task.status==='in_progress'||task.dependsOn.includes(source))return;
@@ -124,7 +125,7 @@ export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
       <ReactFlowProvider>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView minZoom={0.25} maxZoom={1.5}
         nodesConnectable={editable&&!busy} nodesDraggable={editable&&!busy} edgesReconnectable={false}
-        onNodesChange={(changes:NodeChange[])=>setNodes(current=>applyNodeChanges(changes,current))}
+        onNodesChange={(changes:NodeChange[])=>setNodes(current=>applyNodeChanges(changes.filter(change=>change.type!=='remove'),current))}
         onNodeClick={(_,node)=>select(goal.id,node.id)}
         onNodeDragStop={(_,node)=>{const current=(goal.tasks as Task[]).find(item=>item.id===node.id);if(current)void mutate(()=>window.codenode!.goalTaskUpdate(root,goal.id,node.id,{canvasPosition:node.position,expectedRevision:revision}),'位置已保存');}}
         onConnect={connect} onEdgesDelete={disconnect}>

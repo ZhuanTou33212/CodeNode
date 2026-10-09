@@ -1,4 +1,21 @@
 'use strict';
+const fs=require('node:fs'),path=require('node:path');
+
+function projectOutline(root) {
+  const entries=[],skip=new Set(['.git','.codenode','.cache','node_modules','release','out','dist']);
+  const visit=(dir,prefix,depth)=>{
+    if(depth>2||entries.length>=100)return;
+    let children;try{children=fs.readdirSync(dir,{withFileTypes:true});}catch{return;}
+    for(const child of children.sort((a,b)=>a.name.localeCompare(b.name))){
+      if(entries.length>=100)break;
+      if(skip.has(child.name)||child.name.startsWith('.stage-')||child.isSymbolicLink())continue;
+      const rel=prefix?prefix+'/'+child.name:child.name;
+      entries.push(rel+(child.isDirectory()?'/':''));
+      if(child.isDirectory())visit(path.join(dir,child.name),rel,depth+1);
+    }
+  };
+  visit(root,'',0);return entries.join('\n').slice(0,9000);
+}
 
 /** A model proposal is untrusted data. It never writes a Goal or runs a Task. */
 function parseProposal(content) {
@@ -35,4 +52,4 @@ function messages(input) {
     {role:'user',content:`目标：${goal}\n\n约束与已有上下文：${context||'无'}\n\n请规划 2 至 12 个清晰步骤，必要时可以更少。只返回 JSON。`},
   ];
 }
-module.exports={parseProposal,messages};
+module.exports={parseProposal,messages,projectOutline};
