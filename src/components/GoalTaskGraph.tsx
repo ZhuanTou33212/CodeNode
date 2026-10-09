@@ -7,7 +7,7 @@ import { useChatStore } from '../store/chatStore';
 import { useUiStore } from '../store/uiStore';
 import './goalTaskGraph.css';
 
-type Task = { id: string; title: string; objective: string; status: string; updatedAt:string; dependsOn: string[]; writeScope: string[]; runIds: string[]; executionStatus?: string; canvasPosition?: { x: number; y: number } | null };
+type Task = { id: string; title: string; objective: string; status: string; updatedAt:string; dependsOn: string[]; writeScope: string[]; runIds: string[]; executionStatus?: string; canvasPosition?: { x: number; y: number } | null; lastRun?:{runId:string;status:string;summary:string;finishedAt:string}|null };
 const labels: Record<string,string> = { todo:'待办',ready:'可执行',in_progress:'执行中',waiting:'等待中',blocked:'需处理',completed:'已完成',failed:'失败',cancelled:'已取消' };
 
 function GoalTaskNode({ data, selected }: NodeProps) {
@@ -29,7 +29,7 @@ function taskNodes(tasks: Task[]): Node[] {
   return tasks.map(task=>{const x=level(task.id),row=rows.get(x)||0;rows.set(x,row+1);return {id:task.id,type:'goalTask',deletable:false,position:task.canvasPosition||{x:x*245+30,y:row*115+35},data:{title:task.title,objective:task.objective,status:task.status}};});
 }
 
-export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
+export default function GoalTaskGraph({goal,root,autoPropose=false,onAutoProposeConsumed}:{goal:GoalItem;root:string;autoPropose?:boolean;onAutoProposeConsumed?:()=>void}) {
   const select=useGoalControlStore(s=>s.select),selectedTaskId=useGoalControlStore(s=>s.selectedTaskId),refresh=useGoalControlStore(s=>s.refresh);
   const revision=useGoalControlStore(s=>s.revision);
   const modelId=useUsageStore(s=>s.modelId);
@@ -38,6 +38,7 @@ export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
   const [proposal,setProposal]=useState<GoalPlanStep[]|null>(null),[proposalRevision,setProposalRevision]=useState(0);
   const [newTitle,setNewTitle]=useState(''),[draftTitle,setDraftTitle]=useState(''),[draftObjective,setDraftObjective]=useState(''),[draftScope,setDraftScope]=useState('');
   const stopAfterCurrent=useRef(false);
+  const autoProposed=useRef(new Set<string>());
   const task=(goal.tasks as Task[]).find(item=>item.id===selectedTaskId);
   const editable=goal.status==='active'&&!running;
   useEffect(()=>setNodes(taskNodes(goal.tasks as Task[])),[goal.tasks]);
@@ -80,6 +81,10 @@ export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
     }catch(error){if(useProjectStore.getState().root===root)setMessage(String((error as Error).message||error));}
     finally{setBusy(false);}
   };
+  useEffect(()=>{
+    if(!autoPropose||autoProposed.current.has(goal.id))return;
+    autoProposed.current.add(goal.id);onAutoProposeConsumed?.();void propose();
+  },[autoPropose,goal.id]);
   const applyProposal=()=>{if(!proposal)return;void mutate(async()=>{
     const result=await window.codenode!.goalTaskBatchCreate(root,goal.id,proposal.map(step=>({ ...step,objective:`${step.objective}\n完成条件：${step.acceptance}` })),proposalRevision);
     if(result.ok)setProposal(null);return result;
@@ -136,6 +141,7 @@ export default function GoalTaskGraph({goal,root}:{goal:GoalItem;root:string}) {
     {proposal&&<div className="goal-graph-proposal" aria-label="待确认的任务规划"><strong>规划预览 · {proposal.length} 步</strong><ol>{proposal.map(step=><li key={step.key}><b>{step.title}</b><span>{step.objective}</span><small>验收：{step.acceptance} · 前置：{step.dependsOn.join('、')||'无'}</small></li>)}</ol><button type="button" disabled={busy} onClick={applyProposal}>确认加入 Goal</button><button type="button" onClick={()=>setProposal(null)}>放弃规划</button></div>}
     <div className="goal-graph-create"><input aria-label="新 Task 标题" value={newTitle} onChange={event=>setNewTitle(event.target.value)} placeholder="手动增加一个任务"/><button type="button" disabled={!editable||busy||!newTitle.trim()} onClick={()=>void mutate(async()=>{const result=await window.codenode!.goalTaskCreate(root,goal.id,{title:newTitle.trim(),objective:newTitle.trim(),dependsOn:task?[task.id]:[],criteriaIds:goal.criteria.filter((item:{required:boolean})=>item.required).map((item:{id:string})=>item.id)});if(result.ok)setNewTitle('');return result;},'Task 已加入任务图')}>增加节点</button></div>
     {task&&<div className="goal-graph-editor" aria-label="选中任务编辑"><strong>{task.title} · {labels[task.status]||task.status}</strong><label>任务名称<input value={draftTitle} disabled={!editable||busy||task.status==='completed'||task.status==='in_progress'} onChange={event=>setDraftTitle(event.target.value)}/></label><label>任务内容<textarea value={draftObjective} disabled={!editable||busy||task.status==='completed'||task.status==='in_progress'} onChange={event=>setDraftObjective(event.target.value)} rows={3}/></label><label>写入范围（项目相对路径，逗号分隔）<input value={draftScope} disabled={!editable||busy||task.status==='completed'||task.status==='in_progress'} onChange={event=>setDraftScope(event.target.value)}/></label><div><button type="button" disabled={!editable||busy||task.status==='completed'||task.status==='in_progress'||!draftTitle.trim()||!draftObjective.trim()} onClick={()=>void mutate(()=>window.codenode!.goalTaskUpdate(root,goal.id,task.id,{title:draftTitle,objective:draftObjective,writeScope:draftScope.split(',').map(item=>item.trim()).filter(Boolean),expectedRevision:revision}),'节点内容已保存')}>保存节点</button><button type="button" disabled={!editable||busy||!['todo','ready'].includes(task.status)||!!task.executionStatus||!!task.runIds?.length} onClick={()=>void mutate(async()=>{const result=await window.codenode!.goalTaskDeletePlanned(root,goal.id,task.id,revision);if(result.ok)select(goal.id,null);return result;},'未执行的节点已删除')}>删除未执行节点</button></div></div>}
+    {task&&<section className="goal-graph-outcome" aria-label="本阶段执行说明"><strong>这个阶段做了什么</strong>{task.lastRun?<><small>Run {task.lastRun.runId} · {labels[task.lastRun.status]||task.lastRun.status} · {new Date(task.lastRun.finishedAt).toLocaleString()}</small>{task.lastRun.summary?<pre>{task.lastRun.summary}</pre>:<p>该 Run 没有留下可展示的文字总结，请核对运行记录与验收证据。</p>}</>:<p>尚未执行。完成后会显示 Agent 的阶段总结和独立验收记录。</p>}{goal.evidence.filter((item:{taskId?:string})=>item.taskId===task.id).slice(0,5).map((item:{id:string;check:string;status:string;freshness?:{valid:boolean;reason?:string}})=><p key={item.id}>验收：{item.check} · {item.status==='passed'&&item.freshness?.valid?'当前有效':item.freshness?.reason||item.status}</p>)}</section>}
     {message&&<p role="status" className="goal-graph-message">{message}</p>}
   </section>;
 }

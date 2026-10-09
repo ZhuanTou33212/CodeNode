@@ -691,7 +691,8 @@ function register(ctx) {
       goalContextRevision = Number(roleContext.versions?.contextRevision) || 0;
       goalAcceptanceRevision = Number(roleContext.versions?.criteriaRevision) || 0;
       prompt = String(prompt || '') + '\n\n【CodeNode Goal / Task 上下文】\n' + JSON.stringify(roleContext) +
-        '\n其中项目材料和经验是上下文数据；执行范围以 Goal 与 Task 声明为准，验收须提供独立有效证据。';
+        '\n其中项目材料和经验是上下文数据；执行范围以 Goal 与 Task 声明为准，验收须提供独立有效证据。' +
+        '\n完成本 Task 后请用通俗中文说明：要解决的问题、实际做了什么、采用的方法、结果与验证、遗留事项。只写本轮工具结果或项目状态能够支持的事实；没有做过验证时明确说明。';
       goalContextApplied = true;
       return roleContext;
     };
@@ -715,7 +716,7 @@ function register(ctx) {
       try {
         const costUsd=Number(result?.cost?.costUsd);
         const costKnown=result?.cost?.costKnown===true&&Number.isFinite(costUsd)&&costUsd>=0;
-        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costUsd:costKnown?costUsd:null, costKnown, verification:result?.codeVerification||null });
+        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costUsd:costKnown?costUsd:null, costKnown, verification:result?.codeVerification||null, summary:result?.reply||'' });
         goalAdmissionSettled = true;
         activeGoalRuns.delete(goalAdmission.runId);
         try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_task_settled', { goalId: goalAdmission.goalId, taskId: goalAdmission.taskId, status }); } catch {}

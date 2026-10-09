@@ -29,6 +29,8 @@ try{
   store.admit(root,created.id,remaining.id,'goal-canvas-run');
   assert.throws(()=>store.deletePlannedTask(root,created.id,remaining.id,store.read(root).revision),/已有执行或证据/);
   assert.throws(()=>store.updateTask(root,created.id,remaining.id,{title:'changed'}),/执行中或已完成/);
+  store.settle(root,'goal-canvas-run',{status:'completed',summary:'要解决的问题：登录失败。\n做了什么：检查了入口。\n结果与验证：未验证。'});
+  assert.match(store.audit(root,created.id).tasks[0].lastRun.summary,/登录失败/,'clickable Goal node can show the settled Run summary');
   assert.throws(()=>proposal.parseProposal('{"steps":[{"key":"x","title":"X","objective":"X","acceptance":"ok","dependsOn":["missing"]}]}'),/不存在的依赖/);
   assert.throws(()=>proposal.parseProposal('{"steps":[{"key":"x","title":"X","objective":"X","acceptance":"ok","dependsOn":[],"writeScope":["../outside"]}]}'),/写入范围无效/);
   console.log('GOAL CANVAS GRAPH: PASS (proposal validation, atomic import, dependency gate, CAS, deletion audit)');

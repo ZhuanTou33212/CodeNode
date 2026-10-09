@@ -29,5 +29,8 @@
 .goal-graph-proposal li span,.goal-graph-proposal li small { display:block; overflow-wrap:anywhere; color:var(--glass-muted); }
 .goal-graph-proposal button { margin-right:8px; }
 .goal-graph-message { margin:0; color:var(--glass-muted); font-size:12px; }
+.goal-graph-outcome { display:grid; gap:7px; border-top:1px solid var(--glass-border); padding-top:10px; font-size:12px; }
+.goal-graph-outcome small,.goal-graph-outcome p { margin:0; color:var(--glass-muted); line-height:1.5; overflow-wrap:anywhere; }
+.goal-graph-outcome pre { margin:0; padding:10px; border-radius:7px; background:var(--glass-sheet); color:var(--glass-text); white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.55; max-height:320px; overflow:auto; }
 @media (max-width:650px) { .goal-task-graph-canvas { height:260px; } .goal-task-graph-toolbar span { flex-basis:100%; } }
 @media (prefers-reduced-motion:reduce) { .goal-graph-node.status-in_progress { animation:none; } }

@@ -7,6 +7,7 @@ const stateName:Record<string,string>={active:'进行中',completed:'已完成',
 export default function GoalOverview(){
  const root=useProjectStore(s=>s.root),{goals,selectedGoalId,select,refresh,error,pendingDraft,clearDraft}=useGoalControlStore();
  const [editor,setEditor]=useState(false),[creating,setCreating]=useState(false);
+ const [autoPlanGoalId,setAutoPlanGoalId]=useState<string|null>(null);
  const editorRef=useRef<HTMLElement>(null),returnFocus=useRef<HTMLElement|null>(null);
  const detail=goals.find(g=>g.id===selectedGoalId);
  const visible=goals.filter(g=>g.status!=='archived');
@@ -15,7 +16,7 @@ export default function GoalOverview(){
   ...(g.tasks||[]).filter(t=>['blocked','failed'].includes(t.status)||t.executionStatus==='unknown').map(t=>({goal:g,id:t.id,taskId:t.id as string|null,text:t.title,label:t.executionStatus==='unknown'?'待复核':t.status==='failed'?'执行失败':'有阻塞'})),
  ]);
  const openEditor=(goalId:string|null,taskId:string|null=null)=>{returnFocus.current=document.activeElement as HTMLElement;setCreating(!goalId);if(goalId)select(goalId,taskId);setEditor(true);};
- const close=()=>{setEditor(false);clearDraft();returnFocus.current?.focus();};
+ const close=()=>{setEditor(false);setAutoPlanGoalId(null);clearDraft();returnFocus.current?.focus();};
  useEffect(()=>{setEditor(false);setCreating(false);},[root]);
  useEffect(()=>{if(pendingDraft!==null&&root)openEditor(null);},[pendingDraft,root]);
  useEffect(()=>{
@@ -34,7 +35,7 @@ export default function GoalOverview(){
   {error&&<p role="status">{error}</p>}
   <div className="overview-editor-mask" hidden={!editor} onPointerDown={e=>{if(e.target===e.currentTarget)close();}}><section ref={editorRef} className={`overview-goal-editor${creating?'':' with-goal-graph'}`} role="dialog" aria-modal="true" aria-label={creating?'新建目标':'目标详情'}>
    <header><div><h2>{creating?'新建目标':detail?.title||'目标详情'}</h2><span>{creating?'先写清目标与完成标准':'任务、决定与验收'}</span></div><button aria-label="关闭目标编辑" onClick={close}>×</button></header>
-   <div className="overview-editor-scroll"><GoalControlPanel key={root||'no-project'} creating={creating} onCreated={()=>{clearDraft();setCreating(false);setEditor(true);}}/></div>
+   <div className="overview-editor-scroll"><GoalControlPanel key={root||'no-project'} creating={creating} autoPlanGoalId={autoPlanGoalId} onAutoPlanConsumed={()=>setAutoPlanGoalId(null)} onCreated={goalId=>{if(pendingDraft!==null)setAutoPlanGoalId(goalId);clearDraft();setCreating(false);setEditor(true);}}/></div>
   </section></div>
  </section>;
 }

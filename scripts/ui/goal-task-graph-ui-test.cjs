@@ -19,6 +19,7 @@ app.whenReady().then(async()=>{
       let agentChatCalls=0,planCalls=0;
       window.codenode=new Proxy({
         goalList:async()=>({ok:true,value:structuredClone(data)}),
+        goalCreate:async(_root,input)=>{const created={...structuredClone(data.goals[0]),id:'g2',title:input.title,objective:input.objective,criteria:input.criteria.map((text,index)=>({id:'new-c'+index,text,required:true})),tasks:[],evidence:[],decisions:[],updatedAt:new Date().toISOString()};data.goals.unshift(created);data.revision++;return{ok:true,value:created};},
         goalTaskUpdate:async(_root,_goalId,taskId,patch)=>{if(patch.expectedRevision!==data.revision)return{ok:false,error:'revision mismatch'};const task=data.goals[0].tasks.find(t=>t.id===taskId);Object.assign(task,patch,{updatedAt:new Date().toISOString()});data.revision++;return{ok:true,value:task};},
         goalTaskBatchCreate:async(_root,_goalId,steps,expectedRevision)=>{if(expectedRevision!==data.revision)return{ok:false,error:'stale goal'};const ids=new Map(steps.map(step=>[step.key,'generated-'+step.key]));const added=steps.map(step=>({id:ids.get(step.key),title:step.title,objective:step.objective,status:'todo',updatedAt:new Date().toISOString(),dependsOn:step.dependsOn.map(id=>ids.get(id)),readScope:[],writeScope:step.writeScope,criteriaIds:['c1'],decisionIds:[],runIds:[]}));data.goals[0].tasks.push(...added);data.revision++;return{ok:true,value:added};},
         goalPlanPropose:async()=>{planCalls++;return{ok:true,value:{steps:[{key:'s1',title:'检查现状',objective:'读取现有实现',acceptance:'找到入口',dependsOn:[],writeScope:[]},{key:'s2',title:'完成修改',objective:'实施修复',acceptance:'检查通过',dependsOn:['s1'],writeScope:['src']}]}};},
@@ -49,6 +50,10 @@ app.whenReady().then(async()=>{
       [...document.querySelectorAll('.goal-graph-editor button')].find(button=>button.textContent.includes('保存节点')).click();
       await until(()=>document.querySelector('.goal-task-graph-canvas .react-flow__node[data-id="t1"] strong')?.textContent==='确认登录入口');
       out.editedGoalNode=document.querySelector('.goal-task-graph-canvas .react-flow__node[data-id="t1"] strong')?.textContent;
+      data.goals.find(item=>item.id==='g1').tasks.find(item=>item.id==='t1').lastRun={runId:'r1',status:'completed',summary:'做了什么：确认了登录入口。结果与验证：测试通过。',finishedAt:new Date().toISOString()};
+      document.querySelector('.goal-toolbar button').click();
+      await until(()=>document.querySelector('.goal-graph-outcome pre')?.textContent.includes('确认了登录入口'));
+      out.stageSummaryVisible=true;
       document.querySelector('[aria-label="关闭目标编辑"]').click();
       ui.getState().updatePreferences({workbenchView:'conversation'});
       session.getState().startOnCurrent('test plan');
@@ -62,14 +67,23 @@ app.whenReady().then(async()=>{
       await chat.getState().send('/goal 改善登录稳定性');
       await until(()=>document.querySelector('.goal-create-form input[aria-label="Goal 标题"]')?.value==='改善登录稳定性');
       out.goalDraft=document.querySelector('.goal-create-form input[aria-label="Goal 标题"]')?.value;
+      const criterion=document.querySelector('.goal-create-form textarea[aria-label="验收条件"]');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(criterion,'登录测试通过');
+      criterion.dispatchEvent(new Event('input',{bubbles:true}));
+      await until(()=>!document.querySelector('.goal-create-submit').disabled);
+      document.querySelector('.goal-create-submit').click();
+      await until(()=>document.querySelector('.goal-graph-proposal'));
+      out.autoGoalPreview=document.querySelectorAll('.goal-graph-proposal li').length;
+      out.autoGoalTasksBeforeConfirm=data.goals[0].tasks.length;
+      out.planCallsAfterGoal=planCalls;
       return out;
     })()`);
     assert.equal(result.nodes,2);assert.equal(result.edges,1);assert.match(result.selectedTask,/定位问题/);
     assert.equal(result.themeChanged,true);assert.equal(result.nodesAfterTheme,2);assert.equal(result.selectedAfterTheme,true);
-    assert.equal(result.previewBeforeSave,2);assert.equal(result.generatedGoalNodes,4);assert.equal(result.editedGoalNode,'确认登录入口');
+    assert.equal(result.previewBeforeSave,2);assert.equal(result.generatedGoalNodes,4);assert.equal(result.editedGoalNode,'确认登录入口');assert.equal(result.stageSummaryVisible,true);
     assert.equal(result.planNodes,2);assert.equal(result.planEdges,1);assert.equal(result.planPending,true);
     assert.equal(result.slashPlanNodes,4);assert.equal(result.planCalls,2);assert.equal(result.agentChatCalls,0);
-    assert.equal(result.goalDraft,'改善登录稳定性');
+    assert.equal(result.goalDraft,'改善登录稳定性');assert.equal(result.autoGoalPreview,2);assert.equal(result.autoGoalTasksBeforeConfirm,0);assert.equal(result.planCallsAfterGoal,3);
     console.log('GOAL TASK GRAPH UI: PASS (Goal graph, selection, theme state, plan import, /plan, /goal)');
     app.exit(0);
   }catch(error){console.error(error);try{console.error(await win.webContents.executeJavaScript(`({body:document.body.innerText.slice(0,1200),overview:!!document.querySelector('.goal-overview'),editor:!!document.querySelector('.overview-goal-editor'),goalRow:!!document.querySelector('[data-goal-id="g1"]'),graphNodes:document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length,planAction:!!document.querySelector('.ap-plan-canvas-action'),goalDraft:!!document.querySelector('.goal-create-form')})`));}catch{}app.exit(1);}
