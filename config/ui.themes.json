@@ -21,7 +21,7 @@
     "--glass-accent": "#275990",
     "--glass-base": "#d9e8f4",
     "--glass-scrim": "rgba(45, 68, 99, .16)",
-    "--stage-running": "#c47a00",
+    "--stage-running": "#d99000",
     "--stage-done": "#20864a",
     "--stage-failed": "#bd3443",
     "--stage-blocked": "#7544b5",
