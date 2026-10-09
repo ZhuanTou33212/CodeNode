@@ -9,7 +9,7 @@ const originalChat=agent.chatCompletion;
 (async()=>{try{
   const goal=goalStore.createGoal(root,{title:'稳定登录',objective:'改善登录稳定性',criteria:['登录测试通过']});
   const handlers=new Map();ipc.register({ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},userDataDir:()=>root,dialog:{},getFocusedWindow:()=>null});
-  let calls=0;agent.chatCompletion=async(_cfg,messages)=>{calls++;assert.match(messages[1].content,/改善登录稳定性/);assert.match(messages[1].content,/登录测试通过/);return{content:'```json\n'+JSON.stringify({steps:[{key:'inspect',title:'检查入口',objective:'读取登录代码',acceptance:'定位问题',dependsOn:[],writeScope:[]}]})+'\n```'};};
+  let calls=0;agent.chatCompletion=async(_cfg,messages)=>{calls++;assert.match(messages[1].content,/改善登录稳定性/);assert.match(messages[1].content,/登录测试通过/);assert.match(messages[1].content,/独立验收证据/);return{content:'```json\n'+JSON.stringify({steps:[{key:'inspect',title:'检查入口',objective:'读取登录代码',acceptance:'定位问题',dependsOn:[],writeScope:[]}]})+'\n```'};};
   const sender={isDestroyed:()=>false,mainFrame:{}};
   const before=goalStore.read(root).revision;
   const result=await handlers.get('goal:plan-propose')({sender},root,{kind:'goal',goalId:goal.id});

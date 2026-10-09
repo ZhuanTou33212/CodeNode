@@ -47,6 +47,9 @@ app.whenReady().then(async()=>{
       [...document.querySelectorAll('.goal-graph-proposal button')].find(button=>button.textContent.includes('确认加入')).click();
       await until(()=>document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length===4);
       out.generatedGoalNodes=document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length;
+      const criterionBox=document.querySelector('.goal-graph-criteria input[type="checkbox"]');
+      out.initialCriterionBinding=criterionBox.checked;
+      criterionBox.click();
       const titleInput=document.querySelector('.goal-graph-editor input');
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(titleInput,'确认登录入口');
       titleInput.dispatchEvent(new Event('input',{bubbles:true}));
@@ -54,6 +57,7 @@ app.whenReady().then(async()=>{
       [...document.querySelectorAll('.goal-graph-editor button')].find(button=>button.textContent.includes('保存节点')).click();
       await until(()=>document.querySelector('.goal-task-graph-canvas .react-flow__node[data-id="t1"] strong')?.textContent==='确认登录入口');
       out.editedGoalNode=document.querySelector('.goal-task-graph-canvas .react-flow__node[data-id="t1"] strong')?.textContent;
+      out.editedCriterionBinding=data.goals.find(item=>item.id==='g1').tasks.find(item=>item.id==='t1').criteriaIds.length;
       data.goals.find(item=>item.id==='g1').tasks.find(item=>item.id==='t1').lastRun={runId:'r1',status:'completed',summary:'做了什么：确认了登录入口。结果与验证：测试通过。',finishedAt:new Date().toISOString()};
       document.querySelector('.goal-toolbar button').click();
       await until(()=>document.querySelector('.goal-graph-outcome pre')?.textContent.includes('确认了登录入口'));
@@ -95,7 +99,7 @@ app.whenReady().then(async()=>{
     })()`);
     assert.equal(result.nodes,2);assert.equal(result.edges,1);assert.match(result.selectedTask,/定位问题/);
     assert.equal(result.themeChanged,true);assert.equal(result.nodesAfterTheme,2);assert.equal(result.selectedAfterTheme,true);
-    assert.equal(result.previewBeforeSave,2);assert.equal(result.generatedGoalNodes,4);assert.equal(result.editedGoalNode,'确认登录入口');assert.equal(result.stageSummaryVisible,true);
+    assert.equal(result.previewBeforeSave,2);assert.equal(result.generatedGoalNodes,4);assert.equal(result.editedGoalNode,'确认登录入口');assert.equal(result.stageSummaryVisible,true);assert.equal(result.initialCriterionBinding,true);assert.equal(result.editedCriterionBinding,0);
     assert.equal(result.goalRunCalls,4);assert.deepEqual(result.goalRunOrder,['completed','completed','completed','completed']);
     assert.equal(result.planNodes,2);assert.equal(result.planEdges,1);assert.equal(result.planPending,true);
     assert.equal(result.slashPlanNodes,4);assert.equal(result.planCalls,2);assert.equal(result.agentChatCalls,4);
