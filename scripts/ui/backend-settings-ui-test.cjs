@@ -63,6 +63,7 @@ app.whenReady().then(async () => {
 
     await js(`document.querySelector('.goal-toolbar button').click()`);
     await sleep(100);
+    await js(`document.querySelector('.overview-goal-list button').click()`);
     await js(`document.querySelectorAll('.goal-management-section').forEach(d=>d.open=true)`);
     await waitFor(() => js(`document.querySelector('.goal-control-panel')?.innerText.includes('UI Task') && document.querySelector('.goal-control-panel')?.innerText.includes('UI confirmed workflow') && document.querySelector('.goal-control-panel')?.innerText.includes('自动建议')`), 'Goal, Task, and generated experience rendering');
     assert.equal(await js(`document.querySelector('[aria-label="等待条件满足后自动推进"]')?.checked`),false,'the desktop Goal toggle starts unchecked');

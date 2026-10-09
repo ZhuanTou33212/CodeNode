@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "recordedAt": "2026-10-09T16:04:58.609Z",
+  "mode": "packaged",
+  "asarSha256": "4cb8e5f429be2804f150c485029c138a3bb46ee6e23520e9252e93e65cae9a10",
+  "checks": [
+    "native node/shape Delete separation",
+    "Backspace/X and undo",
+    "multi-selection count",
+    "wire deletion",
+    "text and goal-control focus protection",
+    "separate overview and conversation pages",
+    "overview progress and task binding",
+    "overview/conversation preserve forms, messages, canvas and draft",
+    "same controls across themes",
+    "no redundant Agent settings entry"
+  ]
+}

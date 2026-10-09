@@ -482,3 +482,14 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 实际鼠标／键盘专项覆盖内部空白 Del、删除图形后重复 Del 保护、标题 Delete/Backspace/X、拖动节点后 Delete、输入保护、连线、多选和撤销，源码与最终包均通过，日夜主题检查通过；graph undo、构建、静态检查通过。暂存与固定交付路径自检 19/19 及实际启动通过。证据见 [包内交互摘要](validation/delete-routing-2026-10-09.json)。
 
 已覆盖 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行。app.asar SHA-256：FBB231C9897E0FCEF665FED8A577905EDC555C172FF42499ED6549AE8DF1E629；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。仅用公开模板与已提交 Soul 打包，保留用户私有配置和未提交 Soul 改动。
+
+
+### 简洁目标列表总览（按用户确认的 LoopX 风格）
+
+用户确认偏好“简洁目标列表，贴近 LoopX”。移除总览的四张统计卡、左右分栏与常驻创建／编辑表单；改为简短项目简报、待决定／阻塞事项和单列目标列表。无目标时显示短引导与创建入口，不显示一排 0。目标条目直接显示名称、说明、任务进度和状态。点击新建或条目后才打开目标编辑窗口，关闭、Escape 或点击背景不保存、不清空草稿。
+
+创建窗口主要展示目标名称、希望完成什么和完成标准三项，范围与预算折叠为可选；没有名称和完成标准时不能提交。提交调用真实 goal:create IPC，成功后关闭窗口并刷新列表；创建模式与当前被选中 Goal 分离，避免刷新把创建表单替换成既有 Goal，取消再打开保留创建草稿。实际 UI 测试创建了含两条独立标准的目标，验证了 IPC 保存与列表结果。编辑窗口保持已有任务、审批决定、等待、自动推进及证据功能，键盘焦点限制在打开的窗口内。总览／对话切换继续保留消息、画布和表单草稿，日夜主题共用结构。
+
+构建、脚本检查、源码和最终包的空状态／实际创建／取消草稿／目标列表／详情编辑／双主题交互通过；Goal Store 专项、既有目标设置与重启复核通过。暂存和固定交付路径 UI 自检 19/19、实际 asar 启动通过。[无目标日间效果](validation/simple-overview-preview/empty-light.png)、[无目标夜间效果](validation/simple-overview-preview/empty-dark.png)、[已有目标日间效果](validation/simple-overview-preview/light.png)、[已有目标夜间效果](validation/simple-overview-preview/dark.png) 来自最终包的隔离演示工程，原始摘要见 [acceptance.json](validation/simple-overview-preview/acceptance.json)。
+
+固定目录 E:\CodeNode\release\win-unpacked 已覆盖，覆盖前确认 CodeNode 未运行。app.asar SHA-256：4CB8E5F429BE2804F150C485029C138A3BB46EE6E23520E9252E93E65CAE9A10；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。仅使用公开模板与已提交 Soul 打包，用户本地私有配置及未提交 Soul 修改保留。

@@ -110,6 +110,8 @@ async function desktop() {
     return g.id;
   };
   const authorizeUi = async id => {
+    await waitFor(()=>js(`!!document.querySelector('[data-goal-id="${id}"]')`),'overview goal');
+    await js(`document.querySelector('[data-goal-id="${id}"]').click()`);
     await waitFor(() => js(`!!document.querySelector('.goal-control-panel .goal-toolbar select option[value="${id}"]')`), 'Goal option');
     await js(`(()=>{const p=document.querySelector('.goal-control-panel');p.open=true;const s=p.querySelector('.goal-toolbar select');s.value=${JSON.stringify(id)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await waitFor(() => js(`document.querySelector('.goal-toolbar select')?.value===${JSON.stringify(id)} && !!document.querySelector('[aria-label="等待条件满足后自动推进"]')`), 'Goal authorization toggle');
