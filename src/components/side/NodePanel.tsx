@@ -115,6 +115,7 @@ export default function NodePanel({ onOpenFile }: { onOpenFile: (relPath: string
         <span>类型</span>
         <code>{String(node.type)}</code>
       </div>
+      {d.trellis && <div className="sp-kv"><span>Trellis 执行动作</span><code>{String((d.trellis as {phase: string; role: string}).phase)} · {String((d.trellis as {phase: string; role: string}).role)}</code></div>}
 
       <div className="inspector-field">
         <label>名称</label>

@@ -401,11 +401,12 @@ function register(ctx) {
       },
       run: async (node, fullGraph, state) => {
         const data = node.data || {};
+        const trellisBinding = data.trellis ? require('../trellis/canvas.cjs').resolveBinding(root, data.trellis) : null;
         const prompt = String(data.prompt || '').trim();
         const explicit = prompt.match(/^(?:run:|\$)\s*(.+)$/i);
         const command = explicit && explicit[1] ? explicit[1].trim() : /^(npm|npx|node|git|python3?|py|java|javac|mvn|mvnw|gradle|go|cargo|cmd|powershell|pwsh)\b/i.test(prompt) ? prompt : '';
         if (['start', 'end', 'file', 'object', 'scope'].includes(node.type || '')) return { ok: true, output: '结构节点已通过' };
-        if (command) {
+        if (command && !trellisBinding) {
           const response = await runProjectCommand(root, command, 180);
           return { ok: !!response.ok, output: '运行：' + command + '\n' + String(response.output || response.error || '') };
         }
@@ -414,6 +415,8 @@ function register(ctx) {
         const input = state.selectedInputs[node.id] || [];
         const response = await runWorkflowChat(event, {
           projectRoot: root,
+          trellisBinding,
+          sessionId: workflowId,
           prompt: `你正在执行一个画布工作流阶段。请先理解任务，再实际使用可用工具完成它。\n\n阶段：${String(data.label || node.id)}\n任务要求：\n${prompt}\n\n上游阶段交付：\n${input.map((item) => item.id + ': ' + item.output).join('\n') || '无'}\n\n交付名称：${String(data.outputName || data.label || node.id)}\n完成条件：${String(data.completionCondition || '返回执行结果与验证信息')}\n允许或预期写入范围：${String(data.writeScope || '未声明')}\n\n任务完成后，请用通俗中文给用户一份简洁但具体的阶段总结，严格按以下标题组织：\n要解决的问题：说明本阶段要处理什么。\n做了什么：列出实际完成的关键动作和产物。\n解决方法：说明采用了什么思路、工具或步骤，为什么这样处理。\n结果与验证：说明得到什么结果、做过哪些检查及其结果；没有验证就明确写“未验证”。\n遗留事项：说明尚未解决或需要用户确认的内容；没有则写“无”。\n总结只写本轮实际执行和工具结果能够支持的事实；不要把计划说成已完成，不要猜测，也不要堆砌未解释的技术术语。`,
           history: [], canvasSummary: JSON.stringify(fullGraph.nodes.map((item) => ({ id: item.id, type: item.type, label: item.data?.label, status: item.data?.status }))),
           nodeId: node.id, requestId: 'workflow-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),

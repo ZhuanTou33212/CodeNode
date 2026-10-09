@@ -7,6 +7,11 @@ contextBridge.exposeInMainWorld('codenode', {
   trellisProject: (root, conversationId) => ipcRenderer.invoke('trellis:project', root, conversationId),
   trellisContext: (root, taskPath) => ipcRenderer.invoke('trellis:context', root, taskPath),
   trellisSelect: (root, conversationId, taskPath) => ipcRenderer.invoke('trellis:select', root, conversationId, taskPath),
+  trellisWriteInfo: root => ipcRenderer.invoke('trellis:write-info', root),
+  trellisPropose: (root, kind, target, input) => ipcRenderer.invoke('trellis:propose', root, kind, target, input),
+  trellisApply: (root, id, action) => ipcRenderer.invoke('trellis:apply', root, id, action),
+  trellisProposalRead: (root, id) => ipcRenderer.invoke('trellis:proposal-read', root, id),
+  trellisCanvas: (root, taskPath) => ipcRenderer.invoke('trellis:canvas', root, taskPath),
   // S8：统一事件流的按 run 回放（时间线 + 摘要）
   replayEvents: (root, options) => ipcRenderer.invoke('agent:events', root, options),
   // §4.2：Run 级文件回滚 —— 先取只读计划（逐项 restore/delete/skip + 原因），确认后再执行

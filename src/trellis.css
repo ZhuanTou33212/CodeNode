@@ -5,3 +5,7 @@
 .trellis-task-content select { max-width: 100%; color: inherit; background: var(--glass-sheet); border: 1px solid var(--glass-border); border-radius: 4px; }
 .trellis-task-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; margin: 4px; padding: 6px; }
 .trellis-task-content button { margin: 6px 0; color: inherit; background: var(--glass-control); border: 1px solid var(--glass-border); border-radius: 4px; }
+.trellis-write-panel label { display: block; margin: 6px 0; }
+.trellis-write-panel textarea, .trellis-write-panel input:not([type=checkbox]) { display: block; width: 100%; box-sizing: border-box; color: var(--glass-text); background: var(--glass-control); border: 1px solid var(--glass-border); border-radius: 4px; }
+.trellis-write-panel textarea { min-height: 55px; }
+.trellis-write-panel pre { max-height: 220px; overflow: auto; }

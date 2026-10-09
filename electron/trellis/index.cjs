@@ -70,7 +70,7 @@ function detectProject(root) {
     }
   } catch (error) { diagnostics.push(diagnostic('.trellis/tasks', error)); }
   tasks.sort((a, b) => a.taskPath.localeCompare(b.taskPath));
-  return { detected: true, tasks, diagnostics, readOnly: true, format: 'Trellis task.json + JSONL (active tasks only)', referenceVersion: limits.upstreamVersion };
+  return { detected: true, tasks, diagnostics, readOnly: false, format: 'Trellis task.json + JSONL (active tasks only; conditional writeback)', referenceVersion: limits.upstreamVersion };
 }
 
 function readSpecs(root) {
@@ -221,4 +221,4 @@ function taskRuns(root, taskPath) {
   });
 }
 
-module.exports = { detectProject, readTask, readSpecs, resolveContext, contextForRole, assertReady, selectTask, selectedTask, contextForRun, recordContext, sourceChanges, taskRuns, readDocument };
+module.exports = { detectProject, readTask, readSpecs, resolveContext, contextForRole, assertReady, selectTask, selectedTask, contextForRun, recordContext, sourceChanges, taskRuns, readDocument, safePath, taskDirectory };

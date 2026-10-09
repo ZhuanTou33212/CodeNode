@@ -5,5 +5,15 @@
   "maxContextTokens": 12000,
   "maxEntries": 256,
   "maxTasks": 500,
-  "knownStatuses": ["planning", "in_progress", "completed", "blocked", "cancelled"]
+  "knownStatuses": ["planning", "in_progress", "completed", "blocked", "cancelled"],
+  "writableStatuses": ["planning", "in_progress", "completed"],
+  "maxJournalBytes": 524288,
+  "maxJournalLines": 2000,
+  "maxSummaryChars": 4000,
+  "canvasPhases": [
+    {"id":"prepare","label":"准备需求","role":"explorer","prompt":"核对 PRD、规范和需求边界，提出实现与验收计划，不修改文件。"},
+    {"id":"implement","label":"实现","role":"builder","prompt":"按 PRD、实现清单和上游计划实际实现，并说明产物、验证范围与遗留问题。"},
+    {"id":"verify","label":"验证","role":"verifier","prompt":"独立核对当前产物与 PRD 验收项，实际运行适用的检查，记录命令、结果和未覆盖项。"},
+    {"id":"review","label":"审查与收尾","role":"reviewer","prompt":"审查当前产物、PRD 和上游验证证据，报告问题与未核验项，形成工作日志摘要；不得自动完成上游任务。"}
+  ]
 }

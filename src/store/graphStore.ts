@@ -212,6 +212,7 @@ interface GraphState extends GraphLike {
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (conn: Connection) => void;
   addNode: (node: Node) => void;
+  appendGraph: (graph: Graph) => void;
   deleteNodes: (ids: string[]) => void;
   duplicateNode: (id: string) => void;
   updateNodeData: (id: string, patch: Record<string, unknown>) => void;
@@ -456,6 +457,12 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       selectedIds: [node.id],
       ...withHistory(s),
     })),
+  appendGraph: (graph) => set(s => {
+    const ids = new Set(s.nodes.map(node => node.id));
+    if (graph.nodes.some(node => ids.has(node.id))) throw new Error('新增流程包含重复节点标识');
+    const offset = s.nodes.length ? Math.max(...s.nodes.map(node => node.position.y)) + 300 : 0;
+    return { nodes: [...s.nodes, ...graph.nodes.map(node => withZIndex({ ...node, position: { ...node.position, y: node.position.y + offset } }))], edges: [...s.edges, ...graph.edges], ...withHistory(s) };
+  }),
 
   deleteNodes: (ids) =>
     set((s) => {

@@ -3,6 +3,7 @@ import type { Node, Edge } from '@xyflow/react';
 export type NodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'blocked';
 
 export type BaseData = {
+  trellis?: { taskPath: string; snapshotId: string; phase: string; role: string };
   label: string;
   subtitle?: string;
   goal?: string;

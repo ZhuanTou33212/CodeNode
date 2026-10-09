@@ -14,6 +14,7 @@
   },
   "scripts": {
     "test:trellis": "node scripts/core/trellis-compatibility-test.cjs",
+    "test:trellis-write-canvas": "node scripts/core/trellis-write-canvas-test.cjs",
     "test:trellis-ui": "node scripts/run-electron.cjs scripts/ui/trellis-ui-test.cjs",
     "test:acp-full": "node scripts/core/acp-full-test.cjs",
     "test:backends": "node scripts/core/agent-backends-test.cjs",

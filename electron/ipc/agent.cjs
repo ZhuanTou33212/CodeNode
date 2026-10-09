@@ -118,6 +118,7 @@ const activeAutoAdvanceClaims = new Map();
 const activeGoalWaitPolls = new Map();
 /** @type {((event: any, payload: any) => Promise<any>) | null} */
 let registeredChatHandler = null;
+const WORKFLOW_TRELLIS = Symbol('main-process-trellis-workflow');
 
 // Main-process-only reuse by the controlled workflow executor. There is no
 // extra preload capability or IPC channel, and the original sender/event is
@@ -129,7 +130,8 @@ async function runWorkflowChat(event, payload) {
   if (event.senderFrame && event.sender.mainFrame && event.senderFrame !== event.sender.mainFrame) {
     throw new Error('工作流 Agent 仅允许主窗口框架调用');
   }
-  return registeredChatHandler(event, payload);
+  const binding = payload?.trellisBinding ? require('../trellis/canvas.cjs').resolveBinding(payload.projectRoot, payload.trellisBinding) : null;
+  return registeredChatHandler(event, { ...payload, [WORKFLOW_TRELLIS]: binding });
 }
 /** 同一对话的两轮请求必须顺序处理，否则后轮看不到前轮刚确定的临时覆盖。 */
 const activeMemorySessions = new Set();
@@ -277,6 +279,17 @@ function register(ctx) {
     return { ...context, runs: trellis.taskRuns(project, taskPath) };
   }));
   ipcMain.handle('trellis:select', async (_event, root, conversationId, taskPath) => withGoalRoot(root, project => trellis.selectTask(project, conversationId, taskPath)));
+  ipcMain.handle('trellis:write-info', async (_event, root) => withGoalRoot(root, project => ({ workspaces: require('../trellis/writes.cjs').workspaces(project), statuses: require('../../config/trellis.compatibility.json').writableStatuses, proposals: require('../trellis/writes.cjs').listProposals(project) })));
+  ipcMain.handle('trellis:propose', async (_event, root, kind, target, input) => withGoalRoot(root, project => {
+    const writes = require('../trellis/writes.cjs');
+    if (kind === 'status') return writes.proposeTaskUpdate(project, target, input);
+    if (kind === 'journal') return writes.proposeJournal(project, target, input);
+    if (kind === 'spec') return writes.proposeSpecUpdate(project, target, input);
+    throw new Error('未知 Trellis 修改建议类型');
+  }));
+  ipcMain.handle('trellis:apply', async (_event, root, id, action) => withGoalRoot(root, project => require('../trellis/writes.cjs').applyProposal(project, id, action)));
+  ipcMain.handle('trellis:proposal-read', async (_event, root, id) => withGoalRoot(root, project => require('../trellis/writes.cjs').readProposal(project, id)));
+  ipcMain.handle('trellis:canvas', async (_event, root, taskPath) => withGoalRoot(root, project => require('../trellis/canvas.cjs').createGraph(project, taskPath)));
   const fetchWaitObservation = async (root, task) => {
     const provider=String(task.waitCondition?.provider||'manual');
     const scope=observation=>({...observation,id:String(task.id)+':'+String(observation.id||Date.now())});
@@ -662,7 +675,9 @@ function register(ctx) {
     try {
       const cfg = agent.loadConfig(projectRoot);
       runCfg = cfg;
-      const trellisSnapshot = projectRoot ? trellis.contextForRun(projectRoot, memoryConversationId || sessionId, resumeRunId) : null;
+      const workflowTrellis = payload?.[WORKFLOW_TRELLIS] || require('../trellis/canvas.cjs').resumeBinding(projectRoot, resumeRunId);
+      const executionRole = workflowTrellis?.role || null;
+      const trellisSnapshot = workflowTrellis?.snapshot || (projectRoot ? trellis.contextForRun(projectRoot, memoryConversationId || sessionId, resumeRunId) : null);
       cfg.trellisSnapshot = trellisSnapshot;
       if (trellisSnapshot && cfg.dynamicContext?.totalTokens > 0 && trellis.assertReady(trellisSnapshot).tokens > cfg.dynamicContext.totalTokens) throw new Error('Trellis 必要上下文超过动态预算，未裁剪规则；请拆分资料');
       const piiInput = piiLib.apply(prompt || '', cfg.pii);
@@ -683,6 +698,7 @@ function register(ctx) {
       const sessionBackend = !resumeRunId && sessionId && externalRuns.previousSession(projectRoot, sessionId,{conversationId:memoryConversationId,epoch:binding?.epoch});
       if (externalRuns.isProjectActive(projectRoot)) return { ok: false, error: '当前项目已有外部 Agent 执行，请等待结束' };
       if (restoredBackend || sessionBackend || savedBackend.settings.backend !== 'builtin') {
+        if (executionRole) throw new Error('Trellis 角色阶段需要 CodeNode 自研 Agent，以确保角色权限实际生效；请切换 Agent 后再执行');
         if (activeRequests.size) return { ok: false, error: '请先结束当前 Agent 任务再启动外部后端' };
         const externalId = runStore.normalizeRunId(requestId || 'codex-' + Date.now().toString(36));
         runId = externalId;
@@ -754,6 +770,15 @@ function register(ctx) {
       }
       const effortCaps = require('../modelEffort.cjs').capabilities(sel || { model: cfg.model });
       cfg.reasoningEffort = sel?.supportsEffort === false || !effortCaps.effortLevels.length ? null : effortCaps.effortLevels.includes(reqEffort) ? reqEffort : effortCaps.defaultEffort;
+      if (executionRole) {
+        const costs = require('../costSettings.cjs');
+        const budget = costs.taskBudget(cfg, cfg.subagent || {}, executionRole, {}, cfg.costSettings);
+        const roleCfg = cfg.resolveRoleModel(executionRole, cfg);
+        roleCfg.limits = { ...roleCfg.limits, maxToolIterations: budget.maxTurns,
+          maxTotalTokens: budget.tokenBudget > 0 ? Math.min(Number(cfg.limits.maxTotalTokens) > 0 ? cfg.limits.maxTotalTokens : Infinity, budget.tokenBudget) : cfg.limits.maxTotalTokens };
+        Object.assign(cfg, costs.applyOutputBudget(roleCfg, budget.maxOutputTokens));
+        cfg.requestBudget = new RequestBudget(cfg.limits.maxTotalTokens, { retryLimit: cfg.limits.maxTotalRetries, costLimitUsd: cfg.limits.maxCostUsd, prices: cfg.costPrices });
+      }
       /**
        * 本地/自建服务（Ollama、LM Studio、llama.cpp、one-api 网关）可以**免鉴权**：
        * 这类模型配置 auth = 'none' 或地址是本机回环，空 Key 是合法配置 ——
@@ -862,6 +887,7 @@ function register(ctx) {
         sandbox: sandbox.describe(sandboxPolicy),
       });
       trellis.recordContext(projectRoot, runId, trellisSnapshot);
+      if (workflowTrellis && !runStore.appendEvent(projectRoot, runId, 'trellis_canvas_stage', { phase: workflowTrellis.phase, role: executionRole, snapshotId: workflowTrellis.snapshotId, taskPath: workflowTrellis.taskPath, nodeId })) throw new Error('无法保存画布执行角色，停止执行以保护恢复权限');
       if (cfg.pii && cfg.pii.mode === 'warn' && piiInput.findings.length) {
         runStore.appendEvent(projectRoot, runId, 'pii_detected', { direction: 'input', findings: piiInput.findings });
       }
@@ -979,7 +1005,7 @@ function register(ctx) {
           enabled: (cfg.subagent && cfg.subagent.leases) !== false,
           ttlMs: (cfg.subagent && cfg.subagent.leaseTtlMs) || 120000,
         });
-        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
+        registry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, role: executionRole || 'supervisor', projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, leases, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
       }
       let subagentManager = null;
       if (registry) {
@@ -992,7 +1018,7 @@ function register(ctx) {
           runId,
           onDelta: onAgentDelta,
         });
-        subagentManager.register(registry);
+        if (!executionRole) subagentManager.register(registry);
         /**
          * 工具面分层（阶段 A / P0-1）：裁剪生效时才注册取回入口 `discover_tools`。
          * 放在 filterByConfig **之前**：用户的 tools.allowed/deny 是显式白/黑名单，照旧说了算；
@@ -1142,7 +1168,7 @@ function register(ctx) {
             mode: cfg.prompt && cfg.prompt.canvasRules,
           });
           taskRoute = taskRouter.routeTask({ prompt, canvas: preLayers.canvas === true, canvasSummary });
-          if (cfg.modelRouting?.routes?.[taskRoute.task]) cfg.modelTaskType = taskRoute.task;
+          if (!executionRole && cfg.modelRouting?.routes?.[taskRoute.task]) cfg.modelTaskType = taskRoute.task;
           runStore.appendEvent(projectRoot, runId, 'task_route', {
             task: taskRoute.task,
             modelTaskType: cfg.modelTaskType || 'main',
@@ -1287,7 +1313,7 @@ function register(ctx) {
       // 未裁剪（toolExposure === null）时它与 listTools() 等价 —— 与改动前逐字节一致。
       const toolGuide = agent.buildToolGuide(registry ? registry.listTools().filter((t) => registry.isExposed(t.name)) : []);
       // 注入给模型的画布摘要用**预算裁剪后**的那一份（分类/工具侧仍用完整摘要：它们不是提示词固定税）
-      const systemContent = agent.buildSystemPrompt(soul, canvasSummaryForPrompt, toolGuide, memoryText, skillsText, {
+      let systemContent = agent.buildSystemPrompt(soul, canvasSummaryForPrompt, toolGuide, memoryText, skillsText, {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
         userMemoryText,
@@ -1299,6 +1325,10 @@ function register(ctx) {
         // 「真的裁剪过」才追加 discover_tools 那条规则（暴露全部工具 ≠ 没裁剪，二者提示词必须一致）
         toolFaceTrimmed: !!(toolFace && toolFace.applied),
       }) + promptContext.trellisText;
+      if (executionRole) systemContent = require('../subagentPrompt.cjs').buildSubagentPrompt({ role: executionRole, objective: prompt }, {
+        role: executionRole, tools: registry ? registry.listTools().filter(tool => registry.isExposed(tool.name)) : [],
+        trellisContext: trellis.assertReady(trellisSnapshot, executionRole),
+      });
       const messages = resumePlan
         ? runCheckpoint.buildResumeMessages(resumePlan, { systemPrompt: systemContent })
         : [{ role: 'system', content: systemContent }];
@@ -1446,7 +1476,8 @@ function register(ctx) {
           sourceMessageId: requestId || '',
           planSessionId: cfg.planSessionId || '',
           planOwnerExists: (taskId) => !!(subagentManager && subagentManager.hasTask(taskId)),
-          role: 'supervisor',
+          role: executionRole || 'supervisor',
+          readOnly: executionRole ? require('../tools/roles.cjs').isReadOnlyRole(executionRole) : false,
           signal: controller.signal,
           scalarStore,
           // 文件遍历类工具（scan_project / find_files / search_files）走 worker 线程：
@@ -1556,7 +1587,7 @@ function register(ctx) {
         result = await agentBackends.createBackend('builtin').submit({
           controller,
           cfg,
-          soulEvolution: true,
+          soulEvolution: !executionRole,
           soulMessages: [{ role: 'user', content: prompt }],
           messages,
           onDelta: onAgentDelta,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useSessionStore } from '../store/sessionStore';
 import type { TrellisContext, TrellisProject } from '../lib/trellisTypes';
+import TrellisWritePanel from './TrellisWritePanel';
 
 export default function TrellisTaskPanel() {
   const root = useProjectStore(s => s.root);
@@ -47,7 +48,7 @@ export default function TrellisTaskPanel() {
   return <details className="trellis-task-panel">
     <summary>兼容 Trellis · {context?.task.title || '选择任务'}{context && !context.ready ? ' · 资料待修复' : ''}</summary>
     <div className="trellis-task-content">
-      <p>只读任务与规范 · 参考版本 {project?.referenceVersion} · Run 结束不自动完成任务</p>
+      <p>任务与规范 · 参考版本 {project?.referenceVersion} · Run 结束不自动完成任务</p>
       <label>当前对话任务 <select aria-label="Trellis 任务" disabled={busy || streaming} value={project?.selectedTask || ''} onChange={event => void select(event.target.value)}>
         <option value="">不绑定任务</option>
         {project?.selectedTask && !project.tasks.some(task => task.taskPath === project.selectedTask) && <option value={project.selectedTask}>原任务不可读取</option>}
@@ -58,6 +59,7 @@ export default function TrellisTaskPanel() {
       {[...(project?.diagnostics || []), ...(context?.diagnostics || [])].map((item, index) => <p role="alert" key={index}>{item.source}：{item.error}</p>)}
       {context && <>
         <p>任务 ID：{context.task.id} · 上游状态：{context.task.status} · {context.tokens} tokens</p>
+        {root && <TrellisWritePanel key={context.task.taskPath} root={root} context={context} disabled={busy || streaming} reload={reload} />}
         <p>{context.ready ? '资料就绪；发送消息时由现有 Agent 执行' : '资料不完整，启动前需修复上述问题'}</p>
         <details><summary>本次使用的规范和资料 · {context.documents.length}</summary>
           {context.documents.map(doc => <details key={doc.source}><summary>{doc.source} · {doc.stages.join('/')} · {doc.fingerprint.slice(0, 12)}</summary><pre>{doc.content}</pre></details>)}

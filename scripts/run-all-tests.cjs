@@ -22,6 +22,7 @@ const os = require('os');
 // 核心套件：全部为纯 Node 断言，不弹窗、不联网、可在三平台无显示环境运行。
 const CORE = [
   'test:trellis',
+  'test:trellis-write-canvas',
   'test:backends',
   'test:backend-port',
   'test:agent-handoff',

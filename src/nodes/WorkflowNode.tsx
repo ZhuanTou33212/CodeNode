@@ -54,6 +54,7 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
         {d.memberBadge ? <span className="wf-member-badge" title="所属范围">{d.memberBadge}</span> : null}
       </div>
       <div className="wf-node-sub">{d.goal || d.subtitle || ''}</div>
+      {d.trellis && <div className="wf-node-sub" title={d.trellis.taskPath}>Trellis · {d.trellis.role} · 快照 {d.trellis.snapshotId.slice(0, 8)}</div>}
       {isObject ? (
         <input
           className="wf-object-name nodrag"

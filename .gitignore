@@ -27,6 +27,8 @@ docs/eval-reports/
 .codenode/scalars.json
 .codenode/session-overrides.json
 .codenode/trellis.json
+.codenode/trellis-transactions/
+.codenode/trellis-canvas/
 .codenode/runs/
 .codenode/metrics/
 
