@@ -87,6 +87,13 @@ interface SessionState {
   pushUser: (content: string, attachments?: SessionMsg['attachments']) => void;
   beginTurn: () => void;
   streamDelta: (d: {
+    document?: SessionDoc;
+    content?: any;
+    info?: any;
+    terminalId?: string;
+    output?: string;
+    truncated?: boolean;
+    exitStatus?: any;
     diff?: string;
     changes?: SessionMsg['backendChanges'];
     codeVerification?: import('../types').CodeVerificationReport;
@@ -416,7 +423,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   streamDelta: (d) => {
     const s = get();
+    if (d.kind === 'model' && d.document?.root) { get().applyAgentDoc(d.document); return; }
     if (d.kind === 'backend_approval') return; // The existing approval dialog owns the user interaction.
+    if (['backend_content', 'backend_info', 'backend_terminal'].includes(d.kind || '')) {
+      const messages = s.messages.slice();
+      const at = messages.map(message => message.role).lastIndexOf('assistant');
+      if (at >= 0) {
+        const previous = messages[at].backendEvents || [];
+        const events = d.kind === 'backend_terminal' ? previous.filter(e => e.terminalId !== d.terminalId) : previous;
+        messages[at] = { ...messages[at], backendEvents: [...events, { ...d, kind: d.kind || 'backend_info' }].slice(-100) };
+      }
+      set({ messages }); return;
+    }
     if (d.kind === 'backend_diff' || d.kind === 'backend_changes') {
       const messages = s.messages.slice();
       const at = messages.map(message => message.role).lastIndexOf('assistant');

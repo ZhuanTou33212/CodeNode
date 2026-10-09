@@ -42,7 +42,7 @@ async function runExternal(input, deps = {}) {
   if (!root || !fs.statSync(root).isDirectory()) return { ok: false, error: '外部 Agent 后端需要先选择项目工作目录' };
   const key = projectKey(root);
   if (activeProjects.has(key)) return { ok: false, error: '当前项目已有外部 Agent 执行，请等待结束' };
-  if (input.attachments?.length || input.forceCompact) return { ok: false, error: '该外部后端尚不支持图片附件与 /compact，请切换内置后端使用' };
+  if (input.forceCompact) return { ok: false, error: '该外部后端不支持 /compact' };
   const plan = resumeRunId ? resumePlan(root, resumeRunId, new Set()) : null;
   if (resumeRunId && !plan) return { ok: false, error: '不能把内置检查点恢复到外部 Agent 后端' };
   if (plan && (!plan.ok || plan.mode === 'complete')) return { ok: false, error: plan.error || plan.reason };
@@ -52,6 +52,7 @@ async function runExternal(input, deps = {}) {
     return { ok: false, needsReview: true, plan: resumePlan(root, previous.start.runId, new Set()) };
   }
   const backendName = previous?.start?.backend || settings.backend;
+  if ((input.attachments?.length || input.acpContent?.length) && !['hermes', 'opencode', 'openclaw'].includes(backendName)) return { ok: false, error: '该外部后端不支持附件内容' };
   const adapterSettings = previous?.session?.adapterSettings || settings;
   if (resumeRunId && previous?.start?.backend !== settings.backend && !previous?.session?.adapterSettings) return { ok: false, error: '恢复必须使用原 Agent 后端：' + String(previous?.start?.backend || 'unknown') };
   const backend = (deps.createBackend || backendFactory.createBackend)(backendName, adapterSettings, deps);

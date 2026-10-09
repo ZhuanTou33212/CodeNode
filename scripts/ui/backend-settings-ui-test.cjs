@@ -122,6 +122,7 @@ app.whenReady().then(async () => {
     for(const backend of ['hermes','opencode','openclaw']){
       await select('执行后端',backend);
       assert.equal(await js(`!!document.querySelector('[aria-label="ACP 权限请求策略"]')`),true,backend+' exposes its permission request setting');
+      assert.equal(await js(`!!document.querySelector('[aria-label="ACP 会话配置"]')`),true,backend+' exposes its persisted ACP configuration');
       await select('ACP 权限请求策略','workspace-write');
       for(const theme of ['light','dark']){await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(60);assert.equal(await js(`document.querySelector('[aria-label="ACP 权限请求策略"]').value`),'workspace-write');}
     }
@@ -159,7 +160,25 @@ app.whenReady().then(async () => {
     assert.deepEqual(JSON.parse(await js(`document.querySelector('[aria-label="后端启动参数"]').value`)),['acp','--machine-profile'],'inheriting machine configuration also replaces the argument draft used for connection checks');
     assert.equal(fs.existsSync(path.join(projectRoot, '.codenode/backend.json')), false);
     await js(`window.codenode.backendSave(${JSON.stringify(projectRoot)},'machine',{backend:'builtin',executable:'',args:[],sandbox:'read-only'})`);
+    await js(`window.dispatchEvent(new Event('codenode-backend-settings'))`);
+    await waitFor(()=>js(`!document.querySelector('.pp-model')?.textContent.includes('hermes')`),'restored built-in model display');
     await js(`window.__codenodeUi.getState().closeSettings()`); assert.equal(await view(), before);
+    const acpSettings = { backend:'opencode', executable:process.execPath, args:[path.resolve(__dirname,'../fixtures/acp-full.cjs')], sandbox:'workspace-write', model:'m2', acp:{authMethodId:'login',modeId:'code',configValues:{fast:true},codeNodeTools:true} };
+    assert.equal((await js(`window.codenode.backendSave(${JSON.stringify(projectRoot)},'project',${JSON.stringify(acpSettings)})`)).ok,true);
+    await js(`window.__codenodeUi.getState().openSettings('general')`);
+    await waitFor(()=>js(`document.querySelector('[aria-label="执行后端"]')?.value==='opencode'`),'ACP persistence');
+    assert.equal(JSON.parse(await js(`document.querySelector('[aria-label="ACP 会话配置"]').value`)).configValues.fast,true);
+    await js(`window.__codenodeUi.getState().closeSettings()`);
+    fs.writeFileSync(path.join(projectRoot,'source.txt'),'disk\nsecond\nthird');
+    await js(`window.__codenodeProject.getState().openFile('source.txt')`);
+    await js(`window.__codenodeProject.getState().updateDraft(${JSON.stringify('draft\nunsaved\nthird')})`);
+    await js(`window.__codenodeSession.getState().beginTurn()`);
+    const actual = await win.webContents.executeJavaScript(`(async()=>{const approve=window.codenode.onToolRequest(r=>{if(r.type==='confirm')window.codenode.respondToolRequest(r.id,{ok:true});});const off=window.codenode.onAgentDelta(d=>window.__codenodeSession.getState().streamDelta(d));try{return await window.codenode.agentChat({projectRoot:${JSON.stringify(projectRoot)},prompt:'Full ACP UI test',requestId:'full-acp-ui',document:window.__codenodeSession.getState().getDocument()});}finally{off();approve();}})()`);
+    assert.equal(actual.state,'COMPLETED',actual.error);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot,'report.json'),'utf8')).read.result.content,'unsaved','client reads live editor draft via renderer bridge');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot,'report.json'),'utf8')).mcpRead.result.isError,false,'MCP relay executes the real CodeNode workbench tool');
+    await js(`window.__codenodeSession.getState().stopTurn()`);
+    for(const theme of ['light','dark']) { await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`); await sleep(80); assert.equal(await js(`document.querySelectorAll('.cs-msg-agent audio').length > 0`),true,'audio events render in '+theme); assert.equal(await js(`document.querySelectorAll('.cs-msg-agent details').length > 0`),true,'ACP events render in '+theme); }
     console.log('BACKEND SETTINGS UI: PASS (real IPC save/reload/inherit, Goal panel and backend controls shared in both themes, session/draft/model/sidebar preserved)');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }

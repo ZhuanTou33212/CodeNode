@@ -148,6 +148,7 @@ export type SessionMsg = {
   /** 本轮实际写入通知中的文件路径，不包含纯画布操作。 */
   editedFiles?: string[];
   backendDiff?: string;
+  backendEvents?: Array<{ kind: string; content?: any; info?: any; terminalId?: string; output?: string; truncated?: boolean; exitStatus?: any; source?: string }>;
   backendChanges?: { complete: boolean; scope: string; files: { path: string; kind: string; before: string | null; after: string | null }[] };
   status?: string;
   grounding?: RagGrounding;
@@ -226,4 +227,10 @@ export interface AgentBackendSettings {
   home: string;
   sandbox: 'read-only' | 'workspace-write';
   reasoningEffort: string;
+  acp?: { authMethodId?: string; modeId?: string; configValues?: Record<string, string | boolean>; mcpServers?: Array<{ name: string; type?: 'http' | 'sse'; command?: string; args?: string[]; env?: Array<{ name: string; value: string }>; url?: string; headers?: Array<{ name: string; value: string }> }>; codeNodeTools?: boolean };
 }
+export type AgentAcpContent =
+  | { type: 'text'; text: string }
+  | { type: 'image' | 'audio'; mimeType: string; data: string }
+  | { type: 'resource'; resource: { uri: string; mimeType?: string; text?: string; blob?: string } }
+  | { type: 'resource_link'; uri: string; name: string; title?: string };

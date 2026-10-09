@@ -19,6 +19,7 @@
   "interruptTimeoutMs": 10000,
   "shutdownTimeoutMs": 5000,
   "maxMessageBytes": 8388608,
+  "acpLimits": { "fileBytes": 2097152, "contentBytes": 4194304, "terminalBytes": 65536, "terminals": 8, "terminalTimeoutMs": 120000 },
   "snapshotFiles": 20000,
   "snapshotBytes": 268435456
 }

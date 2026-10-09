@@ -162,7 +162,19 @@ DeepSeek Harness 通过官方 stdio SDK JSON-RPC profile。安装 `deepseek-harn
 
 外部 Agent 的工具和沙箱由对应 runtime/profile 控制，CodeNode 工具注册表不能拦截其全部操作。ACP 只读模式拒绝所有权限请求；写入模式对每个 ACP 权限请求逐次询问。ACP 请求类型由 Agent 提供，不能代替操作系统沙箱，也不能证明 Agent 不会绕过权限请求直接操作文件。CodeNode 在运行前后扫描项目文件指纹并展示 Agent 报告的补丁；修改代码后复用独立本地校验，缺少有效校验时不把代码修改标成验收通过。外部用量与费用不一定可得，不承诺 CodeNode 硬费用预算或自动副作用回滚。
 
-首版外部后端未接入 CodeNode 画布修改工具、子 Agent、图片与 `/compact`；这些功能使用内置执行器。OpenClaw 的 ACP Gateway 桥能力受其本机安装和 Gateway 配置影响；DeepSeek Harness SDK 的运行与权限由显式选择的 SDK profile 决定。
+Hermes、OpenCode、OpenClaw 的 ACP v1 接口支持项目内文本读写、编辑器未保存内容、终端创建/输出/等待/终止/释放、Agent 管理的认证、模型/模式与 select/boolean 配置项，以及图片、音频、嵌入资源和资源链接。发送附件前检查 Agent 的 `promptCapabilities`；缺少能力时明确报错。工具补丁、终端、多媒体、计划、命令、模式、配置、会话信息与用量事件会保存并显示；未知客户端方法返回 JSON-RPC `-32601`。文件写入逐次审批，提交前复核文件 SHA256、编辑器草稿与 Task 范围；终端使用既有沙箱执行策略，输出按 UTF-8 字节截断，会话取消/结束时清理进程。
+
+在 **Agent 后端 → ACP 会话配置** 保存 `authMethodId`、`modeId`、`configValues`、`mcpServers`、`codeNodeTools`，点击“读取 ACP 可选项”查询本机 Agent 的实际可用值，点击“执行 ACP 认证”调用 Agent 自身认证流程。模型也可直接填写，运行前检查其配置选项或模型列表。需要交互终端的认证和 URL/form elicitation 没有声明客户端支持，仍由 Agent 自身登录入口处理；本接口以稳定的 ACP v1 为目标，不宣称覆盖 v2 草案或全部可选扩展。`session/list/delete/close/logout` 管理接口按 Agent 能力声明调用；所有控制请求限制在固定方法集合内。
+
+ACP 会话可通过临时、仅监听本机且需要每轮随机令牌的 MCP stdio relay 接入 CodeNode 工具注册表，复用角色、能力、审批、取消和工具配置门禁，支持实际画布读取/修改及项目工具。令牌不写入后端配置，结束后立即失效。只读后端或有明确 Task 写入范围的 MCP 上下文只授予只读工具；有限范围 Task 的 ACP 文件写入按范围执行，任意终端命令被拒绝。额外 MCP stdio/HTTP/SSE 服务器需本机已安装并由 Agent 声明相应传输能力；凭据保存在 Agent 自身配置，不写入 CodeNode 明文设置。OpenClaw 有额外 MCP 时不再省略 `mcpServers`，Gateway 不接受该字段会明确失败，不静默丢弃工具。外部 `/compact` 与 CodeNode 子 Agent 委派仍使用内置执行器。DeepSeek Harness 的运行与权限由显式选择的 SDK profile 决定。
+
+ACP 配置示例（可选项以“读取 ACP 可选项”的实际返回为准）：
+
+```json
+{"authMethodId":"login","modeId":"code","configValues":{"model":"my-model","fast":true},"mcpServers":[],"codeNodeTools":true}
+```
+
+`npm run test:acp-full` 使用独立协议进程覆盖文件/终端、认证/配置、多媒体事件、未知方法错误和真实 MCP relay 工具调用；不下载第三方 Agent。协议依据 [ACP v1 官方规范](https://agentclientprotocol.com/protocol/v1/overview) 与 [官方 v1 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/schema/v1/schema.json)。
 
 离线协议与画布闭环：`npm run test:backends`、`npm run test:multi-backends`、`npm run test:backend-workflow`、`npm run test:goal-store`；主题与持久化：`npm run test:backend-ui`；使用本机 Codex 登录执行真实只读任务：`npm run test:backend-live`；对已安装 Hermes/OpenCode 发真实短提示词/隔离源码任务：`npm run test:backend-live-agents`、`npm run test:backend-live-workflow`（真实请求需可用凭据，可能产生模型用量，使用临时工作目录，不进入离线 CI）。协议依据 [OpenAI app-server 文档](https://learn.chatgpt.com/docs/app-server)、[Hermes ACP 集成说明](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/programmatic-integration.md)、[OpenCode ACP 文档](https://opencode.ai/v2/docs/cli/acp/) 和 [DeepSeek Harness SDK 协议](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sdk/protocol/README.md)。
 

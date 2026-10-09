@@ -17,7 +17,27 @@ function normalize(input) {
   }
   return { backend: input.backend, executable, args: args.slice(), model: String(input.model || '').trim().slice(0, 200),
     provider: String(input.provider || config.defaults.provider).trim().slice(0, 100), home: String(input.home || '').trim().slice(0, 2048), sandbox: input.sandbox,
-    reasoningEffort: String(input.reasoningEffort || '').trim().slice(0, 40) };
+    reasoningEffort: String(input.reasoningEffort || '').trim().slice(0, 40), ...(input.acp ? { acp: normalizeAcp(input.acp) } : {}) };
+}
+function normalizeAcp(input) {
+  if (!input || typeof input !== 'object') throw new Error('ACP 设置无效');
+  const configValues = input.configValues || {};
+  if (typeof configValues !== 'object' || Array.isArray(configValues) || Object.entries(configValues).some(([key, value]) => key.length > 200 || !['string', 'boolean'].includes(typeof value) || String(value).length > 1000)) throw new Error('ACP 配置值必须是字符串或布尔值');
+  const servers = input.mcpServers || [];
+  if (!Array.isArray(servers) || servers.length > 16 || Buffer.byteLength(JSON.stringify(servers)) > 65536) throw new Error('ACP MCP 服务器设置无效');
+  const mcpServers = servers.map(server => {
+    if (!server || typeof server.name !== 'string' || !server.name.trim() || server.name === 'codenode') throw new Error('MCP 名称无效或使用保留名称');
+    if (server.type === 'http' || server.type === 'sse') {
+      if (typeof server.url !== 'string' || !/^https?:\/\//i.test(server.url) || new URL(server.url).username || new URL(server.url).password) throw new Error('MCP URL 无效');
+      if (server.headers?.length) throw new Error('MCP 凭据请保存在 Agent 自身配置中');
+      return { name: server.name, type: server.type, url: server.url, headers: [] };
+    }
+    if (server.type != null || typeof server.command !== 'string' || !server.command || /[\0\r\n]/.test(server.command) || !Array.isArray(server.args) || server.args.some(x => typeof x !== 'string' || x.includes('\0') || /^--?(?:token|password|secret|api[-_]?key)(?:=|$)/i.test(x))) throw new Error('MCP stdio 命令无效');
+    if (server.env?.length) throw new Error('MCP 环境凭据请保存在 Agent 自身配置中');
+    return { name: server.name, command: server.command, args: server.args, env: [] };
+  });
+  if (new Set(mcpServers.map(x => x.name)).size !== mcpServers.length) throw new Error('MCP 名称重复');
+  return { authMethodId: String(input.authMethodId || '').slice(0, 200), modeId: String(input.modeId || '').slice(0, 200), configValues, mcpServers, codeNodeTools: input.codeNodeTools === true };
 }
 function fileFor(root, userData, scope) {
   if (scope === 'project') {

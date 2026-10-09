@@ -1,0 +1,75 @@
+'use strict';
+const assert = require('assert/strict');
+const fs = require('fs'); const os = require('os'); const path = require('path');
+const { AcpBackend } = require('../../electron/backends/acp.cjs');
+const { AcpClient } = require('../../electron/backends/acpClient.cjs');
+const { promptContent, contentBlock } = require('../../electron/backends/acpContent.cjs');
+const { AgentToolRegistry } = require('../../electron/tools/registry.cjs');
+const { AgentToolContext } = require('../../electron/tools/context.cjs');
+const settingsLib = require('../../electron/backends/settings.cjs');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-acp-full-'));
+const fixture = path.resolve(__dirname, '../fixtures/acp-full.cjs');
+const settings = { ...settingsLib.config.defaults, backend: 'opencode', executable: process.execPath, args: [fixture], sandbox: 'workspace-write', model: 'm2', acp: { authMethodId: 'login', modeId: 'code', configValues: { fast: true }, codeNodeTools: true } };
+async function main() {
+  fs.writeFileSync(path.join(root, 'source.txt'), 'disk\nsecond\nthird');
+  const registry = new AgentToolRegistry();
+  registry.registerDescriptor({ name: 'fixture_read', description: 'Read fixture', inputSchema: { type: 'object', properties: {} }, readOnly: true, capabilities: [] }, async () => ({ ok: true, data: { text: 'MCP_OK' } }));
+  const context = new AgentToolContext({ projectRoot: root, role: 'supervisor' });
+  const events = []; const backend = new AcpBackend(settings);
+  const result = await backend.start({ projectRoot: root, prompt: 'Check', toolRegistry: registry, toolContext: context, sandboxPolicy: { mode: 'off' },
+    attachments: [{ dataUrl: 'data:image/png;base64,aGk=' }, { dataUrl: 'data:audio/wav;base64,aGk=' }], acpContent: [{ type: 'resource', resource: { uri: 'fixture://context', text: 'context' } }],
+    readEditorText: async file => file.endsWith('source.txt') ? 'draft\nunsaved\nthird' : null, confirm: async () => true, onDelta: d => events.push(d) });
+  assert.equal(result.state, 'COMPLETED', result.error); assert.equal(result.content, 'FULL_ACP_OK'); assert.equal(result.reasoning, 'Fixture thought');
+  const report = JSON.parse(fs.readFileSync(path.join(root, 'report.json'), 'utf8'));
+  assert.equal(report.read.result.content, 'unsaved'); assert.deepEqual(report.write.result, {}); assert.equal(fs.readFileSync(path.join(root, 'output.txt'), 'utf8'), 'ACP_WRITE_OK');
+  assert.equal(report.escape.error.code, -32000); assert.equal(report.unknown.error.code, -32601); assert.equal(report.badSession.error.code, -32602); assert.equal(report.badParams.error.code, -32602);
+  assert.equal(report.wait.result.exitCode, 0); assert.equal(report.output.result.truncated, true); assert(Buffer.byteLength(report.output.result.output) <= 31); assert(!report.output.result.output.includes('\ufffd')); assert.equal(report.released.error.code, -32602);
+  assert.equal(report.mcpRead.result.isError, false); assert.match(report.mcpRead.result.content[0].text, /MCP_OK/); assert.equal(report.mcpUnknown.error.code, -32602);
+  assert.deepEqual(report.mcpList.result.tools[0].inputSchema.type, 'object');
+  assert(events.some(x => x.kind === 'plan')); assert(events.some(x => x.kind === 'backend_terminal')); assert.equal(events.filter(x => x.kind === 'backend_diff').length, 1); assert.equal(events.filter(x => x.kind === 'backend_content').length, 3); assert.equal(result.usage.used, 15);
+  const initialized = JSON.parse(fs.readFileSync(path.join(root, 'initialize.json'), 'utf8'));
+  assert.equal(initialized.clientCapabilities.fs.readTextFile, true); assert.equal(initialized.clientCapabilities.terminal, true);
+  const controls = fs.readFileSync(path.join(root, 'controls.jsonl'), 'utf8'); assert.match(controls, /authenticate/); assert.match(controls, /set_mode/); assert.match(controls, /"value":true/); assert.match(controls, /"value":"m2"/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'prompt.json'), 'utf8')).prompt.length, 4);
+  assert.throws(() => promptContent({ attachments: [{ dataUrl: 'data:audio/wav;base64,aGk=' }] }, '', {}), /audio/);
+  assert.throws(() => contentBlock({ type: 'image', mimeType: 'image/svg+xml', data: 'aGk=' }), /无效/);
+  assert.throws(() => settingsLib.normalize({ ...settings, acp: { mcpServers: [{ name: 'x', command: 'node', args: [], env: [{ name: 'API_KEY', value: 'secret' }] }] } }), /凭据/);
+  const management = new AcpBackend(settings);
+  try {
+    await management.connect(root);
+    management.sessionInfo = await management.sessionRequest('session/new', { cwd: root, mcpServers: [] }); management.sessionId = management.sessionInfo.sessionId;
+    assert.equal((await management.control('session/list')).sessions[0].sessionId, 'full-session');
+    await management.control('session/close'); await management.control('session/delete', { sessionId: 'full-session' }); await management.control('logout');
+    await assert.rejects(management.control('session/set_mode', { modeId: 'invented' }), /未提供/);
+    await assert.rejects(management.control('session/set_config_option', { configId: 'fast', value: 'wrong type' }), /无效/);
+    management.authMethods = [{ id: 'interactive', type: 'terminal' }];
+    await assert.rejects(management.control('authenticate', { methodId: 'interactive' }), /终端/);
+    management.capabilityInfo = {};
+    await assert.rejects(management.control('session/delete', { sessionId: 'full-session' }), /未声明/);
+  } finally { await management.rpc.close(); }
+  const bridge = await require('../../electron/backends/acpMcp.cjs').createToolBridge(registry, context, () => {});
+  const environment = Object.fromEntries(bridge.descriptor.env.map(x => [x.name, x.value]));
+  const endpoint = environment.CODENODE_MCP_ENDPOINT;
+  assert.equal((await fetch(endpoint, { method: 'POST', body: '{}' })).status, 403, 'MCP rejects callers without the per-run token');
+  await bridge.close();
+  await assert.rejects(fetch(endpoint, { method: 'POST', headers: { Authorization: 'Bearer ' + environment.CODENODE_MCP_TOKEN }, body: '{}' }), /fetch failed/, 'MCP run capability is revoked on close');
+  const owner = { cwd: root, sessionId: 'unit', settings, stopping: false, deps: {}, emit() {}, input: { confirm: async () => true } };
+  const client = new AcpClient(owner);
+  owner.input.confirm = async () => { fs.writeFileSync(path.join(root, 'output.txt'), 'changed during approval'); return true; };
+  await assert.rejects(client.handle('fs/write_text_file', { sessionId: 'unit', path: path.join(root, 'output.txt'), content: 'overwrite' }), /版本已变化/);
+  assert.equal(fs.readFileSync(path.join(root, 'output.txt'), 'utf8'), 'changed during approval');
+  owner.input.goalWriteScope = ['allowed'];
+  await assert.rejects(client.handle('fs/write_text_file', { sessionId: 'unit', path: path.join(root, 'output.txt'), content: 'overwrite' }), /Task/);
+  await assert.rejects(client.handle('terminal/create', { sessionId: 'unit', command: process.execPath, args: [] }), /Task/);
+  owner.settings = { ...settings, sandbox: 'read-only' };
+  owner.input.goalWriteScope = [];
+  await assert.rejects(client.handle('terminal/create', { sessionId: 'unit', command: process.execPath, args: [] }), /只读/);
+  owner.settings = settings; owner.input.confirm = async () => true;
+  owner.input.sandboxPolicy = { mode: 'off' };
+  const longRunning = await client.handle('terminal/create', { sessionId: 'unit', command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'] });
+  const terminal = client.terminals.get(longRunning.terminalId);
+  await client.close();
+  assert.equal(client.terminals.size, 0); assert(terminal.exitStatus, 'session cleanup confirms terminal exit');
+  console.log('ACP FULL: PASS (process roundtrips, editor drafts, CAS, scopes, terminal lifecycle/UTF-8, auth/config/media/events, real MCP relay and tool execution)');
+}
+main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -1,4 +1,5 @@
 import { useGraphStore } from '../store/graphStore';
+import { useProjectStore } from '../store/projectStore';
 import { useUiStore } from '../store/uiStore';
 import { useToolStore, type ConfirmRequest, type AskRequest } from '../store/toolStore';
 
@@ -88,6 +89,13 @@ export function installToolListener(): () => void {
   if (!api || !api.onToolRequest) return () => {};
   return api.onToolRequest((req) => {
     if (!req || !req.id) return;
+    if (req.type === 'editor_read') {
+      const state = useProjectStore.getState();
+      const normalize = (value: string) => value.replace(/\\/g, '/').toLowerCase();
+      const matches = state.root && state.selected && normalize(state.root + '/' + state.selected.relPath) === normalize(String(req.path || ''));
+      api.respondToolRequest(req.id, { content: matches ? state.draft : null });
+      return;
+    }
     if (req.type === 'cancel') {
       useToolStore.getState().cancel(req.id);
       return;

@@ -62,7 +62,7 @@ export function MessageView({ msg, isLatest = true }: { msg: SessionMsg; isLates
                 rel="noreferrer"
                 title={`${a.name || '图片'}${a.bytes ? '（' + Math.round(a.bytes / 1024) + 'KB）' : ''} · 点击查看原图`}
               >
-                <img src={a.dataUrl} alt={a.name || '图片'} />
+                {a.mime.startsWith('image/') ? <img src={a.dataUrl} alt={a.name || '图片'} /> : a.mime.startsWith('audio/') ? <audio controls src={a.dataUrl} /> : <span>{a.name || '资源附件'}</span>}
               </a>
             ))}
           </div>
@@ -84,6 +84,14 @@ export function MessageView({ msg, isLatest = true }: { msg: SessionMsg; isLates
       {msg.status === 'failed' ? <div className="cs-msg-state cs-msg-state-error" role="status">本轮失败（详见下方错误说明）</div> : null}
       <div className="cs-msg-text" data-revealing={display.revealing ? 'true' : 'false'}>{display.text || (msg.status === 'running' ? '…' : '')}{display.revealing && <span className="cs-typewriter-cursor" aria-hidden="true" />}</div>
       <FileChangesCard message={msg} />
+      {msg.backendEvents?.map((event, i) => {
+        const c = event.content;
+        if (c?.type === 'image') return <img key={i} style={{ maxWidth: '100%' }} src={`data:${c.mimeType};base64,${c.data}`} alt="Agent 图片" />;
+        if (c?.type === 'audio') return <audio key={i} controls src={`data:${c.mimeType};base64,${c.data}`} />;
+        if (c?.type === 'resource') return <details key={i}><summary>{c.resource.uri}</summary><pre>{c.resource.text || '二进制资源'}</pre></details>;
+        if (c?.type === 'resource_link') return <p key={i}>{/^https?:/.test(c.uri) ? <a href={c.uri} target="_blank" rel="noreferrer">{c.title || c.name}</a> : `${c.name} · ${c.uri}`}</p>;
+        return <details key={i}><summary>{event.kind === 'backend_terminal' ? 'Agent 终端' : event.info?.sessionUpdate || 'Agent 事件'}</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{event.output ?? c?.text ?? JSON.stringify(event.info, null, 2)}{event.truncated ? '\n（输出已截断）' : ''}</pre></details>;
+      })}
       {msg.content && msg.status !== 'running' && !display.revealing ? (
         <div className="cs-msg-feedback" aria-label="回答反馈">
           <button type="button" className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>

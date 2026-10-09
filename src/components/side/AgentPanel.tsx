@@ -11,6 +11,7 @@ import { useSending } from '../../lib/useSending';
 import { formatResumePlanNotice, summarizeResumePlan } from '../../lib/resumePlan';
 import { reportError } from '../../lib/reportError';
 import type { AgentAttachment } from '../../types';
+import backendConfig from '../../../config/agent.backends.json';
 import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
 import { PlanCard } from '../PlanCard';
@@ -136,11 +137,12 @@ function PromptComposer() {
   const pendingDraft = useSessionStore(s => s.newConversationPending);
   const projectRoot = useProjectStore(s => s.root);
   const [externalModel, setExternalModel] = useState<string | null>(null);
+  const [externalBackend, setExternalBackend] = useState('builtin');
   useEffect(() => {
     let alive = true;
     const refresh = () => {
       void window.codenode?.agentConfig(projectRoot).then(config => {
-        if (alive) setExternalModel(config.backend?.settings.backend === 'codex' ? config.backend.settings.model || '跟随 Codex 配置' : null);
+        if (alive) { const settings = config.backend?.settings; setExternalBackend(settings?.backend || 'builtin'); setExternalModel(settings && settings.backend !== 'builtin' ? settings.backend + ' · ' + (settings.model || '跟随 Agent 配置') : null); }
       }).catch(() => { if (alive) setExternalModel(null); });
     };
     refresh(); window.addEventListener('codenode-backend-settings', refresh);
@@ -196,7 +198,8 @@ function PromptComposer() {
   };
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
-  const canVision = !externalModel && !selectedNode && model?.vision === true;
+  const isAcp = ['hermes', 'opencode', 'openclaw'].includes(externalBackend);
+  const canVision = !selectedNode && (isAcp || !externalModel && model?.vision === true);
 
   useEffect(() => {
     void loadModels();
@@ -216,6 +219,11 @@ function PromptComposer() {
     const picked = files.slice(0, room);
     const next: AgentAttachment[] = [];
     for (const f of picked) {
+      if (isAcp && !f.type.startsWith('image/')) {
+        if (f.size > backendConfig.acpLimits.contentBytes / 2) { useUiStore.getState().setToast('附件超过 ACP 内容上限'); continue; }
+        const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(f); });
+        next.push({ name: f.name, mime: f.type || 'application/octet-stream', bytes: f.size, dataUrl }); continue;
+      }
       const r = await fileToAttachment(f);
       if (!r.ok) {
         useUiStore.getState().setToast(r.error);
@@ -275,7 +283,7 @@ function PromptComposer() {
         <div className="pp-attach-list">
           {attachments.map((a, i) => (
             <div className="pp-attach" key={i} title={`${a.name || '图片'}（${fmtBytes(a.bytes || 0)}）`}>
-              <img src={a.dataUrl} alt={a.name || '附件'} />
+              {a.mime.startsWith('image/') ? <img src={a.dataUrl} alt={a.name || '附件'} /> : <span>{a.name || '附件'}</span>}
               <button
                 className="pp-attach-del"
                 title="移除这张图片"
@@ -327,12 +335,12 @@ function PromptComposer() {
 
       {/* 控件行：模型 / 推理强度 / 发送（紧凑一行，保证输入框常驻面板底部） */}
       <div className="pp-controls">
-        {externalModel ? <button type="button" className="pp-model" disabled={busy} onClick={() => useUiStore.getState().openSettings('general')} title="在 Agent 后端设置中选择 Codex 模型">Codex · {externalModel}</button> : <ModelPicker busy={busy} />}
+        {externalModel ? <button type="button" className="pp-model" disabled={busy} onClick={() => useUiStore.getState().openSettings('general')} title="在 Agent 后端设置中选择模型">{externalModel}</button> : <ModelPicker busy={busy} />}
 
         <input
           ref={fileRef}
           type="file"
-          accept={ALLOWED_IMAGE_MIME.join(',')}
+          accept={isAcp ? [...ALLOWED_IMAGE_MIME, 'audio/*', 'text/*', 'application/pdf'].join(',') : ALLOWED_IMAGE_MIME.join(',')}
           multiple
           style={{ display: 'none' }}
           onChange={(e) => {

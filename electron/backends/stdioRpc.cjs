@@ -53,6 +53,7 @@ class StdioRpc extends EventEmitter {
     this.ready = (async () => {
       const resolved = resolveCommand(command); const network = await launchEnvironment();
       const env = { ...network.env, ...(options.env || {}) };
+      if (resolved.command === process.execPath && process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
       this.proxySource = network.proxySource;
       this.child = (options.spawn || spawn)(resolved.command, [...resolved.prefix, ...(args || [])],
         { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -76,6 +77,7 @@ class StdioRpc extends EventEmitter {
     });
   }
   async respond(id, result) { return this.send({ jsonrpc: '2.0', id, result }); }
+  async respondError(id, code, message, data) { return this.send({ jsonrpc: '2.0', id, error: { code, message, ...(data === undefined ? {} : { data: redact(data) }) } }); }
   receive(chunk) {
     this.buffer += chunk;
     if (Buffer.byteLength(this.buffer) > config.maxMessageBytes) { this.disconnected(new Error('Agent 协议消息超过限制')); void this.close(); return; }

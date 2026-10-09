@@ -80,7 +80,8 @@ interface ToolRecordDto {
 
 interface ToolRequestDto {
   id: string;
-  type: 'confirm' | 'ask' | 'ui' | 'cancel';
+  type: 'confirm' | 'ask' | 'ui' | 'cancel' | 'editor_read';
+  path?: string;
   level?: string;
   what?: string;
   detail?: string;
@@ -203,6 +204,7 @@ interface CodenodeApi {
   editingSave: (root: string, settings: import('./types').EditingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').EditingSettings }>;
   executionSave: (root: string, settings: { autoExecuteTools: boolean }) => Promise<{ ok: boolean; error?: string; settings?: { autoExecuteTools: boolean } }>;
   backendSave: (root: string | null, scope: 'machine' | 'project', settings: import('./types').AgentBackendSettings | null) => Promise<{ ok: boolean; error?: string; settings?: import('./types').AgentBackendSettings; scope?: 'machine' | 'project' }>;
+  backendControl: (root: string | null, settings: import('./types').AgentBackendSettings, method: string, params?: Record<string, unknown>) => Promise<{ ok: boolean; error?: string; value?: any }>;
   backendStatus: (root: string | null, settings?: import('./types').AgentBackendSettings) => Promise<{ ok: boolean; error?: string; checkedSettings?: import('./types').AgentBackendSettings; capabilities?: { backend: string; available: boolean; authenticated?: boolean | null; protocolVersion?: string; protocol?: string; version?: string; resume?:boolean; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
   goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[];recoveredAdmissions?:{count:number;recovered:any[]}}}>;
   goalCreate: (root:string|null,input:{title:string;objective?:string;scope?:string;exclusions?:string;criteria?:string[];maxTokens?:number;maxCostUsd?:number})=>Promise<{ok:boolean;error?:string;value?:any}>;
@@ -425,6 +427,7 @@ interface CodenodeApi {
     history?: { role: string; content: string }[];
     /** 图片附件（多模态）：仅当所选模型 vision=true 时允许 */
     attachments?: { mime: string; dataUrl: string; name?: string; bytes?: number }[];
+    acpContent?: import('./types').AgentAcpContent[];
     canvasSummary?: string;
     nodeId?: string | null;
     requestId?: string;
@@ -517,6 +520,13 @@ interface CodenodeApi {
   }>;
   stopAgent: (requestId: string) => Promise<{ ok: boolean }>;
   onAgentDelta: (cb: (data: {
+    document?: import('./types').SessionDoc;
+    content?: any;
+    info?: any;
+    terminalId?: string;
+    output?: string;
+    truncated?: boolean;
+    exitStatus?: any;
     diff?: string;
     changes?: import('./types').SessionMsg['backendChanges'];
     codeVerification?: import('./types').CodeVerificationReport;

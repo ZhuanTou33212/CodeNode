@@ -244,6 +244,25 @@ function register(ctx) {
       return { ok: true, ...saved, checkedSettings, capabilities: await backend.capabilities(projectRoot || userDataDir()) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
+  ipcMain.handle('agent:backend-control', async (_event, projectRoot, input, method, params) => {
+    let backend;
+    try {
+      if (activeRequests.size) throw new Error('请先结束当前 Agent 任务');
+      const settings = backendSettings.normalize(input);
+      if (!['hermes', 'opencode', 'openclaw'].includes(settings.backend)) throw new Error('当前后端不是 ACP');
+      if (!['inspect', 'authenticate', 'logout', 'session/list', 'session/delete', 'session/close'].includes(method)) throw new Error('不支持的管理方法');
+      backend = new (require('../backends/acp.cjs').AcpBackend)(settings);
+      await backend.connect(projectRoot || userDataDir());
+      if (method === 'inspect') {
+        const info = await backend.sessionRequest('session/new', { cwd: projectRoot || userDataDir(), ...(settings.backend === 'openclaw' ? {} : { mcpServers: [] }) });
+        if (info.sessionId && backend.capabilityInfo.sessionCapabilities?.close) await backend.rpc.request('session/close', { sessionId: info.sessionId });
+        return { ok: true, value: { ...info, authMethods: backend.authMethods, agentCapabilities: backend.capabilityInfo } };
+      }
+      if (['session/delete', 'session/close'].includes(method) && typeof params?.sessionId !== 'string') throw new Error('缺少会话编号');
+      return { ok: true, value: await backend.control(method, params || {}) };
+    } catch (error) { return { ok: false, error: error.message }; }
+    finally { await backend?.rpc?.close(); }
+  });
 
   const withGoalRoot = (projectRoot, action) => {
     try { if (!projectRoot || !fs.statSync(projectRoot).isDirectory()) return { ok: false, error: '请先选择项目' }; return { ok: true, value: action(path.resolve(projectRoot)) }; }
@@ -655,15 +674,30 @@ function register(ctx) {
         runId = externalId;
         const externalController = new AbortController();
         const externalBridge = makeBridge(sender, externalController.signal, { projectRoot });
+        const externalModel = new GraphModel(document || undefined);
+        const externalRegistry = toolkit.buildDefaultRegistryWithConfig({ ...cfg.tools, projectRoot, ragEnabled: cfg.rag.enabled && !!projectRoot, webSearchEnabled: webSearchConfig(cfg).enabled, difyEnabled: cfg.dify.enabled });
+        const externalContext = new AgentToolContext({ projectRoot, model: externalModel, runId: externalId,
+          signal: externalController.signal, sandbox: sandboxPolicy, role: 'supervisor',
+          readOnly: savedBackend.settings.sandbox === 'read-only' || !!goalWriteScope?.length,
+          confirm: externalBridge.confirm, askUser: externalBridge.askUser, ui: externalBridge.ui,
+          editingConfig: cfg.editing, ragConfig: cfg.rag, webSearchConfig: webSearchConfig(cfg),
+          scalarStore: cfg.scalars?.enabled !== false && projectRoot ? getScalarStore(projectRoot) : null,
+          conversationHistory: () => payload.history || [],
+          mutateWorkbench: async fn => { fn(externalModel); bumpCanvasRevision(externalModel); sendDelta({ kind: 'model', document: externalModel.doc }); return true; },
+          saveProject: async () => { const saved = saveDoc(projectRoot, projectFile, externalModel); sendDelta({ kind: 'saved', filePath: saved }); return saved; },
+          notifyFileChange: (rel, kind, detail) => { require('../rag/index.cjs').invalidateProjectIndex(projectRoot, rel); sendDelta({ kind: 'file_change', fileChange: { path: rel, kind, detail } }); },
+          audit: entry => auditLog(projectRoot, entry) });
         activeRequests.set(externalId, externalController);
         try {
           applyGoalContext();
           const externalResult = await externalRuns.runExternal({ ...payload, prompt, requestId: externalId, cfg,
             settings: savedBackend.settings, sandboxPolicy, signal: externalController.signal,
             goalContextRevision, goalAcceptanceRevision,
+            toolRegistry: externalRegistry, toolContext: externalContext,
+            readEditorText: async file => { const result = await externalBridge.request('editor_read', { path: file }); return result?.content; },
             onDelta: sendDelta, confirm: externalBridge.confirm, goalWriteScope, onStart: () => admitGoalTask(externalId) });
           if (goalAdmission) settleGoalTask(externalResult?.state === 'COMPLETED' ? 'completed' : externalResult?.state === 'CANCELLED' ? 'cancelled' : 'failed', externalResult);
-          return externalResult;
+          return { ...externalResult, document: externalModel.doc };
         } finally {
           if (goalAdmission && !goalAdmissionSettled) settleGoalTask('failed');
           activeGoalRuns.delete(externalId);

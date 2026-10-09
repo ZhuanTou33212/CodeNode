@@ -23,6 +23,7 @@ const os = require('os');
 const CORE = [
   'test:backends',
   'test:multi-backends',
+  'test:acp-full',
   'test:goal-store',
   'test:goal-scope',
   'test:goal-ipc-recovery',

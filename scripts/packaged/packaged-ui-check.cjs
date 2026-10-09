@@ -79,6 +79,7 @@ app.whenReady().then(async () => {
     ok('asar 渲染包包含 Run 复核与 Agent Eval 等待控件',rendererBundles.some(bundle=>bundle.includes('确认复核并重新排队')&&bundle.includes('我已查看 Run 差异并核对外部副作用')&&bundle.includes('Agent Eval commit SHA')&&bundle.includes('查询 Agent Eval 报告')));
     ok('asar 渲染包包含显式自动推进授权与应用级调度器',rendererBundles.some(bundle=>bundle.includes('等待条件满足后自动推进')&&bundle.includes('自动启动 Task')));
     ok('asar 包含未保存配置检测与 ACP 权限设置',rendererBundles.some(bundle=>bundle.includes('检测当前配置')&&bundle.includes('ACP 权限请求策略')));
+    ok('asar 包含 ACP 文件/终端、多媒体、MCP 客户端与设置入口', typeof require(path.join(ASAR,'electron/backends/acpClient.cjs')).AcpClient === 'function' && typeof require(path.join(ASAR,'electron/backends/acpContent.cjs')).promptContent === 'function' && typeof require(path.join(ASAR,'electron/backends/acpMcp.cjs')).createToolBridge === 'function' && rendererBundles.some(bundle=>bundle.includes('ACP 会话配置')&&bundle.includes('执行 ACP 认证')));
     const distTmp = path.join(tmp, 'dist');
     fs.mkdirSync(path.join(distTmp, 'assets'), { recursive: true });
     fs.writeFileSync(path.join(distTmp, 'index.html'), rawHtml);
