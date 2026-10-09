@@ -4719,27 +4719,27 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 @keyframes reply-cursor-blink{50%{opacity:0}}
 @media(prefers-reduced-motion:reduce){.cs-typewriter-cursor{animation:none}}
 
-/* Agent selection lives in the conversation header, away from the composer. */
+/* Compact Chat selector, following LoopX's one-line list hierarchy. */
 .conversation-head { gap: 12px; }
 .agent-switcher { min-width: 0; margin-left: auto; }
-.glass-theme .conversation-head .agent-switch-trigger { display: flex; align-items: center; gap: 7px; max-width: 235px; padding: 7px 10px; border: 1px solid var(--glass-border); border-radius: 9px; font-size: 12px; color: var(--glass-text); background: var(--glass-surface); }
-.agent-switch-caption { color: var(--glass-muted); font-size: 11px; }
+.glass-theme .conversation-head .agent-switch-trigger { display: flex; align-items: center; gap: 5px; max-width: 218px; padding: 6px 9px; border: 1px solid var(--glass-border); border-radius: 6px; font-size: 12px; color: var(--glass-text); background: var(--glass-surface); }
+.agent-switch-caption { color: var(--glass-muted); font-size: 10px; }
 .agent-switch-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .agent-switch-trigger:disabled { opacity: .5; cursor: not-allowed; }
 .agent-switch-layer { position: fixed; inset: 0; z-index: 1100; pointer-events: none; }
-.agent-switch-menu { position: fixed; width: min(304px,calc(100vw - 16px)); max-height: calc(100vh - 90px); display: flex; flex-direction: column; border: 1px solid var(--glass-border); border-radius: 14px; background: var(--glass-sheet); color: var(--glass-text); box-shadow: var(--glass-shadow); backdrop-filter: blur(22px); pointer-events: auto; overflow: hidden; }
-.agent-switch-heading { display: flex; align-items: center; justify-content: space-between; padding: 15px 16px 10px; font-size: 13px; }
-.agent-switch-heading > span { color: var(--glass-muted); font-size: 11px; }
-.agent-switch-list { padding: 0 8px 8px; overflow-y: auto; min-height: 0; }
-.agent-switch-list button { width: 100%; display: flex; align-items: center; justify-content: space-between; text-align: left; gap: 10px; padding: 9px 10px; border: 0; border-radius: 8px; color: var(--glass-text); background: transparent; }
-.agent-switch-list button > span:first-child { display: flex; flex-direction: column; gap: 3px; }
-.agent-switch-list strong { font-size: 12px; font-weight: 500; }
-.agent-switch-list small { color: var(--glass-muted); font-size: 10px; }
+.agent-switch-menu { position: fixed; width: min(218px,calc(100vw - 16px)); display: flex; flex-direction: column; padding-top: 5px; border: 1px solid var(--glass-border); border-radius: 10px; background: var(--glass-sheet); color: var(--glass-text); box-shadow: var(--glass-shadow); backdrop-filter: blur(22px); pointer-events: auto; overflow: hidden; }
+.agent-switch-list { padding: 0 5px 5px; overflow-y: auto; min-height: 0; }
+.agent-switch-list button { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; text-align: left; gap: 10px; padding: 7px 8px; border: 0; border-radius: 5px; font-size: 11px; color: var(--glass-text); background: transparent; }
 .agent-switch-list button:hover,.agent-switch-list button.is-selected { background: var(--glass-selected); }
-.agent-switch-confirm { border-top: 1px solid var(--glass-border); padding: 10px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
-.agent-switch-confirm p { margin: 0; color: var(--glass-muted); font-size: 11px; line-height: 1.5; }
-.agent-switch-confirm button { border: 1px solid var(--glass-border); border-radius: 8px; font-size: 12px; padding: 9px; color: var(--glass-text); }
+.agent-switch-list button:disabled { color: var(--glass-muted); opacity: .55; cursor: not-allowed; }
+.agent-switch-list button:disabled:hover { background: transparent; }
+.agent-unavailable { font-size: 10px; }
+.agent-switch-confirm { border-top: 1px solid var(--glass-border); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; }
+.agent-switch-confirm p { margin: 0; color: var(--glass-muted); font-size: 10px; line-height: 1.5; }
+.agent-switch-confirm button { border: 1px solid var(--glass-border); border-radius: 8px; font-size: 11px; padding: 7px; color: var(--glass-text); }
 .agent-switch-apply { background: var(--glass-selected); }
 .agent-switch-apply:disabled { opacity: .45; cursor: not-allowed; }
-.agent-switch-settings { background: transparent; }
+.agent-switch-footer { padding: 3px 5px 5px; border-top: 1px solid var(--glass-border); }
+.agent-switch-footer button { width: 100%; text-align: left; font-size: 11px; padding: 8px; border: 0; border-radius: 5px; color: var(--glass-text); background: transparent; }
+.agent-switch-footer button:hover { background: var(--glass-selected); }
 .agent-switch-error { font-size: 11px; color: var(--glass-muted); }

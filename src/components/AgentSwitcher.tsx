@@ -9,6 +9,7 @@ import { useBackendSwitchStore } from '../store/backendSwitchStore';
 import { useSending } from '../lib/useSending';
 
 type Backend = AgentBackendSettings['backend'];
+const shortLabel=(name:Backend)=>name==='builtin'?'内置 Agent':labels[name].replace(' ACP','').replace(' Agent','');
 const labels = backendConfig.labels as Record<Backend, string>;
 export default function AgentSwitcher() {
   const root = useProjectStore(s => s.root);
@@ -23,6 +24,7 @@ export default function AgentSwitcher() {
   const [selected, setSelected] = useState<Backend>('builtin');
   const [target, setTarget] = useState<Backend>('builtin');
   const [profiles, setProfiles] = useState<Partial<Record<Backend, AgentBackendSettings>>>({});
+  const [availability,setAvailability]=useState<Partial<Record<Backend,{installed:boolean;reason?:string}>>>({});
   const [error, setError] = useState('');
   const [position, setPosition] = useState({left:0,top:0});
   const trigger = useRef<HTMLButtonElement>(null);
@@ -35,6 +37,7 @@ export default function AgentSwitcher() {
       if (!alive) return;
       const current = result.backend?.sessionSettings || result.backend?.settings;
       setSelected(current?.backend || 'builtin'); setTarget(current?.backend || 'builtin');
+      setAvailability(result.backend?.availability||{});
       setProfiles({...result.backend?.profiles,...(current?{[current.backend]:current}:{})});
     }).catch(() => { if(alive)setError('读取 Agent 配置失败，请在设置中检查连接。'); }).finally(() => {if(alive)setLoading(false);});
     refresh(); window.addEventListener('codenode-backend-settings',refresh);
@@ -43,7 +46,7 @@ export default function AgentSwitcher() {
   useEffect(() => {if(busy)setOpen(false);},[busy]);
   useLayoutEffect(() => {
     if(!open)return;
-    const place=()=>{const r=trigger.current?.getBoundingClientRect();if(r)setPosition({left:Math.max(8,Math.min(r.right-304,innerWidth-312)),top:r.bottom+8});};
+    const place=()=>{const r=trigger.current?.getBoundingClientRect();if(r)setPosition({left:Math.max(8,Math.min(r.right-218,innerWidth-226)),top:r.bottom+8});};
     place();window.addEventListener('resize',place);return()=>window.removeEventListener('resize',place);
   },[open]);
   useEffect(() => {
@@ -55,7 +58,7 @@ export default function AgentSwitcher() {
     document.addEventListener('pointerdown',dismiss);document.addEventListener('keydown',dismiss);
     return()=>{document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',dismiss);};
   },[open]);
-  const configured = target !== 'acp' || !!profiles.acp?.executable;
+  const configured = availability[target]?.installed!==false && (target !== 'acp' || !!profiles.acp?.executable);
   const apply = async () => {
     const api=window.codenode;
     if(!api||busy||loading||target===selected||!configured)return;
@@ -73,23 +76,24 @@ export default function AgentSwitcher() {
     finally{useBackendSwitchStore.setState({switching:false});}
   };
   return <div className="agent-switcher">
-    <button ref={trigger} className="agent-switch-trigger" aria-label="选择 Agent" aria-haspopup="dialog" aria-expanded={open} disabled={busy||loading} title={busy?'任务运行或切换期间不能更换 Agent':'选择执行任务的 Agent'} onClick={()=>{setTarget(selected);setError('');setOpen(!open);}}><span className="agent-switch-caption">Agent</span><span className="agent-switch-name">{labels[selected]}</span><span aria-hidden="true">⌄</span></button>
+    <button ref={trigger} className="agent-switch-trigger" aria-label="选择 Agent" aria-haspopup="dialog" aria-expanded={open} disabled={busy||loading} title={busy?'任务运行或切换期间不能更换 Agent':'选择执行任务的 Agent'} onClick={()=>{setTarget(selected);setError('');setOpen(!open);}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12v3M16 12v3M1 12v5M23 12v5"/></svg><span className="agent-switch-caption">Chat</span><span className="agent-switch-name">{shortLabel(selected)}</span><span aria-hidden="true">⌄</span></button>
     {error&&!open&&<span className="agent-switch-error" role="status">{error}</span>}
     {open&&createPortal(<div className={`glass-theme theme-${theme} agent-switch-layer`}><div ref={menu} className="agent-switch-menu" role="dialog" aria-label="切换 Agent" style={{...position,maxHeight:`calc(100vh - ${position.top+12}px)`}}>
-      <div className="agent-switch-heading"><strong>选择 Agent</strong><span>{root?'仅当前项目':'本机默认'}</span></div>
+
       <div className="agent-switch-list" role="radiogroup" aria-label="可用 Agent" onKeyDown={event=>{
           if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return;
-          event.preventDefault();const buttons=Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button'));
+          event.preventDefault();const buttons=Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
           const at=buttons.indexOf(document.activeElement as HTMLButtonElement),index=event.key==='Home'?0:event.key==='End'?buttons.length-1:(at+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;
-          setTarget(backendConfig.backends[index] as Backend);buttons[index]?.focus();
+          setTarget(buttons[index]?.dataset.backend as Backend);buttons[index]?.focus();
         }}>
-        {backendConfig.backends.map(name=>{const backend=name as Backend;return <button key={backend} role="radio" aria-checked={target===backend} className={target===backend?'is-selected':''} onClick={()=>setTarget(backend)}><span><strong>{labels[backend]}</strong><small>{backend===selected?'当前使用':profiles[backend]?'已记住连接配置':backend==='builtin'?'使用 CodeNode 模型与工具':backend==='acp'?'需要先配置连接':'使用本机已安装的 Agent'}</small></span><span aria-hidden="true">{target===backend?'✓':''}</span></button>;})}
+        {backendConfig.backends.map(name=>{const backend=name as Backend,unavailable=availability[backend]?.installed===false;return <button key={backend} data-backend={backend} role="radio" aria-checked={selected===backend} disabled={unavailable} title={availability[backend]?.reason} className={target===backend&&target!==selected?'is-selected':''} onClick={()=>setTarget(backend)}><span>{shortLabel(backend)}{unavailable&&<span className="agent-unavailable"> · 不可用</span>}</span><span aria-hidden="true">{selected===backend?'✓':''}</span></button>;})}
       </div>
-      <div className="agent-switch-confirm">
+      {target!==selected&&<div className="agent-switch-confirm">
         <p>{!configured?'请先在高级设置中填写 ACP 命令和参数。':hasHistory?'切换会开启新对话，原对话和输入草稿会保留。':'选中不会立即切换，确认后用于下一次任务。'}</p>
         {error&&<p role="status">{error}</p>}
         <button className="agent-switch-apply" disabled={target===selected||busy||!configured} onClick={()=>void apply()}>{hasHistory?'新建对话并切换':'确认切换'}</button>
-        <button className="agent-switch-settings" onClick={()=>{setOpen(false);useUiStore.getState().openSettings('general');}}>高级连接设置…</button>
+      </div>}
+      <div className="agent-switch-footer"><button className="agent-switch-settings" onClick={()=>{setOpen(false);useUiStore.getState().openSettings('general');}}>连接设置…</button>
       </div>
     </div></div>,document.body)}
   </div>;

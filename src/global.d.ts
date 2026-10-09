@@ -185,7 +185,7 @@ interface CodenodeApi {
     root: string | null, sessionId?: string | null
   ) => Promise<{
     configured: boolean;
-    backend?: { profiles?: Partial<Record<import('./types').AgentBackendSettings['backend'],import('./types').AgentBackendSettings>>; sessionSettings?: import('./types').AgentBackendSettings; settings: import('./types').AgentBackendSettings; machine: import('./types').AgentBackendSettings; project: import('./types').AgentBackendSettings | null; scope: 'machine' | 'project' };
+    backend?: { availability?: Partial<Record<import('./types').AgentBackendSettings['backend'],{installed:boolean;reason?:string}>>; profiles?: Partial<Record<import('./types').AgentBackendSettings['backend'],import('./types').AgentBackendSettings>>; sessionSettings?: import('./types').AgentBackendSettings; settings: import('./types').AgentBackendSettings; machine: import('./types').AgentBackendSettings; project: import('./types').AgentBackendSettings | null; scope: 'machine' | 'project' };
     model: string;
     soul: { name: string; greeting: string; style: string; raw: string };
     toolsEnabled: boolean;

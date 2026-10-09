@@ -436,3 +436,12 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 新增 test:agent-switch-ui，已纳入显示环境测试组。源码与最终包内 UI 验证了两步确认、Escape 取消、已保存配置恢复、原历史和草稿保留、运行禁用、自定义 ACP 未配置时阻止切换、高级设置跳转，以及双主题相同结构/状态。图片来自实际暂存包界面：[日间效果](validation/agent-switcher-preview/light.png)、[夜间效果](validation/agent-switcher-preview/dark.png)。构建、脚本检查、后端与画布工作流专项、既有后端设置双主题检查通过；暂存和固定交付包 UI 自检 19/19、实际 asar 启动自检通过。
 
 已覆盖 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行，不保留旧包备份。app.asar SHA-256：8BF65362B3362721B5F94DF1B8985DC61AC6A8FB8D41AFF7175A9BB00E51F1F5；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。打包仅包含公开 Agent 配置模板和已提交 Soul，本机私有配置和用户未提交 Soul 修改保留。
+### 2026-10-09 参考 LoopX 的紧凑 Agent 选择器
+
+依据用户提供的 LoopX 截图，将入口改为机器人图标 + Chat + 当前 Agent 简称，菜单收窄为 218px，使用单行名称和当前使用的勾选标记。取消常驻的双行介绍及大块说明区，只有选择其他可用 Agent 时才展开切换确认；运行禁用、原对话/草稿保留和各 Agent 配置恢复规则继续生效。菜单底部保留连接设置入口，日夜主题只由同一组配色变量表达。
+
+新增只读本机启动命令探测，直接按已保存的命令/路径或默认命令做文件解析，不启动 CLI、不发模型请求、不自动安装。找不到命令或自定义 ACP 尚未配置时，菜单置灰并标注“不可用”，键盘导航跳过这些项。命令存在仅表示已找到启动入口，不代表认证、Gateway、依赖或模型请求已通过，完整连接仍使用设置中的检测。
+
+构建、脚本检查、后端专项、原后端设置双主题测试和源码/包内 Agent 选择 UI 测试通过；验证了当前勾选、候选预览不保存、不可用禁用、确认切换、Escape、历史与草稿保留及双主题同结构。最新效果图仍在 [日间](validation/agent-switcher-preview/light.png) 和 [夜间](validation/agent-switcher-preview/dark.png)。暂存与固定路径均通过 UI 自检 19/19 及正式 asar 启动检查。
+
+已覆盖 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行。app.asar SHA-256：AD99350593F367238B1EE2B14914528172020C18741358550A8CC6E4BBCDDB45；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。使用公开 Agent 模板及已提交 Soul 打包，用户私有配置及未提交 Soul 修改保留。

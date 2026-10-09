@@ -65,7 +65,15 @@ function readProfiles(file) {
 function read(root, userData) {
   const machine = readFile(fileFor(null, userData, 'machine')) || { ...config.defaults };
   const project = root ? readFile(fileFor(root, userData, 'project')) : null;
-  return { settings: project || machine, machine, project, profiles:{...readProfiles(fileFor(null,userData,'machine')),...(root?readProfiles(fileFor(root,userData,'project')):{})}, scope: project ? 'project' : 'machine' };
+  const profiles={...readProfiles(fileFor(null,userData,'machine')),...(root?readProfiles(fileFor(root,userData,'project')):{})};
+  const availability={};
+  for(const name of config.backends){
+    const command=profiles[name]?.executable||config.commands[name];
+    if(name==='builtin'){availability[name]={installed:true};continue;}
+    try{if(!command)throw new Error('请先配置 ACP 命令');require('./stdioRpc.cjs').resolveCommand(command);availability[name]={installed:true};}
+    catch{availability[name]={installed:false,reason:command?'未找到本机命令 '+command:'请先配置 ACP 命令'};}
+  }
+  return { settings: project || machine, machine, project, profiles,availability, scope: project ? 'project' : 'machine' };
 }
 function write(root, userData, scope, input) {
   const file = fileFor(root, userData, scope);
