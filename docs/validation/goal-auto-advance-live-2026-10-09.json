@@ -1,0 +1,41 @@
+{
+  "scriptSha256": "3a6cb871f029186941e8cac321b64df3f7e6273643a4f3e610e6febfde57876f",
+  "managerSourceSha256": "d12f5e038aa1ecd614fbe3fa08ffd05e8ec22fdb6d2b465d2c1631b8be238a90",
+  "asarSha256": "b2fca2bd28d8b2710ce9f0fc3bb3acf8c72eb96bc8f1b52b03896c3a23c5f046",
+  "passed": true,
+  "recordedAt": "2026-10-09T07:56:20.659Z",
+  "backend": "opencode",
+  "runtime": "1.17.18",
+  "package": "packaged",
+  "results": [
+    {
+      "phase": "success-failure",
+      "pid": 47960,
+      "successRunId": "auto-78872603-f2bb-42d9-93c0-7372d65a2b02",
+      "claimRefreshes": 6,
+      "realReplySentinel": true,
+      "successSettlement": "completed",
+      "taskWithoutEvidence": "blocked",
+      "failedSettlement": "failed",
+      "unauthorizedRuns": 0,
+      "repeatedRefreshNoRetry": true,
+      "unadmittedClaim": true
+    },
+    {
+      "phase": "interrupt",
+      "pid": 39012,
+      "preAdmissionRestartNoRetry": true,
+      "interruptedRunId": "auto-22df7642-e636-4228-86bf-e85e7159d90c",
+      "interruptedAfterRealModelChunk": true
+    },
+    {
+      "phase": "recover",
+      "pid": 48528,
+      "recoveredRunStatus": "interrupted",
+      "executionStatus": "unknown",
+      "taskStatus": "blocked",
+      "automaticRetry": false,
+      "totalRuns": 3
+    }
+  ]
+}

@@ -20,6 +20,7 @@
     "test:goal-scope": "node scripts/core/goal-scope-test.cjs",
     "test:goal-ipc-recovery": "node scripts/core/goal-ipc-recovery-test.cjs",
     "test:goal-desktop-restart": "node scripts/tools/goal-desktop-restart-e2e.cjs",
+    "test:goal-auto-live": "node scripts/tools/goal-auto-advance-live-e2e.cjs",
     "test:goal-github-actions": "node scripts/core/github-actions-wait-test.cjs",
     "test:agent-eval-wait": "node scripts/core/agent-eval-wait-test.cjs",
     "test:backend-workflow": "node scripts/core/backend-workflow-test.cjs",

@@ -355,7 +355,7 @@ Goal/Task 表单保存目标、排除项、必需验收条件、预算、依赖�
 | P2 经验回写 | 基于新鲜、独立通过的测试证据自动生成局部测试方法候选；记录来源 Run、Task、证据 ID、文件指纹和验收修订；UI 标明自动建议；重复结算幂等；未确认前不注入实现上下文，用户显式确认后才可用 | 当前自动建议限于“修改这些文件后运行该测试命令”的可验证事实；从模型总结、架构规律或重复故障中提炼更一般经验尚未实现 |
 | 阶段 E 后端比较 | 有离线 fixture、Hermes/OpenCode 文本 smoke 与一次 OpenCode 文件任务（Hermes 文件任务在本机 runtime 报 Internal error，未改文件） | 同任务多轮、相同验收标准下的成功率/用量/成本/恢复率比较未完成 |
 
-等待自动推进现在由项目 Goal 持久化授权控制，默认关闭；时间等待与 GitHub Actions、Agent Eval 会按下次检查时间和指数退避唤醒，未满足条件期间只做只读观察，不启动模型。匹配后只为对应 Task 生成一次性认领；主进程再次检查授权、Goal active 状态、依赖、决定、预算及 unknown Run，每个 Goal 最多自动尝试 3 次。失败、未 admission 的重启恢复和 unknown Run 都不会自动重试。`test:goal-store` 与 `test:goal-ipc-recovery` 覆盖状态机、外部轮询、重复认领、暂停/预算门禁、授权撤销和失败后不重试；桌面 UI 测试覆盖默认关闭、授权持久化及双主题状态一致。真实模型自动启动的端到端闭环仍待实测。
+等待自动推进现在由项目 Goal 持久化授权控制，默认关闭；时间等待与 GitHub Actions、Agent Eval 会按下次检查时间和指数退避唤醒，未满足条件期间只做只读观察，不启动模型。匹配后只为对应 Task 生成一次性认领；主进程再次检查授权、Goal active 状态、依赖、决定、预算及 unknown Run，每个 Goal 最多自动尝试 3 次。失败、未 admission 的重启恢复和 unknown Run 都不会自动重试。`test:goal-store` 与 `test:goal-ipc-recovery` 覆盖状态机、外部轮询、重复认领、暂停/预算门禁、授权撤销和失败后不重试；桌面 UI 测试覆盖默认关闭、授权持久化及双主题状态一致。时间等待释放后的真实模型自动启动闭环已于 2026-10-09 通过桌面验收，见下方补充记录。
 
 ### 2026-10-09 ACP 权限、取消与恢复实测补充
 
@@ -381,7 +381,7 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 
 本机 `node` 为 24.11.0，系统 OpenClaw `2026.2.2-3` 仍因缺少 `undici/lib/cache/memory-cache-store` 无法启动。此前隔离安装同版后用临时 Gateway 验证 ACP `session/new`，没有发 prompt。2026-10-09 重跑 `npm run test:backend-live-openclaw` 时，失败于启动 Gateway 之前的全局 `openclaw --version`，仍是同一个缺失模块；没有模型请求，脚本清理了临时目录。尝试安装最新 OpenClaw 时，其包要求 Node `>=24.16.0 <25` 或 `>=26.1.0`，npm tarball 校验不稳定；全局安装、Node 和用户配置没有改动，默认 OpenClaw 配置的修改时间仍为 2026-02-04，测试进程均已退出。DeepSeek SDK/runtime `0.1.5rc1` 的隔离文本推理也通过，`npm run test:backend-live-deepseek` 提供复现命令；本机当前没有 `dsh` runtime 或 `DEEPSEEK_API_KEY` 环境变量，因此没有重跑真实请求。两者仍缺少真实源码任务证据。
 
-协议请求和恢复能工作不等于权限已在操作系统边界执行。ACP Agent 可以使用其自身配置允许的文件/命令工具；DeepSeek SDK profile 也由 Harness profile 管理权限。本项目的变更指纹和写入范围检查发生在执行后，不能阻止越界副作用。Codex 本机 `helper_sandbox_lock_failed` 尚未排除，期间未继续修改 ACL。P0 仍缺稳定的执行隔离及 Hermes、DeepSeek Harness、OpenClaw 的真实源码任务、权限及中断恢复验收。P2 等待周期已实现为默认关闭且需 Goal 级授权，状态/预算/未知 Run 门禁和专项测试通过；授权后的真实模型自动启动闭环尚未实测。外部 LoopX/远程实验跟踪和阶段 E 的重复实测比较仍未完成，因此本目标不能标记为全部完成。
+协议请求和恢复能工作不等于权限已在操作系统边界执行。ACP Agent 可以使用其自身配置允许的文件/命令工具；DeepSeek SDK profile 也由 Harness profile 管理权限。本项目的变更指纹和写入范围检查发生在执行后，不能阻止越界副作用。Codex 本机 `helper_sandbox_lock_failed` 尚未排除，期间未继续修改 ACL。P0 仍缺稳定的执行隔离及 Hermes、DeepSeek Harness、OpenClaw 的真实源码任务、权限及中断恢复验收。P2 等待周期已实现为默认关闭且需 Goal 级授权，状态/预算/未知 Run 门禁和专项测试通过；授权后的时间等待真实模型自动启动闭环已通过桌面验收；外部等待 provider 的真实多轮闭环仍未覆盖。外部 LoopX/远程实验跟踪和阶段 E 的重复实测比较仍未完成，因此本目标不能标记为全部完成。
 
 ### 2026-10-09 本机 Agent 接口修复
 
@@ -390,3 +390,23 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 ### 2026-10-09 Codex Windows sandbox 只读诊断
 
 默认 `CODEX_HOME` 的只读配置显示 `[windows] sandbox = "elevated"`。最新 `.sandbox/setup_error.json` 与 sandbox 日志均报 `helper_sandbox_lock_failed`，消息指向无法打开 `%USERPROFILE%\.codex\.sandbox-bin` 目录；该目录当前没有 reparse 属性，当前用户 ACL 有 Modify，PowerShell/Node 也能枚举目录，因此现有证据不像普通的目录读取权限拒绝，但仍不能区分并发占用、runner 内部锁问题或其他 Windows 句柄状态。没有修改 ACL 或 Codex 配置。本机 PATH 上的 `codex --version` 为 `0.135.0`，缓存的 `codex-command-runner` 是 `0.160.0`。桌面更新检查报告 `restart_required`，检查本身未重启或切换运行时。官方 [Windows sandbox 文档](https://learn.chatgpt.com/docs/windows/windows-sandbox)目前介绍了兼容设备上的 MXC，以及 `elevated` / `unelevated` legacy fallback；standalone CLI 的 `prefer_mxc` 需要 `0.162.0`，桌面 app 则由 rollout 配置控制。当前未证明这台机器的 Codex 桌面版本、MXC 兼容性或 rollout 状态，故未切换实现；故障仍未解决。
+
+### 2026-10-09 授权后的真实模型自动推进验收
+
+新增显式运行入口 `npm run test:goal-auto-live`，使用本机已安装的 OpenCode 1.17.18 和既有认证，在独立临时项目、User Data、Home 与 Soul 中运行三个 Electron 主进程。它通过实际 Goal 授权控件、时间等待调度器、应用级自动推进组件、preload 与 `agent:chat` IPC 发起真实 ACP 模型请求，不直接调用聊天启动来代替自动调度，不安装第三方 Agent。临时项目拒绝模型工具操作；结束后删除本轮创建的 OpenCode session 和临时工程。
+
+源码版及暂存交付包均通过以下验收：
+
+- 未授权时，时间等待到期只释放 Task，不产生 Run 或模型请求；点击 Goal 中的授权控件后，真实模型返回本轮新生成的哨兵，Run 恰好结算一次为 completed。
+- 成功和故意设置不存在的 executable 所产生的失败路径，各在认领 IPC 返回前刷新 Goal 三次，共六次；刷新不丢失认领。启动失败产生一个 failed Run，反复刷新及重启均不自动重试。
+- 成功回复只证明执行结束，没有独立验收证据的 Task 仍为 blocked，不把模型回答自动判作业务验收通过。
+- 真实 claim IPC 已完成但尚未 dispatch 时退出应用；下一进程恢复为 failed（app_restarted_before_admission），不重放启动。
+- 另一个授权 Task 自动启动真实模型，在收到首个正文块时强制结束本轮 Agent 子进程及主进程；第三个 Electron 进程恢复该 Run 为 interrupted，Task 为 unknown/blocked，拒绝运行并要求复核，不自动重试。
+
+验收发现并修复了刷新竞态：原自动推进 effect 每次因 Goal 列表更新而清理时都会设置 cancelled，导致同一项目的有效认领被误标记为 project_changed_before_dispatch。现在只在组件卸载或项目代际改变时取消待启动认领，普通 Goal 刷新不取消。构建、JavaScript 检查、Goal store/IPC 专项及源码和包内双主题 UI 均通过；双主题保持会话、草稿、模型和侧栏状态。暂存包 UI 自检 19/19 和实际 asar 启动自检通过。
+
+可复现命令：`npm run build` 后运行 `npm run test:goal-auto-live`。设置 `CODENODE_AUTO_LIVE_PACKAGE` 为 unpacked 包目录可验收其实际 app.asar main/preload/renderer；`CODENODE_AUTO_LIVE_REPORT` 可指定 JSON 报告。此入口会实际使用已登录 OpenCode 发起模型请求，故不加入默认离线测试套件。原始打包验收摘要及脚本、组件和 asar 的 SHA-256 保存于 [验收证据](validation/goal-auto-advance-live-2026-10-09.json)。报告中的 recordedAt 使用 UTC。
+
+范围：本次验证 Windows 桌面上的 OpenCode、时间等待以及文本任务自动推进；不代表所有外部 Agent、GitHub Actions/Agent Eval 外部状态真实闭环、美元预算或操作系统隔离均已实测，也不替代具体业务 Task 的独立验收。其余角色质量比较、阶段 E、外部实验跟踪和一般经验提炼保持原状态。
+
+交付已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行；固定包与实测暂存包 app.asar SHA-256 均为 `B2FCA2BD28D8B2710CE9F0FC3BB3ACF8C72EB96BC8F1B52B03896C3A23C5F046`，`CodeNode.exe` SHA-256 为 `4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB`。覆盖后 19/19 UI 自检与实际 asar 启动自检通过；打包配置仅含公开 Agent 模板和已提交 Soul，保留本地私有配置及用户 Soul 修改。

@@ -11,9 +11,16 @@ export default function GoalAutoAdvanceManager() {
   const goals = useGoalControlStore(state => state.goals);
   const refresh = useGoalControlStore(state => state.refresh);
   const claimInFlight = useRef(false);
+  const mounted = useRef(false);
+  const projectEpoch = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const retryTimer = useRef<number | null>(null);
 
   useEffect(() => {
+    projectEpoch.current += 1;
     if (!root) return;
     void refresh(root);
   }, [root, refresh]);
@@ -46,7 +53,6 @@ export default function GoalAutoAdvanceManager() {
       : [])[0];
     if (!candidate) return;
 
-    let cancelled = false;
     const start = async () => {
       if (useProjectStore.getState().root !== root) return;
       if (useChatStore.getState().inflight.size() > 0) {
@@ -56,8 +62,9 @@ export default function GoalAutoAdvanceManager() {
         return;
       }
       claimInFlight.current = true;
+      const claimedProjectEpoch = projectEpoch.current;
       const claimResult = await api.goalAutoAdvanceClaim(root, candidate.goal.id, candidate.task.id);
-      if (cancelled || useProjectStore.getState().root !== root) {
+      if (!mounted.current || claimedProjectEpoch !== projectEpoch.current || useProjectStore.getState().root !== root) {
         if (claimResult.ok && claimResult.value) void api.goalAutoAdvanceRelease(root, candidate.goal.id, candidate.task.id, claimResult.value.claimId, 'project_changed_before_dispatch');
         claimInFlight.current = false;
         return;
@@ -90,7 +97,6 @@ export default function GoalAutoAdvanceManager() {
       }
     };
     void start();
-    return () => { cancelled = true; };
   }, [root, goals, refresh]);
 
   return null;
