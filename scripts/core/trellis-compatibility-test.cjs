@@ -53,10 +53,12 @@ async function main() {
     const originalLoad = agent.loadConfig;
     agent.loadConfig = project => ({ ...originalLoad(project), apiBase: 'http://scripted.local/v1', apiKey: 'synthetic', model: 'scripted', rag: { ...originalLoad(project).rag, enabled: false }, hooks: { enabled: false }, sandbox: { ...originalLoad(project).sandbox, mode: 'off' } });
     let stub = installScriptedModel([{ content: 'offline main reply' }]);
+    require('../../electron/feedbackStore.cjs').add(root,{verdict:'reject',content:'旧回答',conversationId:'conversation-a',sessionId:'demo-session',correction:'FEEDBACK_FIX_USE_CLEAR_STEPS'});
     try {
       const result = await handlers.get('agent:chat')({ sender: { isDestroyed: () => false, send: () => {} } }, { projectRoot: root, memoryConversationId: 'conversation-a', sessionId: 'demo-session', requestId: 'trellis-main', prompt: '读取所选任务资料并报告，不修改文件', history: [], document: { root: { nodes: [], edges: [] } } });
       assert.equal(result.ok, true, result.error);
       assert.ok(stub.seen.some(request => request.messages.some(message => message.role === 'system' && String(message.content).includes('DEMO_PRD'))), 'actual desktop request includes Trellis PRD');
+      assert.ok(stub.seen.some(request=>request.messages.some(message=>message.role==='system'&&String(message.content).includes('FEEDBACK_FIX_USE_CLEAR_STEPS'))),'actual model request receives same-conversation correction');
       assert.ok(runStore.readRun(root, 'trellis-main').some(event => event.type === 'trellis_context'));
     } finally { stub.restore(); agent.loadConfig = originalLoad; }
     const toolkit = require('../../electron/tools/toolkit.cjs');

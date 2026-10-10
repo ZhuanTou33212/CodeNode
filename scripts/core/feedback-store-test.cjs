@@ -22,5 +22,15 @@ try {
   assert.equal(reviewed.ok, true);
   assert.equal(feedback.exportDataset(root, { reviewedOnly: true }).count, 1);
   assert.equal(feedback.add(root, { verdict: 'reject', content: '' }).ok, false);
+  const payload={content:'反馈用于实际改善回答',input:'给出步骤',sessionId:'canvas-1',conversationId:'conversation-1',tools:[]};
+  assert.equal(feedback.add(root,{...payload,verdict:'accept'}).ok,true);
+  assert.equal(feedback.messageState(root,payload).verdict,'accept');
+  assert.equal(feedback.add(root,{...payload,verdict:'reject',correction:'减少解释，直接给步骤'}).ok,true);
+  assert.match(feedback.contextText(root,'conversation-1'),/减少解释，直接给步骤/);
+  assert.equal(feedback.contextText(root,'conversation-2'),'');
+  feedback.add(root,{...payload,verdict:'accept'});
+  assert.equal(feedback.messageState(root,payload).verdict,'accept','changing a prior vote restores latest state');
+  assert.doesNotMatch(feedback.contextText(root,'conversation-1'),/减少解释，直接给步骤/,'superseded correction no longer injected');
+  assert.equal(feedback.add(null,payload).ok,false);
   console.log('FEEDBACK STORE: PASS — dedupe, provenance, redaction, export and invalid input');
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

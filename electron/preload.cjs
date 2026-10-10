@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('codenode', {
   saveGraph: (data) => ipcRenderer.invoke('graph:save', data),
   openGraph: () => ipcRenderer.invoke('graph:open'),
   chooseProject: () => ipcRenderer.invoke('project:choose'),
+  copyMessage: text => ipcRenderer.invoke('message:copy',text),
+  agentFeedbackState: (root,payload) => ipcRenderer.invoke('agent:feedback-state',root,payload),
   trellisProject: (root, conversationId) => ipcRenderer.invoke('trellis:project', root, conversationId),
   trellisContext: (root, taskPath) => ipcRenderer.invoke('trellis:context', root, taskPath),
   trellisSelect: (root, conversationId, taskPath) => ipcRenderer.invoke('trellis:select', root, conversationId, taskPath),

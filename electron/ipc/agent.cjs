@@ -532,6 +532,11 @@ function register(ctx) {
   });
 
   ipcMain.handle('agent:feedback', async (_event, projectRoot, payload) => require('../feedbackStore.cjs').add(projectRoot, payload || {}));
+  ipcMain.handle('agent:feedback-state', async (_event, projectRoot, payload) => require('../feedbackStore.cjs').messageState(projectRoot,payload||{}));
+  ipcMain.handle('message:copy', async (_event,text) => {
+    if(typeof text!=='string'||Buffer.byteLength(text)>2*1024*1024)return {ok:false,error:'复制内容为空或过大'};
+    try{await require('electron').clipboard.writeText(text);return {ok:true}}catch(error){return {ok:false,error:String(error.message||error)}}
+  });
   ipcMain.handle('agent:feedback-export', async (_event, projectRoot, options) => require('../feedbackStore.cjs').exportDataset(projectRoot, options || {}));
   ipcMain.handle('agent:feedback-review', async (_event, projectRoot, id, expectedOutput, reviewer) => require('../feedbackStore.cjs').review(projectRoot, id, expectedOutput, reviewer));
 
@@ -728,6 +733,7 @@ function register(ctx) {
     try {
       const cfg = agent.loadConfig(projectRoot);
       runCfg = cfg;
+      const answerFeedback=require('../feedbackStore.cjs').contextText(projectRoot,memoryConversationId||'');
       const workflowTrellis = payload?.[WORKFLOW_TRELLIS] || require('../trellis/canvas.cjs').resumeBinding(projectRoot, resumeRunId);
       const executionRole = workflowTrellis?.role || null;
       const trellisSnapshot = workflowTrellis?.snapshot || (projectRoot ? trellis.contextForRun(projectRoot, memoryConversationId || sessionId, resumeRunId) : null);
@@ -773,7 +779,7 @@ function register(ctx) {
         activeRequests.set(externalId, externalController);
         try {
           applyGoalContext();
-          const externalResult = await externalRuns.runExternal({ ...payload, prompt: String(prompt || '') + (trellisSnapshot ? trellis.assertReady(trellisSnapshot).text : ''), trellisSnapshot, requestId: externalId, cfg,
+          const externalResult = await externalRuns.runExternal({ ...payload, prompt: String(prompt || '') + (trellisSnapshot ? trellis.assertReady(trellisSnapshot).text : '') + answerFeedback, trellisSnapshot, requestId: externalId, cfg,
             settings: savedBackend.settings, backendEpoch:binding?.epoch||null,sandboxPolicy, signal: externalController.signal,
             goalContextRevision, goalAcceptanceRevision,
             toolRegistry: externalRegistry, toolContext: externalContext,
@@ -1377,7 +1383,7 @@ function register(ctx) {
         exposedTools: registry ? registry.toolExposure : null,
         // 「真的裁剪过」才追加 discover_tools 那条规则（暴露全部工具 ≠ 没裁剪，二者提示词必须一致）
         toolFaceTrimmed: !!(toolFace && toolFace.applied),
-      }) + promptContext.trellisText;
+      }) + promptContext.trellisText + answerFeedback;
       if (executionRole) systemContent = require('../subagentPrompt.cjs').buildSubagentPrompt({ role: executionRole, objective: prompt }, {
         role: executionRole, tools: registry ? registry.listTools().filter(tool => registry.isExposed(tool.name)) : [],
         trellisContext: trellis.assertReady(trellisSnapshot, executionRole),

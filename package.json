@@ -13,6 +13,7 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "test:message-actions-ui":"node scripts/run-electron.cjs scripts/ui/message-actions-ui-test.cjs",
     "test:simple-settings-ui":"node scripts/run-electron.cjs scripts/ui/simple-settings-ui-test.cjs",
     "test:trellis": "node scripts/core/trellis-compatibility-test.cjs",
     "test:trellis-write-canvas": "node scripts/core/trellis-write-canvas-test.cjs",

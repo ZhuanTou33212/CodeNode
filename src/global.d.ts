@@ -279,7 +279,9 @@ interface CodenodeApi {
     finishedAt: string | null;
     eventCount: number;
   }>>;
-  agentFeedback: (root: string, payload: { verdict: 'accept' | 'reject' | 'retry' | 'report'; content: string; input?: string; correction?: string; sessionId?: string; runId?: string; role?: string; tools?: unknown[] }) => Promise<{ ok: boolean; duplicate?: boolean; error?: string }>;
+  copyMessage: (text:string)=>Promise<{ok:boolean;error?:string}>;
+  agentFeedbackState: (root:string,payload:{content:string;sessionId?:string;conversationId?:string;role?:string;tools?:unknown[]})=>Promise<{ok:boolean;verdict?:string|null;correction?:string;error?:string}>;
+  agentFeedback: (root: string, payload: { verdict: 'accept' | 'reject' | 'retry' | 'report'; content: string; input?: string; correction?: string; sessionId?: string; conversationId?:string;runId?: string; role?: string; tools?: unknown[] }) => Promise<{ ok: boolean; duplicate?: boolean; error?: string }>;
   agentFeedbackExport: (root: string, options?: { includeReviewed?: boolean }) => Promise<{ ok: boolean; count?: number; dataset?: unknown[]; error?: string }>;
   agentFeedbackReview: (root: string, id: string, expectedOutput: string, reviewer?: string) => Promise<{ ok: boolean; error?: string }>;
   agentResumePlan: (root: string | null, runId: string) => Promise<{

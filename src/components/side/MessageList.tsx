@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect,useState } from 'react';
 import type { SessionMsg } from '../../types';
 import FileChangesCard from './FileChangesCard';
 import { useProjectStore } from '../../store/projectStore';
@@ -13,17 +13,24 @@ export function MessageView({ msg, isLatest = true }: { msg: SessionMsg; isLates
   const semanticFailed = grounding?.semantic?.supported === false && !safeAbstention;
   const projectRoot = useProjectStore((state) => state.root);
   const sessionId = useSessionStore((state) => state.activeId);
+  const conversationId=useSessionStore(state=>state.memoryConversationId);
   const enabled = useUiStore(state => state.preferences.typewriterEnabled);
   const speed = useUiStore(state => state.preferences.typewriterCharsPerSecond);
   const display = useTextReveal(msg.content, { enabled: enabled && isLatest && msg.role === 'assistant' && !msg.compaction,
     speed, revision: msg.contentRevision || 0, scope: sessionId || '', status: msg.status });
   const [feedback, setFeedback] = useState<'accept' | 'reject' | null>(null);
+  const [feedbackBusy,setFeedbackBusy]=useState(false),[feedbackNote,setFeedbackNote]=useState(''),[editingFeedback,setEditingFeedback]=useState(false),[correction,setCorrection]=useState(''),[copied,setCopied]=useState(false);
+  useEffect(()=>{setFeedback(null);setFeedbackNote('');setEditingFeedback(false);setCopied(false);if(!projectRoot||msg.role!=='assistant'||msg.status==='running'||!msg.content)return;let alive=true;void window.codenode?.agentFeedbackState(projectRoot,{content:msg.content,role:msg.role,sessionId:sessionId||undefined,conversationId,tools:msg.tools||[]}).then(result=>{if(!alive)return;if(result.ok){setFeedback(result.verdict==='accept'||result.verdict==='reject'?result.verdict:null);setCorrection(result.correction||'')}else setFeedbackNote(result.error||'反馈读取失败')}).catch(error=>{if(alive)setFeedbackNote(String(error))});return()=>{alive=false}},[projectRoot,sessionId,conversationId,msg.content,msg.status,msg.role,msg.tools]);
+  const copy=async()=>{try{const result=await window.codenode!.copyMessage(msg.content);if(!result.ok)throw Error(result.error||'复制失败');setCopied(true);useUiStore.getState().setToast('已复制')}catch(error){useUiStore.getState().setToast(error instanceof Error?error.message:String(error))}};
   const sendFeedback = async (verdict: 'accept' | 'reject') => {
-    if (!projectRoot || !msg.content || !window.codenode?.agentFeedback) return;
-    const result = await window.codenode.agentFeedback(projectRoot, {
-      verdict, content: msg.content, input: msg.feedbackInput || '', role: msg.role, sessionId: sessionId || undefined, tools: msg.tools || [],
-    });
-    if (result.ok) setFeedback(verdict);
+    if(feedbackBusy)return;
+    if (!projectRoot || !msg.content || !window.codenode?.agentFeedback){setFeedbackNote('请先打开项目再保存反馈');return;}
+    if(verdict==='reject'&&!correction.trim()){setFeedbackNote('请说明需要改进的地方');return;}
+    setFeedbackBusy(true);setFeedbackNote('');
+    try{const result = await window.codenode.agentFeedback(projectRoot, {
+      verdict,correction:verdict==='reject'?correction.trim():undefined,content: msg.content, input: msg.feedbackInput || '', role: msg.role, sessionId: sessionId || undefined,conversationId,tools: msg.tools || [],
+    });if(!result.ok)throw Error(result.error||'反馈保存失败');setFeedback(verdict);setEditingFeedback(false);setFeedbackNote(verdict==='accept'?'已保存，后续回答将参考这种表达方式':'已保存，下一轮会参考你的改进意见');}
+    catch(error){setFeedbackNote(error instanceof Error?error.message:String(error))}finally{setFeedbackBusy(false)}
   };
 
   // 上下文压缩卡（照 Codex CLI）：不是对话轮次，而是「更早的对话已被这份交接摘要取代」的标记。
@@ -68,6 +75,7 @@ export function MessageView({ msg, isLatest = true }: { msg: SessionMsg; isLates
           </div>
         )}
         <div className="cs-msg-text">{msg.content}</div>
+        {msg.content&&<div className="cs-msg-feedback"><button type="button" onClick={()=>void copy()}>{copied?'已复制':'复制'}</button></div>}
       </div>
     );
   }
@@ -94,10 +102,13 @@ export function MessageView({ msg, isLatest = true }: { msg: SessionMsg; isLates
       })}
       {msg.content && msg.status !== 'running' && !display.revealing ? (
         <div className="cs-msg-feedback" aria-label="回答反馈">
-          <button type="button" className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>
-          <button type="button" className={feedback === 'reject' ? 'active' : ''} aria-pressed={feedback === 'reject'} onClick={() => void sendFeedback('reject')}>需改进</button>
+          <button type="button" aria-label="复制回答" onClick={()=>void copy()}>{copied?'已复制':'复制'}</button>
+          <button type="button" disabled={feedbackBusy} className={feedback === 'accept' ? 'active' : ''} aria-pressed={feedback === 'accept'} onClick={() => void sendFeedback('accept')}>有帮助</button>
+          <button type="button" disabled={feedbackBusy} className={feedback === 'reject' ? 'active' : ''} aria-pressed={feedback === 'reject'} onClick={() => {setEditingFeedback(!editingFeedback);setFeedbackNote('')}}>需改进</button>
         </div>
       ) : null}
+      {editingFeedback&&<form className="cs-feedback-editor" onSubmit={event=>{event.preventDefault();void sendFeedback('reject')}}><label>哪里需要改进？<textarea aria-label="回答改进意见" value={correction} maxLength={4000} disabled={feedbackBusy} onChange={event=>setCorrection(event.target.value)} placeholder="例如：直接给出步骤，减少重复解释" autoFocus/></label><div><button type="submit" disabled={feedbackBusy||!correction.trim()}>保存意见</button><button type="button" disabled={feedbackBusy} onClick={()=>setEditingFeedback(false)}>取消</button></div></form>}
+      {feedbackNote&&<p className="cs-feedback-note" role="status">{feedbackNote}</p>}
       {grounding && (safeAbstention || semanticFailed || grounding.status === 'missing' || grounding.status === 'invalid') ? (
         <div
           className={`rag-grounding rag-grounding-${safeAbstention ? 'missing' : semanticFailed ? 'invalid' : grounding.status}`}

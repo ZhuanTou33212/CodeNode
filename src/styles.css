@@ -4061,6 +4061,12 @@ textarea:focus-visible {
 .ui-clean .cs-msg:hover .cs-msg-feedback, .ui-clean .cs-msg:focus-within .cs-msg-feedback { opacity: 1; }
 .ui-clean .cs-msg-feedback button { border: 0; background: transparent; padding: 2px 0; color: #8a929f; font-size: 10px; }
 .ui-clean .cs-msg-feedback button.active { color: #c5d3ee; }
+.cs-msg-text,.cs-msg-agent pre,.cs-msg-agent p { -webkit-user-select:text; user-select:text; cursor:text; }
+.cs-feedback-editor { margin:10px 0; padding:12px; border:1px solid var(--glass-border); border-radius:10px; background:var(--glass-control); font-size:12px; }
+.cs-feedback-editor label { display:block; color:var(--glass-text); }
+.cs-feedback-editor textarea { box-sizing:border-box; width:100%; min-height:70px; margin:8px 0; resize:vertical; padding:8px; border:1px solid var(--glass-border); border-radius:6px; color:var(--glass-text); background:var(--glass-sheet); font:inherit; user-select:text; }
+.cs-feedback-editor button { margin-right:10px; padding:4px 8px; color:var(--glass-text); border:1px solid var(--glass-border); border-radius:6px; background:var(--glass-control); }
+.cs-feedback-note { font-size:11px; color:var(--glass-muted); margin:8px 0; }
 .ui-clean .pp-composer { padding: 12px; gap: 10px; background: #24272c; border: 1px solid #3b3f47; border-radius: 14px; box-shadow: none; }
 .ui-clean .pp-composer:focus-within { border-color: #6c7482; }
 .ui-clean .pp-input { min-height: 64px; max-height: 140px; font-size: 13px; line-height: 1.7; color: #e2e5e9; scrollbar-width: thin; }

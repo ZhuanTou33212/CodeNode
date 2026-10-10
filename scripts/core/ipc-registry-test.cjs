@@ -24,6 +24,7 @@ const EXPECTED = {
     'project:save', 'project:load', 'extensions:list', 'extensions:add',
   ],
   'agent.cjs': [
+    'message:copy','agent:feedback-state',
     'trellis:project', 'trellis:context', 'trellis:select',
     'trellis:write-info', 'trellis:propose', 'trellis:apply', 'trellis:canvas',
     'trellis:proposal-read',

@@ -229,7 +229,7 @@ const CORE = [
 ];
 
 // 需要显示环境（Electron 窗口）或本机浏览器（无头 Edge + CDP）的用例：CI 分开跑。
-const DISPLAY = ['test:simple-settings-ui', 'test:trellis-connect-ui', 'test:trellis-ui', 'test:goal-canvas-ui', 'test:agent-compact-ui', 'test:smoke', 'test:rag-ui', 'test:coding-slim-ui', 'test:coding-settings-ui', 'test:ime-shortcut-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui', 'test:rag-review-ui'];
+const DISPLAY = ['test:message-actions-ui', 'test:simple-settings-ui', 'test:trellis-connect-ui', 'test:trellis-ui', 'test:goal-canvas-ui', 'test:agent-compact-ui', 'test:smoke', 'test:rag-ui', 'test:coding-slim-ui', 'test:coding-settings-ui', 'test:ime-shortcut-ui', 'test:compaction-ui', 'test:plan-ui', 'test:intent-ui', 'test:vector', 'test:event-replay-ui', 'test:project-ui', 'test:workflow-recovery-ui', 'test:model-connection-ui', 'test:workbench-clean-ui', 'test:rag-review-ui'];
 
 DISPLAY.push('test:node-inspector-ui');
 DISPLAY.push('test:workflow-canvas-ui');
