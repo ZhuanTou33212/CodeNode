@@ -14,7 +14,7 @@ export function addPlanToCanvas(steps:Step[],sourceId:string): number {
   const ids=new Map(steps.map((step,index)=>[step.key,`${prefix}-${index+1}`]));
   const positions=new Map<string,number>();const byKey=new Map(steps.map(step=>[step.key,step]));
   const level=(key:string,seen=new Set<string>()):number=>{if(seen.has(key))return 0;seen.add(key);const deps=byKey.get(key)?.dependsOn||[];return deps.length?1+Math.max(...deps.filter(dep=>ids.has(dep)).map(dep=>level(dep,new Set(seen)))):0;};
-  const nodes:Node[]=steps.map((step,index)=>{const x=level(step.key),row=positions.get(String(x))||0;positions.set(String(x),row+1);return{id:ids.get(step.key)!,type:'task',position:{x:60+x*304,y:100+row*178},data:{label:step.title||`步骤 ${index+1}`,prompt:step.objective,completionCondition:step.acceptance,writeScope:(step.writeScope||[]).join(', '),status:'pending',accent:'#3b82f6',planSourceId:sourceId}};});
+  const nodes:Node[]=steps.map((step,index)=>{const x=level(step.key),row=positions.get(String(x))||0;positions.set(String(x),row+1);return{id:ids.get(step.key)!,type:'task',position:{x:60+x*245,y:100+row*165},data:{label:step.title||`步骤 ${index+1}`,prompt:step.objective,completionCondition:step.acceptance,writeScope:(step.writeScope||[]).join(', '),status:'pending',accent:'#3b82f6',planSourceId:sourceId}};});
   const edges:Edge[]=[];
   steps.forEach((step,index)=>{
     const deps=step.dependsOn.length?step.dependsOn:(index>0?[steps[index-1].key]:[]);

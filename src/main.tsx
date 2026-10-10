@@ -13,7 +13,6 @@ import { getActiveVectorNode, getVectorStore, useVectorStore } from './vector/ve
 import '@xyflow/react/dist/style.css';
 import './styles.css';
 import './trellis.css';
-import './canvas-studio.css';
 
 const w = window as unknown as {
   __codenodeStore?: typeof useGraphStore;

@@ -231,12 +231,13 @@ function VectorNode({ id, data, selected }: NodeProps) {
   const style = {
     width: d.width || DEFAULT_W,
     height: d.height || DEFAULT_H,
+    borderColor: `${accent}b8`,
     '--wf-accent': accent,
   } as CSSProperties;
 
   return (
     <div
-      className={`wf-node wf-vector wf-node-vector wf-status-${d.status || 'pending'} ${selected ? 'is-selected' : ''}`}
+      className={`wf-node wf-vector wf-node-vector ${selected ? 'is-selected' : ''}`}
       style={style}
       data-testid="vector-node"
     >

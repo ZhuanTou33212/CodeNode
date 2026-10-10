@@ -14,9 +14,8 @@ function GoalTaskNode({ data, selected }: NodeProps) {
   const item=data as { title:string; objective:string; status:string };
   return <div className={`goal-graph-node status-${item.status}${selected?' is-selected':''}`} title={item.objective}>
     <Handle type="target" position={Position.Left}/>
-    <div className="goal-graph-node-head"><span className="goal-graph-kind" aria-hidden="true">◈</span><span className="goal-graph-title"><small>目标任务</small><strong>{item.title}</strong></span></div>
-    <p className="goal-graph-description">{item.objective}</p>
-    <div className="goal-graph-node-foot"><span className="goal-graph-status-dot" aria-hidden="true"/>{labels[item.status]||item.status}</div>
+    <strong>{item.title}</strong><span>{labels[item.status]||item.status}</span>
+    <small>{item.objective}</small>
     <Handle type="source" position={Position.Right}/>
   </div>;
 }
@@ -27,7 +26,7 @@ function taskNodes(tasks: Task[]): Node[] {
   const depth=new Map<string,number>(),visiting=new Set<string>();
   const level=(id:string):number=>{if(depth.has(id))return depth.get(id)!;if(visiting.has(id))return 0;visiting.add(id);const task=byId.get(id);const value=task?.dependsOn?.length?Math.max(...task.dependsOn.map(dep=>level(dep)))+1:0;visiting.delete(id);depth.set(id,value);return value;};
   const rows=new Map<number,number>();
-  return tasks.map(task=>{const x=level(task.id),row=rows.get(x)||0;rows.set(x,row+1);return {id:task.id,type:'goalTask',deletable:false,position:task.canvasPosition||{x:x*300+30,y:row*148+35},data:{title:task.title,objective:task.objective,status:task.status}};});
+  return tasks.map(task=>{const x=level(task.id),row=rows.get(x)||0;rows.set(x,row+1);return {id:task.id,type:'goalTask',deletable:false,position:task.canvasPosition||{x:x*245+30,y:row*115+35},data:{title:task.title,objective:task.objective,status:task.status}};});
 }
 
 function goalContract(goal: GoalItem): string {

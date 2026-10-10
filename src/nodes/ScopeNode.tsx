@@ -22,6 +22,7 @@ function ScopeNode({ id, data, selected }: NodeProps) {
   const scopeStyle = {
     width: d.width || 320,
     height: d.height || 220,
+    borderColor: `${accent}b8`,
     '--wf-accent': accent,
     background: `${fill}${Math.round((d.opacity ?? 0.16) * 255)
       .toString(16)

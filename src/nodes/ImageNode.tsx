@@ -9,7 +9,6 @@ import type { ImageData } from '../types';
 
 const DEFAULT_W = 320;
 const DEFAULT_H = 224;
-const STATUS_LABEL: Record<string, string> = { pending: '待执行', running: '执行中', done: '已完成', failed: '失败', blocked: '阻塞' };
 
 /**
  * 图像节点：画布上的一块图片。图片来源两种：
@@ -112,7 +111,7 @@ function ImageNode({ id, data, selected }: NodeProps) {
   return (
     <div
       className={`wf-node wf-image-node wf-status-${d.status || 'pending'} ${selected ? 'is-selected' : ''}${dragOver ? ' is-dragover' : ''}`}
-      style={{ '--wf-accent': accent, width } as CSSProperties}
+      style={{ borderColor: `${accent}b8`, '--wf-accent': accent, width } as CSSProperties}
       onDragOver={(e) => {
         const has = Array.from(e.dataTransfer?.items || []).some(
           (it) => it.kind === 'file' && String(it.type).startsWith('image/'),
@@ -134,16 +133,16 @@ function ImageNode({ id, data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="wf-handle" />
       <div className="wf-node-title">
-        <span className="wf-image-mark" aria-hidden="true">图</span>
-        <span className="wf-node-title-copy">
-          <span className="wf-node-type-caption">图片素材</span>
-          <span className="wf-node-label" title={d.imagePath || fileName}>{fileName}</span>
+        <span className="wf-image-mark">图</span>
+        <span className="wf-node-label" title={d.imagePath || fileName}>
+          {fileName}
         </span>
         {visionModel ? (
           <span className="wf-vision-badge" title="当前模型支持看图，可直接在对话里引用这张图">
             视觉
           </span>
         ) : null}
+        {d.memberBadge ? <span className="wf-member-badge" title="所属范围">{d.memberBadge}</span> : null}
       </div>
 
       <div
@@ -169,8 +168,7 @@ function ImageNode({ id, data, selected }: NodeProps) {
       </div>
 
       <div className="wf-node-footer">
-        <span className="wf-node-status"><span className="wf-status-dot" aria-hidden="true" /><span className="wf-status-text">{STATUS_LABEL[d.status || 'pending'] || d.status}</span></span>
-        {d.memberBadge ? <span className="wf-member-badge" title="所属范围">{d.memberBadge}</span> : null}
+        <span className="wf-status-text">{d.status || 'pending'}</span>
         {d.imagePath ? (
           <span className="wf-image-src" title={d.imagePath}>
             {d.imagePath}

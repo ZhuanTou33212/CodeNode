@@ -395,8 +395,7 @@ app.whenReady().then(async () => {
       assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".workspace-tabs").length`),0);
       assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".activity-bar button[aria-label=文件]").length`),1);
       assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".conversation-toggle").length`),1);
-      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".conversation-head .conversation-toggle").length`),0);
-      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".conversation-head .agent-switch-trigger").length`),1);
+      assert.equal(await win.webContents.executeJavaScript(`document.querySelectorAll(".conversation-head button").length`),0);
       const js = code => win.webContents.executeJavaScript(code);
       win.setSize(1300,850); win.showInactive(); await sleep(150);
       await js(`window.__codenodeUi.setState({theme:'light',navigationOpen:true,conversationOpen:true}); const input=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'切换主题保留草稿');input.dispatchEvent(new Event('input',{bubbles:true}));`);

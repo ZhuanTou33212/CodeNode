@@ -630,7 +630,9 @@ async function main() {
     const expanded = await cdp.eval(`(() => { const data=window.__codenodeStore.getState().nodes.find(n=>n.id===${JSON.stringify(secondId)}).data; const canvas=document.querySelector('.canvas-wrap').getBoundingClientRect(); return {width:data.width,height:data.height,expectedW:Math.max(560,Math.round(canvas.width-80)),expectedH:Math.max(380,Math.round(canvas.height-80))}; })()`);
     ok('放大入口按可用窗口调整节点尺寸', expanded.width===expanded.expectedW && expanded.height===expanded.expectedH, JSON.stringify(expanded));
 
-    /* ========== 15. 样式归属：节点卡片与连线保持新画布层级，不被旧样式覆盖 ========== */
+    /* ========== 15. 样式归属：节点与连线用本地 Blender 那套，不被覆盖 ========== */
+    // 背景：n0_12 的「session surface」主题在后面又写了一遍 .wf-node/.wf-scope/.react-flow__edge-path
+    // 等选择器，同优先级下后写的会赢。这里锁死「节点样式 + 连线样式」必须来自本地那套。
     await cdp.eval(`(() => {
       const st = window.__codenodeStore.getState();
       st.addNode({ id: 'style-task', type: 'task', position: { x: 80, y: 80 }, data: { label: '样式任务', status: 'running', prompt: 'p', subtitle: 'Task', accent: '#3b82f6' } });
@@ -668,17 +670,17 @@ async function main() {
         scopeRadius: sc && sc.borderTopLeftRadius,
       };
     })()`);
-    ok(`节点卡片圆角 13px（实际 ${style.nodeRadius}）`, style.nodeRadius === '13px');
+    ok(`节点圆角用本地 7px（实际 ${style.nodeRadius}）`, style.nodeRadius === '7px');
     ok('节点背景没有被覆盖成渐变', style.nodeBgImage === 'none');
-    ok(`节点内容区域不受旧外边距挤压（实际 ${style.nodePaddingTop} ${style.nodePaddingX}）`, style.nodePaddingTop === '0px' && style.nodePaddingX === '0px/0px');
-    ok(`节点宽度至少 228px（实际 ${style.nodeMinWidth}）`, style.nodeMinWidth === '228px');
+    ok(`节点内边距用本地 0/10px（实际 ${style.nodePaddingTop} ${style.nodePaddingX}）`, style.nodePaddingTop === '0px' && style.nodePaddingX === '10px/10px');
+    ok(`节点 min-width 用本地 160px（实际 ${style.nodeMinWidth}）`, style.nodeMinWidth === '160px');
     // 标题栏应落在节点内（左右对称、不为负即未凸出）；数值随画布缩放变化，故只校验对称与不凸出
     ok(`标题栏不凸出节点（左右 inset ${style.titleInsetL}/${style.titleInsetR}）`, style.titleInsetL > 0.3 && style.titleInsetR > 0.3 && Math.abs(style.titleInsetL - style.titleInsetR) < 0.3);
     ok(`标题字号用本地 12px（实际 ${style.titleFontSize}）`, style.titleFontSize === '12px');
-    ok(`端口维持可操作的 10px（实际 ${style.handleW}）`, style.handleW === '10px');
-    ok(`连线使用主题色而非旧固定灰（实际 ${style.edgeStroke}）`, ['rgb(121, 133, 145)', 'rgb(145, 161, 175)'].includes(style.edgeStroke));
-    ok(`连线为 1.7px 圆角（实际 ${style.edgeStrokeWidth} ${style.edgeLinecap}）`, style.edgeStrokeWidth === '1.7px' && style.edgeLinecap === 'round');
-    ok(`范围节点圆角 14px（实际 ${style.scopeRadius}）`, style.scopeRadius === '14px');
+    ok(`端口用本地 11px（实际 ${style.handleW}）`, style.handleW === '11px');
+    ok(`连线描边用本地 #778292（实际 ${style.edgeStroke}）`, style.edgeStroke === 'rgb(119, 130, 146)');
+    ok(`连线用本地 2.2px / round（实际 ${style.edgeStrokeWidth} ${style.edgeLinecap}）`, style.edgeStrokeWidth === '2.2px' && style.edgeLinecap === 'round');
+    ok(`范围节点圆角用本地 8px（实际 ${style.scopeRadius}）`, style.scopeRadius === '8px');
 
     /* ========== 16. 画布节点 × 工作台互不干扰 ========== */
     ok('工作台工具栏仍然完整', await cdp.eval(`document.querySelectorAll('.toolbar-group button').length > 5`));
