@@ -32,7 +32,17 @@
     "--text-dim": "#51647d",
     "--border": "rgba(111,145,184,.22)",
     "--canvas-dot": "#2a2f3a",
-    "--canvas-grid-opacity": ".24",
+    "--canvas-grid-opacity": ".16",
+    "--canvas-stage": "#edf1f4",
+    "--canvas-node-surface": "rgba(255,255,255,.94)",
+    "--canvas-node-inset": "#f3f6f8",
+    "--canvas-node-border": "#cdd6de",
+    "--canvas-node-text": "#273747",
+    "--canvas-node-muted": "#627385",
+    "--canvas-node-shadow": "0 10px 26px rgba(44,63,81,.11),0 2px 5px rgba(44,63,81,.05)",
+    "--canvas-edge": "#91a1af",
+    "--canvas-edge-hover": "#4e738f",
+    "--canvas-scope-border": "#9aa8b5",
     "--composer-shadow": "0 8px 24px rgba(30,50,80,.06)"
   },
   "dark": {
@@ -68,7 +78,17 @@
     "--text-dim": "#a0a7b1",
     "--border": "#353941",
     "--canvas-dot": "#777e89",
-    "--canvas-grid-opacity": ".24",
+    "--canvas-grid-opacity": ".18",
+    "--canvas-stage": "#1b1e22",
+    "--canvas-node-surface": "rgba(39,43,49,.94)",
+    "--canvas-node-inset": "#22262b",
+    "--canvas-node-border": "#4a5059",
+    "--canvas-node-text": "#e2e6ea",
+    "--canvas-node-muted": "#a4adb7",
+    "--canvas-node-shadow": "0 12px 28px rgba(0,0,0,.27),0 2px 6px rgba(0,0,0,.15)",
+    "--canvas-edge": "#798591",
+    "--canvas-edge-hover": "#b6c5d2",
+    "--canvas-scope-border": "#737d88",
     "--composer-shadow": "0 8px 24px rgba(0,0,0,.12)"
   }
 }

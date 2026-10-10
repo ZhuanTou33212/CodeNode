@@ -445,7 +445,15 @@ export default function Canvas() {
         <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="var(--canvas-dot)" />
       </ReactFlow>
       {!nodes.length && <div className="canvas-welcome">
-        <p>Shift + A 添加节点</p>
+        <span className="canvas-welcome-mark" aria-hidden="true">◈</span>
+        <h2>从一个节点开始</h2>
+        <p>把任务、文件和想法放在同一张画布上，再用连线说明它们的关系。</p>
+        <button type="button" className="canvas-welcome-add" onClick={(event) => {
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          useUiStore.getState().openAddMenu(rect.left + 12, rect.bottom + 8);
+        }}>＋ 添加节点</button>
+        <small>也可以按 Shift + A</small>
       </div>}
       {cutLine.length > 1 ? (
         <svg

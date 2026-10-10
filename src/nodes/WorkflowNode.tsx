@@ -3,14 +3,6 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useGraphStore } from '../store/graphStore';
 import type { WorkflowNodeData } from '../types';
 
-const STATUS_COLOR: Record<string, string> = {
-  pending: '#64748b',
-  running: '#f59e0b',
-  done: '#22c55e',
-  failed: '#ef4444',
-  blocked: '#8b5cf6',
-};
-
 const STATUS_TEXT: Record<string, string> = {
   pending: '待执行',
   running: '执行中',
@@ -30,6 +22,12 @@ const TYPE_ACCENT: Record<string, string> = {
   scope: '#8b5cf6',
   object: '#06b6d4',
 };
+const TYPE_LABEL: Record<string, string> = {
+  start: '起点', end: '终点', task: '任务', stage: '阶段', tool: '工具', object: '对象',
+};
+const TYPE_MARK: Record<string, string> = {
+  start: '▶', end: '■', task: '◈', stage: '▦', tool: '⚙', object: '◇',
+};
 
 function WorkflowNode({ id, data, selected }: NodeProps) {
   const d = data as unknown as WorkflowNodeData & { objectName?: string };
@@ -43,17 +41,19 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
   const isStart = nodeType === 'start';
   const isEnd = nodeType === 'end';
   const isObject = nodeType === 'object';
-  const nodeStyle = { borderColor: `${accent}b8`, '--wf-accent': accent } as CSSProperties;
+  const nodeStyle = { '--wf-accent': accent } as CSSProperties;
 
   return (
     <div className={`wf-node wf-node-${nodeType || 'default'} wf-status-${status} ${selected ? 'is-selected' : ''} ${isObject ? 'wf-object-node' : ''}`} style={nodeStyle}>
       {!isStart && <Handle type="target" position={Position.Left} className="wf-handle" />}
       <div className="wf-node-title">
-        <span className="wf-status-dot" style={{ background: STATUS_COLOR[status] }} title={status} />
-        <span className="wf-node-label">{d.label}</span>
-        {d.memberBadge ? <span className="wf-member-badge" title="所属范围">{d.memberBadge}</span> : null}
+        <span className="wf-node-kind" aria-hidden="true">{TYPE_MARK[nodeType || ''] || '◇'}</span>
+        <span className="wf-node-title-copy">
+          <span className="wf-node-type-caption">{TYPE_LABEL[nodeType || ''] || '节点'}</span>
+          <span className="wf-node-label" title={d.label}>{d.label}</span>
+        </span>
       </div>
-      <div className="wf-node-sub">{d.goal || d.subtitle || ''}</div>
+      <div className="wf-node-sub">{d.goal || (d.subtitle && !['Task', 'Stage', 'Tool', 'Start', 'End'].includes(d.subtitle) ? d.subtitle : '')}</div>
       {d.trellis && <div className="wf-node-sub" title={d.trellis.taskPath}>Trellis · {d.trellis.role} · 快照 {d.trellis.snapshotId.slice(0, 8)}</div>}
       {isObject ? (
         <input
@@ -66,9 +66,11 @@ function WorkflowNode({ id, data, selected }: NodeProps) {
         <div className="wf-prompt-preview" title={d.prompt || '选中节点，在底部输入任务'}>{d.prompt || '选中后在底部输入任务'}</div>
       ) : null}
       <div className="wf-node-footer">
-        <span className="wf-status-text" style={{ color: STATUS_COLOR[status] }}>
-          {STATUS_TEXT[status] || status}
+        <span className="wf-node-status">
+          <span className="wf-status-dot" aria-hidden="true" />
+          <span className="wf-status-text">{STATUS_TEXT[status] || status}</span>
         </span>
+        {d.memberBadge ? <span className="wf-member-badge" title="所属范围">{d.memberBadge}</span> : null}
         {flowOut > 0 && <span className="wf-flow-badge" title={`输入 ${flowIn} 项 · 输出 ${flowOut} 项`}>↦{flowOut}</span>}
       </div>
       {!isEnd && <Handle type="source" position={Position.Right} className="wf-handle" />}
