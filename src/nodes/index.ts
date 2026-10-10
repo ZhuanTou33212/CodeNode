@@ -29,7 +29,7 @@ export const NODE_TEMPLATES: Record<string, NodeTemplate> = {
   start: {
     label: '入口',
     subtitle: 'Start',
-    data: { label: '入口', status: 'done', accent: '#22c55e' },
+    data: { label: '入口', status: 'pending', accent: '#22c55e' },
   },
   end: {
     label: '出口',
