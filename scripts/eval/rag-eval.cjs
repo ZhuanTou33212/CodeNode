@@ -13,7 +13,7 @@ const cases = JSON.parse(fs.readFileSync(path.join(__dirname, "./rag-eval-cases.
 const outputArg = process.argv.find((arg) => arg.startsWith('--out='));
 const output = outputArg ? path.resolve(root, outputArg.slice('--out='.length)) : null;
 const base = {
-  include: ['electron/**', 'docs/**', 'README.md'],
+  include: ['electron/**', 'docs/**', 'README.md', 'README.zh-CN.md'],
   exclude: ['docs/eval-reports/**'],
   embedProvider: 'none', vectorStore: 'memory', topK: 6,
   bm25K1: 1.35, bm25B: 0.72, vectorWeight: 0.35, graphHops: 1,

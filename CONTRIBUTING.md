@@ -54,6 +54,11 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 | `scripts/core/runtime-gate.cjs` | **运行时门禁**：断言上述能力真的接线可用（不是"源码里出现过某个字符串"） |
 | `docs/` | 最新设计建议、架构图片和评测数据；`docs/eval-reports/` 是**生成物**（CI 以 artifact 上传，不入库） |
 
+## 文档双语
+
+`README.md` 是英文入口（GitHub 默认展示），`README.zh-CN.md` 是中文全量版。两版的结构、命令、数字和链接必须一一对应，改一版就同步另一版；
+`scripts/eval/rag-eval.cjs` 的 `include` 同时收录这两份文件，新增根目录说明文档时同步更新。其余文档（`CONTRIBUTING.md`、`docs/**`、`scripts/README.md`）目前只有中文，英文 README 里的对应链接标注为 "(Chinese)"。
+
 ## 生成物不要入库
 
 - `docs/eval-reports/`（Agent 评测报告，`npm run test:eval` 产出）
