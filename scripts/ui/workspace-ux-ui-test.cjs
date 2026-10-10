@@ -59,7 +59,13 @@ app.whenReady().then(async()=>{
   await js("document.querySelector('.overview-create').click()");assert.equal(await js("document.querySelector('.overview-editor-mask').hidden"),false);assert.equal(await js("document.querySelector('.goal-create-advanced').open"),false,'optional fields collapsed');
   await js(`(()=>{const set=(label,value)=>{const e=document.querySelector('[aria-label="'+label+'"]');Object.getOwnPropertyDescriptor(e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype,'value').set.call(e,value);e.dispatchEvent(new Event('input',{bubbles:true}));};set('Goal 标题','完善画布编辑体验');set('Goal 目标','让节点编辑、删除和撤销操作清晰可靠。');set('验收条件',${JSON.stringify('节点删除与撤销通过\n对话内容不被管理表单挤占')});})()`);
   await js("document.querySelector('[aria-label=\"关闭目标编辑\"]').click();document.querySelector('.overview-create').click()");assert.equal(await js("document.querySelector('[aria-label=\"Goal 标题\"]').value"),'完善画布编辑体验','cancel/reopen retains new goal draft');
-  await js("document.querySelector('.goal-create-submit').click()");await wait(()=>js("document.querySelector('.overview-editor-mask').hidden&&document.querySelector('.overview-goal-list button')"),'created Goal closes form');
+  await js("document.querySelector('.goal-create-submit').click()");
+  // 5c236ea（turn plans and Goals into editable task graphs）起，创建成功**不再关闭**窗口，
+  // 而是把编辑器切到新 Goal 的详情，便于接着预览任务图、加任务。这条期望写于它之前的
+  // f82946f，之后没跟着更新，属于过期断言；这里改成断言当前契约：
+  // 创建表单消失 + 编辑器进入「目标详情」+ 选中的就是刚建的 Goal + 目标列表里出现该条目。
+  await wait(()=>js("!document.querySelector('.goal-create-form')&&!!document.querySelector('.overview-goal-editor[aria-label=\"目标详情\"]')&&document.querySelector('.overview-goal-list button')"),'created Goal opens its detail');
+  assert.equal(await js("document.querySelector('.overview-goal-editor header h2').textContent"),'完善画布编辑体验','created Goal is selected in the editor');
   const goalList=await js(`window.codenode.goalList(${JSON.stringify(project)})`);const goal={ok:true,value:goalList.value.goals[0]};assert.equal(goal.value.title,'完善画布编辑体验');assert.equal(goal.value.criteria.length,2,'criteria are separate rows');
   const task=await js(`window.codenode.goalTaskCreate(${JSON.stringify(project)},${JSON.stringify(goal.value.id)},{title:'修正节点删除交互',objective:'区分删除节点与删除内部图形。'})`);assert.equal(task.ok,true);
   await js(`window.codenode.goalTaskUpdate(${JSON.stringify(project)},${JSON.stringify(goal.value.id)},${JSON.stringify(task.value.id)},{status:'blocked'})`);
