@@ -19,7 +19,7 @@ app.whenReady().then(async()=>{
     await win.loadFile(path.join(appRoot,'dist/index.html'));
     await js(`window.__codenodeSession.getState().initProject();window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
     await wait(`!!document.querySelector('.activity-bar [aria-label="任务"]')`);await js(`document.querySelector('.activity-bar [aria-label="任务"]').click()`);
-    await wait(`document.querySelector('.task-connect')?.textContent.includes('已检测到 Trellis 0.6.17')`);
+    await wait(`document.querySelector('.task-connect')?.textContent.includes('本机 Trellis 已就绪')`);
     assert.equal(await js(`document.querySelector('[aria-label="接入开发者名称"]').value`),'tester');
     await click('生成接入预览');await wait(`!!document.querySelector('[aria-label="Trellis 接入预览"]')`);
     assert.equal(fs.existsSync(path.join(project,'.trellis')),false,'preview does not connect project');

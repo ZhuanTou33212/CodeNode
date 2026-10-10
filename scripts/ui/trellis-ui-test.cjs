@@ -38,7 +38,7 @@ app.whenReady().then(async () => {
     await js(`window.__codenodeSession.getState().initProject();window.__codenodeSession.setState({memoryConversationId:'trellis-ui-conversation'});window.__codenodeProject.getState().loadRoot(${JSON.stringify(empty)})`);
     await waitFor(win,'!!document.querySelector(".activity-bar [aria-label=任务]")');
     await js(`document.querySelector('.activity-bar [aria-label="任务"]').click()`);
-    await waitFor(win,'document.querySelector(".task-workspace")?.textContent.includes("这个项目还没有接入 Trellis")');
+    await waitFor(win,'document.querySelector(".task-workspace")?.textContent.includes("连接本机工具，开始管理项目任务。")');
     assert.equal(await js(`document.querySelector('.task-workspace').hidden`),false,'task entry is always available');
     const project=path.join(root,'project');
     await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`); await taskReady();
@@ -92,6 +92,14 @@ app.whenReady().then(async () => {
     console.log('TASK WORKSPACE FUNCTIONAL CHECKS: PASS');
     win.showInactive();
     for(const theme of ['light','dark']){lastPaint=null;await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);win.webContents.invalidate();await sleep(500);for(let i=0;i<100&&!lastPaint;i++)await sleep(50);assert.ok(lastPaint,'offscreen preview frame');fs.writeFileSync(path.join(shots,theme+'.png'),lastPaint);}
+    await js(`(async()=>{await window.codenode.trellisCliSave({executable:'missing-trellis-for-ui',developer:''});await window.__codenodeProject.getState().loadRoot(${JSON.stringify(empty)})})()`);
+    await waitFor(win,`document.querySelector('.task-connect')?.textContent.includes('尚未连接本机工具')`);
+    for(const theme of ['light','dark']){
+      lastPaint=null;await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);win.webContents.invalidate();await sleep(500);for(let i=0;i<100&&!lastPaint;i++)await sleep(50);assert.ok(lastPaint);
+      const layout=await js(`(()=>{const card=document.querySelector('.task-onboarding'),help=document.querySelector('.task-connect-help');return {height:card.getBoundingClientRect().height,width:card.getBoundingClientRect().width,helpOpen:help.open,visibleText:card.innerText};})()`);
+      assert.equal(layout.helpOpen,false);assert.ok(layout.height<420,'empty state fits without excessive scrolling');assert.ok(layout.visibleText.length<120,'concise initial copy');
+      fs.writeFileSync(path.join(shots,'connect-'+theme+'.png'),lastPaint);
+    }
     win.hide();
     console.log('TASK WORKSPACE UI: PASS (always-visible rail entry, empty-project onboarding, browse/bind separation, preserved composer/editor/preview across pages/themes, actual status/journal writeback, saved canvas navigation, reopened transaction recovery)');
   }finally{win.destroy();}

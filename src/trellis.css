@@ -63,5 +63,20 @@
 .task-connect-files { max-height:200px; overflow:auto; display:flex; flex-direction:column; align-items:flex-start; }
 .task-connect section { padding:18px; margin-top:20px; border:1px solid var(--glass-border); border-radius:12px; }
 .task-connect pre { max-height:300px; overflow:auto; }
+.task-onboarding { width:min(420px,100%); box-sizing:border-box; margin:clamp(32px,8vh,90px) auto; padding:32px; text-align:center; }
+.task-empty-icon { color:var(--glass-muted); margin-bottom:14px; }
+.task-onboarding h2 { font-size:21px; margin:0 0 10px; font-weight:600; }
+.task-onboarding>p { font-size:13px; margin:0; line-height:1.6; }
+.task-onboarding .task-connect { margin:22px 0 0; padding:0; border:0; text-align:center; }
+.task-connect-status { font-size:12px; margin:0 0 18px; }
+.task-onboarding .task-connect label { text-align:left; font-size:12px; }
+.task-connect-actions { display:flex; flex-direction:column; align-items:center; gap:6px; }
+.task-workspace .task-connect-primary { padding:10px 20px; background:var(--glass-selected); color:var(--glass-accent); font-weight:500; }
+.task-workspace .task-connect-secondary { border:0; background:transparent; font-size:12px; color:var(--glass-muted); }
+.task-connect-help { margin-top:18px; font-size:12px; color:var(--glass-muted); }
+.task-connect-help summary { cursor:pointer; }
+.task-connect-help p { text-align:left; font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
+.task-onboarding:has([aria-label="Trellis 接入预览"]) { width:min(640px,100%); }
+.task-connect section { text-align:left; }
 @media(max-width:900px) { .task-detail { padding:20px; } .task-materials { grid-template-columns:1fr; } .task-materials>nav { flex-direction:row; overflow:auto; } .task-materials>nav button { min-width:180px; } }
 @media(max-width:600px) { .task-workspace { flex-direction:column; overflow:auto; } .task-navigation { width:100%; max-height:230px; border-right:0; border-bottom:1px solid var(--glass-border); } .task-detail { overflow:visible; } .task-page-heading { align-items:flex-start; flex-direction:column; } }
