@@ -36,6 +36,9 @@ const LAYERS = Object.freeze([
  * 但返回值里用 `toolSchema.guideTokens / schemaTokens` 分别报出 —— 加总透明，不藏钱。
  */
 const SECTION_LAYER = Object.freeze({
+  // 模型身份段（【当前模型】）与回复约束/运行规则同属稳定前缀：会话内逐字节不变，
+  // 按静态层计账才和 prompt cache 的实际行为一致（不登记会落进默认的 system_dynamic）。
+  'model-identity': 'system_static',
   'reply-rules': 'system_static',
   'runtime-rules': 'system_static',
   soul: 'system_static',

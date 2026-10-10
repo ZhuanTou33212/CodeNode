@@ -1375,6 +1375,9 @@ function register(ctx) {
       let systemContent = agent.buildSystemPrompt(soul, canvasSummaryForPrompt, toolGuide, memoryText, skillsText, {
         prompt,
         canvasMode: cfg.prompt && cfg.prompt.canvasRules,
+        // 当前模型身份（模型配置里的 label / 模型名）：模型被问「你是谁」时按事实回答，
+        // 不再因为提示词里没有身份而回避（sel 为空 = 取不到配置 → 发占位句，见 buildSystemPrompt）
+        modelIdentity: { label: sel && sel.label, model: sel && sel.model, id: sel && sel.id },
         userMemoryText,
         sessionMemoryText: promptContext.sessionMemoryText,
         // 意图识别的提示词路由信号（只在「本来会省画布层」时把层救回来；null = 不改变既有判定）

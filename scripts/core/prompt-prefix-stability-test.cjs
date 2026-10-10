@@ -80,6 +80,8 @@ console.log('== A. 段落登记表：稳定段全在动态段之前 ==');
 
   const prompt = build({ canvas: CANVAS_A });
   const secs = agent.splitPromptSections(prompt);
+  // 身份段（【当前模型】）是登记段且**必发**：取不到模型配置时也发占位句 —— 段落在不在
+  // 不能让段落顺序飘（顺序飘 = 前缀缓存与「装配顺序 = 登记表顺序」这条判据一起失效）。
   const presentByDefault = table.filter((s) => s.id !== 'session-memory');
   check('[A] 实际装配顺序 = 本轮出现的登记段落顺序', JSON.stringify(secs.map((s) => s.id)) === JSON.stringify(presentByDefault.map((s) => s.id)),
     JSON.stringify(secs.map((s) => s.id)));
@@ -229,6 +231,22 @@ console.log('\n== E. 跨任务类型前缀（棘轮）+ 接线 ==');
   const discoverNumber = Number(/^(\d+)\./.exec(agent.RUNTIME_RULE_DISCOVER)[1]);
   check('[E] 任务段包含随常见工具面变化的规则与裁剪入口',
     JSON.stringify(agent.TASK_RULE_NUMBERS) === JSON.stringify([...new Set([...gatedNumbers, discoverNumber])].sort((a, b) => a - b)));
+
+  // ---- 模型身份注入（2026-10-10）：模型答不出「你是什么模型」的根因是 prompt 里没有身份 ----
+  const identityWith = agent.buildSystemPrompt(soul, '', guide, '', '', {
+    prompt: '你是什么模型', modelIdentity: { label: 'DeepSeek-V4.1-Flash', model: 'deepseek-flash' },
+  });
+  const identitySection = agent.splitPromptSections(identityWith).find((s) => s.id === 'model-identity');
+  check('[E] 模型配置进了身份段（界面标签 + 模型名，模型不必再回避这个问题）',
+    !!identitySection && identitySection.text.includes('DeepSeek-V4.1-Flash') && identitySection.text.includes('deepseek-flash'),
+    identitySection && identitySection.text.replace(/\n/g, ' ').slice(0, 80));
+  const identityNone = agent.buildSystemPrompt(soul, '', guide, '', '', { prompt: '你好' });
+  const identityNoneSection = agent.splitPromptSections(identityNone).find((s) => s.id === 'model-identity');
+  check('[E] 取不到模型配置时身份段仍存在（发占位句，不猜模型名）',
+    !!identityNoneSection && /未上报/.test(identityNoneSection.text), identityNoneSection && identityNoneSection.text.slice(0, 40));
+  const ipcSrcNow = fs.readFileSync(path.join(__dirname, "../../electron/ipc/agent.cjs"), 'utf8');
+  check('[E] ipc 真的把所选模型的身份传给了 buildSystemPrompt（防「实现了但没接线」）',
+    /buildSystemPrompt\([^)]*\{[\s\S]{0,400}modelIdentity:\s*\{[^}]*sel\s*&&\s*sel\.label/.test(ipcSrcNow));
 }
 
 console.log('\n' + (failures === 0 ? 'PROMPT PREFIX STABILITY TEST: PASS（稳定内容前置、规则按面分层且零改字）' : 'PROMPT PREFIX STABILITY TEST: FAIL —— ' + failures + ' 项断言未通过'));

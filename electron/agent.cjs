@@ -959,6 +959,7 @@ const CANVAS_RULES_STUB =
  */
 const PROMPT_SECTIONS = Object.freeze([
   // ---- 稳定前缀：同一项目 + 同一工具面 → 逐字节相同 ----
+  { id: 'model-identity', title: '【当前模型】', stable: true },
   { id: 'reply-rules', title: '【回复与编码约束】', stable: true },
   { id: 'runtime-rules', title: '【运行规则】', stable: true },
   { id: 'soul', title: '【灵魂设定】', stable: true },
@@ -1174,6 +1175,40 @@ function resolvePromptLayers(input = {}) {
   return { canvas: false, reason: 'pure-code-task' };
 }
 
+/**
+ * 当前模型身份段（**必发**，即使取不到也发占位句）。
+ *
+ * 为什么要发：此前 system prompt 里**没有任何一句说明当前用的是哪个模型**，于是用户问
+ * 「你是什么模型」时模型只能回避（真实日志 2026-10-10：「我这边没有可靠信息可查，不方便瞎猜」），
+ * 而界面上明明显示着所选模型 —— 模型答不出「我是谁」，用户看到的就是答非所问、不像所选模型。
+ *
+ * 两条口径：
+ *   ① 身份来自**模型配置**（models.json 的 label / id / model），不是模型的自我认知，所以是可信事实；
+ *   ② 必发（取不到也发占位句）—— 段落在 `PROMPT_SECTIONS` 里是登记段，时有时无会让段落顺序不稳定，
+ *      也会把「当前模型」这个事实留成空白（模型又会开始猜）。
+ *
+ * @param {{label?: any, model?: any, id?: any}} [identity]
+ * @returns {string}
+ */
+function buildModelIdentityBlock(identity) {
+  const source = identity && typeof identity === 'object' ? identity : {};
+  const pick = (...values) => {
+    for (const value of values) {
+      const text = String(value == null ? '' : value).trim();
+      if (text) return text;
+    }
+    return '';
+  };
+  const label = pick(source.label, source.id, source.model);
+  const modelName = pick(source.model, source.id);
+  if (!label) {
+    return '【当前模型】\n应用未上报本轮模型标识（引擎未找到该会话的模型配置）；不要猜具体模型名，也不要否认自己是 CodeNode 里运行的 Agent。';
+  }
+  const viaModel = modelName && modelName !== label ? '（模型名 ' + modelName + '）' : '';
+  return '【当前模型】\n当前会话由 CodeNode 驱动，使用的模型是「' + label + '」' + viaModel +
+    '。回答「你是谁 / 你是什么模型」这类问题时，直接按这一条如实说明，不要声称查不到，也不要猜测或换成其它模型名。';
+}
+
 function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, options = {}) {
   const promptLayers = resolvePromptLayers({ canvasSummary, prompt: options.prompt, mode: options.canvasMode, intentHint: options.intentHint });
   // 工具面同源：画布建模规则要求 workbench_edit —— 工具面被裁剪且没带画布时，连规则也要退成占位，
@@ -1181,6 +1216,9 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
   const canvasToolsExposed = !Array.isArray(options.exposedTools) || options.exposedTools.includes('workbench_edit');
   const canvasRules = promptLayers.canvas && canvasToolsExposed ? CANVAS_RULES : CANVAS_RULES_STUB;
   const lines = [];
+  // 身份段排在最前（登记表里也是第一个稳定段）：模型先知道「我是谁、用的是什么模型」，
+  // 再按回复约束组织输出。内容只随模型配置变，同一会话内逐字节稳定 → 不影响前缀缓存。
+  lines.push(buildModelIdentityBlock(options.modelIdentity));
   lines.push(
     '\n【回复与编码约束】\n' +
       '1. 回复尽量简短，只回答用户必须知道的问题；不要重复背景、过程或无关细节。\n' +
@@ -4494,6 +4532,7 @@ module.exports = {
   orderPromptSections,
   splitPromptSections,
   splitRuntimeRules,
+  buildModelIdentityBlock,
   buildToolGuide,
   chatCompletion,
   validateRagGrounding,

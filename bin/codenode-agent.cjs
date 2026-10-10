@@ -284,6 +284,8 @@ async function main() {
     promptContext.skillsText,
     {
       prompt,
+      // 非交互入口没有模型配置条目，只有 cfg.model：身份段按模型名如实说明（同样不再回避）
+      modelIdentity: { label: cfg.model, model: cfg.model },
       userMemoryText: promptContext.userMemoryText,
       sessionMemoryText: promptContext.sessionMemoryText,
       canvasMode: cfg.prompt && cfg.prompt.canvasRules,

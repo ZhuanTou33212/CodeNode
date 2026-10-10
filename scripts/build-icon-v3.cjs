@@ -77,6 +77,21 @@ function outputsPresent() {
   return SIZES.concat(PNG_SIZES).every((size) => fs.existsSync(path.join(OUTPUT_DIR, `icon-${size}.png`)));
 }
 
+/**
+ * 结束进程。
+ *
+ * 为什么要有这个函数：`require('electron')` 在 **electron 宿主里** 才有 app 对象；这个脚本被
+ * `npm run build` 的 postbuild 以 `electron` 拉起时正常，但一旦被非 electron 宿主（或宿主里
+ * `app` 拿不到）执行，直接 `app.quit()` 会抛 `Cannot read properties of undefined (reading 'quit')`
+ * —— 那是「跳过重建」这条**正常路径**上的崩溃，会把整个 `dist:win`（连 electron-builder 都没跑到）
+ * 一起带红。所以：有 app 就让它退出，没有就让事件循环自然结束。
+ */
+function quitApp() {
+  try {
+    if (app && typeof app.quit === 'function') app.quit();
+  } catch {}
+}
+
 async function main() {
   if (!fs.existsSync(SOURCE)) throw new Error(`找不到图标源文件：${SOURCE}`);
   const fingerprint = sourceFingerprint();
@@ -85,13 +100,39 @@ async function main() {
     previous = fs.readFileSync(MANIFEST, 'utf8').trim();
   } catch {}
   const force = process.argv.includes('--force') || process.env.CODENODE_ICON_FORCE === '1';
+  /**
+   * 渲染用的临时 HTML 在**渲染之前**就写好，所以它必须在这里就登记好清理责任：
+   * 之前的清理只写在「窗口建好之后」的 finally 里，于是「走到渲染前就退出」的分支（下面两条）
+   * 会把 build/.icon-render.html 留在工作区里（实测踩到：非 electron 宿主跑一次 build 就多一个未跟踪文件）。
+   */
+  const htmlPath = path.join(OUTPUT_DIR, '.icon-render.html');
+  const cleanupHtml = () => { try { fs.unlinkSync(htmlPath); } catch {} };
+  try {
+    return await renderIcons({ previous, fingerprint, force, htmlPath });
+  } finally {
+    cleanupHtml();
+  }
+}
+
+async function renderIcons({ previous, fingerprint, force, htmlPath }) {
   if (!force && previous === fingerprint && outputsPresent()) {
     console.log(
       `[icons] 图标与源文件一致（指纹 ${fingerprint.slice(0, 12)}），跳过重建；` +
         '源图已改动或需要强制重建时用：npm run icons:build -- --force'
     );
     // 必须显式退出：Electron 主进程在加载后不会自行结束，否则 npm run build 会挂住。
-    app.quit();
+    quitApp();
+    return;
+  }
+  /**
+   * 没有 app 对象 = **不是 electron 宿主**（例如设置了 ELECTRON_RUN_AS_NODE=1，或有人直接用
+   * `node scripts/build-icon-v3.cjs` 跑）。此时渲染图标根本不可能：既没有 whenReady 也没有窗口。
+   * 口径与「渲染失败」一致 —— 图标已存在就沿用已提交版本并如实提示，不把 npm run build / dist:win 带红。
+   */
+  if (!app || typeof app.whenReady !== 'function') {
+    if (!outputsPresent()) throw new Error('没有可用的 electron 宿主，且仓库里也没有已提交的图标产物');
+    console.warn('[icons] 跳过图标重建：当前不是 electron 宿主（app 不可用）。build/icon.ico 沿用仓库已提交版本；' +
+      '需要重建时请用 `npm run icons:build`（electron 宿主），不要带 ELECTRON_RUN_AS_NODE=1。');
     return;
   }
   if (headlessLinuxWithoutDisplay()) {
@@ -100,11 +141,10 @@ async function main() {
         'Electron 无法创建渲染窗口。build/icon.ico 沿用仓库已提交版本；' +
         '如需重建请用 xvfb-run -a npm run icons:build，或设置 CODENODE_ICON_REQUIRE_HEADLESS=1 强制尝试。'
     );
-    app.quit();
+    quitApp();
     return;
   }
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  const htmlPath = path.join(OUTPUT_DIR, '.icon-render.html');
   const sourceUrl = pathToFileURL(SOURCE).href;
   fs.writeFileSync(htmlPath, `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;width:${RENDER_SIZE}px;height:${RENDER_SIZE}px;overflow:hidden;background:transparent"><img id="icon" src="${sourceUrl}" width="${RENDER_SIZE}" height="${RENDER_SIZE}" style="display:block;width:${RENDER_SIZE}px;height:${RENDER_SIZE}px"></body></html>`, 'utf8');
 
@@ -159,13 +199,13 @@ async function main() {
     console.warn('[icons] 重建失败，沿用已提交的图标：' + (error && error.message ? error.message : error));
   } finally {
     window.destroy();
-    try { fs.unlinkSync(htmlPath); } catch {}
-    app.quit();
+    // 临时 HTML 由 main() 的外层 finally 统一清理（这里不再重复，避免两处清理责任重叠）
+    quitApp();
   }
 }
 
 main().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
-  try { app.quit(); } catch {}
+  quitApp();
   process.exitCode = 1;
 });
