@@ -49,7 +49,7 @@ The workbench also ships a large offline regression suite; run `npm run test:lis
 You need **Node.js 22.12 or newer** and a desktop environment able to run Electron; CI pins the 22 line via `.nvmrc`.
 
 ```powershell
-git clone --branch yimi-branch https://github.com/ZhuanTou33212/CodeNode.git
+git clone https://github.com/ZhuanTou33212/CodeNode.git
 cd CodeNode
 npm ci
 npm run dev

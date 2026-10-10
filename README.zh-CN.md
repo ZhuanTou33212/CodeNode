@@ -49,7 +49,7 @@ CodeNode 是一个基于 Electron 和 React 的本地开发工作台。工作流
 需要 **Node.js 22.12 或更新版本**以及可运行 Electron 的桌面环境；CI 使用 `.nvmrc` 指定的 22 系列。
 
 ```powershell
-git clone --branch yimi-branch https://github.com/ZhuanTou33212/CodeNode.git
+git clone https://github.com/ZhuanTou33212/CodeNode.git
 cd CodeNode
 npm ci
 npm run dev

@@ -71,7 +71,7 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 
 ## 分支与 PR
 
-- 默认分支 `main`（与 `0_2` 同线）。
+- 默认分支 `main`（与 `0_2` 同线），也是 GitHub 首页展示的分支；`yimi-branch` 是当前开发线，功能完成并验证后快进到 `main`。两条分支曾相差 81 个提交导致首页展示旧文档，发布或对外演示前先核对 `git rev-list --count origin/main..yimi-branch`。
 - 直接推 `main` 也可以，但**改动门禁 / 隔离 / 签名 / 发布流程**请走 PR，用 `.github/pull_request_template.md` 的清单自检。
 - CI（`.github/workflows/ci.yml`）与门禁（`production-gate.yml`）对所有分支的 push 与所有 PR 触发；
   两个 workflow 都调用 `npm test`，**门禁清单只在 `scripts/run-all-tests.cjs` 里维护一处**。
