@@ -53,6 +53,7 @@
     "test:coding-settings-ui": "node scripts/run-electron.cjs scripts/ui/coding-settings-ui-test.cjs",
     "test:ime-shortcut-ui": "node scripts/run-electron.cjs scripts/ui/ime-shortcut-ui-test.cjs",
     "test:node-inspector-ui": "node scripts/run-electron.cjs scripts/ui/node-inspector-ui-test.cjs",
+    "test:workflow-canvas-ui": "node scripts/run-electron.cjs scripts/ui/workflow-canvas-ui-test.cjs",
     "test:rag-document": "node scripts/core/rag-document-test.cjs",
     "test:scalar": "node scripts/core/scalar-vector-test.cjs",
     "test:vector-store": "node scripts/core/vector-store-test.cjs",

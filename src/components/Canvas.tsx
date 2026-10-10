@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
-  Background,
-  BackgroundVariant,
   useReactFlow,
   SelectionMode,
   type NodeChange,
@@ -18,6 +16,7 @@ import { nodeTypes } from '../nodes';
 import { edgeTypes } from '../edges';
 import { childIdsOf, computeChildren, parentIdOf, isDescendantOf } from '../lib/flow';
 import { useSpacePan } from '../hooks/useSpacePan';
+import WorkflowCanvasLayer from './WorkflowCanvasLayer';
 
 function collectHiddenIds(nodes: Node[]): Set<string> {
   const hidden = new Set<string>();
@@ -126,6 +125,7 @@ function lineHitsEdge(dragPts: Pt[], edgePts: Pt[]): Pt | null {
 }
 
 export default function Canvas() {
+  const rasterSupported = typeof document !== 'undefined' && !!document.createElement('canvas').getContext('2d');
   const { spacePressed } = useSpacePan();
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
@@ -159,6 +159,7 @@ export default function Canvas() {
   const hoverScope = useRef<string | null>(null);
   const lineEdit = useRef<{ mode: 'cut' | 'waypoint'; points: Pt[]; screenPts: Pt[]; hits: Map<string, Pt> } | null>(null);
   const [cutLine, setCutLine] = useState<Pt[]>([]);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
 
   useEffect(() => {
     const v = applyPendingViewport();
@@ -258,7 +259,7 @@ export default function Canvas() {
   return (
     <div
       ref={canvasRef}
-      className="canvas-wrap"
+      className={`canvas-wrap${rasterSupported ? ' canvas-raster-mode' : ''}`}
       onMouseDown={(e) => {
         if (e.button === 2 && e.ctrlKey) {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -312,6 +313,7 @@ export default function Canvas() {
       }}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {rasterSupported && <WorkflowCanvasLayer nodes={visibleNodes} edges={displayEdges} hoveredEdgeId={hoveredEdgeId} cutLine={cutLine} />}
       <ReactFlow
         nodes={visibleNodes}
         edges={displayEdges}
@@ -396,6 +398,8 @@ export default function Canvas() {
             st.onEdgesChange([{ id: edge.id, type: 'remove' }]);
           }
         }}
+        onEdgeMouseEnter={(_, edge) => setHoveredEdgeId(edge.id)}
+        onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         onEdgeClick={(e, edge: Edge) => {
           // Ctrl+Shift 点击连线：新增纯几何中转点
           if (e.ctrlKey && e.shiftKey) {
@@ -442,33 +446,13 @@ export default function Canvas() {
           animated: false,
         }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="var(--canvas-dot)" />
       </ReactFlow>
       {!nodes.length && <div className="canvas-welcome">
         <p>Shift + A 添加节点</p>
       </div>}
-      {cutLine.length > 1 ? (
-        <svg
-          className="wf-cut-line"
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: '100%',
-            height: '100%',
-            pointerEvents: 'none',
-            zIndex: 1000,
-          }}
-        >
-          <polyline
-            points={cutLine.map((p) => `${p.x},${p.y}`).join(' ')}
-            fill="none"
-            stroke="#f43f5e"
-            strokeWidth={2}
-            strokeDasharray="6 4"
-          />
-        </svg>
-      ) : null}
+      {!rasterSupported && cutLine.length > 1 && <svg className="wf-cut-line" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1000 }}>
+        <polyline points={cutLine.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#f43f5e" strokeWidth={2} strokeDasharray="6 4" />
+      </svg>}
     </div>
   );
 }
