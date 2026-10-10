@@ -17,6 +17,9 @@
  *       ② 重载渲染层，点该条目走**真实**打开工程链路；
  *       ③ 断言画布有真实节点、已离开启动门禁页、节点都在可见视口内；
  *          对话态额外断言：assistant 消息已完成、有工具调用记录、画布节点数增加（即真的改图了）。
+ * 副作用：对话态会把 Agent 的改动写回示例工程，所以脚本在启动时快照 workflow.cnode、
+ *       退出前还原 —— 出图不应在仓库里留下 diff。截图前会重试「显示全部节点」直到所有节点
+ *       进入视口（新增节点的尺寸要等 React Flow 测完才参与 fit，一次点击可能漏掉它）。
  * 退出码 0 = 截图内容符合断言。
  */
 'use strict';
@@ -31,6 +34,8 @@ const DEMO = path.join(ROOT, 'workflow.cnode');
 
 const PROMPT = String(process.env.SHOT_PROMPT || '').trim();
 const WAIT_S = Number(process.env.SHOT_WAIT_S || 180);
+/** 示例工程的原始字节：对话态会被 Agent 改动并落盘，出图后还原，避免截图脚本污染仓库 */
+const DEMO_ORIGINAL = fs.existsSync(DEMO) ? fs.readFileSync(DEMO) : null;
 const OUT = process.env.SHOT_OUT
   ? path.resolve(ROOT, process.env.SHOT_OUT)
   : path.join(DEST, PROMPT ? 'agent-chat.png' : 'codenode-canvas.png');
@@ -101,11 +106,16 @@ app.whenReady().then(async () => {
     const readState = () =>
       js(`(()=>{
         const nodes = [...document.querySelectorAll('.react-flow__node')];
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
+        // 视口必须按**画布容器**算，不能用 window：一级侧栏与对话面板会盖在画布左侧/右侧，
+        // 用 window 判断时「节点被面板压住」也会被算成在视口内，截图里的裁切就漏检了。
+        const host = document.querySelector('.react-flow') || document.querySelector('.canvas-wrap');
+        const hr = host ? host.getBoundingClientRect() : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight };
+        const vp = document.querySelector('.react-flow__viewport');
         const inView = nodes.filter((n) => {
           const r = n.getBoundingClientRect();
-          return r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh && r.width > 40 && r.height > 20;
+          // 只排除真正塌陷/不可见的元素：原来的 width>40 && height>20 是给未适配低缩放的旧用法，
+          // 现在「显示全部节点」会缩到 25%~45%，合法节点在屏幕上可能只有几十像素，会被误判成出界。
+          return r.left >= hr.left - 1 && r.top >= hr.top - 1 && r.right <= hr.right + 1 && r.bottom <= hr.bottom + 1 && r.width > 2 && r.height > 2;
         }).length;
         const chat = window.__codenodeChat && window.__codenodeChat.getState();
         const sess = window.__codenodeSession && window.__codenodeSession.getState();
@@ -116,6 +126,8 @@ app.whenReady().then(async () => {
           workspace: !!document.querySelector('.canvas-wrap'),
           nodes: nodes.length,
           inView,
+          canvas: { w: Math.round(hr.width), h: Math.round(hr.height), left: Math.round(hr.left) },
+          transform: vp ? vp.style.transform : null,
           edges: document.querySelectorAll('.react-flow__edge').length,
           sending: !!(chat && chat.sending),
           msgCount: msgs.length,
@@ -169,15 +181,36 @@ app.whenReady().then(async () => {
       console.log('GEOM ' + JSON.stringify(now));
     }
 
-    // 截图前把画布「聚焦全部」，保证节点完整落在可视区内（与任务栏上的 Z 按钮同一动作）
-    const fitted = await js(`(()=>{
-      const b = [...document.querySelectorAll('button')].find((x) => /聚焦全部/.test(x.title || ''));
-      if (!b) return 'no-fit-button';
-      b.click();
-      return 'clicked';
-    })()`);
-    console.log('fit-all → ' + fitted);
-    await sleep(1200);
+    // 截图前把画布「显示全部节点」，保证每个节点都落在可视区内。
+    // 该动作现在位于顶部「画布操作」菜单里（config/ui.defaults.json 的 menuActions），用 data-action 定位；
+    // 不要再按按钮 title 找，title 早已改成「显示全部节点」。
+    // 刚被 Agent 新增的节点要等 React Flow 测完尺寸才参与 fit，第一次点击可能漏掉它 —— 最多重试 3 次。
+    const clickFit = () =>
+      js(`(()=>{
+        const menu = [...document.querySelectorAll('details')].find((d) => /画布操作/.test((d.querySelector('summary')||{}).textContent || ''));
+        if (!menu) return 'no-menu';
+        menu.open = true;
+        const button = menu.querySelector('button[data-action="fit"]');
+        if (!button) { menu.open = false; return 'no-fit-item'; }
+        if (button.disabled) { menu.open = false; return 'fit-disabled'; }
+        button.click();
+        return 'clicked';
+      })()`);
+    let fitResult = 'not-tried';
+    let fitState = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      fitResult = await clickFit();
+      await sleep(1500);
+      fitState = await readState();
+      console.log(
+        'fit-all #' + attempt + ' → ' + fitResult + ' ' + JSON.stringify({ nodes: fitState.nodes, inView: fitState.inView })
+      );
+      if (fitResult !== 'clicked' || fitState.inView === fitState.nodes) break;
+    }
+    if (fitResult !== 'clicked') failures.push('未能执行「显示全部节点」：' + fitResult);
+    else if (fitState && fitState.inView !== fitState.nodes) {
+      failures.push('适应视图后仍有节点在视口外（' + fitState.inView + '/' + fitState.nodes + '）');
+    }
 
     fs.mkdirSync(path.dirname(OUT), { recursive: true });
     const raw = await win.webContents.capturePage();
@@ -190,6 +223,18 @@ app.whenReady().then(async () => {
   } catch (e) {
     failures.push('harness error: ' + ((e && e.stack) || e));
   } finally {
+    // 还原示例工程：对话态里 Agent 的改动会被应用写回 workflow.cnode，出图不应在仓库留下 diff
+    try {
+      if (DEMO_ORIGINAL) {
+        const now = fs.existsSync(DEMO) ? fs.readFileSync(DEMO) : null;
+        if (!now || !now.equals(DEMO_ORIGINAL)) {
+          fs.writeFileSync(DEMO, DEMO_ORIGINAL);
+          console.log('RESTORE ' + DEMO + ' (' + (now ? now.length : 0) + ' → ' + DEMO_ORIGINAL.length + ' bytes)');
+        }
+      }
+    } catch (e) {
+      console.log('RESTORE DEMO FAIL: ' + ((e && e.message) || e));
+    }
     console.log(
       failures.length ? 'SHOT FAIL(' + failures.length + '): ' + failures.join(' | ') : 'SHOT PASS'
     );

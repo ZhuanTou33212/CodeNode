@@ -440,6 +440,10 @@ export default function Canvas() {
           useGraphStore.getState().setSelectedIds([]);
         }}
         fitView
+        // React Flow 默认 minZoom=0.5。现在画布左右被一级侧栏与对话面板占掉，稍宽的流程
+        // （例如仓库自带示例工程再加一个节点）在「显示全部节点」时缩不到合适倍率，结果是被迫
+        // 裁掉两侧节点 —— 被裁掉的往往正是 Agent 刚加的那个。与 GoalTaskGraph 保持一致，允许缩到 25%。
+        minZoom={0.25}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
           type: 'waypoint',
