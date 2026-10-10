@@ -57,8 +57,8 @@ For a single failing area: `npm run test:sandbox`, `npm run test:eval -- --list`
 
 ## Documentation is bilingual
 
-The default branches show the English entry point: `README.md`, `CONTRIBUTING.md` and `scripts/README.md`; their full Chinese counterparts are `README.zh-CN.md`, `CONTRIBUTING.zh-CN.md` and `scripts/README.zh-CN.md`. Every pair must keep matching structure, commands, numbers and links — change one and update the other, keeping the language switcher line at the top.
-`scripts/eval/rag-eval.cjs` indexes both READMEs, so update its `include` list when you add a root-level document. `.github/pull_request_template.md` carries both languages in one file because GitHub only renders a single default template; `docs/**` is Chinese-only today, and the English README marks those links as "(Chinese)".
+The default branches show the English entry point: `README.md`, `CONTRIBUTING.md`, `scripts/README.md` and the `docs/*.md` guides; their full Chinese counterparts are the matching `*.zh-CN.md` files. Every pair must keep matching structure, commands, numbers and links — change one and update the other, keeping the language switcher line at the top.
+`scripts/eval/rag-eval.cjs` indexes both READMEs, so update its `include` list when you add a root-level document. `.github/pull_request_template.md` carries both languages in one file because GitHub only renders a single default template; `docs/trellis-compatibility.md` and `docs/agent-harness-and-workflow-recommendations.md` are Chinese-only today, and the English README marks those links as "(Chinese)".
 
 ## Do not commit generated artifacts
 

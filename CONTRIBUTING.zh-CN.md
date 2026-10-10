@@ -58,8 +58,8 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 
 ## 文档双语
 
-默认分支展示英文入口：`README.md`、`CONTRIBUTING.md`、`scripts/README.md`；对应的中文全量版是 `README.zh-CN.md`、`CONTRIBUTING.zh-CN.md`、`scripts/README.zh-CN.md`。每一对的结构、命令、数字和链接必须一一对应，改一版就同步另一版，并保留顶部的语言切换行；
-`scripts/eval/rag-eval.cjs` 的 `include` 收录两份 README，新增根目录说明文档时同步更新。`.github/pull_request_template.md` 中英同文件（GitHub 只渲染一个默认模板）；`docs/**` 目前只有中文，英文 README 里的对应链接标注为 "(Chinese)"。
+默认分支展示英文入口：`README.md`、`CONTRIBUTING.md`、`scripts/README.md` 与 `docs/*.md` 说明文档；对应的中文全量版是同名 `*.zh-CN.md`。每一对的结构、命令、数字和链接必须一一对应，改一版就同步另一版，并保留顶部的语言切换行；
+`scripts/eval/rag-eval.cjs` 的 `include` 收录两份 README，新增根目录说明文档时同步更新。`.github/pull_request_template.md` 中英同文件（GitHub 只渲染一个默认模板）；`docs/trellis-compatibility.md` 与 `docs/agent-harness-and-workflow-recommendations.md` 目前只有中文，英文 README 里的对应链接标注为 "(Chinese)"。
 
 ## 生成物不要入库
 
