@@ -173,7 +173,7 @@ npm run dist:win    # Windows 打包；另有 dist:mac / dist:linux
 | `electron/runStore.cjs`、`electron/runCheckpoint.cjs` | 运行事件、检查点和恢复计划 |
 | `docs/` | 最新设计建议、架构图片和评测数据 |
 
-开发与验证入口见[参与开发](CONTRIBUTING.md)和[脚本目录](scripts/README.md)，CI 与门禁规则写在同样的文件里。
+开发与验证入口见[参与开发](CONTRIBUTING.zh-CN.md)和[脚本目录](scripts/README.zh-CN.md)，CI 与门禁规则写在同样的文件里。
 
 ### Agent 后端
 

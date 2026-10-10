@@ -1,83 +1,82 @@
-# 参与开发
+# Contributing
 
-CodeNode 桌面端：Electron 主进程（`electron/`）+ React 渲染层（`src/`）+ 一整套可执行的回归/门禁脚本（`scripts/`）。
+[English](CONTRIBUTING.md) · [简体中文](CONTRIBUTING.zh-CN.md)
 
-## 环境
+CodeNode desktop is an Electron main process (`electron/`), a React renderer (`src/`) and an executable suite of regression and gate scripts (`scripts/`).
 
-| 项 | 要求 |
+## Environment
+
+| Item | Requirement |
 |---|---|
-| Node | **22.12 或更新版本**（`package.json` 的 `engines` 定义最低版本；CI 用 `node-version-file: .nvmrc`，固定 22 系列） |
-| 包管理 | npm（有 `package-lock.json`，CI 用 `npm ci`） |
-| 行尾 | 一律 LF（`.gitattributes` 强制；Windows 上不要开 `core.autocrlf=true` 提交 CRLF）、缩进 2 空格（`.editorconfig`） |
+| Node | **22.12 or newer** (`engines` in `package.json` defines the minimum; CI uses `node-version-file: .nvmrc`, pinned to the 22 line) |
+| Package manager | npm (`package-lock.json` is committed; CI uses `npm ci`) |
+| Line endings | LF everywhere (`.gitattributes` enforces it — do not commit CRLF on Windows with `core.autocrlf=true`), 2-space indentation (`.editorconfig`) |
 
 ```bash
 npm ci
-npm run dev          # 渲染层 vite + Electron（VITE_DEV_SERVER_URL）
+npm run dev          # renderer (vite) + Electron (VITE_DEV_SERVER_URL)
 ```
 
-## 提交前必须跑
+## Before you commit
 
 ```bash
-npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静态检查）+ 全量回归与门禁
+npm run verify       # = build (tsc + vite) + check:js (Electron/scripts static checks) + full regression and gates
 ```
 
-拆开单独跑：
+Run the pieces separately:
 
-| 命令 | 覆盖 |
+| Command | Coverage |
 |---|---|
-| `npm run build` | `src/` 的 `tsc --noEmit` + vite 构建 + 图标 |
-| `npm run check:js` | `electron/**`、`scripts/**` 的 checkJs 静态检查（这些是 `.cjs`，不受 `src/` 的 tsc 覆盖）。**分两档**：`electron/**` 走 `tsconfig.checkjs.json`（开 `strictNullChecks`），`scripts/**` 走 `tsconfig.checkjs-scripts.json`（宽松） |
-| `npm test` | **core 套件**：无需显示环境的回归与门禁；当前集合和数量以 `npm run test:list` 为准（CI 跑这个） |
-| `npm run test:display` | 需要 Electron 窗口 / 本机无头 Edge 的用例（smoke、RAG UI、矢量画布） |
-| `npm run test:list` | 打印套件清单 |
+| `npm run build` | `tsc --noEmit` over `src/` + the vite build + icons |
+| `npm run check:js` | checkJs static checks for `electron/**` and `scripts/**` (they are `.cjs`, so `tsc` over `src/` does not cover them). **Two tiers**: `electron/**` uses `tsconfig.checkjs.json` (with `strictNullChecks`), `scripts/**` uses `tsconfig.checkjs-scripts.json` (looser) |
+| `npm test` | **core suite**: regressions and gates that need no display environment; the current set and count come from `npm run test:list` (this is what CI runs) |
+| `npm run test:display` | Cases that need an Electron window or the local headless Edge (smoke, RAG UI, vector canvas) |
+| `npm run test:list` | Print the suite list |
 
-脚本按用途分为 `scripts/core`、`scripts/ui`、`scripts/packaged`、`scripts/eval` 和 `scripts/tools`；共用代码与输入保留在 `scripts/lib`、`scripts/fixtures`。分类与手工验收入口见 [脚本目录](scripts/README.md)。
+Scripts are grouped by purpose into `scripts/core`, `scripts/ui`, `scripts/packaged`, `scripts/eval` and `scripts/tools`; shared code and inputs stay in `scripts/lib` and `scripts/fixtures`. The grouping and the manual acceptance entry points are documented in the [scripts directory](scripts/README.md).
 
-单项排查：`npm run test:sandbox`、`npm run test:eval -- --list` 等。统一入口 runner 支持
-`--only test:eval,test:sandbox`、`--stop-on-fail`。
+For a single failing area: `npm run test:sandbox`, `npm run test:eval -- --list`, and so on. The unified runner accepts
+`--only test:eval,test:sandbox` and `--stop-on-fail`.
 
-### 测试理念（请遵守）
+### Test principles (please follow)
 
-1. **判据只看终态**：文件字节、工具真实返回值、Run JSONL、独立复跑退出码——不采信模型自述。
-2. **不许绕过内置 Agent 工具链**：走 `AgentToolkit.buildDefaultRegistry + registry.execute` / `agent.runAgentChat`，
-   不要为了"通过"直接调 `RunLauncher` / `BuildRunner`。
-3. **不许假装**：能力不足要如实降级并写审计（`sandbox.capabilities()` 不虚报隔离项、无后端时不假装隔离）。
-4. **断言要有强制力**：隔离类断言应验证"内核真的拦住了"（进程数/内存上限、孤儿清理），而不是"返回了错误字符串"。
+1. **Judge only on the end state**: file bytes, real tool return values, Run JSONL, the exit code of an independent re-run — never the model's own account of what it did.
+2. **Do not bypass the built-in agent toolchain**: go through `AgentToolkit.buildDefaultRegistry + registry.execute` / `agent.runAgentChat`; never call `RunLauncher` / `BuildRunner` directly just to make a test pass.
+3. **Never fake it**: when a capability is missing, degrade honestly and write an audit record (`sandbox.capabilities()` must not overstate isolation, and a missing backend must not pretend to be isolated).
+4. **Assertions must have force**: isolation assertions should prove the kernel really blocked something (process count, memory limit, orphan cleanup), not that "an error string came back".
 
-## 结构约定
+## Repository layout
 
-| 目录 | 说明 |
+| Directory | Contents |
 |---|---|
-| `electron/` | 主进程：`main.cjs`（窗口与 IPC）、`agent.cjs`（工具循环）、`tools/`（工具注册表与实现）、`sandbox.cjs`（执行隔离）、`runCheckpoint.cjs`（断点续跑）、`sideEffects.cjs`（幂等）、`costLedger.cjs` + `alerts.cjs`（成本与告警）、`selfTest.cjs`（发布自检） |
-| `src/` | 渲染层（React + zustand + xyflow）；`src/vector/` 是矢量工作室 |
-| `scripts/*-test.cjs` | 回归用例（纯 Node 断言，见上） |
-| `scripts/core/runtime-gate.cjs` | **运行时门禁**：断言上述能力真的接线可用（不是"源码里出现过某个字符串"） |
-| `docs/` | 最新设计建议、架构图片和评测数据；`docs/eval-reports/` 是**生成物**（CI 以 artifact 上传，不入库） |
+| `electron/` | Main process: `main.cjs` (window and IPC), `agent.cjs` (tool loop), `tools/` (tool registry and implementations), `sandbox.cjs` (execution isolation), `runCheckpoint.cjs` (resume), `sideEffects.cjs` (idempotency), `costLedger.cjs` + `alerts.cjs` (cost and alerts), `selfTest.cjs` (release self-check) |
+| `src/` | Renderer (React + zustand + xyflow); `src/vector/` is the vector studio |
+| `scripts/*-test.cjs` | Regression cases (plain Node assertions, see above) |
+| `scripts/core/runtime-gate.cjs` | **Runtime gate**: asserts those capabilities are really wired up and usable (not that "some string appears in the source") |
+| `docs/` | Latest design notes, architecture images and evaluation data; `docs/eval-reports/` is **generated** (CI uploads it as an artifact, it is not committed) |
 
-## 文档双语
+## Documentation is bilingual
 
-`README.md` 是英文入口（GitHub 默认展示），`README.zh-CN.md` 是中文全量版。两版的结构、命令、数字和链接必须一一对应，改一版就同步另一版；
-`scripts/eval/rag-eval.cjs` 的 `include` 同时收录这两份文件，新增根目录说明文档时同步更新。其余文档（`CONTRIBUTING.md`、`docs/**`、`scripts/README.md`）目前只有中文，英文 README 里的对应链接标注为 "(Chinese)"。
+The default branches show the English entry point: `README.md`, `CONTRIBUTING.md` and `scripts/README.md`; their full Chinese counterparts are `README.zh-CN.md`, `CONTRIBUTING.zh-CN.md` and `scripts/README.zh-CN.md`. Every pair must keep matching structure, commands, numbers and links — change one and update the other, keeping the language switcher line at the top.
+`scripts/eval/rag-eval.cjs` indexes both READMEs, so update its `include` list when you add a root-level document. `.github/pull_request_template.md` carries both languages in one file because GitHub only renders a single default template; `docs/**` is Chinese-only today, and the English README marks those links as "(Chinese)".
 
-## 生成物不要入库
+## Do not commit generated artifacts
 
-- `docs/eval-reports/`（Agent 评测报告，`npm run test:eval` 产出）
-- `.codenode-selftest/`（发布自检的临时构建与备份）、`.codenode/tmp-sandbox/`
-- `.codenode/tools_trace.jsonl`（运行时流水，跑一次测试就追加）
-- `out/`（UI 校验截图）
+- `docs/eval-reports/` (agent evaluation reports, produced by `npm run test:eval`)
+- `.codenode-selftest/` (temporary build and backups of the release self-check), `.codenode/tmp-sandbox/`
+- `.codenode/tools_trace.jsonl` (runtime trace, appended by a single test run)
+- `out/` (UI verification screenshots)
 
-`build/icon.ico`、`build/icon-*.png` 由 `npm run icons:build` 从 `codenode-icon.png` 生成：**渲染结果依赖平台**，
-因此脚本带源文件哈希清单（`build/.icon-source.sha256`），源图没变时不会重写——不要为了"看上去干净"重复提交图标。
+`build/icon.ico` and `build/icon-*.png` are generated from `codenode-icon.png` by `npm run icons:build`. **The rendered result is platform-dependent**, so the script keeps a source hash manifest (`build/.icon-source.sha256`) and will not rewrite them while the source image is unchanged — do not re-commit icons just to make the tree look tidy.
 
-## 分支与 PR
+## Branches and pull requests
 
-- 默认分支 `main`（与 `0_2` 同线），也是 GitHub 首页展示的分支；`yimi-branch` 是当前开发线，功能完成并验证后快进到 `main`。两条分支曾相差 81 个提交导致首页展示旧文档，发布或对外演示前先核对 `git rev-list --count origin/main..yimi-branch`。
-- 直接推 `main` 也可以，但**改动门禁 / 隔离 / 签名 / 发布流程**请走 PR，用 `.github/pull_request_template.md` 的清单自检。
-- CI（`.github/workflows/ci.yml`）与门禁（`production-gate.yml`）对所有分支的 push 与所有 PR 触发；
-  两个 workflow 都调用 `npm test`，**门禁清单只在 `scripts/run-all-tests.cjs` 里维护一处**。
-- 提交信息用中文 + 约定式前缀：`feat:` / `fix:` / `refactor:` / `chore:` / `docs:`，第二行起写清动机与验证方式。
+- The default branch is `main` (the same line as `0_2`) and it is what GitHub renders on the repository home page; `yimi-branch` is the active development line — fast-forward it into `main` once work is complete and verified. The two once drifted 81 commits apart, which left stale documentation on the home page, so check `git rev-list --count origin/main..yimi-branch` before a release or a public demo.
+- Pushing to `main` directly is allowed, but **changes to the gates, execution isolation, signing or the release process** should go through a pull request, self-checked with the list in [.github/pull_request_template.md](.github/pull_request_template.md).
+- CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) and the production gate ([production-gate.yml](.github/workflows/production-gate.yml)) run on every branch push and every pull request. Both call `npm test`, and **the gate list is maintained in exactly one place: `scripts/run-all-tests.cjs`**.
+- Commit messages use a conventional prefix (`feat:` / `fix:` / `refactor:` / `chore:` / `docs:`) and explain the motive and the verification method from the second line on. The existing history is written in Chinese; English messages are fine for outside contributions.
 
-## 发布
+## Releases
 
-版本号只在 `package.json` 维护；标签格式 `vX.Y.Z`；发布产物必须带签名
-（`npm run release:sign`），Windows 便携包未签名会被安全软件误判/篡改。
+The version number lives only in `package.json`; tags use `vX.Y.Z`; release artifacts must be signed
+(`npm run release:sign`) — an unsigned Windows portable build gets misreported or tampered with by security software.

@@ -173,7 +173,7 @@ npm run dist:win    # Windows packaging; dist:mac / dist:linux as well
 | `electron/runStore.cjs`, `electron/runCheckpoint.cjs` | Run events, checkpoints and recovery plans |
 | `docs/` | Latest design notes, architecture images and evaluation data |
 
-Development entry points are documented in [CONTRIBUTING.md](CONTRIBUTING.md) (Chinese) and the [scripts directory](scripts/README.md) (Chinese); the CI and test-gate rules are the same files.
+Development entry points are documented in [CONTRIBUTING.md](CONTRIBUTING.md) and the [scripts directory](scripts/README.md); the CI and test-gate rules live in the same files.
 
 ### Agent backends
 

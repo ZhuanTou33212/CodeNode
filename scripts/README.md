@@ -1,37 +1,39 @@
-# 脚本目录
+# Scripts directory
 
-按执行用途存放脚本；分类迁移不改变 npm 命令、断言或测试组。文件所在目录不代表它会自动执行，实际测试集合以 `run-all-tests.cjs` 为准。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-| 位置 | 用途 | 入口 |
+Scripts are grouped by execution purpose; moving a file between groups changes neither npm commands, assertions nor test groups. A file's directory does not mean it runs automatically — the effective test set is defined by `run-all-tests.cjs`.
+
+| Location | Purpose | Entry point |
 | --- | --- | --- |
-| 根目录的 6 个 `.cjs` | 开发启动、构建、图标、发布签名、启动器和测试调度 | `npm run dev`、`npm run build`、`npm run dist:win`、`npm run verify` |
-| `core/` | 无需界面的功能回归、权限边界、存储与运行门禁 | `npm test`；专项测试见 `package.json` |
-| `ui/` | Electron / 浏览器界面测试、截图与主题检查 | `npm run test:display`；未注册用例通过 `run-electron.cjs` 或脚本自身说明运行 |
-| `packaged/` | 对实际 `app.asar` 的启动、工具和界面验收 | 设置 `CODENODE_PACKAGED_ASAR`，再通过 `run-electron.cjs` 运行 |
-| `eval/` | 数据集、评测、消融实验及可选本地模型服务 | `npm run test:eval`、`npm run rag:acceptance`；其他脚本见自身参数说明 |
-| `tools/` | 事件回放、图像与视觉专项检查工具 | 见各脚本的用法说明 |
-| `lib/` | 脚本共用的模型桩、源码读取与检查函数 | 由测试或评测脚本导入 |
-| `fixtures/` | 测试输入、冻结数据集和锁文件 | 由脚本读取，不能当缓存删除 |
+| The 6 `.cjs` files in the root | Dev startup, build, icons, release signing, launcher and test scheduling | `npm run dev`, `npm run build`, `npm run dist:win`, `npm run verify` |
+| `core/` | Feature regressions, permission boundaries, storage and runtime gates with no UI | `npm test`; specialised tests are in `package.json` |
+| `ui/` | Electron/browser UI tests, screenshots and theme checks | `npm run test:display`; unregistered cases run through `run-electron.cjs` or their own instructions |
+| `packaged/` | Startup, tool and UI acceptance against the real `app.asar` | Set `CODENODE_PACKAGED_ASAR`, then run through `run-electron.cjs` |
+| `eval/` | Datasets, evaluations, ablation experiments and an optional local model service | `npm run test:eval`, `npm run rag:acceptance`; other scripts document their own arguments |
+| `tools/` | Event replay, image and visual inspection tools | See each script's usage notes |
+| `lib/` | Shared model stubs, source readers and check helpers for scripts | Imported by tests and evaluation scripts |
+| `fixtures/` | Test inputs, frozen datasets and lock files | Read by scripts; they are not cache and must not be deleted |
 
-## 常用验证
+## Common verification
 
 ```powershell
-npm run test:list                 # 当前 core / display 集合和数量
-npm run verify                    # 构建 + CJS 静态检查 + core 回归
-npm run test:display               # 需要 Electron 或浏览器
+npm run test:list                 # current core / display sets and counts
+npm run verify                    # build + CJS static checks + core regression
+npm run test:display               # needs Electron or a browser
 node scripts/run-all-tests.cjs --only test:session,test:undo
 node scripts/run-electron.cjs scripts/ui/theme-parity-ui-test.cjs
 $env:CODENODE_PACKAGED_ASAR = 'E:\CodeNode\release\win-unpacked\resources\app.asar'
 node scripts/run-electron.cjs scripts/packaged/packaged-startup-check.cjs
 ```
 
-`eval/` 包含离线评测和真实模型实验。目录分类不改变脚本原有的凭据、发送确认或冻结基线要求；按脚本说明选择模式。
+`eval/` contains offline evaluations and real-model experiments. Moving a script between directories does not change its credential, send-confirmation or frozen-baseline requirements; pick a mode according to the script's own notes.
 
-冻结归档的说明和哈希保留其当时的目录结构。校验原始材料使用 `node baselines/rag-regression-v3/verify.cjs`；归档中的 `--check-host-evaluator` 用于核对当时的宿主脚本，当前迁移后的脚本路径和哈希已有变化。使用当前 `eval/` 重新评测时须写入新报告，不能覆盖旧成绩或声称与冻结评测器逐字节一致。
+Frozen archives keep the directory structure and hashes they had when they were frozen. Verify the original material with `node baselines/rag-regression-v3/verify.cjs`; the archive's `--check-host-evaluator` checks the host scripts of that time, and the migrated script paths and hashes have changed since. Re-evaluating with the current `eval/` must write a new report — never overwrite an older result or claim byte-identical equivalence with the frozen evaluator.
 
-## 维护规则
+## Maintenance rules
 
-- 新测试放到对应分类，公共辅助代码放 `lib/`，输入数据放 `fixtures/`。
-- 注册 npm 命令，并根据执行条件决定是否加入 `run-all-tests.cjs` 的 core / display 集合。现有手工探针和专项验收保留，不因为没有进入默认集合就删除。
-- 移动文件时同步模块导入、`__dirname` 路径、npm 命令、CI / CODEOWNERS 与文档示例；验证测试集合未改变。
-- 生成报告写入 `out/` 或既定报告目录。已被文档、基线或审查材料引用的报告保留；临时文件删除前检查实际引用和运行占用。
+- Put new tests in the matching group, shared helper code in `lib/` and input data in `fixtures/`.
+- Register an npm command, and decide from its execution requirements whether it joins the core/display sets in `run-all-tests.cjs`. Keep existing manual probes and specialised acceptance scripts even when they are not in the default set.
+- When moving files, update module imports, `__dirname` paths, npm commands, CI / CODEOWNERS and the doc examples in the same change; verify that the test set did not change.
+- Write generated reports to `out/` or the established report directory. Keep reports already referenced by documentation, baselines or review material; before deleting temporary files, check the real references and whether something is still running.
