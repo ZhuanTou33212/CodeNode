@@ -2,7 +2,7 @@
   "name": "codenode-desktop-next",
   "version": "0.13.0",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "yimi528 <148250049+yimi528@users.noreply.github.com>",
   "description": "CodeNode Coding Agent 工作台：代码工具循环、画布与可选检索扩展",
   "main": "electron/main.cjs",

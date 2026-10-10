@@ -5,7 +5,7 @@
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml/badge.svg)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -221,4 +221,4 @@ To delete a node, click its title or border and press Delete / Backspace / X; Ct
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE) — Copyright 2026 yimi528
