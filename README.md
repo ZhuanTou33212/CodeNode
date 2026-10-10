@@ -13,6 +13,8 @@ CodeNode is a local development workbench built with Electron and React. The can
 
 A project lives in a single `.cnode` file; your source code stays in the directory you chose. The desktop main process owns files, tools, models and run state, so opening the renderer in a plain browser is not a substitute for the desktop app.
 
+![CodeNode agent chat and workflow canvas](docs/screenshots/agent-chat.png)
+
 **Project status:** pre-1.0, actively developed by a single maintainer. The runtime dependency set is deliberately small — React, Zustand and `@xyflow/react`.
 
 [Design focus](#design-focus-runs-you-can-audit-and-resume) · [Core capabilities](#core-capabilities) · [Quick start](#quick-start) · [Single-agent architecture](#single-agent-architecture) · [Multi-agent collaboration](#multi-agent-collaboration) · [Workflows and retrieval](#workflows-and-retrieval) · [Development and verification](#development-and-verification) · [Agent backends](#agent-backends) · [Goals and node deletion](#goals-and-node-deletion)
