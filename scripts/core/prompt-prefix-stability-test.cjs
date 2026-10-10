@@ -247,6 +247,17 @@ console.log('\n== E. 跨任务类型前缀（棘轮）+ 接线 ==');
   const ipcSrcNow = fs.readFileSync(path.join(__dirname, "../../electron/ipc/agent.cjs"), 'utf8');
   check('[E] ipc 真的把所选模型的身份传给了 buildSystemPrompt（防「实现了但没接线」）',
     /buildSystemPrompt\([^)]*\{[\s\S]{0,400}modelIdentity:\s*\{[^}]*sel\s*&&\s*sel\.label/.test(ipcSrcNow));
+  /**
+   * 用户要求「不允许出现身份复述」：只靠身份段措辞不够 —— 措辞里凡出现「如实说明 / 不要否认自己是…Agent」
+   * 这类暗示，模型就会把 persona 再复述一遍（真实答复里 CodeNode 说了两遍）。所以要有两条判据：
+   *   ① 身份段自身给出**一句话模板**，不再给「复述身份」留口子；
+   *   ② 稳定段（回复约束）里有一条明确禁止复述身份的规则 —— 否则换模型/换提问时身份段单独不够。
+   */
+  check('[E] 身份段给出一句话模板（「我是 <模型名>」），不再暗示复述身份',
+    !!identitySection && /我是 DeepSeek-V4\.1-Flash/.test(identitySection.text) && /一句话/.test(identitySection.text),
+    identitySection && identitySection.text.replace(/\n/g, ' '));
+  check('[E] 回复约束里明确禁止身份复述（不是只写在身份段里）',
+    /【回复与编码约束】[\s\S]*?不复述身份/.test(identityWith), 'runtime rules 段内是否有该条');
 }
 
 console.log('\n' + (failures === 0 ? 'PROMPT PREFIX STABILITY TEST: PASS（稳定内容前置、规则按面分层且零改字）' : 'PROMPT PREFIX STABILITY TEST: FAIL —— ' + failures + ' 项断言未通过'));

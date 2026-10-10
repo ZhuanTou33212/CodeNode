@@ -1187,6 +1187,11 @@ function resolvePromptLayers(input = {}) {
  *   ② 必发（取不到也发占位句）—— 段落在 `PROMPT_SECTIONS` 里是登记段，时有时无会让段落顺序不稳定，
  *      也会把「当前模型」这个事实留成空白（模型又会开始猜）。
  *
+ * 措辞口径（2026-10-10 用户要求「不允许出现身份复述」）：只给**一句**最短的模板 ——
+ * 原因：措辞里凡出现「如实说明 / 不要否认自己是…Agent」这类暗示，模型就会把 persona 再复述一遍
+ * （实测真实答复：『我是 CodeNode，当前会话由 CodeNode 驱动，使用的模型是…』，CodeNode 说了两遍），
+ * 换模型时长短差异也主要来自这种自由发挥。身份块只负责「事实是什么」，格式交给回复约束第 5 条统一管。
+ *
  * @param {{label?: any, model?: any, id?: any}} [identity]
  * @returns {string}
  */
@@ -1202,11 +1207,11 @@ function buildModelIdentityBlock(identity) {
   const label = pick(source.label, source.id, source.model);
   const modelName = pick(source.model, source.id);
   if (!label) {
-    return '【当前模型】\n应用未上报本轮模型标识（引擎未找到该会话的模型配置）；不要猜具体模型名，也不要否认自己是 CodeNode 里运行的 Agent。';
+    return '【当前模型】\n应用未上报本轮模型标识；被问到就说不知道具体模型名，不要猜。';
   }
   const viaModel = modelName && modelName !== label ? '（模型名 ' + modelName + '）' : '';
-  return '【当前模型】\n当前会话由 CodeNode 驱动，使用的模型是「' + label + '」' + viaModel +
-    '。回答「你是谁 / 你是什么模型」这类问题时，直接按这一条如实说明，不要声称查不到，也不要猜测或换成其它模型名。';
+  return '【当前模型】\n' + label + viaModel +
+    '。被问「你是什么模型 / 你是谁」时，只用「我是 ' + label + '」这样的**一句话**回答，不复述其它身份、不加说明。';
 }
 
 function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsText, options = {}) {
@@ -1224,7 +1229,8 @@ function buildSystemPrompt(soul, canvasSummary, toolGuide, memoryText, skillsTex
       '1. 回复尽量简短，只回答用户必须知道的问题；不要重复背景、过程或无关细节。\n' +
       '2. 制作或修改代码前先自检：这段代码是否真的需要？有没有更简单、改动更小的方案？只采用满足需求的最简方案，不必向用户展示这段自检过程。\n' +
       '3. 一次回复只做一步：节奏固定为先给结论 → 再调用工具 → 最后简短汇报。不要把长段叙述、冗长中间过程、前后有依赖关系的多个工具调用塞进同一条回复，避免单次输出过长被截断（工具调用本身往往已成功，断在话术/后续步骤未输出完）。\n' +
-      '4. 长文本下沉，回复只写摘要：节点 prompt、长方案、长代码等完整内容写入节点的 prompt 字段或写入文件；回复中只给摘要与关键路径，不重复全文。'
+      '4. 长文本下沉，回复只写摘要：节点 prompt、长方案、长代码等完整内容写入节点的 prompt 字段或写入文件；回复中只给摘要与关键路径，不重复全文。\n' +
+      '5. 不复述身份：不要在回复里重复「我是 CodeNode（工具型 Agent / 编程助手）」「当前会话由 CodeNode 驱动」这类身份介绍，也不要重复说明自己是什么模型——需要说明时，直接用【当前模型】给出的名字写**一句话**，不换措辞、不加编号或项目符号、不额外追问用户要不要继续。'
   );
   if (soul.raw) lines.push('【灵魂设定】\n' + soul.raw);
   if (canvasSummary) lines.push('\n【当前画布节点清单（JSON）】\n' + canvasSummary);
