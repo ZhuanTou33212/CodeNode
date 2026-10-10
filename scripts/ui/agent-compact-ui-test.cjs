@@ -81,14 +81,14 @@ app.whenReady().then(async () => {
       win.hide();
       await js('document.querySelector(".file-changes-summary").click()');
     }
-    await js(`window.__codenodeUi.getState().openSettings('general')`);
+    await js(`window.__codenodeUi.getState().openSettings('execution')`);
     await wait(`!!document.querySelector('[aria-label="普通工具自动执行"]')`, 'execution setting');
     await sleep(120);
     assert.equal(await js(`document.querySelector('[aria-label="普通工具自动执行"]').checked`), true);
     await js(`document.querySelector('[aria-label="普通工具自动执行"]').click()`);
     await wait(`!document.querySelector('[aria-label="普通工具自动执行"]').checked&&!document.querySelector('[aria-label="普通工具自动执行"]').disabled`, 'persist manual mode');
     assert.match(fs.readFileSync(path.join(root, '.codenode/agent.properties'), 'utf8'), /^tools.confirm_writes=true$/m);
-    await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openSettings('general')`);
+    await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openSettings('execution')`);
     await sleep(150);
     assert.equal(await js(`document.querySelector('[aria-label="普通工具自动执行"]').checked`), false);
     await js(`document.querySelector('[aria-label="普通工具自动执行"]').click()`);

@@ -118,7 +118,7 @@ app.whenReady().then(async () => {
     }
     await js(`window.__codenodeUi.setState({theme:${JSON.stringify(themeBefore)}})`);
     await js(`document.querySelector('[aria-label="切换到对话"]').click()`);
-    await js(`window.__codenodeUi.getState().openSettings('general')`);
+    await js(`window.__codenodeUi.getState().openSettings('agents')`);
     await waitFor(() => js('!!document.querySelector("[aria-label=执行后端]")'), 'backend controls');
     await waitFor(() => js('!document.querySelector("[aria-label=执行后端]").disabled'), 'loaded settings');
     const select = async (label, value) => {
@@ -156,7 +156,7 @@ app.whenReady().then(async () => {
     await waitFor(()=>js(`document.querySelector('[data-testid=backend-settings] [role=status]')?.textContent.includes('CodeNode 可用')`),'check unsaved current configuration');
     assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot,'.codenode/backend.json'),'utf8')).backend,'codex','checking unsaved builtin leaves saved Codex unchanged');
     await js(`window.__codenodeUi.getState().closeSettings()`);
-    await js(`window.__codenodeUi.getState().openSettings('general')`);
+    await js(`window.__codenodeUi.getState().openSettings('agents')`);
     await waitFor(() => js('document.querySelector("[aria-label=执行后端]")?.value === "codex"'), 'reload persistence');
     assert.equal(await js('document.querySelector("[aria-label=后端配置范围]").value'), 'project');
     const machineFixture=await js(`window.codenode.backendSave(${JSON.stringify(projectRoot)},'machine',{backend:'hermes',executable:'codenode-fixture-missing-hermes',args:['acp','--machine-profile'],sandbox:'read-only'})`);
@@ -171,7 +171,7 @@ app.whenReady().then(async () => {
     await js(`window.__codenodeUi.getState().closeSettings()`); assert.equal(await view(), before);
     const acpSettings = { backend:'opencode', executable:process.execPath, args:[path.resolve(__dirname,'../fixtures/acp-full.cjs')], sandbox:'workspace-write', model:'m2', acp:{authMethodId:'login',modeId:'code',configValues:{fast:true},codeNodeTools:true} };
     assert.equal((await js(`window.codenode.backendSave(${JSON.stringify(projectRoot)},'project',${JSON.stringify(acpSettings)})`)).ok,true);
-    await js(`window.__codenodeUi.getState().openSettings('general')`);
+    await js(`window.__codenodeUi.getState().openSettings('agents')`);
     await waitFor(()=>js(`document.querySelector('[aria-label="执行后端"]')?.value==='opencode'`),'ACP persistence');
     assert.equal(JSON.parse(await js(`document.querySelector('[aria-label="ACP 会话配置"]').value`)).configValues.fast,true);
     await js(`window.__codenodeUi.getState().closeSettings()`);

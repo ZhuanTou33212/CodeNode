@@ -32,7 +32,7 @@ app.whenReady().then(async()=>{
     await click('spec/index.md');await wait(`document.querySelector('.task-connect article')?.textContent.includes('Local CLI generated spec')`);
     await click('确认导入项目资料');await wait(`document.querySelector('.task-page-heading')?.textContent.includes('本机 CLI 任务')`);
     assert.equal(fs.readFileSync(path.join(project,'AGENTS.md'),'utf8'),'KEEP ORIGINAL RULES');assert.equal(fs.existsSync(path.join(project,'.codex')),false);
-    await js(`window.__codenodeUi.getState().openSettings('general')`);await wait(`!!document.querySelector('[aria-label="Trellis CLI 路径"]')`);
+    await js(`window.__codenodeUi.getState().openSettings('trellis')`);await wait(`!!document.querySelector('[aria-label="Trellis CLI 路径"]')`);
     await wait(`document.querySelector('[aria-label="Trellis CLI 路径"]')?.value===${JSON.stringify(local)}`);
     assert.equal(await js(`document.querySelector('[aria-label="Trellis CLI 路径"]').value`),local);assert.equal(await js(`document.querySelector('[aria-label="Trellis 默认开发者"]').value`),'tester');
     await js(`window.__codenodeUi.getState().closeSettings()`);

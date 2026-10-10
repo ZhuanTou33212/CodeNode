@@ -13,6 +13,7 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "test:simple-settings-ui":"node scripts/run-electron.cjs scripts/ui/simple-settings-ui-test.cjs",
     "test:trellis": "node scripts/core/trellis-compatibility-test.cjs",
     "test:trellis-write-canvas": "node scripts/core/trellis-write-canvas-test.cjs",
     "test:trellis-cli": "node scripts/core/trellis-cli-test.cjs",

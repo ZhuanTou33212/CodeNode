@@ -50,8 +50,8 @@ app.whenReady().then(async () => {
     assert.equal((await js('window.codenode.agentConfig(null)')).scheduling.concurrency, 4);
     await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(root)})`);
     await wait('!!document.querySelector(".pp-input")', 'composer');
-    await js(`window.__codenodeUi.getState().openSettings('general')`);
-    await wait(`document.querySelector('[aria-label="子任务与模型请求并发上限"]')?.disabled===false`, 'global settings');
+    await js(`window.__codenodeUi.getState().openSettings('execution')`);
+    await wait(`document.querySelector('[aria-label="子任务与模型请求并发上限"]')?.disabled===false`, 'global settings');await js(`document.querySelector('.settings-advanced').open=true`);
     assert.equal(await js(`document.querySelector('[aria-label="子任务与模型请求并发上限"]').value`), '4');
     assert.match(await js(`document.querySelector('.scheduling-settings').textContent`), /18\/24/);
     await js(`window.__codenodeUi.getState().closeSettings()`);
@@ -59,8 +59,8 @@ app.whenReady().then(async () => {
     await sleep(80);
     const state = () => js(`JSON.stringify({id:window.__codenodeSession.getState().activeId,messages:window.__codenodeSession.getState().messages,draft:document.querySelector('.pp-input').value,model:document.querySelector('.pp-model').textContent,navigation:window.__codenodeUi.getState().navigationOpen,sideOpen:window.__codenodeUi.getState().sideOpen,sideTab:window.__codenodeUi.getState().sideTab})`);
     const before = await state();
-    await js(`window.__codenodeUi.getState().openSettings('general')`);
-    await wait(`document.querySelector('[aria-label="子任务与模型请求并发上限"]')?.disabled===false`, 'loaded settings');
+    await js(`window.__codenodeUi.getState().openSettings('execution')`);
+    await wait(`document.querySelector('[aria-label="子任务与模型请求并发上限"]')?.disabled===false`, 'loaded settings');await js(`document.querySelector('.settings-advanced').open=true`);
     const labels = ['子任务与模型请求并发上限', '每次运行子任务上限', '单批子任务上限', '子任务配额预警百分比', '单任务尝试上限（含首次）', '每次运行尝试上限（含首次）'];
     for (let index = 0; index < labels.length; index++) {
       await js(`(()=>{const input=document.querySelector('[aria-label="'+${JSON.stringify(labels[index])}+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(String([6, 28, 8, 80, 2, 50][index]))});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
@@ -76,11 +76,11 @@ app.whenReady().then(async () => {
     const otherProject = path.join(root, 'other-project'); fs.mkdirSync(otherProject);
     assert.equal(agent.loadConfig(otherProject).subagent.maxConcurrentTasks, 6);
     assert.deepEqual((await js(`window.codenode.agentConfig(${JSON.stringify(otherProject)})`)).scheduling, expected);
-    await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openSettings('general')`);
-    await wait(`document.querySelector('[aria-label="每次运行子任务上限"]')?.value==='28'`, 'reopen persistence');
+    await js(`window.__codenodeUi.getState().closeSettings();window.__codenodeUi.getState().openSettings('execution')`);
+    await wait(`document.querySelector('[aria-label="每次运行子任务上限"]')?.value==='28'`, 'reopen persistence');await js(`document.querySelector('.settings-advanced').open=true`);
     const themes = [];
     for (const theme of ['light', 'dark']) {
-      await js(`if(window.__codenodeUi.getState().theme!==${JSON.stringify(theme)})document.querySelector('.settings-theme-toggle').click()`);
+      await js(`if(window.__codenodeUi.getState().theme!==${JSON.stringify(theme)})window.__codenodeUi.getState().toggleTheme()`);
       await sleep(80);
       assert.equal(await state(), before, 'Theme switch preserves session, draft, model and sidebar');
       themes.push(await js(`JSON.stringify([...document.querySelectorAll('.scheduling-settings input')].map(input=>({label:input.getAttribute('aria-label'),type:input.type,value:input.value,disabled:input.disabled})))`));

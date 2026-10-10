@@ -363,8 +363,8 @@ app.whenReady().then(async () => {
     if (process.env.CODENODE_UI_PREFERENCES_TEST === '1') {
       const js = code => win.webContents.executeJavaScript(code);
       win.showInactive();
-      await js(`window.__codenodeUi.getState().openSettings()`); await sleep(100);
-      await js(`(() => {const input=document.querySelector('input[aria-label="菜单宽度"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'280');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await js(`window.__codenodeUi.getState().openSettings('layout')`); await sleep(100);
+      await js(`(() => {document.querySelector('.settings-advanced').open=true;const input=document.querySelector('input[aria-label="菜单宽度"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'280');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await js(`(() => {const label=[...document.querySelectorAll('.settings-row')].find(el=>el.textContent==='显示快捷键提示');label.querySelector('input').click()})()`); await sleep(80);
       assert.equal(await js(`window.__codenodeUi.getState().preferences.menuWidth`),280);
       assert.equal(await js(`window.__codenodeUi.getState().preferences.showShortcuts`),false);

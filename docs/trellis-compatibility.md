@@ -10,7 +10,7 @@
 
 未接入项目的任务页会检测 PATH 和 npm 全局安装中的 `trellis`。检测到可用 CLI 后，填写开发者名称，点击“生成接入预览”，查看文件和范围，再点击“确认导入项目资料”。已有 `.trellis` 的项目直接读取，不能用此入口重初始化或覆盖。
 
-若 CLI 不在 PATH，可到“设置→常规→本机 Trellis”填写命令、选择可执行文件或选择已构建的本地 Trellis 仓库。支持 npm CMD 的已识别 JS 入口及仓库 `packages/cli/bin/trellis.js` / `bin/trellis.js`；不通过 shell 拼接用户参数。命令路径与默认开发者保存在本机用户数据目录，跨项目和昼夜主题共用。仅有未构建源码或 CLI 初始化参数不兼容时会显示诊断，不擅自安装、构建或升级 Trellis。
+若 CLI 不在 PATH，可到“设置→Trellis”填写命令、选择可执行文件或选择已构建的本地 Trellis 仓库。支持 npm CMD 的已识别 JS 入口及仓库 `packages/cli/bin/trellis.js` / `bin/trellis.js`；不通过 shell 拼接用户参数。命令路径与默认开发者保存在本机用户数据目录，跨项目和昼夜主题共用。仅有未构建源码或 CLI 初始化参数不兼容时会显示诊断，不擅自安装、构建或升级 Trellis。
 
 接入调用用户独立安装的 CLI，先检查 `--version` 与 `init --help`，再在隔离临时 Git 工程中运行已识别的非交互初始化参数。只导入生成的 `.trellis` 资料树，保留上游文件内容；不导入 `.codex`、`.agents`、根 `AGENTS.md` 或其它平台配置，不改用户 Git 记录。初始化使用基础模板，接入后仍需按项目补充规范和必要任务上下文；不会把模板当成已完成验收。
 
