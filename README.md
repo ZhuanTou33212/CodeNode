@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml/badge.svg)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml)
+[![CI](https://github.com/yimi528/CodeNode/actions/workflows/ci.yml/badge.svg)](https://github.com/yimi528/CodeNode/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -29,7 +29,7 @@ Most agent projects optimise for capability. CodeNode also makes a run survive a
 Node.js 22.12 or newer, plus a desktop environment able to run Electron (CI pins the 22 line via `.nvmrc`).
 
 ```powershell
-git clone https://github.com/ZhuanTou33212/CodeNode.git
+git clone https://github.com/yimi528/CodeNode.git
 cd CodeNode
 npm ci
 npm run dev

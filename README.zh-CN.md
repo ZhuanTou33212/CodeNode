@@ -4,7 +4,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml/badge.svg)](https://github.com/ZhuanTou33212/CodeNode/actions/workflows/ci.yml)
+[![CI](https://github.com/yimi528/CodeNode/actions/workflows/ci.yml/badge.svg)](https://github.com/yimi528/CodeNode/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
@@ -29,7 +29,7 @@ CodeNode 是一个基于 Electron 和 React 的本地开发工作台。Agent 在
 需要 Node.js 22.12 或更新版本，以及可运行 Electron 的桌面环境（CI 用 `.nvmrc` 固定 22 系列）。
 
 ```powershell
-git clone https://github.com/ZhuanTou33212/CodeNode.git
+git clone https://github.com/yimi528/CodeNode.git
 cd CodeNode
 npm ci
 npm run dev
