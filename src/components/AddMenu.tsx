@@ -3,13 +3,14 @@ import { useEffect } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useUiStore } from '../store/uiStore';
 import { useGraphStore } from '../store/graphStore';
+import { newNodeId, placeCanvasNode } from '../lib/nodePlacement';
 import { NODE_TEMPLATES } from '../nodes';
 
 export default function AddMenu() {
   const menu = useUiStore((s) => s.addMenu);
   const close = useUiStore((s) => s.closeAddMenu);
   const addNode = useGraphStore((s) => s.addNode);
-  const screenToFlowPosition = useReactFlow().screenToFlowPosition;
+  const { screenToFlowPosition, getViewport, setViewport } = useReactFlow();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -22,10 +23,16 @@ export default function AddMenu() {
   if (!menu) return null;
 
   const handlePick = (type: string, template: (typeof NODE_TEMPLATES)[string]) => {
+    // 画布节点尺寸大（1040×640），光标处创建会大半落在视口外：
+    // 与工具栏「✦ 画布节点」共用「可视区中心 + 自动取景」这条路径。
+    if (type === 'vector') {
+      placeCanvasNode({ screenToFlowPosition, getViewport, setViewport });
+      close();
+      return;
+    }
     if (!useSessionStore.getState().current()) useSessionStore.getState().newCanvas();
     const position = screenToFlowPosition({ x: menu.x, y: menu.y });
-    const id = `${type}-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
-    addNode({ id, type, position, data: { ...template.data } });
+    addNode({ id: newNodeId(type), type, position, data: { ...template.data } });
     close();
   };
 
@@ -49,7 +56,7 @@ export default function AddMenu() {
           <span className="add-menu-sub">{t.subtitle}</span>
         </div>
       ))}
-      <div className="add-menu-tip">Escape 关闭 · 选择后将在光标位置创建</div>
+      <div className="add-menu-tip">Escape 关闭 · 选择后将在光标位置创建 · 画布节点居中放置并自动取景</div>
     </div>
   );
 }

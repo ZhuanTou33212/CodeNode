@@ -12,6 +12,7 @@ The canvas is a real workflow engine, not a sketch pad: execution state is persi
 - Selecting an image, object, scope or embedded vector-canvas node shows its editing controls temporarily above the layer.
 - The saved format remains node and edge data and does not depend on screen pixels. `显示全部节点` (View → show all nodes) fits every node into the canvas viewport.
 - Press **Shift+A** on an empty canvas to add a node; the minimal runnable chain is `start → task → end`. Select a node, fill in its goal and connect from its ports.
+- The toolbar **✦ 画布节点** button and the canvas-node entry in the Shift+A menu are one and the same path: they ignore the cursor, place the node at the centre of the visible canvas and zoom out one step so the whole canvas node stays visible (a canvas node is 1040×640 by default — larger than most viewports).
 - The **Run** button on top opens the bottom panel — start the workflow from the "Continuous execution" tab. "Data flow" only computes node inputs and outputs.
 
 A canvas workflow orders execution by node connections; a chat task is executed by the agent against the current project and available tools. Both live in the same workbench, but drawing a `stage` node does not start a subagent. Node execution goes through the same run chain as chat (see [run safety and recovery](run-recovery.md)): a node is persisted as `prepared` before it runs, with a compare-and-swap on the graph revision.

@@ -1,5 +1,4 @@
 import {WorkbenchViewSwitcher} from './GoalOverview';
-import { useSessionStore } from '../store/sessionStore';
 import { useReactFlow } from '@xyflow/react';
 import { useEffect, useLayoutEffect, type CSSProperties } from 'react';
 import { useProjectSaveStore } from '../store/projectSaveStore';
@@ -8,8 +7,7 @@ import { CANVAS_ACTIONS } from '../lib/uiPreferences';
 import { useGraphStore } from '../store/graphStore';
 import { useUiStore } from '../store/uiStore';
 import { saveProject } from '../lib/projectActions';
-import { NODE_TEMPLATES } from '../nodes';
-import type { VectorData } from '../types';
+import { placeCanvasNode } from '../lib/nodePlacement';
 
 function positionToolbarMenus() {
   document.querySelectorAll<HTMLDetailsElement>('.toolbar-dropdown[open]').forEach(dropdown=>{
@@ -120,43 +118,8 @@ export default function Toolbar() {
       <div className="toolbar-group toolbar-spacer" style={{ marginLeft: 'auto' }}>
         <button
           className="toolbar-vector"
-          title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）"
-          onClick={() => {
-            if (!useSessionStore.getState().current()) useSessionStore.getState().newCanvas();
-            const template = NODE_TEMPLATES.vector;
-            const vd = template.data as VectorData;
-            const w = vd.width ?? 1040;
-            const h = vd.height ?? 640;
-            const id = `vector-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
-
-            // 视口中心（flow 坐标）放节点，尺寸按当前 zoom 折算，
-            // 使节点完整落在可视区内 —— 不依赖 fitView 的时序。
-            const host = document.querySelector('.canvas-wrap');
-            const rect = host
-              ? host.getBoundingClientRect()
-              : ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight } as DOMRect);
-            const center = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-            const vp = getViewport();
-            const zoom = vp.zoom > 0 ? vp.zoom : 1;
-            const flowW = w / zoom;
-            const flowH = h / zoom;
-
-            useGraphStore.getState().addNode({
-              id,
-              type: 'vector',
-              position: { x: Math.round(center.x - flowW / 2), y: Math.round(center.y - flowH / 2) },
-              data: { ...template.data },
-            });
-            useGraphStore.getState().setSelectedIds([id]);
-            setToast('已添加画布节点');
-            // 节点尺寸大（1040×640）且当前 zoom 可能偏大，收一档保证整块可见
-            const targetZoom = Math.min(zoom, 0.55);
-            const focus = () => {
-              const c = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-              rfSetViewport({ x: rect.width / 2 - c.x * targetZoom, y: rect.height / 2 - c.y * targetZoom, zoom: targetZoom }, { duration: 240 });
-            };
-            window.setTimeout(focus, 90);
-          }}
+          title="在当前画布中央放置一个画布节点：预设配件 + 自由绘制（设计/逻辑模式）；也可按 Shift+A 从添加菜单选择"
+          onClick={() => { placeCanvasNode({ screenToFlowPosition, getViewport, setViewport: rfSetViewport }); }}
         >
           ✦ 画布节点
         </button>

@@ -377,6 +377,50 @@ async function clickEl(cdp, selector, index = 0) {
   })()`);
 }
 
+/**
+ * 等画布视口倍率真正稳定：节点矩形是四舍五入后比较的，动画收尾时可能提前两次读到同一串数字，
+ * 但 zoom 还在变（实测在 zoom=0.646 时就判成了「已停」）。判据用 zoom 本身连续两次完全相等。
+ */
+async function waitForZoomSettled(cdp, timeoutMs = 4000) {
+  let last = await readStageScale(cdp);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(200);
+    const now = await readStageScale(cdp);
+    if (now === last) return now;
+    last = now;
+  }
+  return last;
+}
+
+/**
+ * 读取某个画布节点相对可视区的落点：
+ * dx/dy = 节点中心 - 画布中心（屏幕像素）、inside = 整块是否落在可视区内、
+ * zoom = 工作台画布当前倍率、selected = 是否被选中。
+ * 判据只依赖 DOM 矩形与 viewport transform，与实现细节无关。
+ */
+async function readNodePlacement(cdp, id) {
+  return cdp.eval(`(() => {
+    const el = document.querySelector('.react-flow__node-vector[data-id="' + ${JSON.stringify(id)} + '"]');
+    if (!el) return null;
+    const canvas = document.querySelector('.canvas-wrap').getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const m = /scale\\(([-0-9.]+)\\)/.exec((document.querySelector('.react-flow__viewport') || {}).style?.transform || '');
+    return {
+      dx: Math.round(r.left + r.width / 2 - (canvas.left + canvas.width / 2)),
+      dy: Math.round(r.top + r.height / 2 - (canvas.top + canvas.height / 2)),
+      inside: r.left >= canvas.left - 2 && r.right <= canvas.right + 2 && r.top >= canvas.top - 2 && r.bottom <= canvas.bottom + 2,
+      zoom: m ? parseFloat(m[1]) : 1,
+      selected: window.__codenodeStore.getState().selectedId === ${JSON.stringify(id)},
+    };
+  })()`);
+}
+
+/** 把焦点移出画布节点：焦点在 .vs-scope 内时工作台快捷键（含 Shift+A）会整体让位 */
+async function blurActive(cdp) {
+  return cdp.eval(`(() => { const el = document.activeElement; if (el && el.blur) el.blur(); return document.activeElement === document.body; })()`);
+}
+
 async function keyOnWindow(cdp, key, ctrl = false, shift = false) {
   return cdp.eval(`(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(key)}, ctrlKey: ${ctrl}, shiftKey: ${shift}, bubbles: true, cancelable: true }));
@@ -425,6 +469,16 @@ async function main() {
     await waitFor(cdp, `!!document.querySelector(${JSON.stringify(NODE)})`, 6000, '画布节点挂载');
     nodeId = await cdp.eval(`document.querySelector('.react-flow__node-vector').dataset.id`);
     ok('画布节点直接出现在 Agent 画布上', Boolean(nodeId));
+    // 落点契约（工具栏按钮与 Shift+A 菜单共用同一条路径）：可视区中心 + 整块可见。
+    // zoom 只作为诊断信息打印：放置后的取景动画与画布自身的重新 fitView（面板尺寸变化触发）
+    // 都会改倍率，具体数值不属于契约。
+    await waitForViewportIdle(cdp);
+    const toolbarZoom = await waitForZoomSettled(cdp);
+    const toolbarPlaced = await readNodePlacement(cdp, nodeId);
+    ok(`工具栏按钮把画布节点放在可视区中心（偏移 ${toolbarPlaced.dx}/${toolbarPlaced.dy}）`,
+      Math.abs(toolbarPlaced.dx) <= 4 && Math.abs(toolbarPlaced.dy) <= 4, JSON.stringify(toolbarPlaced));
+    ok(`放置后整块节点可见（zoom=${toolbarZoom}）`,
+      toolbarPlaced.inside, JSON.stringify({ ...toolbarPlaced, settledZoom: toolbarZoom }));
     ok('工作台画布未被替换（无全屏工作区）', await cdp.eval(`!!document.querySelector('.react-flow') && !document.querySelector('.vs-app')`));
     ok('节点类型为 vector，且带 Blender 风格端口', await cdp.eval(`document.querySelectorAll(${JSON.stringify(NODE)} + ' .wf-handle').length === 2`));
 
@@ -458,6 +512,11 @@ async function main() {
     ok('矩形尺寸≈拖拽范围且被选中', rectInfo.type === 'rectangle' && Math.abs(rectInfo.w - 160) < 6 && Math.abs(rectInfo.h - 110) < 6 && rectInfo.sel, JSON.stringify(rectInfo));
 
     /* ========== 5. 双击编辑文字 ========== */
+    // 先把节点内画布对准内容：节点内 fitView 是 160ms 防抖的（尺寸变化后触发），
+    // 空画布时它把世界原点放到视口中心，上面那个 (700,420) 的矩形就落在可视区外，
+    // 按世界坐标换算出来的点会跑到节点外面。这里显式取景，去掉对防抖时序的依赖。
+    await clickEl(cdp, `${NODE} .vs-zoom-fit`);
+    await sleep(200);
     const rectObj = await vs(`(() => { const o = s.objects[s.objects.length-1]; return { id: o.id, cx: o.x + o.width/2, cy: o.y + o.height/2 }; })()`);
     const scale = await readStageScale(cdp);
     await cdp.eval(`(() => {
@@ -577,15 +636,36 @@ async function main() {
     const saved = await cdp.eval(`(() => { const raw = localStorage.getItem('codenode.vector.node.' + ${JSON.stringify(nodeId)}); return raw ? JSON.parse(raw).objects.length : -1; })()`);
     ok(`画布节点文档保存到独立 localStorage（${saved} 个对象）`, saved === n2, `saved=${saved} expect=${n2}`);
 
-    /* ========== 13. 多个画布节点：各自独立文档 ========== */
+    /* ========== 13. 多个画布节点：各自独立文档（第二个走 Shift+A 添加菜单） ========== */
     const firstId = nodeId;
     const firstCount = await vs('s.objects.length');
-    await clickEl(cdp, '.toolbar-vector');
-    await waitForViewportIdle(cdp);
+    // 走菜单路径需要两个前置条件，都是应用现有约定：
+    //   1) 选中的画布节点会接管快捷键（Shift+A 被让位），所以先清空选中；
+    //   2) 焦点在 .vs-scope 内时工作台快捷键整体让位，所以先把焦点移出节点。
+    // 光标故意留在对话栏那一侧：按光标落点创建的话，1040×640 的节点会大半落在视口外。
+    await cdp.eval(`window.__codenodeStore.getState().setSelectedIds([])`);
+    await blurActive(cdp);
+    await cdp.eval(`window.__codenodeUi.getState().setLastMouse(1480, 900)`);
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'A', code: 'KeyA', shiftKey: true, bubbles: true, cancelable: true }))`);
+    await waitFor(cdp, `!!document.querySelector('.add-menu')`, 4000, 'Shift+A 添加菜单');
+    await cdp.eval(`(() => {
+      const item = [...document.querySelectorAll('.add-menu-item')].find(el => el.textContent.includes('画布节点'));
+      if (!item) throw new Error('添加菜单里没有画布节点项');
+      item.click();
+      return 'ok';
+    })()`);
     await waitFor(cdp, `document.querySelectorAll('.react-flow__node-vector').length === 2`, 6000, '第二个画布节点');
+    await waitForViewportIdle(cdp);
+    const menuZoom = await waitForZoomSettled(cdp);
     const ids = await cdp.eval(`[...document.querySelectorAll('.react-flow__node-vector')].map(n => n.dataset.id)`);
     const secondId = ids.find((x) => x !== firstId);
     ok('可以再新增一个画布节点', Boolean(secondId), JSON.stringify(ids));
+    const menuPlaced = await readNodePlacement(cdp, secondId);
+    ok(`菜单选画布节点也居中放置、不跟随光标（偏移 ${menuPlaced.dx}/${menuPlaced.dy}）`,
+      Math.abs(menuPlaced.dx) <= 4 && Math.abs(menuPlaced.dy) <= 4, JSON.stringify(menuPlaced));
+    ok(`菜单选画布节点整块可见且被选中（zoom=${menuZoom}）`,
+      menuPlaced.inside && menuPlaced.selected, JSON.stringify({ ...menuPlaced, settledZoom: menuZoom }));
+
     ok('两个画布节点 store 实例不同', await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(firstId)}) !== window.__codenodeVectorNode(${JSON.stringify(secondId)})`));
     const secondCount = await cdp.eval(`window.__codenodeVectorNode(${JSON.stringify(secondId)}).getState().objects.length`);
     ok(`新画布节点是独立空白文档（${firstCount} / ${secondCount}）`, firstCount > 0 && secondCount === 0);
