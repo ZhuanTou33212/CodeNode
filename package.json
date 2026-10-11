@@ -179,6 +179,9 @@
     "dist": "node scripts/build-release.cjs win && node scripts/make-launcher.cjs",
     "release:sign": "node scripts/release-sign.cjs",
     "release:hash": "node scripts/release-sign.cjs --no-sign",
+    "branch:status": "node scripts/branch-sync.cjs --status",
+    "branch:integrate": "node scripts/branch-sync.cjs --integrate",
+    "branch:publish": "node scripts/branch-sync.cjs --publish",
     "icons:build": "electron scripts/build-icon-v3.cjs",
     "postbuild": "npm run icons:build",
     "test:tool-descriptor": "node scripts/core/tool-descriptor-test.cjs",
@@ -250,7 +253,8 @@
     "test:backend-port": "node scripts/core/backend-port-test.cjs",
     "test:agent-switch-ui": "node scripts/run-electron.cjs scripts/ui/agent-switcher-ui-test.cjs",
     "test:workspace-ux-ui": "node scripts/run-electron.cjs scripts/ui/workspace-ux-ui-test.cjs",
-    "test:agent-handoff": "node scripts/core/agent-handoff-test.cjs"
+    "test:agent-handoff": "node scripts/core/agent-handoff-test.cjs",
+    "test:branch-sync": "node scripts/core/branch-sync-test.cjs"
   },
   "build": {
     "appId": "com.codenode.desktop",

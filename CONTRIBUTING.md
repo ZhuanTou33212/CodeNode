@@ -71,7 +71,24 @@ The default branches show the English entry point: `README.md`, `CONTRIBUTING.md
 
 ## Branches and pull requests
 
-- The default branch is `main` (the same line as `0_2`) and it is what GitHub renders on the repository home page; `yimi-branch` is the active development line — fast-forward it into `main` once work is complete and verified. The two once drifted 81 commits apart, which left stale documentation on the home page, so check `git rev-list --count origin/main..yimi-branch` before a release or a public demo.
+Two long-lived branches with different jobs:
+
+| Branch | Role | Who writes to it |
+|---|---|---|
+| `main` | **Integration branch**, and the repository default (the line GitHub renders on the home page) | Merges of outside PRs — Dependabot dependency updates and fork contributions — land here, and CI runs on them |
+| `yimi-branch` | **Delivery line**: day-to-day development, verification and packaging | The maintainer's commits; `npm run dist:win` and the fixed delivery path are built from this line |
+
+Both directions are kept in sync, and each one is an explicit command rather than something that happens by itself:
+
+```bash
+npm run branch:status      # read-only: how far apart the two are, and what to do next
+npm run branch:integrate   # integration -> delivery: merge origin/main into yimi-branch
+npm run branch:publish     # delivery -> integration: fast-forward yimi-branch onto main
+```
+
+- **After a dependency or outside PR is merged into `main`**, run `npm run branch:integrate` on `yimi-branch`, then `git push origin yimi-branch`. The merge commit keeps the source visible (`HEAD^2` is the integration tip).
+- **Before a release or a public demo**, run `npm run branch:publish` so the default branch and the home page show the verified delivery line. It only fast-forwards and never forces; when `main` has commits the delivery line lacks, it refuses and tells you to integrate first.
+- Both commands refuse a dirty working tree or an unfinished merge/rebase. `publish` also refuses while local commits are unpushed, unless you pass `--allow-unpushed`. Check drift with `npm run branch:status`: the two once drifted 81 commits apart, which left stale documentation on the repository home page.
 - Pushing to `main` directly is allowed, but **changes to the gates, execution isolation, signing or the release process** should go through a pull request, self-checked with the list in [.github/pull_request_template.md](.github/pull_request_template.md).
 - CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) and the production gate ([production-gate.yml](.github/workflows/production-gate.yml)) run on every branch push and every pull request. Both call `npm test`, and **the gate list is maintained in exactly one place: `scripts/run-all-tests.cjs`**.
 - Commit messages use a conventional prefix (`feat:` / `fix:` / `refactor:` / `chore:` / `docs:`) and explain the motive and the verification method from the second line on. The existing history is written in Chinese; English messages are fine for outside contributions.

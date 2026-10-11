@@ -6,7 +6,7 @@
 
 | 位置 | 用途 | 入口 |
 | --- | --- | --- |
-| 根目录的 6 个 `.cjs` | 开发启动、构建、图标、发布签名、启动器和测试调度 | `npm run dev`、`npm run build`、`npm run dist:win`、`npm run verify` |
+| 根目录的 7 个 `.cjs` | 开发启动、构建、图标、发布签名、启动器、分支同步和测试调度 | `npm run dev`、`npm run build`、`npm run dist:win`、`npm run verify`、`npm run branch:status` |
 | `core/` | 无需界面的功能回归、权限边界、存储与运行门禁 | `npm test`；专项测试见 `package.json` |
 | `ui/` | Electron / 浏览器界面测试、截图与主题检查 | `npm run test:display`；未注册用例通过 `run-electron.cjs` 或脚本自身说明运行 |
 | `packaged/` | 对实际 `app.asar` 的启动、工具和界面验收 | 设置 `CODENODE_PACKAGED_ASAR`，再通过 `run-electron.cjs` 运行 |
@@ -20,6 +20,7 @@
 ```powershell
 npm run test:list                 # 当前 core / display 集合和数量
 npm run verify                    # 构建 + CJS 静态检查 + core 回归
+npm run branch:status             # 集成分支 main 与交付分支 yimi-branch 的差距
 npm run test:display               # 需要 Electron 或浏览器
 node scripts/run-all-tests.cjs --only test:session,test:undo
 node scripts/run-electron.cjs scripts/ui/theme-parity-ui-test.cjs

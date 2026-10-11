@@ -27,6 +27,7 @@ const CORE = [
   'test:backends',
   'test:backend-port',
   'test:agent-handoff',
+  'test:branch-sync',
   'test:multi-backends',
   'test:muse-backend',
   'test:acp-full',

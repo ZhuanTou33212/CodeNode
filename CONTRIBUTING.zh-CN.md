@@ -73,7 +73,24 @@ npm run verify       # = build（tsc + vite）+ check:js（Electron/scripts 静�
 
 ## 分支与 PR
 
-- 默认分支 `main`（与 `0_2` 同线），也是 GitHub 首页展示的分支；`yimi-branch` 是当前开发线，功能完成并验证后快进到 `main`。两条分支曾相差 81 个提交导致首页展示旧文档，发布或对外演示前先核对 `git rev-list --count origin/main..yimi-branch`。
+两条长期分支，分工不同：
+
+| 分支 | 定位 | 谁往里写 |
+| --- | --- | --- |
+| `main` | **集成分支**，也是仓库默认分支（GitHub 首页展示的那条） | 外部 PR 的合并落点——Dependabot 依赖更新与 fork 贡献合到这里，CI 在这些 PR 上跑 |
+| `yimi-branch` | **交付分支**：日常开发、验证与打包 | 维护者的常规提交；`npm run dist:win` 与固定交付路径都从这条线产出 |
+
+两个方向都要维护同步，且都是显式命令，不会自己发生：
+
+```bash
+npm run branch:status      # 只读：两侧差多少、下一步该做什么
+npm run branch:integrate   # 集成分支 → 交付分支：把 origin/main 合并进 yimi-branch
+npm run branch:publish     # 交付分支 → 集成分支：把 yimi-branch 快进到 main
+```
+
+- **依赖或外部 PR 合进 `main` 之后**，在 `yimi-branch` 上跑 `npm run branch:integrate`，再 `git push origin yimi-branch`。合并提交保留来源（`HEAD^2` 就是集成分支的那个提交）。
+- **发布或对外演示之前**，跑 `npm run branch:publish`，让默认分支与首页展示已验证的交付线。它只做快进、永不 force；当 `main` 有交付分支缺失的提交时会拒绝，并提示先 integrate。
+- 两条命令都拒绝脏工作区与未完成的合并/变基；`publish` 还要求本地提交已推送到 `origin/yimi-branch`，否则要显式加 `--allow-unpushed`。漂移情况用 `npm run branch:status` 观察：两条分支曾相差 81 个提交，导致首页展示旧文档。
 - 直接推 `main` 也可以，但**改动门禁 / 隔离 / 签名 / 发布流程**请走 PR，用 [.github/pull_request_template.md](.github/pull_request_template.md) 的清单自检。
 - CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）与门禁（[production-gate.yml](.github/workflows/production-gate.yml)）对所有分支的 push 与所有 PR 触发；
   两个 workflow 都调用 `npm test`，**门禁清单只在 `scripts/run-all-tests.cjs` 里维护一处**。

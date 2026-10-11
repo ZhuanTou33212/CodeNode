@@ -6,7 +6,7 @@ Scripts are grouped by execution purpose; moving a file between groups changes n
 
 | Location | Purpose | Entry point |
 | --- | --- | --- |
-| The 6 `.cjs` files in the root | Dev startup, build, icons, release signing, launcher and test scheduling | `npm run dev`, `npm run build`, `npm run dist:win`, `npm run verify` |
+| The 7 `.cjs` files in the root | Dev startup, build, icons, release signing, launcher, branch sync and test scheduling | `npm run dev`, `npm run build`, `npm run dist:win`, `npm run verify`, `npm run branch:status` |
 | `core/` | Feature regressions, permission boundaries, storage and runtime gates with no UI | `npm test`; specialised tests are in `package.json` |
 | `ui/` | Electron/browser UI tests, screenshots and theme checks | `npm run test:display`; unregistered cases run through `run-electron.cjs` or their own instructions |
 | `packaged/` | Startup, tool and UI acceptance against the real `app.asar` | Set `CODENODE_PACKAGED_ASAR`, then run through `run-electron.cjs` |
@@ -20,6 +20,7 @@ Scripts are grouped by execution purpose; moving a file between groups changes n
 ```powershell
 npm run test:list                 # current core / display sets and counts
 npm run verify                    # build + CJS static checks + core regression
+npm run branch:status             # integration (main) vs delivery (yimi-branch) divergence
 npm run test:display               # needs Electron or a browser
 node scripts/run-all-tests.cjs --only test:session,test:undo
 node scripts/run-electron.cjs scripts/ui/theme-parity-ui-test.cjs
