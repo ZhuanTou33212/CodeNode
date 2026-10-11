@@ -326,7 +326,7 @@
     "@xyflow/react": "^12.11.6",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "zustand": "^4.5.5",
+    "zustand": "^5.0.15",
     "@typescript/typescript6": "^6.0.2"
   },
   "devDependencies": {
