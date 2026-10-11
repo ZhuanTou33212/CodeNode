@@ -23,6 +23,7 @@
     "test:acp-full": "node scripts/core/acp-full-test.cjs",
     "test:backends": "node scripts/core/agent-backends-test.cjs",
     "test:multi-backends": "node scripts/core/multi-agent-backends-test.cjs",
+    "test:muse-backend": "node scripts/core/muse-backend-test.cjs",
     "test:goal-store": "node scripts/core/goal-store-test.cjs",
     "test:goal-canvas-graph": "node scripts/core/goal-canvas-graph-test.cjs",
     "test:goal-plan-ipc": "node scripts/core/goal-plan-ipc-test.cjs",

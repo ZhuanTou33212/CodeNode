@@ -11,38 +11,58 @@
   },
   "backends": [
     "builtin",
-    "codex",
-    "deepseek-harness",
-    "hermes",
+    "qwen",
     "opencode",
     "openclaw",
+    "qoder",
+    "minimax",
+    "kimi",
+    "hermes",
+    "codebuddy",
+    "codex",
+    "claude",
+    "deepseek-harness",
+    "pi",
+    "muse",
     "acp"
   ],
   "labels": {
     "builtin": "CodeNode",
-    "codex": "Codex ACP",
-    "deepseek-harness": "DeepSeek Harness ACP",
-    "hermes": "Hermes Agent",
+    "qwen": "Qwen Code",
     "opencode": "OpenCode",
     "openclaw": "OpenClaw",
+    "qoder": "Qoder",
+    "minimax": "MiniMax Code",
+    "kimi": "Kimi Code",
+    "hermes": "Hermes Agent",
+    "codebuddy": "CodeBuddy",
+    "codex": "Codex ACP",
+    "claude": "Claude Code",
+    "deepseek-harness": "DeepSeek Harness ACP",
+    "pi": "Pi",
+    "muse": "Muse Code",
     "acp": "自定义 ACP Agent"
   },
   "commands": {
     "builtin": "",
-    "codex": "codex-acp",
-    "deepseek-harness": "dsh",
-    "hermes": "hermes",
+    "qwen": "qwen",
     "opencode": "opencode",
     "openclaw": "openclaw",
+    "qoder": "qodercli",
+    "minimax": "mcode",
+    "kimi": "kimi",
+    "hermes": "hermes",
+    "codebuddy": "codebuddy",
+    "codex": "codex-acp",
+    "claude": "claude-agent-acp",
+    "deepseek-harness": "dsh",
+    "pi": "pi-acp",
+    "muse": "muse",
     "acp": ""
   },
   "defaultArgs": {
-    "deepseek-harness": [
-      "--profile",
-      "acp"
-    ],
-    "hermes": [
-      "acp"
+    "qwen": [
+      "--acp"
     ],
     "opencode": [
       "acp"
@@ -50,15 +70,55 @@
     "openclaw": [
       "acp"
     ],
+    "qoder": [
+      "--acp"
+    ],
+    "minimax": [
+      "acp"
+    ],
+    "kimi": [
+      "acp"
+    ],
+    "hermes": [
+      "acp"
+    ],
+    "codebuddy": [
+      "--acp"
+    ],
     "codex": [],
+    "claude": [],
+    "deepseek-harness": [
+      "--profile",
+      "acp"
+    ],
+    "pi": [],
+    "muse": [
+      "serve"
+    ],
     "acp": []
   },
+  "commandAliases": {
+    "qodercli": [
+      "qoder"
+    ],
+    "claude-agent-acp": [
+      "claude-code-acp"
+    ]
+  },
   "capabilityNotes": {
-    "deepseek-harness": "Requires installed dsh with native ACP profile. DSH_HOME is optional; authentication remains in Harness.",
-    "hermes": "Requires Hermes ACP dependencies and configured provider credentials.",
+    "qwen": "Requires installed Qwen Code CLI with its native stdio ACP entry (`qwen --acp`). Authentication, provider and model stay in Qwen Code.",
     "opencode": "Requires OpenCode ACP CLI and configured provider authentication.",
     "openclaw": "Requires a healthy OpenClaw ACP bridge and Gateway.",
+    "qoder": "Requires installed Qoder CLI with native ACP (`qodercli --acp`, falls back to `qoder --acp`). Login stays in Qoder.",
+    "minimax": "Requires MiniMax Code 0.3.7 or newer with native ACP v1/stdio (`mcode acp`). Provider and model stay in MiniMax Code.",
+    "kimi": "Requires Kimi Code 0.31.0 or newer with native ACP (`kimi acp`). Login and session storage stay in Kimi Code.",
+    "hermes": "Requires Hermes ACP dependencies and configured provider credentials.",
+    "codebuddy": "Requires installed CodeBuddy Code CLI with ACP (`codebuddy --acp`); sign in once through its own terminal.",
     "codex": "Requires installed codex-acp adapter and Codex native authentication. No automatic install.",
+    "claude": "Requires an installed Claude Code ACP adapter (claude-agent-acp, legacy claude-code-acp) and Claude Code authentication. No automatic install.",
+    "deepseek-harness": "Requires installed dsh with native ACP profile. DSH_HOME is optional; authentication remains in Harness.",
+    "pi": "Requires pi and the community pi-acp adapter. pi has no built-in sandbox and pi-acp does not implement ACP permission requests, so CodeNode cannot enforce read-only for this backend.",
+    "muse": "Requires installed Muse Code reachable through its Muse Session Protocol service (`muse serve`). Windows deployments usually run Muse inside WSL2.",
     "acp": "Connect an already installed ACP stdio Agent using command and arguments."
   },
   "sandboxModes": [
@@ -84,13 +144,26 @@
   "snapshotFiles": 20000,
   "snapshotBytes": 268435456,
   "acpBackends": [
-    "codex",
-    "deepseek-harness",
-    "hermes",
+    "qwen",
     "opencode",
     "openclaw",
+    "qoder",
+    "minimax",
+    "kimi",
+    "hermes",
+    "codebuddy",
+    "codex",
+    "claude",
+    "deepseek-harness",
+    "pi",
     "acp"
   ],
+  "mspBackends": [
+    "muse"
+  ],
+  "permissionEnforcement": {
+    "pi": "unavailable"
+  },
   "backendPort": {
     "maxRetainedTasks": 100,
     "maxPendingRequests": 32

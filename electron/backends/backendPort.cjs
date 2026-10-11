@@ -23,7 +23,9 @@ class BackendPort {
     /** @type {Promise<any>|null} */ this.starting=null;
     /** @type {any} */ this.runtime={state:'idle',available:false,error:null};this.root=null;this.closed=false;
   }
-  describe() { return {kind:this.name,label:config.labels[this.name],transport:this.name==='builtin'?'builtin':'acp',capabilities:{conversation:true,events:true,permissions:true,cancel:true,inputRequests:this.name==='builtin'?'native':'elicitation',sessionContinuity:this.name==='builtin'?'native':'negotiated',hardBudget:this.name==='builtin'}}; }
+  transport() { if(this.name==='builtin')return 'builtin';return (config.mspBackends||[]).includes(this.name)?'msp':'acp'; }
+  describe() { const transport=this.transport(),enforcement=config.permissionEnforcement?.[this.name]||'acp-requests';
+    return {kind:this.name,label:config.labels[this.name],transport,capabilities:{conversation:true,events:true,permissions:enforcement!=='unavailable',permissionEnforcement:enforcement,cancel:true,inputRequests:this.name==='builtin'?'native':transport==='msp'?'msp':'elicitation',sessionContinuity:this.name==='builtin'?'native':transport==='msp'?'unsupported':'negotiated',hardBudget:this.name==='builtin'}}; }
   async start(context={}) {
     if(this.closed)throw portError('BackendPort 已关闭','BACKEND_CLOSED');
     const root=path.resolve(context.projectRoot||context.cwd||this.root||process.cwd());
@@ -115,6 +117,7 @@ class BackendPort {
     if([...this.tasks.values()].some(t=>t.state==='working'))throw portError('请先结束当前 Task','BACKEND_BUSY');
     await this.start(context);
     if(method==='inspect'){
+      if(typeof this.driver.sessionRequest!=='function')throw portError('该后端不提供 ACP 会话检查','UNSUPPORTED_BACKEND_OPERATION');
       const info=await this.driver.sessionRequest('session/new',{cwd:this.root,...(this.name==='openclaw'?{}:{mcpServers:[]})});
       if(info.sessionId&&this.driver.capabilityInfo.sessionCapabilities?.close)await this.driver.rpc.request('session/close',{sessionId:info.sessionId});
       return {...info,authMethods:this.driver.authMethods,agentCapabilities:this.driver.capabilityInfo};

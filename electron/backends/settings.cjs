@@ -20,7 +20,7 @@ function normalize(input) {
   if (args.some(arg => /^--?(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret)(?:=|$)/i.test(arg))) {
     throw new Error('启动参数不能保存明文密钥或口令；请使用 Agent 自身的凭据配置或安全文件选项');
   }
-  return { transport:input.backend==='builtin'?'builtin':'acp', settingsVersion:2, backend: input.backend, executable, args: args.slice(), model: String(input.model || '').trim().slice(0, 200),
+  return { transport:input.backend==='builtin'?'builtin':(config.mspBackends||[]).includes(input.backend)?'msp':'acp', settingsVersion:2, backend: input.backend, executable, args: args.slice(), model: String(input.model || '').trim().slice(0, 200),
     provider: String(input.provider || config.defaults.provider).trim().slice(0, 100), home: String(input.home || '').trim().slice(0, 2048), sandbox: input.sandbox,
     reasoningEffort: String(input.reasoningEffort || '').trim().slice(0, 40), ...(input.acp ? { acp: normalizeAcp(input.acp) } : {}) };
 }

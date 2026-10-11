@@ -125,13 +125,21 @@ app.whenReady().then(async () => {
       await win.webContents.executeJavaScript(`(() => { const control=document.querySelector(${JSON.stringify('[aria-label="' + label + '"]')});control.value=${JSON.stringify(value)};control.dispatchEvent(new Event('change',{bubbles:true})); })()`);
       await sleep(80);
     };
-    for(const backend of ['codex','deepseek-harness','hermes','opencode','openclaw','acp']){
+    for(const backend of require('../../config/agent.backends.json').acpBackends){
       await select('执行后端',backend);
       assert.equal(await js(`!!document.querySelector('[aria-label="ACP 权限请求策略"]')`),true,backend+' exposes its permission request setting');
       assert.equal(await js(`!!document.querySelector('[aria-label="ACP 会话配置"]')`),true,backend+' exposes its persisted ACP configuration');
       await select('ACP 权限请求策略','workspace-write');
       for(const theme of ['light','dark']){await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);await sleep(60);assert.equal(await js(`document.querySelector('[aria-label="ACP 权限请求策略"]').value`),'workspace-write');}
     }
+    await select('执行后端','pi');
+    assert.equal(await js(`!!document.querySelector('.backend-permission-warning')`),true,'pi warns that ACP permission requests are unavailable');
+    await select('执行后端','muse');
+    assert.equal(await js(`!!document.querySelector('[aria-label="MSP 权限请求策略"]')`),true,'muse exposes the MSP permission policy');
+    assert.equal(await js(`!!document.querySelector('[aria-label="MSP 模型"]')`),true,'muse exposes its persisted model override');
+    assert.equal(await js(`!!document.querySelector('[aria-label="ACP 会话配置"]')`),false,'muse must not show ACP-only session configuration');
+    assert.equal(await js(`!!document.querySelector('.backend-permission-warning')`),false,'muse keeps its own permission flow');
+    await select('MSP 权限请求策略','workspace-write');
     await select('后端配置范围', 'project'); await select('执行后端', 'codex');
     await select('ACP 权限请求策略', 'workspace-write');
     const controls = () => js(`JSON.stringify([...document.querySelectorAll('[data-testid=backend-settings] select,[data-testid=backend-settings] input')].map(n=>[n.getAttribute('aria-label'),n.value,n.disabled]))`);

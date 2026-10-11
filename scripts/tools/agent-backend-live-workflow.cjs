@@ -11,7 +11,8 @@ const {redact}=require('../../electron/redaction.cjs');
 
 const requested=process.argv.find(arg=>arg.startsWith('--backends='))?.slice('--backends='.length);
 const backends=(requested||'hermes,opencode').split(',').map(value=>value.trim()).filter(Boolean);
-if(!backends.length||backends.some(name=>!['hermes','opencode','openclaw'].includes(name))){
+const liveBackends=['qwen','opencode','openclaw','qoder','minimax','kimi','hermes','codebuddy','claude','pi','acp'];
+if(!backends.length||backends.some(name=>!liveBackends.includes(name))){
   console.error('Usage: node scripts/tools/agent-backend-live-workflow.cjs [--backends=hermes,opencode]');process.exit(2);
 }
 function inputObject(value){if(value&&typeof value==='object')return value;try{return JSON.parse(String(value||''));}catch{return{};}}

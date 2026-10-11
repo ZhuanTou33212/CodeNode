@@ -28,6 +28,7 @@ const CORE = [
   'test:backend-port',
   'test:agent-handoff',
   'test:multi-backends',
+  'test:muse-backend',
   'test:acp-full',
   'test:goal-store',
   'test:goal-canvas-graph',

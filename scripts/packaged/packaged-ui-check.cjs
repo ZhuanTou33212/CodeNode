@@ -60,7 +60,9 @@ app.whenReady().then(async () => {
     const rawHtml = fs.readFileSync(indexInAsar, 'utf8'); // 走 Electron 的 asar 感知 fs
     console.log('asar 内入口可读: ' + rawHtml.length + ' 字节');
     const packagedConfig = JSON.parse(fs.readFileSync(path.join(ASAR, 'config', 'agent.backends.json'), 'utf8'));
-    ok('asar 包含内置和统一 ACP 后端', JSON.stringify(packagedConfig.backends) === JSON.stringify(['builtin', 'codex', 'deepseek-harness', 'hermes', 'opencode', 'openclaw','acp']));
+    const expectedBackends=JSON.parse(fs.readFileSync(path.join(__dirname,'../../config/agent.backends.json'),'utf8')).backends;
+    ok('asar 包含内置、统一 ACP 与 MSP 后端', JSON.stringify(packagedConfig.backends) === JSON.stringify(expectedBackends));
+    ok('asar 后端默认命令与源码一致', JSON.stringify(packagedConfig.commands) === JSON.stringify(JSON.parse(fs.readFileSync(path.join(__dirname,'../../config/agent.backends.json'),'utf8')).commands) && packagedConfig.mspBackends.join(',') === 'muse');
     const waitConfig=JSON.parse(fs.readFileSync(path.join(ASAR,'config','goal.wait.json'),'utf8'));
     const evalWait=require(path.join(ASAR,'electron','goalWaitProviders','agentEval.cjs'));
     ok('asar 包含按 SHA/数据集绑定的 Agent Eval 报告状态源',waitConfig.providers.includes('agent-eval')&&typeof evalWait.check==='function');

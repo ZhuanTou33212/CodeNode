@@ -11,7 +11,7 @@ const make=()=>{const port=createBackend('acp',options);ports.push(port);return 
 const wait=async fn=>{const end=Date.now()+5000;while(Date.now()<end){const value=fn();if(value)return value;await new Promise(r=>setTimeout(r,10));}throw new Error('Port event timed out');};
 async function main(){
  assert.throws(()=>assertBackendPort({start(){}}),error=>/** @type {any} */(error).code==='INVALID_BACKEND_PORT');
- for(const name of settings.config.backends){const port=createBackend(name,{...options,backend:name});assert(METHODS.every(method=>typeof port[method]==='function'));assert.equal(port.describe().transport,name==='builtin'?'builtin':'acp');await port.close();}
+ for(const name of settings.config.backends){const port=createBackend(name,{...options,backend:name});assert(METHODS.every(method=>typeof port[method]==='function'));assert.equal(port.describe().transport,name==='builtin'?'builtin':settings.config.mspBackends.includes(name)?'msp':'acp');await port.close();}
  const legacy=settings.normalize({...settings.config.defaults,backend:'codex',executable:'codex',args:['app-server']});assert.equal(legacy.executable,'codex-acp');assert.deepEqual(legacy.args,[]);assert.equal(settings.normalize({...legacy,settingsVersion:undefined,executable:'C:/Codex/bin/codex.exe'}).executable,'codex-acp');
  assert.deepEqual(settings.normalize({...settings.config.defaults,backend:'deepseek-harness',args:['--profile','sdk']}).args,['--profile','acp']);
  assert.deepEqual(settings.normalize({...settings.config.defaults,backend:'deepseek-harness',args:[]}).args,['--profile','acp']);

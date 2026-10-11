@@ -12,6 +12,9 @@ class BuiltinBackend {
 function createBackend(name,settings={},deps={}){
   if(!config.backends.includes(name))throw new Error('未知 Agent 后端：'+name);
   const normalized=require('./settings.cjs').normalize({...config.defaults,...settings,backend:name});
-  return assertBackendPort(new BackendPort(name,normalized,name==='builtin'?new BuiltinBackend():new AcpBackend({...normalized,turnTimeoutMs:settings.turnTimeoutMs},deps)));
+  const driver=name==='builtin'?new BuiltinBackend()
+    :(config.mspBackends||[]).includes(name)?new (require('./muse.cjs').MuseCodeBackend)({...normalized,turnTimeoutMs:settings.turnTimeoutMs},deps)
+    :new AcpBackend({...normalized,turnTimeoutMs:settings.turnTimeoutMs},deps);
+  return assertBackendPort(new BackendPort(name,normalized,driver));
 }
 module.exports={createBackend,BuiltinBackend};

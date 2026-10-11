@@ -6,7 +6,6 @@ const config = require('../../config/agent.backends.json');
 const { AcpClient } = require('./acpClient.cjs');
 const { contentBlock, promptContent } = require('./acpContent.cjs');
 
-const names = { hermes: 'Hermes Agent', opencode: 'OpenCode', openclaw: 'OpenClaw' };
 function requiresOpenClawMcpArray(error) {
   if (error?.code !== -32602) return false;
   const detail = JSON.stringify(error.data || {});
@@ -18,10 +17,20 @@ class AcpBackend {
     this.sessionId = null; this.settle = null; this.timer = undefined; this.stopping = false;
     this.capabilityInfo = null; this.messages = new Map(); this.tools = new Map(); this.toolCalls = [];
     this.diffText = ''; this.cwd = null;
+    // Agents without ACP permission requests cannot be constrained by the
+    // read-only/approval policy; the limitation is reported instead of faked.
+    this.permissionEnforcement = config.permissionEnforcement?.[settings.backend] || 'acp-requests';
     this.client = new AcpClient(this); this.reasoning = ''; this.usage = null; this.sessionInfo = {}; this.bridge = null;
   }
   events(listener) { this.listener = listener; }
   emit(delta) { this.listener(delta); }
+  permissionWarning() {
+    if (this.permissionEnforcement !== 'unavailable') return null;
+    return { permissionEnforcement: 'unavailable', sandbox: this.settings.sandbox,
+      warning: '该 Agent 不实现 ACP 权限请求（session/request_permission），CodeNode 的'
+        + (this.settings.sandbox === 'read-only' ? '只读' : '逐次审批')
+        + '策略无法约束它的文件与命令操作' };
+  }
   command() {
     const command = this.settings.executable || config.commands[this.settings.backend];
     const args = Array.isArray(this.settings.args) ? this.settings.args : config.defaultArgs[this.settings.backend] || [];
@@ -53,7 +62,7 @@ class AcpBackend {
     return result;
   }
   capabilitySnapshot() {
-    return {backend:this.settings.backend,protocol:'ACP',protocolVersion:1,conversation:true,events:true,approvals:true,interrupt:true,resume:this.capabilityInfo?.loadSession===true||!!this.capabilityInfo?.sessionCapabilities?.resume,usage:true,hardBudget:false,customTools:true,authMethods:this.authMethods||[],permissions:this.settings.sandbox,proxySource:this.rpc?.proxySource,cost:'unknown',version:this.agentInfo?.version||'unknown'};
+    return {backend:this.settings.backend,protocol:'ACP',protocolVersion:1,conversation:true,events:true,approvals:true,interrupt:true,resume:this.capabilityInfo?.loadSession===true||!!this.capabilityInfo?.sessionCapabilities?.resume,usage:true,hardBudget:false,customTools:true,authMethods:this.authMethods||[],permissions:this.settings.sandbox,permissionEnforcement:this.permissionEnforcement,proxySource:this.rpc?.proxySource,cost:'unknown',version:this.agentInfo?.version||'unknown'};
   }
   async close(){await this.client.close();await this.bridge?.close();this.bridge=null;await this.rpc?.close();this.rpc=null;}
   async capabilities(cwd) {
@@ -62,7 +71,7 @@ class AcpBackend {
       return { backend: this.settings.backend, available: true, authenticated: null, protocol: 'ACP', protocolVersion: 1,
         conversation: true, events: true, approvals: true, interrupt: true,
         resume: this.capabilityInfo.loadSession === true || !!this.capabilityInfo.sessionCapabilities?.resume,
-        usage: true, hardBudget: false, customTools: true, authMethods: this.authMethods, permissions: this.settings.sandbox, proxySource:this.rpc?.proxySource,
+        usage: true, hardBudget: false, customTools: true, authMethods: this.authMethods, permissions: this.settings.sandbox, permissionEnforcement: this.permissionEnforcement, proxySource:this.rpc?.proxySource,
         cost: 'unknown', version: this.agentInfo.version || 'unknown' };
     } catch (error) { return { backend: this.settings.backend, available: false, error: error.message }; }
     finally { await this.rpc?.close(); this.rpc = null; }
@@ -76,6 +85,8 @@ class AcpBackend {
     try {
       if (input.signal?.aborted) return { content: '', state: 'CANCELLED', aborted: true, stopReason: 'cancelled' };
       await this.connect(input.projectRoot);
+      const permission = this.permissionWarning();
+      if (permission) this.emit({ kind: 'backend_info', info: permission });
       if (this.settings.acp?.authMethodId) await this.control('authenticate', { methodId: this.settings.acp.authMethodId });
       if (input.toolRegistry && input.toolContext && this.settings.acp?.codeNodeTools === true) this.bridge = await require('./acpMcp.cjs').createToolBridge(input.toolRegistry, input.toolContext, delta => this.emit(delta));
       // Newer OpenClaw ACP bridges reject the mcpServers field entirely.
@@ -107,7 +118,7 @@ class AcpBackend {
       input.onSession?.({ backend: this.settings.backend, protocol: 'acp', protocolVersion: 1,
         sessionId: this.sessionId, cwd: input.projectRoot, model: this.settings.model || null,
         adapterSettings:this.settings,
-        permissions: { sandbox: this.settings.sandbox, network: 'agent-managed' } });
+        permissions: { sandbox: this.settings.sandbox, network: 'agent-managed', enforcement: this.permissionEnforcement } });
       if (this.stopping || input.signal?.aborted) return { content: '', state: 'CANCELLED', aborted: true, stopReason: 'cancelled' };
       const terminal = new Promise(resolve => { this.settle = resolve; });
       this.emit({ kind: 'state', state: 'RUNNING', previous: null, sequence: 0 });

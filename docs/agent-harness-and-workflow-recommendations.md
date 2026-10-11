@@ -493,3 +493,22 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 构建、脚本检查、源码和最终包的空状态／实际创建／取消草稿／目标列表／详情编辑／双主题交互通过；Goal Store 专项、既有目标设置与重启复核通过。暂存和固定交付路径 UI 自检 19/19、实际 asar 启动通过。[无目标日间效果](validation/simple-overview-preview/empty-light.png)、[无目标夜间效果](validation/simple-overview-preview/empty-dark.png)、[已有目标日间效果](validation/simple-overview-preview/light.png)、[已有目标夜间效果](validation/simple-overview-preview/dark.png) 来自最终包的隔离演示工程，原始摘要见 [acceptance.json](validation/simple-overview-preview/acceptance.json)。
 
 固定目录 E:\CodeNode\release\win-unpacked 已覆盖，覆盖前确认 CodeNode 未运行。app.asar SHA-256：4CB8E5F429BE2804F150C485029C138A3BB46EE6E23520E9252E93E65CAE9A10；CodeNode.exe SHA-256：4E069955705384D0B711BEDF5611B7C0BC91FF8C84FC199879D29FC4910F9BAB。仅使用公开模板与已提交 Soul 打包，用户本地私有配置及未提交 Soul 修改保留。
+
+
+### 2026-10-11 外部 Agent 覆盖补齐（新增 7 个 ACP 后端 + Muse Code MSP 适配器）
+
+对照 [qwen-audio-agent 后台列表](https://github.com/QwenAudio/qwen-audio-agent/blob/main/docs/backends/overview.zh.md) 与[各后台详细配置](https://github.com/QwenAudio/qwen-audio-agent/blob/main/docs/backends/configuration.zh.md)，把此前只有 Codex、DeepSeek Harness、Hermes、OpenCode、OpenClaw 的可选后端补齐到图中全部 ACP 能力项，并单独接入唯一的非 ACP 后端 Muse Code。
+
+统一 ACP 层新增 7 个后端，全部复用既有 AcpBackend、BackendPort、权限与运行记录链路，只增加配置、命令解析和类型：`qwen --acp`（Qwen Code）、`qodercli --acp`（Qoder，缺失时回退 `qoder`）、`mcode acp`（MiniMax Code）、`kimi acp`（Kimi Code）、`codebuddy --acp`（CodeBuddy）、`claude-agent-acp`（Claude Code，缺失时回退已弃用的旧名 `claude-code-acp`）、`pi-acp`（Pi）。自定义 ACP 入口保持不变。
+
+命令解析改为：文档别名只在本名缺失时按 PATH 顺序回退；Windows npm 垫片除 `.exe` 与 `.js/.mjs/.cjs` 目标外，也接受无扩展名启动器，但只在该文件带 Node shebang 时才交给内置 Node 运行，否则如实报告找不到程序。可用性判断仍只做命令探测，不发模型请求。
+
+**Pi 的只读不可强制执行。** `pi-acp` 未实现 ACP `session/request_permission`，Pi 也没有内置沙箱，因此只读与逐次审批都约束不到它。CodeNode 不假装生效：配置新增 `permissionEnforcement`，设置界面在选择 Pi 时显示警告，能力快照与 `capabilities()` 返回 `permissionEnforcement: "unavailable"`，`BackendPort.describe().capabilities.permissions` 为 false，本轮开始前另发一条 `backend_info`，会话记录里的 `permissions.enforcement` 也如实标注。其余 ACP 后端保持 `acp-requests`。
+
+**Muse Code 走 MSP 而不是 ACP。** 新增 `electron/backends/muse.cjs`：启动 `muse serve`，在同一个 stdio 上跑 MSP（换行分隔 JSON-RPC 2.0），复用现有 StdioRpc 传输。已接入 `initialize` + `initialized` 握手与 `schema.version === 1` 校验、`session/start`（UUIDv7 `commandId`/`sessionId`、`workspaceRoot`、可选 `modelId`，写入模式不带 `approvalMode`）、`turn/start`（文本与内联图片、`displayText`、`ifBusy: "queue"`）、`item/started|delta|updated|completed` 流式映射（`item/delta` 逐段出文本与推理，`item/completed` 只补增量未覆盖的部分，不重复拼接）、`turn/completed` 终态、`turn/cancel`。权限与补充输入按 MSP 的“双通道”处理：`approval/requested`／`userInput/requested` 通知与 `approval/request`／`userInput/request` 服务端请求只回空 `{}` 收据，真正决定走带当前 `requirementId` 的 `approval/decide` 与 `userInput/answer`（无回答时 `userInput/cancel`）。只读直接选拒绝项且不弹确认，写入逐次询问且只选单次允许，不升级为会话或持久策略。MSP 没有 `session/close`，结束靠关闭 stdin 让 Muse drain 后退出；会话编号不跨重启保存，也不注入 CodeNode 工具，附件只支持内联图片。Windows 上的 WSL2 部署用 `wsl.exe` 作为启动命令，“工作区”字段填 Muse 在 Linux 内看到的路径并作为 `workspaceRoot`。因为 MSP 会话不可恢复，该后端不进入 `acpBackends`（据此 `BackendPort.describe().transport` 为 `msp`、`sessionContinuity` 为 `unsupported`），每轮新建 Muse 会话并交接可见历史与画布。
+
+验证：`npx tsc --noEmit`、`npm run check:js` 通过；`npm test` 核心套件 166/166 通过（含新增 `test:muse-backend`，覆盖 MSP 握手、会话/回合生命周期、流式增量不重复、权限允许与只读拒绝、补充输入映射、取消，以及“Muse 不能声明为 ACP 后端”；`test:multi-backends` 扩展到全部 ACP 后端别名与无扩展名垫片解析）。`test:backend-ui` 覆盖全部 ACP 后端的权限设置与 ACP 配置、Pi 的警告、Muse 的 MSP 权限策略与 MSP 模型且不显示 ACP 会话配置，日夜主题结构一致。`test:agent-switch-ui` 的“高级设置跳转”此前的实现与期望不一致（`全局设置` 默认打开“常规”，测试却直接等 `backend-settings`），本轮改为进入设置后点击“Agent 连接”分类，测试恢复通过。Agent 列表预览图见 [日间](validation/agent-switcher-preview/light.png)、[夜间](validation/agent-switcher-preview/dark.png)。
+
+打包自检：暂存包与固定路径均为 packaged UI 自检 20/20、实际 asar main/preload 渲染启动检查通过、Soul 成长专项通过；暂存目录已清理。已覆盖固定目录 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行，不保留旧包备份。app.asar SHA-256：F4E015BB9E1035B946D4C58C7084545823784299AFAA12A5829BAD5839B2C715；CodeNode.exe SHA-256：9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59；便携版 CodeNode-0.13.0.exe SHA-256：29d46cf2c7f154fb6a2972597ac5f02266a735d536addce10d86236deac825c1。用户本地未提交的 Soul 成长数据与私有配置未提交、未被改写。
+
+未在本机实测的后端（Qwen Code、Qoder、MiniMax Code、Kimi Code、CodeBuddy、Claude Code、Pi、Muse Code）只完成了命令探测、协议夹具与静态检查：本机只安装了 OpenCode、OpenClaw、Hermes 与 Claude Code 本体（无对应 ACP 适配器），没有 `muse`、`qwen`、`qodercli`、`mcode`、`kimi`、`codebuddy`、`pi-acp`，因此这些后端不标记为实测通过。需要真实验证时用 `npm run test:backend-live-agents -- --backends=<name>` 或 `test:backend-live-workflow`。

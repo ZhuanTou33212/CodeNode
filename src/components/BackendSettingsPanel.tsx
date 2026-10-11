@@ -18,6 +18,10 @@ export default function BackendSettingsPanel() {
   const [acpText, setAcpText] = useState('{}');
   const [agentInfo, setAgentInfo] = useState<any>(null);
   const isAcp = backendConfig.acpBackends.includes(settings.backend);
+  const isMsp = (backendConfig.mspBackends as readonly string[]).includes(settings.backend);
+  const external = isAcp || isMsp;
+  const permissionEnforcement = (backendConfig.permissionEnforcement as Record<string, string | undefined>)[settings.backend];
+  const permissionLabel = isMsp ? 'MSP 权限请求策略' : 'ACP 权限请求策略';
   useEffect(() => {
     let alive = true;
     setBusy(true); setMessage('');
@@ -86,7 +90,12 @@ export default function BackendSettingsPanel() {
       <label className="settings-row"><span>启动命令或可执行文件</span><input aria-label="后端启动命令" value={settings.executable} disabled={disabled} onChange={e => setSettings(s => ({ ...s, executable: e.target.value }))} /></label>
       {<label className="settings-row"><span>启动参数（JSON 数组）</span><textarea aria-label="后端启动参数" value={argsText} disabled={disabled} rows={3} onChange={e => setArgsText(e.target.value)} /></label>}
       {settings.backend==='deepseek-harness' && <label className="settings-row"><span>Harness home（留空跟随 Agent）</span><input aria-label="Harness home" value={settings.home} disabled={disabled} onChange={e=>setSettings(s=>({...s,home:e.target.value}))}/></label>}
-      {isAcp && <label className="settings-row"><span>{'ACP 权限请求策略'}</span><select aria-label="ACP 权限请求策略" value={settings.sandbox} disabled={disabled} onChange={e => setSettings(s => ({ ...s, sandbox: e.target.value as AgentBackendSettings['sandbox'] }))}><option value="read-only">只读／拒绝扩权请求</option><option value="workspace-write">允许项目修改／逐次审批</option></select></label>}
+      {external && <label className="settings-row"><span>{permissionLabel}</span><select aria-label={permissionLabel} value={settings.sandbox} disabled={disabled} onChange={e => setSettings(s => ({ ...s, sandbox: e.target.value as AgentBackendSettings['sandbox'] }))}><option value="read-only">只读／拒绝扩权请求</option><option value="workspace-write">允许项目修改／逐次审批</option></select></label>}
+      {permissionEnforcement === 'unavailable' && <p className="settings-scope backend-permission-warning" role="note">该 Agent 不实现权限请求，只读与逐次审批都无法约束它的文件、命令和网络操作；选择它即代表信任其自身沙箱配置。</p>}
+      {isMsp && <>
+        <label className="settings-row"><span>MSP 模型（留空跟随 Muse）</span><input aria-label="MSP 模型" value={settings.model} disabled={disabled} onChange={e => setSettings(s => ({ ...s, model: e.target.value }))} /></label>
+        <p className="settings-scope">Muse Code 通过 Muse Session Protocol（MSP）接入：CodeNode 启动 <code>muse serve</code> 子进程，把执行项、权限请求、补充输入、取消和最终消息映射到统一后端契约。Muse 的会话编号不跨重启保存，也不注入 CodeNode 工具；工作区改动保留在所选项目中，由 CodeNode 独立核对文件差异。</p>
+      </>}
       {isAcp && <>
         <label className="settings-row"><span>ACP 模型（留空跟随 Agent）</span><input aria-label="ACP 模型" value={settings.model} disabled={disabled} onChange={e => setSettings(s => ({ ...s, model: e.target.value }))} /></label>
         <label className="settings-row"><span>ACP 会话配置（JSON）</span><textarea aria-label="ACP 会话配置" rows={6} value={acpText} disabled={disabled} onChange={e => setAcpText(e.target.value)} /></label>
@@ -95,7 +104,7 @@ export default function BackendSettingsPanel() {
         <div className="settings-row"><button disabled={disabled} onClick={() => void control('inspect')}>读取 ACP 可选项</button><button disabled={disabled} onClick={() => void control('authenticate')}>执行 ACP 认证</button></div>
         {agentInfo && <details><summary>Agent 提供的可选项</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ authMethods: agentInfo.authMethods, modes: agentInfo.modes, models: agentInfo.models, configOptions: agentInfo.configOptions }, null, 2)}</pre></details>}
       </>}
-      <p className="settings-scope">所有外部 Agent 统一通过 ACP stdio 接入。Codex 使用已安装的 codex-acp 适配器；DeepSeek 使用 dsh --profile acp；自定义 ACP 可填写现有命令和参数。登录、模型默认值和原生工具由 Agent 自身管理，不自动下载。只读策略拒绝权限扩权请求，写入策略逐次询问；ACP 权限不是操作系统沙箱。外部费用可能未知，CodeNode 会独立核对文件差异与验收结果。</p>
+      <p className="settings-scope">所有外部 Agent 统一接入：支持 ACP 的走 ACP stdio，Muse Code 走 MSP。Codex 使用已安装的 codex-acp 适配器；Claude Code 使用 claude-agent-acp（旧名 claude-code-acp）；Qwen Code、Qoder、MiniMax Code、Kimi Code、CodeBuddy、Hermes、OpenCode、OpenClaw 使用各自的原生 ACP 入口；DeepSeek 使用 dsh --profile acp；自定义 ACP 可填写现有命令和参数。登录、模型默认值和原生工具由 Agent 自身管理，不自动下载。只读策略拒绝权限扩权请求，写入策略逐次询问；权限请求不是操作系统沙箱，不声明权限请求的 Agent 无法被约束。外部费用可能未知，CodeNode 会独立核对文件差异与验收结果。</p>
     </>}
     <div className="settings-row"><button onClick={() => void save()} disabled={disabled || scope === 'project' && !root}>保存后端</button><button onClick={() => void check()} disabled={disabled}>检测当前配置</button>{root && <button onClick={() => void save(true)} disabled={disabled}>项目跟随本机默认</button>}</div>
     {message && <p className="settings-scope" role="status">{message}</p>}

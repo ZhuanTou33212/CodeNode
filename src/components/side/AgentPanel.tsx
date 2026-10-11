@@ -202,7 +202,8 @@ function PromptComposer() {
 
   const model = models.find((m) => m.id === modelId) || models[0] || null;
   const isAcp = backendConfig.acpBackends.includes(externalBackend);
-  const canVision = !selectedNode && (isAcp || externalBackend === 'builtin' && model?.vision === true);
+  const isMsp = (backendConfig.mspBackends as readonly string[]).includes(externalBackend);
+  const canVision = !selectedNode && (isAcp || isMsp || externalBackend === 'builtin' && model?.vision === true);
 
   useEffect(() => {
     void loadModels();
@@ -222,10 +223,13 @@ function PromptComposer() {
     const picked = files.slice(0, room);
     const next: AgentAttachment[] = [];
     for (const f of picked) {
-      if (isAcp && !f.type.startsWith('image/')) {
-        if (f.size > backendConfig.acpLimits.contentBytes / 2) { useUiStore.getState().setToast('附件超过 ACP 内容上限'); continue; }
-        const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(f); });
-        next.push({ name: f.name, mime: f.type || 'application/octet-stream', bytes: f.size, dataUrl }); continue;
+      if (!f.type.startsWith('image/')) {
+        if (isMsp) { useUiStore.getState().setToast('Muse Code 当前只接收内联图片附件'); continue; }
+        if (isAcp) {
+          if (f.size > backendConfig.acpLimits.contentBytes / 2) { useUiStore.getState().setToast('附件超过 ACP 内容上限'); continue; }
+          const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(f); });
+          next.push({ name: f.name, mime: f.type || 'application/octet-stream', bytes: f.size, dataUrl }); continue;
+        }
       }
       const r = await fileToAttachment(f);
       if (!r.ok) {
