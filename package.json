@@ -330,7 +330,7 @@
     "@typescript/typescript6": "^6.0.2"
   },
   "devDependencies": {
-    "@types/node": "^22.20.2",
+    "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
