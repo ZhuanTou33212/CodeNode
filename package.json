@@ -341,6 +341,6 @@
     "typescript": "^7.0.2",
     "vite": "^8.0.0",
     "wait-on": "^8.0.1",
-    "@electron/asar": "3.4.1"
+    "@electron/asar": "4.3.1"
   }
 }
