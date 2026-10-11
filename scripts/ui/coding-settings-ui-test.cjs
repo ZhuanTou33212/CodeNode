@@ -53,7 +53,7 @@ app.whenReady().then(async()=>{
       const result=await win.webContents.executeJavaScript(`(async()=>{
         const ui=window.__codenodeUi;
         ui.getState().openSettings('general');await new Promise(resolve=>setTimeout(resolve,60));
-        if(ui.getState().theme!==${JSON.stringify(theme)})document.querySelector('.settings-theme-toggle').click();
+        if(ui.getState().theme!==${JSON.stringify(theme)})document.querySelector('[data-theme-option="${theme}"]').click();
         ui.getState().openSettings('editing');await new Promise(resolve=>setTimeout(resolve,250));
         const model=await window.codenode.modelsList();
         const controls=[...document.querySelectorAll('.editing-settings input')].map(input=>({label:input.getAttribute('aria-label'),type:input.type,value:input.value,checked:input.checked}));

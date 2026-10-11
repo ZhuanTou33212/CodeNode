@@ -60,7 +60,7 @@ app.whenReady().then(async () => {
     for (const theme of ['light', 'dark']) {
       const result = await win.webContents.executeJavaScript(`(async()=>{
         const ui=window.__codenodeUi;ui.getState().openSettings('general');await new Promise(r=>setTimeout(r,60));
-        if(ui.getState().theme!==${JSON.stringify(theme)})document.querySelector('.settings-theme-toggle').click();
+        if(ui.getState().theme!==${JSON.stringify(theme)})document.querySelector('[data-theme-option="${theme}"]').click();
         ui.getState().openSettings('costs');await costWait(()=>document.querySelector('.cost-settings select')?.value==='cheap-ui');
         return {controls:[...document.querySelectorAll('.cost-settings input,.cost-settings select')].map(el=>({label:el.getAttribute('aria-label'),value:el.value,checked:el.checked,type:el.type})),
           text:document.querySelector('.task-cost-list').textContent,theme:ui.getState().theme,sessionId:window.__codenodeSession.getState().activeId,

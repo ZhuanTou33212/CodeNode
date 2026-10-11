@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('codenode', {
+  // 主题 → 原生窗口材质（透明玻璃主题靠系统亚克力透出桌面）
+  applyTheme: (theme) => ipcRenderer.invoke('theme:apply', theme),
   saveGraph: (data) => ipcRenderer.invoke('graph:save', data),
   openGraph: () => ipcRenderer.invoke('graph:open'),
   chooseProject: () => ipcRenderer.invoke('project:choose'),

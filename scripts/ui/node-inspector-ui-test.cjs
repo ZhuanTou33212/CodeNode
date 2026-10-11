@@ -94,7 +94,10 @@ app.whenReady().then(async () => {
     }
     const settings = await win.webContents.executeJavaScript(`(async () => {
       const ui = window.__codenodeUi;
-      ui.getState().openSettings('general'); await new Promise(r => setTimeout(r, 100));
+      ui.getState().openSettings('layout'); await new Promise(r => setTimeout(r, 100));
+      // 画布菜单的可见操作在「界面 → 画布菜单」折叠项里，必须先展开。
+      const advanced = document.querySelector('.settings-advanced'); if (advanced) advanced.open = true;
+      await new Promise(r => setTimeout(r, 60));
       const label = [...document.querySelectorAll('.settings-menu-actions label')].find(el => el.textContent === '节点属性');
       if (!label) throw Error('Properties menu setting missing');
       const checkbox = label.querySelector('input'); checkbox.click(); await new Promise(r => setTimeout(r, 50));

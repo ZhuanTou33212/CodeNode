@@ -241,6 +241,7 @@ DISPLAY.push('test:backend-ui');
 DISPLAY.push('test:agent-switch-ui');
 DISPLAY.push('test:workspace-ux-ui');
 DISPLAY.push('test:streaming-ui');
+DISPLAY.push('test:glass-theme-ui');
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const valueOf = (name) => {

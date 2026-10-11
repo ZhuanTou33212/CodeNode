@@ -78,6 +78,7 @@ setupConsoleLog();
 
 const agent = require('./agent.cjs');
 const runStore = require('./runStore.cjs');
+const windowTheme = require('./theme.cjs');
 const sandbox = require('./sandbox.cjs');
 // IPC 按域拆出的模块（各自导出 register(ctx)，依赖显式传入；auditLog 也随工程域搬走了）
 const { auditLog } = require('./ipc/project.cjs');
@@ -90,6 +91,7 @@ const ipcContext = { ipcMain, userDataDir: () => app.getPath('userData') };
 require('./ipc/models.cjs').register({ ...ipcContext, agent });
 require('./ipc/metrics.cjs').register({ ...ipcContext, agent, sandbox, runStore });
 agentIpc.register(ipcContext);
+windowTheme.register();
 require('./ipc/project.cjs').register({ ...ipcContext, dialog, getFocusedWindow: () => BrowserWindow.getFocusedWindow(), sandbox,
   runWorkflowChat: agentIpc.runWorkflowChat });
 
@@ -124,6 +126,9 @@ function isInternalUrl(url) {
 const ALLOWED_PERMISSIONS = new Set([]);
 
 function createWindow() {
+  // 主题决定窗口底色与系统材质：第三个主题「透明玻璃」用 Windows 亚克力透出桌面，
+  // 昼夜主题仍然是不透明底色（见 electron/theme.cjs 的实测结论）。
+  const themeOptions = windowTheme.windowOptions();
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -132,7 +137,8 @@ function createWindow() {
     minWidth: 720,
     minHeight: 560,
     title: 'CodeNode',
-    backgroundColor: '#14161a',
+    backgroundColor: themeOptions.backgroundColor,
+    backgroundMaterial: themeOptions.backgroundMaterial,
     icon: resolveAppIcon(),
     autoHideMenuBar: true,
     webPreferences: {
@@ -142,6 +148,8 @@ function createWindow() {
       sandbox: true,
     },
   });
+  // 绑定后，该窗口的玻璃材质会在最大化/还原/重新聚焦时自动补施一次。
+  windowTheme.bindWindow(win, themeOptions.theme);
 
   // ---- 窗口加固：外链交系统浏览器、站外导航一律拦截、浏览器权限默认拒绝 ----
   win.webContents.setWindowOpenHandler(({ url }) => {

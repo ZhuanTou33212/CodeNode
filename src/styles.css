@@ -4099,6 +4099,11 @@ textarea:focus-visible {
 /* Day / night glass material shared by every workbench surface. */
 /* Theme colors are loaded from config/ui.themes.json; geometry and behavior are shared. */
 .app.glass-theme { background: var(--app-background); }
+/* 第三主题「透明玻璃」：窗口底色由主进程换成系统亚克力材质（见 electron/theme.cjs），
+   页面必须整体透明，否则会盖住桌面。昼夜主题保持各自不透明底色，不受影响。 */
+html[data-theme="glass"],
+html[data-theme="glass"] body,
+html[data-theme="glass"] #root { background: transparent; }
 .glass-theme.ui-clean { color: var(--glass-text); }
 .glass-theme.ui-clean .app-body, .glass-theme.ui-clean .canvas-wrap { background: transparent; }
 .glass-theme.ui-clean :is(.toolbar,.side-panel,.status-bar,.workbench-dock,.side-badge) {
@@ -4512,6 +4517,12 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .global-settings .settings-row input[type="range"] { width: 120px; min-width: 60px; accent-color: var(--glass-accent); }
 .global-settings .settings-row output { min-width: 46px; font-size: 11px; color: var(--glass-muted); }
 .global-settings input[type="checkbox"] { accent-color: var(--glass-accent); }
+/* 主题选择：三套皮肤共用同一控件结构，差异只由配色变量表达。 */
+.settings-theme-hint { display: block; margin-top: 2px; font-size: 11px; color: var(--glass-muted); }
+.settings-theme-choice { display: inline-flex; flex: none; gap: 3px; padding: 3px; border: 1px solid var(--glass-border); border-radius: 10px; background: var(--glass-control); }
+.global-settings .settings-theme-choice button { min-height: 28px; padding: 5px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--glass-muted); font-size: 12px; }
+.global-settings .settings-theme-choice button:hover:not(.is-active) { background: var(--glass-selected); color: var(--glass-text); }
+.global-settings .settings-theme-choice button.is-active { background: var(--glass-sheet); border-color: var(--glass-border); color: var(--glass-text); box-shadow: inset 0 1px 0 var(--glass-edge); }
 .settings-menu-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px; border: 1px solid var(--glass-border); border-radius: 8px; }
 .settings-menu-actions legend { font-size: 12px; color: var(--glass-muted); }
 .settings-menu-actions label { display: flex; align-items: center; gap: 8px; font-size: 12px; }

@@ -512,3 +512,21 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 打包自检：暂存包与固定路径均为 packaged UI 自检 20/20、实际 asar main/preload 渲染启动检查通过、Soul 成长专项通过；暂存目录已清理。已覆盖固定目录 E:\CodeNode\release\win-unpacked，覆盖前确认 CodeNode 未运行，不保留旧包备份。app.asar SHA-256：F4E015BB9E1035B946D4C58C7084545823784299AFAA12A5829BAD5839B2C715；CodeNode.exe SHA-256：9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59；便携版 CodeNode-0.13.0.exe SHA-256：29d46cf2c7f154fb6a2972597ac5f02266a735d536addce10d86236deac825c1。用户本地未提交的 Soul 成长数据与私有配置未提交、未被改写。
 
 未在本机实测的后端（Qwen Code、Qoder、MiniMax Code、Kimi Code、CodeBuddy、Claude Code、Pi、Muse Code）只完成了命令探测、协议夹具与静态检查：本机只安装了 OpenCode、OpenClaw、Hermes 与 Claude Code 本体（无对应 ACP 适配器），没有 `muse`、`qwen`、`qodercli`、`mcode`、`kimi`、`codebuddy`、`pi-acp`，因此这些后端不标记为实测通过。需要真实验证时用 `npm run test:backend-live-agents -- --backends=<name>` 或 `test:backend-live-workflow`。
+
+### 2026-10-11 第三个主题皮肤：纯透明无色玻璃（桌面穿透）
+
+外观设置从「日间／夜间」两态切换改为**三选一**：日间、夜间、透明玻璃。三套皮肤继续共用同一套控件结构、布局与交互，差异只由 `config/ui.themes.json` 的配色变量表达；主题选择入口集中在 `src/lib/theme.ts`（ID、标签、说明、校验、token 读取的唯一来源），选中后写入 `localStorage` 并由主进程另存一份用于下次启动建窗。切换主题不重建窗口，因此不会重置会话、输入草稿、模型选择或侧栏状态。
+
+**先测量再定方案。** 本轮先用一次性探针在真实屏幕上量「哪种窗口配置能真透出桌面」，结论写进 [透明玻璃主题](theme-glass.md)：
+
+- CSS 的 `backdrop-filter` **模糊不到桌面**：透明窗口 + `blur(28px)` 面板与透明窗口 + 纯半透明色块，屏幕像素逐点一致（亮度均值同为 245.75、标准差同为 26.50），模糊只作用于页面自身内容。所以桌面透亮只能来自窗口材质。
+- `backgroundMaterial: 'acrylic'` **在有边框窗口上同样生效**（亮度均值 221.66、标准差 2.81 的磨砂玻璃，对照：不透明底色 107.01／1.47）。因此不需要改成无边框窗口、不需要自绘标题栏，昼夜主题的窗口外观与行为完全不变。
+- 底色与材质**都能在运行时切换**：先建不透明深色窗口，再 `setBackgroundColor('#00000000')` + `setBackgroundMaterial('acrylic')`，结果与一开始就建玻璃窗口逐像素一致（均值同为 221.86），所以切换主题不必重建窗口。
+- 材质明暗跟随 `nativeTheme.themeSource`：`dark` 是石墨灰（均值 143.22），`light` 才是无色的明亮玻璃（221.86）。玻璃主题因此强制 `light`，离开时恢复 `system`。
+
+**实现。** 新增 `electron/theme.cjs` 负责「主题 → 窗口材质」：读取并持久化主题（`userData/window-theme.json`，原子写）、给出建窗参数（避免启动时先闪一下不透明深色）、运行时施加材质，并在最大化／还原／重新聚焦等时机补施一次（DWM 在这些时机可能丢弃材质）。`electron/main.cjs` 用 `windowTheme.windowOptions()` 建窗并绑定该窗口；`electron/preload.cjs` 暴露 `applyTheme`；`src/App.tsx` 在主题变化时写 `html[data-theme]`、`color-scheme` 与全部 CSS 变量并上报主进程。CSS 侧只要 `html[data-theme="glass"]` 下 `html/body/#root` 整体透明（原来的 `body` 有不透明底色会盖住桌面玻璃），其余玻璃质感沿用既有 `.glass-theme` 规则。主题 ID 直接取 `config/ui.themes.json` 的键，主进程与渲染层不各维护一份列表。玻璃主题除语义状态色外**必须无色**（RGB 极差 ≤ 12），由测试直接断言，避免以后顺手加回偏蓝的灰。
+
+**验收。** 新增 `npm run test:glass-theme-ui` 并纳入显示环境测试组，跑真实 `main.cjs`、真实 preload 与构建产物：三套 token 键一致、设置入口三选一与持久化、玻璃主题下窗口底色变全透明且 `color-scheme` 为亮色、`.app`/`body`/`#root` 计算背景透明、**透光率**（把窗口背后的底色从纯亮黄换成近黑，玻璃主题下 99.8% 像素亮度变化、均值差 69.3；夜间主题下变化 0%、均值 35.69 —— 后者同时是对照组，证明取样区确实是应用本体）、切换主题保留工程／消息／偏好／侧栏／工作台状态、切回夜间后底色恢复不透明且 `nativeTheme.themeSource` 恢复 `system`。`npx tsc --noEmit`、`npm run check:js` 通过；`npm test` 核心套件 167/167 通过。显示组里受影响的既有用例同步更新：`test:project-ui`、`test:coding-settings-ui`、`test:token-cost-ui`、`test:simple-settings-ui` 改为点击 `[data-theme-option]`，全部通过；`test:node-inspector-ui` 此前在「常规」标签里找只存在于「界面 → 画布菜单」的节点属性开关而失败（与本次改动无关，`HEAD` 同样如此），本轮按控件真实位置修正点击分类并展开折叠项后通过。证据图：[亮色桌面背景](validation/glass-theme-preview/bright-backdrop.png)、[暗色桌面背景](validation/glass-theme-preview/dark-backdrop.png)。
+
+**打包自检。** `packaged-ui-check` 增加 6 项主题检查（asar 内主题→材质模块、三套色值齐全且 token 键一致、asar preload 暴露 `theme:apply`、渲染包包含第三个主题入口与整体透明规则、切玻璃后页面整体透明且主进程换成系统玻璃底色、切回夜间恢复不透明）：暂存包与固定路径均为 **28/28** 通过，`packaged-startup-check` 与 Soul 成长专项同样通过。把 `CODENODE_UI_TEST_PACKAGE` 指向交付包再跑一次 `test:glass-theme-ui`，透光率与源码一致（99.8%、亮度差 69.3）。已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行，不保留旧包备份；独立暂存目录 `.stage-glass-theme`、临时打包配置与隔离自检数据均已清理。app.asar SHA-256：`A7020D35AA040D101B58DE035CF58F297465EA1D190C1497BC4C8408060207F2`；CodeNode.exe SHA-256：`9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59`（与替换前逐字节一致，本次交付只更新包内容）；便携版 CodeNode-0.13.0.exe SHA-256：`D47DF8A76A77659EBC72F5BD46B6208DB1A271A8C4A3F38B8C91AB4CD0F27495`。用户本地未提交的 Soul 修改与私有配置未提交、未被改写。
+

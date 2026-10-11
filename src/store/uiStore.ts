@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { loadUiPreferences, normalizeUiPreferences, UI_PREFERENCES_KEY, type UiPreferences } from '../lib/uiPreferences';
 import { formatResumePlanNotice, type ResumePlanLike } from '../lib/resumePlan';
+import { DEFAULT_THEME, normalizeTheme, THEME_STORAGE_KEY, type Theme } from '../lib/theme';
 
 /** 左侧侧栏的标签页：Agent 对话 / 节点属性 / 项目树 / 文件预览 */
 export type SideTab = 'agent' | 'node' | 'project' | 'preview';
@@ -9,8 +10,8 @@ export type SideTab = 'agent' | 'node' | 'project' | 'preview';
 export const SIDE_WIDTH_MIN = 260;
 export const SIDE_WIDTH_MAX = 520;
 export const SIDE_WIDTH_DEFAULT = 360;
-function savedTheme(): 'light' | 'dark' {
-  try { return localStorage.getItem('codenode.theme') === 'light' ? 'light' : 'dark'; } catch { return 'dark'; }
+function savedTheme(): Theme {
+  try { return normalizeTheme(localStorage.getItem(THEME_STORAGE_KEY)); } catch { return DEFAULT_THEME; }
 }
 
 const initialPreferences = loadUiPreferences();
@@ -37,7 +38,8 @@ interface UiState {
   navigationOpen: boolean;
   navigationAutoHidden: boolean;
   toggleNavigation: () => void;
-  theme: 'light' | 'dark';
+  theme: Theme;
+  setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   /** 右侧侧栏（原「检查器」+ 原左侧「项目管理」合并后的唯一面板） */
   sideOpen: boolean;
@@ -115,11 +117,13 @@ export const useUiStore = create<UiState>((set, get) => ({
   navigationAutoHidden: false,
   toggleNavigation: () => get().updatePreferences({navigationOpen:!get().navigationOpen}),
   theme: savedTheme(),
-  toggleTheme: () => set((state) => {
-    const theme = state.theme === 'dark' ? 'light' : 'dark';
-    try { localStorage.setItem('codenode.theme', theme); } catch {}
-    return { theme };
+  setTheme: (theme) => set(() => {
+    const next = normalizeTheme(theme);
+    try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch {}
+    return { theme: next };
   }),
+  // 日间/夜间快速切换：只在这两套配色之间来回，玻璃主题视为亮色一侧。
+  toggleTheme: () => get().setTheme(get().theme === 'dark' ? 'light' : 'dark'),
   sideOpen: false,
   sideTab: 'agent',
   sideWidth: SIDE_WIDTH_DEFAULT,

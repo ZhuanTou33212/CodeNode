@@ -154,6 +154,27 @@ app.whenReady().then(async () => {
     await sleep(400);
     ok('项目标签含文件树与过滤框', await js(`!!document.querySelector('.pm-tree') && !!document.querySelector('.pm-search')`));
 
+    // ---- 第三个主题「透明玻璃」：打包产物里的色值、入口、透明规则与窗口材质链路 ----
+    const packagedTheme = require(path.join(ASAR, 'electron', 'theme.cjs'));
+    ok('asar 包含主题→窗口材质模块', ['windowOptions', 'applyToWindow', 'bindWindow', 'register'].every((name) => typeof packagedTheme[name] === 'function') && packagedTheme.GLASS === 'glass');
+    const asarThemes = JSON.parse(fs.readFileSync(path.join(ASAR, 'config', 'ui.themes.json'), 'utf8'));
+    ok('asar 三套主题色值齐全且 token 键一致', ['light', 'dark', 'glass'].every((id) => asarThemes[id]) && JSON.stringify(Object.keys(asarThemes.light).sort()) === JSON.stringify(Object.keys(asarThemes.glass).sort()) && asarThemes.glass['--app-background'] === 'transparent');
+    ok('asar preload 暴露主题材质 IPC', fs.readFileSync(path.join(ASAR, 'electron', 'preload.cjs'), 'utf8').includes('theme:apply'));
+    const cssBundles = assetNames.filter((name) => name.endsWith('.css')).map((name) => fs.readFileSync(path.join(assetsDir, name), 'utf8'));
+    // 压缩后的选择器会去掉属性值引号，这里两种写法都认。
+    ok('asar 渲染包包含第三个主题入口与整体透明规则', rendererBundles.some((bundle) => bundle.includes('透明玻璃') && bundle.includes('data-theme-option')) && cssBundles.some((bundle) => /\[data-theme=["']?glass["']?\]/.test(bundle)));
+
+    await js(`window.__codenodeUi.getState().setTheme('glass')`);
+    await sleep(350);
+    ok('切换到透明玻璃后页面整体透明', await js(`document.documentElement.dataset.theme==='glass' && getComputedStyle(document.querySelector('.app')).backgroundColor==='rgba(0, 0, 0, 0)' && getComputedStyle(document.body).backgroundColor==='rgba(0, 0, 0, 0)'`));
+    ok('切换到透明玻璃后主进程换成系统玻璃底色', String(win.getBackgroundColor()).slice(0, 7).toUpperCase() === '#000000');
+    // 包内玻璃主题的“透亮”不由截图断言：隐藏窗口会被 Chromium 节流重绘，截到的是旧帧。
+    // 真实透光率由 npm run test:glass-theme-ui 在真实屏幕合成结果上测量（支持 CODENODE_UI_TEST_PACKAGE）。
+    await js(`window.__codenodeUi.getState().setTheme('dark')`);
+    await sleep(300);
+    ok('切回夜间后窗口底色恢复不透明', String(win.getBackgroundColor()).slice(0, 7).toUpperCase() === '#14161A');
+    ok('切回夜间后页面底色恢复墨黑', await js(`getComputedStyle(document.querySelector('.app')).backgroundColor==='rgb(23, 25, 29)'`));
+
     const img = await win.webContents.capturePage();
     fs.mkdirSync(path.dirname(SHOT), { recursive: true });
     fs.writeFileSync(SHOT, img.toPNG());

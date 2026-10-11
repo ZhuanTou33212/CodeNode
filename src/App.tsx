@@ -1,6 +1,6 @@
 import GoalOverview from './components/GoalOverview';
 import { useEffect, useLayoutEffect } from 'react';
-import { themeTokens } from './lib/themeTokens';
+import { themeTokens, themeColorScheme } from './lib/theme';
 import { useReactFlow } from '@xyflow/react';
 import Toolbar from './components/Toolbar';
 import { useProjectAutoSave } from './lib/useProjectAutoSave';
@@ -80,8 +80,11 @@ export default function App() {
   const theme = useUiStore((s) => s.theme);
   useLayoutEffect(() => {
     const root = document.documentElement;
-    root.dataset.theme = theme; root.style.colorScheme = theme;
+    root.dataset.theme = theme; root.style.colorScheme = themeColorScheme(theme);
     for (const [name,value] of Object.entries(themeTokens(theme))) root.style.setProperty(name,value);
+    // 玻璃主题的「透亮」来自窗口背景材质（Windows 亚克力），必须由主进程施加；
+    // 渲染层只负责上报主题，这样切换主题不需要重建窗口，也就不会打断会话与草稿。
+    try { void window.codenode?.applyTheme(theme); } catch {}
   }, [theme]);
   const dockOpen = useUiStore((s) => s.dockOpen);
   const booted = useUiStore((s) => s.booted);
