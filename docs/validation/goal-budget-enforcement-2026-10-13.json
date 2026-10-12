@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T22:55:40.092Z",
-  "sourceCommit": "c2077b510096c3681ce943b49180ca11e4eb95da",
+  "recordedAt": "2026-10-12T23:05:46.602Z",
+  "sourceCommit": "85d5dbaee78832ee95cf6bfebb67e3c55519ebd5",
   "passed": true,
-  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed actions, persisted Task owners, owner-aware planning and fixed Windows delivery",
+  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed attention actions, risk-prioritized follow-ups and fixed Windows delivery",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "f06b02a97ea5296b7c48437c27a5ae013ead4579b1aad754e4e4b5621ae7577b",
-    "portableSha256": "69f0ffd1a2e52cbd3e372a5897fb506f563edbe0700ed95b3fcf8f28e7f75635",
+    "asarSha256": "3a248eb88aa4e70b45cd7bc03094ad7bf15523dee46501791fef32639cc958ab",
+    "portableSha256": "de63fda393cacbf5b0f83f63074e7c920e001d5e319e9c7610ff988a706c4735",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -19,7 +19,7 @@
         "userDataDirWritable": true
       },
       "ok": true,
-      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker planner-owner-fixed"
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker attention-priority-fixed"
     }
   },
   "verification": {
@@ -165,6 +165,18 @@
       "goalPlanOwnerIpcTest": "passed",
       "goalCanvasBatchOwnerTest": "passed",
       "packagedGraphOwnerUi": "passed"
+    },
+    "goalAttentionPriority": {
+      "unit": true,
+      "sourceUi": true,
+      "actualAsar": true,
+      "unknownBudgetAndRunFirst": true,
+      "decisionAndTaskFailuresSecond": true,
+      "waitsAfterActions": true,
+      "overviewAndEditorSameOrder": true,
+      "lightTheme": true,
+      "darkTheme": true,
+      "overflowRouteToFullQueue": true
     }
   },
   "budgetSemantics": {
