@@ -238,6 +238,7 @@ interface CodenodeApi {
   goalCreate: (root:string|null,input:{title:string;objective?:string;scope?:string;exclusions?:string;criteria?:string[];maxTokens?:number;maxCostUsd?:number})=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalUpdate: (root:string|null,goalId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalTokenUsageReconcile: (root:string|null,goalId:string,totalTokens:number,reason:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalCostReconcile: (root:string|null,goalId:string,totalCostUsd:number,reason:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalAutoAdvanceClaim: (root:string|null,goalId:string,taskId:string)=>Promise<{ok:boolean;error?:string;value?:{goalId:string;taskId:string;title:string;objective:string;claimId:string;requestId:string;waitObservationId:string;usedRuns:number;maxRuns:number}}>;
   goalAutoAdvanceRelease: (root:string|null,goalId:string,taskId:string,claimId:string,reason?:string)=>Promise<{ok:boolean;error?:string;value?:boolean}>;
   goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;

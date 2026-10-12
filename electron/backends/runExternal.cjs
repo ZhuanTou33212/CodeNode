@@ -10,6 +10,19 @@ const { CodeVerifier } = require('../codeVerification.cjs');
 const { createStateMachine, toRunStatus } = require('../agentState.cjs');
 const activeProjects = new Set();
 function projectKey(root) { const key = path.resolve(root); return process.platform === 'win32' ? key.toLowerCase() : key; }
+function usageCost(update){const cost=update?.cost,amount=Number(cost?.amount),currency=String(cost?.currency||'').toUpperCase();return Number.isFinite(amount)&&amount>=0&&currency?{amount,currency}:null;}
+function priorSessionCost(root,previous){
+  if(!previous)return{known:true,amount:0};
+  const events=runStore.readRun(root,previous.start?.runId||'');
+  for(let i=events.length-1;i>=0;i--){const event=events[i];if(event.type!=='backend_info'||event.info?.sessionUpdate!=='usage_update'||!event.info.cost)continue;const cost=usageCost(event.info);return cost?.currency==='USD'?{known:true,amount:cost.amount}:{known:false,amount:0};}
+  return{known:false,amount:0};
+}
+function cumulativeCostDelta(prior,current){
+  if(current?.currency!=='USD'||!prior.known)return null;
+  const tolerance=Number.EPSILON*Math.max(1,current.amount,prior.amount)*4;
+  if(current.amount+tolerance<prior.amount)return null;
+  return Math.max(0,current.amount-prior.amount);
+}
 function sessionFromRun(root, id) {
   const events = runStore.readRun(root, id);
   const start = events.find(event => event.type === 'run_start');
@@ -56,9 +69,12 @@ async function runExternal(input, deps = {}) {
   const adapterSettings = previous?.session?.adapterSettings || settings;
   if (resumeRunId && previous?.start?.backend !== settings.backend && !previous?.session?.adapterSettings) return { ok: false, error: '恢复必须使用原 Agent 后端：' + String(previous?.start?.backend || 'unknown') };
   const backend = (deps.createBackend || backendFactory.createBackend)(backendName, adapterSettings, deps);
+  const priorCost=priorSessionCost(root,previous);
   const permissions = {owner:'acp-agent-runtime',transport:'acp',requestPolicy:adapterSettings.sandbox,osSandboxEnforcedByCodeNode:false};
   const runId = runStore.normalizeRunId(requestId);
-  let goalTokenAllowance=null,goalBudgetExceeded=false,latestGoalUsage=null;
+  let goalTokenAllowance=null,goalCostAllowance=null,goalTokenExceeded=false,goalCostExceeded=false,latestGoalUsage=null;
+  /** @type {{value:{amount:number,currency:string}|null}} */
+  const latestCostState={value:null};
   if (runStore.readRun(root, runId).length) return { ok: false, runId, error: '该请求编号已有执行记录，请查看原运行结果，避免重复执行' };
   const machine = createStateMachine({ onTransition: info => emit({ kind: 'state', state: info.to, previous: info.from, sequence: info.sequence, reason: info.reason }) });
   function emit(delta) {
@@ -73,6 +89,7 @@ async function runExternal(input, deps = {}) {
   try {
     input.onStart?.();
     goalTokenAllowance=Number.isSafeInteger(cfg?.goalTokenBudgetAllowance)&&cfg.goalTokenBudgetAllowance>=0?cfg.goalTokenBudgetAllowance:null;
+    goalCostAllowance=Number.isFinite(cfg?.goalCostBudgetAllowance)&&cfg.goalCostBudgetAllowance>=0?cfg.goalCostBudgetAllowance:null;
     if (!runStore.startRun(root, runId, { prompt: String(input.prompt || '').slice(0, 4000), backend: backendName,
       memoryConversationId:input.memoryConversationId||null,backendEpoch:resumeRunId?previous?.start?.backendEpoch||null:input.backendEpoch||null,
       model: adapterSettings.model || backendName, nodeId: input.nodeId || null, planSessionId: sessionId || null,
@@ -93,8 +110,16 @@ async function runExternal(input, deps = {}) {
       const usage=delta.kind==='backend_info'&&delta.info?.sessionUpdate==='usage_update'?delta.info:null;
       const total=usage?Number(usage.total_tokens??usage.totalTokens):NaN;
       if(usage&&Number.isFinite(total)&&total>=0)latestGoalUsage=usage;
-      if(usage&&goalTokenAllowance!=null&&Number.isFinite(total)&&total>goalTokenAllowance&&!goalBudgetExceeded){
-        goalBudgetExceeded=true;emit({kind:'error',error:'外部 Agent 已报告用量超过 Goal Token 预算；正在请求停止本次运行。'});
+      if(usage?.cost){const cost=usageCost(usage);latestCostState.value=cost;}
+      const currentCost=latestCostState.value;
+      const sessionCostDelta=cumulativeCostDelta(priorCost,currentCost);
+      const costForGuard=currentCost?.currency==='USD'?(sessionCostDelta??currentCost.amount):null;
+      if(usage&&goalTokenAllowance!=null&&Number.isFinite(total)&&total>goalTokenAllowance&&!goalTokenExceeded){
+        goalTokenExceeded=true;emit({kind:'error',error:'外部 Agent 已报告用量超过 Goal Token 预算；正在请求停止本次运行。'});
+        void backend.cancel(runId,{ownerId:'local'}).catch(()=>{});
+      }
+      if(usage&&goalCostAllowance!=null&&costForGuard!=null&&costForGuard>goalCostAllowance+Number.EPSILON*Math.max(1,goalCostAllowance)*4&&!goalCostExceeded){
+        goalCostExceeded=true;emit({kind:'error',error:'外部 Agent 已报告费用超过 Goal 预算；正在请求停止本次运行。'});
         void backend.cancel(runId,{ownerId:'local'}).catch(()=>{});
       }
       emit(delta);
@@ -103,7 +128,10 @@ async function runExternal(input, deps = {}) {
     try{result = await backend.submit({ ...input, onDelta:undefined, backendSession: previous?.session,
       onSession: session => { if (!runStore.appendEvent(root, runId, 'backend_session', session)) throw new Error('无法持久化 ACP 会话，停止执行'); },
       confirm });}finally{unsubscribe();await backend.close();}
-    if(goalBudgetExceeded)result={...result,state:'FAILED',error:'外部 Agent 用量超过 Goal Token 预算，已停止本次运行。',stopReason:'goal_token_budget_exceeded',usage:result?.usage||latestGoalUsage};
+    const currentCost=latestCostState.value;
+    const goalRunCost=cumulativeCostDelta(priorCost,currentCost);
+    const goalRunCostKnown=goalRunCost!=null;
+    if(goalTokenExceeded||goalCostExceeded)result={...result,state:'FAILED',error:goalTokenExceeded?'外部 Agent 用量超过 Goal Token 预算，已停止本次运行。':'外部 Agent 费用超过 Goal 预算，已停止本次运行。',stopReason:goalTokenExceeded?'goal_token_budget_exceeded':'goal_cost_budget_exceeded',usage:result?.usage||latestGoalUsage};
     const changes = diff.compare(before, diff.capture(root));
     const goalScopeViolations = goalScope.violations(changes.files, input.goalWriteScope);
     const goalScopeUnverified = Array.isArray(input.goalWriteScope) && input.goalWriteScope.length > 0 && !changes.complete;
@@ -130,11 +158,11 @@ async function runExternal(input, deps = {}) {
     }
     machine.go(state, result.stopReason || state);
     runStore.finishRun(root, runId, toRunStatus(state), { state, reply: result.content, usage: result.usage,
-      stopReason: result.stopReason, error: result.error, backendErrorCode: result.backendErrorCode || null, backendErrorMethod: result.backendErrorMethod || null, backendErrorDetails: result.backendErrorDetails || null, backendStderr: result.backendStderr || null, backend: backendName, changes, goalScopeViolations, codeVerification: verification, cost: 'unknown' });
+      stopReason: result.stopReason, error: result.error, backendErrorCode: result.backendErrorCode || null, backendErrorMethod: result.backendErrorMethod || null, backendErrorDetails: result.backendErrorDetails || null, backendStderr: result.backendStderr || null, backend: backendName, changes, goalScopeViolations, codeVerification: verification, costUsd:goalRunCost,costKnown:goalRunCostKnown,cost:goalRunCostKnown?{amount:goalRunCost,currency:'USD',source:'ACP cumulative session cost delta'}:'unknown' });
     return { ok: state === 'COMPLETED', runId, reply: result.content || '', reasoning: result.reasoning || '', toolCalls: result.toolCalls || [],
       usage: result.usage, state, error: result.error, aborted: result.aborted, backend: backendName, stopReason: result.stopReason,
       backendErrorCode: result.backendErrorCode, backendErrorMethod: result.backendErrorMethod, backendErrorDetails: result.backendErrorDetails, backendStderr: result.backendStderr,
-      changes, goalScopeViolations, codeVerification: verification, costUnknown: true };
+      changes, goalScopeViolations, codeVerification: verification, cost:goalRunCostKnown?{costUsd:goalRunCost,costKnown:true,currency:'USD',source:'ACP cumulative session cost delta'}:{costUsd:null,costKnown:false},costUnknown:!goalRunCostKnown };
   } catch (error) {
     machine.go('FAILED', 'backend_result_unknown');
     runStore.finishRun(root, runId, 'error', { state: 'FAILED', error: error.message, stopReason: 'backend_result_unknown', backend: backendName });

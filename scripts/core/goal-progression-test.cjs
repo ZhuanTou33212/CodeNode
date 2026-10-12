@@ -29,6 +29,18 @@ try{
   assert.throws(()=>store.reconcileTokenUsage(root,unknownUsage.id,39,'核对'),/不能低于已有/);
   const reconciled=store.reconcileTokenUsage(root,unknownUsage.id,64,'读取 ACP provider usage_update used=64');assert.equal(reconciled.totalTokens,64);assert.equal(store.canRun(root,unknownUsage.id,unknownTask.id).decision,'run');
   store.admit(root,unknownUsage.id,unknownTask.id,'budget-snapshot');assert.equal(store.read(root).admissions.find(a=>a.runId==='budget-snapshot').tokenAllowance,136);assert.throws(()=>store.updateGoal(root,unknownUsage.id,{maxTokens:500}),/活动 Run/);store.settle(root,'budget-snapshot',{status:'failed',usage:{total_tokens:0}});
+  const unknownCost=store.createGoal(root,{title:'Reconcile unknown ACP cost',criteria:['accepted'],maxCostUsd:0.5}),costTask=store.createTask(root,unknownCost.id,{title:'No cumulative cost frame'});
+  store.admit(root,unknownCost.id,costTask.id,'unknown-cost-reconcile');store.settle(root,'unknown-cost-reconcile',{status:'failed',costKnown:false});
+  assert.equal(store.audit(root,unknownCost.id).budget.costBudgetUnknown,true);assert.equal(store.canRun(root,unknownCost.id,costTask.id).decision,'needs-user');
+  store.updateGoal(root,unknownCost.id,{maxCostUsd:0.75});assert.equal(store.read(root).goals.find(g=>g.id===unknownCost.id).budget.costUnknown,true);
+  assert.throws(()=>store.reconcileGoalCost(root,unknownCost.id,0.02,''),/不能为空/);
+  assert.equal(store.reconcileGoalCost(root,unknownCost.id,0.02,'读取 ACP 账单 USD 累计值').totalCostUsd,0.02);
+  assert.equal(store.canRun(root,unknownCost.id,costTask.id).decision,'run');
+  const costFloor=store.createGoal(root,{title:'Reconcile cumulative cost floor',criteria:['accepted'],maxCostUsd:0.2}),costKnownTask=store.createTask(root,costFloor.id,{title:'Known USD run'}),costUnknownTask=store.createTask(root,costFloor.id,{title:'Unknown USD run'});
+  store.admit(root,costFloor.id,costKnownTask.id,'known-usd');store.settle(root,'known-usd',{status:'failed',costKnown:true,costUsd:0.08});
+  store.admit(root,costFloor.id,costUnknownTask.id,'unknown-usd');store.settle(root,'unknown-usd',{status:'failed',costKnown:false});
+  assert.throws(()=>store.reconcileGoalCost(root,costFloor.id,0.07,'provider statement'),/不能低于已有/);
+  assert.equal(store.reconcileGoalCost(root,costFloor.id,0.11,'provider statement').totalCostUsd,0.11);
 
   const waiting=store.createGoal(root,{title:'Unobserved due wait',criteria:['accepted']});const w=store.createTask(root,waiting.id,{title:'Wait'});store.updateTask(root,waiting.id,w.id,{waitCondition:{kind:'external_status',provider:'manual',description:'CI success',expected:'success',nextCheckAt:new Date(Date.now()-1000).toISOString()}});
   assert.equal(store.canRun(root,waiting.id,w.id).decision,'wait','an elapsed polling deadline is not evidence that the external condition matched');assert.throws(()=>store.admit(root,waiting.id,w.id,'unobserved-run'),/运行资格：wait/);

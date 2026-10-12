@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('codenode', {
   goalCreate: (root, input) => ipcRenderer.invoke('goal:create', root, input),
   goalUpdate: (root, goalId, patch) => ipcRenderer.invoke('goal:update', root, goalId, patch),
   goalTokenUsageReconcile: (root, goalId, totalTokens, reason) => ipcRenderer.invoke('goal:token-usage-reconcile', root, goalId, totalTokens, reason),
+  goalCostReconcile: (root, goalId, totalCostUsd, reason) => ipcRenderer.invoke('goal:cost-reconcile', root, goalId, totalCostUsd, reason),
   goalAutoAdvanceClaim: (root, goalId, taskId) => ipcRenderer.invoke('goal:auto-advance-claim', root, goalId, taskId),
   goalAutoAdvanceRelease: (root, goalId, taskId, claimId, reason) => ipcRenderer.invoke('goal:auto-advance-release', root, goalId, taskId, claimId, reason),
   goalTaskCreate: (root, goalId, input) => ipcRenderer.invoke('goal:task-create', root, goalId, input),

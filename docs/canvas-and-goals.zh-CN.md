@@ -44,8 +44,10 @@
 - 交接包、界面重载后的真实请求与固定交付验证：[2026-10-13 交接记录](validation/goal-handoff-2026-10-13.json)。
 - 等待验收或等待续跑授权只阻塞相关依赖分支；已明确启动的独立分支可以继续。失败或未知结果仍会停止自动推进。到达检查时间只代表应检查条件，未记录满足观察的 Task 不能启动。
 - 预算用到上限后不再启动新 Run；已完成并通过验收的结果在未超额、费用可核对时可以完成 Goal，无需额外预留余额。超额或受限预算中的未知费用仍阻止完成。
-- 内置模型的每次请求会用剩余 Goal 额度预留输入和输出 Token，并相应收紧实际 `max_tokens`；输入本身超过余额时不会发送请求。外部 ACP 报告超额时 CodeNode 会请求取消；没有可靠 usage 时会显示待核对状态，要求填写有来源说明的累计用量，且不能低于已有记录。ACP 运行中的预算仍取决于 Agent 是否报告 usage。
-- Goal Token 用量、请求级预留和 ACP 超额处理的固定包验证：[2026-10-13 预算记录](validation/goal-budget-enforcement-2026-10-13.json)。
+- 内置模型的每次请求会用剩余 Goal 额度预留输入和输出 Token，并相应收紧实际 `max_tokens`；输入本身超过余额时不会发送请求。ACP v1 的 `usage_update.used/size` 表示会话当前上下文占用，不是累计消费量（见[ACP 规范](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/prompt-turn.mdx#session-usage-updates)）。CodeNode 只把明确报告的 `total_tokens` 用于 Token 预算超额停止。
+- ACP 报告 USD 累计 session cost 时，CodeNode 用同一会话上次留存值计算本 Run 差额，并在差额超过 Goal 余额时请求取消。缺少用量报告、费用基线或 USD 币种时会将预算标为待核对；填写累计 Token/USD 用量和来源说明后才能继续受限 Goal。外部运行中的取消仍取决于 Agent 及时报告。
+- Goal 摘要显示已知 USD 费用和上限；账单基线未知时，详情页要求记录可追溯的累计 USD 核对值。
+- Goal Token 与累计 USD 费用、请求级预留、ACP 超额取消和人工核对的固定包验证：[2026-10-13 预算记录](validation/goal-budget-enforcement-2026-10-13.json)。
 
 ### 总览页
 

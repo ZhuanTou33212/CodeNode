@@ -389,6 +389,10 @@ function register(ctx) {
     try{checkedSender(event);return withGoalRoot(projectRoot,root=>goalStore.reconcileTokenUsage(root,goalId,totalTokens,reason));}
     catch(error){return{ok:false,error:String(error?.message||error)};}
   });
+  handleGoal('goal:cost-reconcile',async(event,projectRoot,goalId,totalCostUsd,reason)=>{
+    try{checkedSender(event);return withGoalRoot(projectRoot,root=>goalStore.reconcileGoalCost(root,goalId,totalCostUsd,reason));}
+    catch(error){return{ok:false,error:String(error?.message||error)};}
+  });
   handleGoal('goal:auto-advance-claim', async (_event, projectRoot, goalId, taskId) => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value;
     if(activeRequests.size||activeGoalVerifications.size)return{ok:false,error:'Agent 或独立验收正在运行，自动推进会在当前 Run 结束后重试'};
@@ -752,6 +756,7 @@ function register(ctx) {
       goalAdmission = { goalId: String(goalId), taskId: String(taskId), runId: String(admissionRunId) };
       if(options.external===true)runCfg.goalExternalBackend=true;
       runCfg.goalTokenBudgetAllowance=admission.tokenAllowance;
+      runCfg.goalCostBudgetAllowance=admission.costAllowance;
       if(options.external!==true){
         require('../goalRunBudget.cjs').apply(runCfg,admission);
         runCfg.goalRunBudget=true;

@@ -13,6 +13,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   else if(m.method==='session/prompt'){
     if(process.argv.includes('--record-prompts')){const fs=require('node:fs'),path=require('node:path');const dir=path.join(process.cwd(),'.codenode');fs.mkdirSync(dir,{recursive:true});fs.appendFileSync(path.join(dir,'handoff-prompts.jsonl'),JSON.stringify(m.params)+'\n');}
     pendingPrompt=m.id;
+    const costSequenceArg=process.argv.find(arg=>arg.startsWith('--cost-sequence='));
+    if(costSequenceArg){const fsCost=require('node:fs'),pathCost=require('node:path'),dirCost=pathCost.join(process.cwd(),'.codenode');fsCost.mkdirSync(dirCost,{recursive:true});const fileCost=pathCost.join(dirCost,'acp-cost-sequence.json'),values=costSequenceArg.slice(16).split(',').map(Number).filter(Number.isFinite);const state=fsCost.existsSync(fileCost)?JSON.parse(fsCost.readFileSync(fileCost,'utf8')):{index:0};const amount=values[Math.min(state.index,values.length-1)];state.index++;fsCost.writeFileSync(fileCost,JSON.stringify(state));send({jsonrpc:'2.0',method:'session/update',params:{sessionId:session,update:{sessionUpdate:'usage_update',used:100,size:200000,cost:{amount,currency:'USD'}}}});}
     const usageArg=process.argv.find(arg=>arg.startsWith('--usage='));
     if(usageArg){const total=Number(usageArg.slice(8));send({jsonrpc:'2.0',method:'session/update',params:{sessionId:session,update:{sessionUpdate:'usage_update',inputTokens:total,outputTokens:0,total_tokens:total}}});}
     send({jsonrpc:'2.0',method:'session/update',params:{sessionId:session,update:{sessionUpdate:'agent_message_chunk',messageId:'msg-1',content:{type:'text',text:'ACP_RUNTIME_OK'}}}});
