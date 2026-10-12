@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T20:45:55.587Z",
-  "sourceCommit": "fd0a2259dce9c6f25d4257972d3e45679929c705",
+  "recordedAt": "2026-10-12T21:04:51.12Z",
+  "sourceCommit": "656ef72129cf85cfad5634c37402c49c01925dd7",
   "passed": true,
-  "scope": "Goal token and cumulative ACP USD budget admission, per-request reservations, unknown-usage recovery, branch progress, fixed Windows delivery and packaged acceptance",
+  "scope": "Goal token and cumulative ACP USD budgets, shared user-owned budget attention actions, cross-Goal routing, request reservations, fixed Windows delivery and packaged acceptance",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "23eb16c5a0b83417b879e96b4a1c67dee43acbb15d2269d1ed1e8515165e87f3",
-    "portableSha256": "f0d546877bd289e9bee81b50cc335fef0fe7eedf27406a41ae0538b9d020456b",
+    "asarSha256": "76ab19a29b35e3ed6d079e2d272564ec7f71c7abadd2c81a6c0c313fc78ca272",
+    "portableSha256": "ec9b2763a60b711227c6e2f548f5833dea8667e2ca08afe9daf9b204f80f9e4d",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -19,7 +19,7 @@
         "userDataDirWritable": true
       },
       "ok": true,
-      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated user data and project; version 0.13.0"
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker goal-attention-fixed"
     }
   },
   "verification": {
@@ -63,14 +63,32 @@
       "unknownCumulativeCostRequiresReconciliation": true,
       "costReconciliationCannotLowerKnownFloor": true
     },
+    "packagedGoalUi": true,
+    "portableArtifact": true,
     "sourceFilesVerified": [
       "electron/backends/runExternal.cjs",
       "electron/goalStore.cjs",
       "electron/ipc/agent.cjs",
       "electron/preload.cjs"
     ],
-    "packagedGoalUi": true,
-    "portableArtifact": true
+    "goalBudgetAttention": {
+      "source": true,
+      "actualAsar": true,
+      "overviewActions": [
+        "reconcile-token-usage",
+        "reconcile-cost-usage"
+      ],
+      "editorQueueActions": [
+        "reconcile-token-usage",
+        "reconcile-cost-usage"
+      ],
+      "owner": "user",
+      "crossGoalRouting": true,
+      "themes": [
+        "light",
+        "dark"
+      ]
+    }
   },
   "budgetSemantics": {
     "builtin": "Admission snapshots remaining Goal allowance; each HTTP attempt reserves estimated input, caps actual max_tokens to remaining capacity, and records conservative reservations when provider usage is missing.",
