@@ -73,15 +73,18 @@ async function desktop() {
   cp.spawn = function (...args) { const child = originalSpawn.apply(this, args); children.add(child); return child; };
   let claimRefresh = null;
   let claimRefreshes = 0;
-  const register = ipcMain.handle.bind(ipcMain);
-  ipcMain.handle = (channel, handler) => register(channel, channel === 'goal:auto-advance-claim' ? async (...args) => {
-    const result = await handler.apply(null,args);
-    // Keep the real IPC response pending while the same project refreshes its Goal list.
-    if (result.ok && claimRefresh) {
-      for (let i=0;i<3;i++) { await claimRefresh(); claimRefreshes++; await sleep(100); }
-    }
-    return result;
-  } : handler);
+  const agentIpc=require(path.join(appRoot,'electron/ipc/agent.cjs'));
+  const registerAgent=agentIpc.register;
+  agentIpc.register=ctx=>{
+    const runtime=registerAgent(ctx),claim=runtime.scheduler.deps.claim;
+    runtime.scheduler.deps.claim=async(...args)=>{
+      const result=await claim(...args);
+      // Hold the actual main-process claim while repeated list reads verify ownership.
+      if(claimRefresh)for(let i=0;i<3;i++){await claimRefresh();claimRefreshes++;await sleep(100);}
+      return result;
+    };
+    return runtime;
+  };
   app.disableHardwareAcceleration();
   app.on('browser-window-created', (_event, win) => win.hide());
   require(path.join(appRoot, 'electron/main.cjs'));

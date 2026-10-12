@@ -17,10 +17,13 @@ app.whenReady().then(async()=>{
       const data={revision:1,goals:[{id:'g1',title:'稳定登录',objective:'解决登录失败',scope:'src',exclusions:'',status:'active',updatedAt:new Date().toISOString(),criteriaRevision:1,criteria:[{id:'c1',text:'登录测试通过',required:true}],tasks:[
         {id:'t1',title:'定位问题',objective:'查看登录入口',status:'todo',updatedAt:new Date().toISOString(),dependsOn:[],readScope:[],writeScope:[],criteriaIds:['c1'],decisionIds:[],runIds:[]},
         {id:'t2',title:'实现修复',objective:'修改登录逻辑',status:'todo',updatedAt:new Date().toISOString(),dependsOn:['t1'],readScope:[],writeScope:['src'],criteriaIds:['c1'],decisionIds:[],runIds:[]}],decisions:[],evidence:[],context:{rules:[],taskMaterial:[],confirmedExperience:[]},budget:{},qualified:false}]};
-      let agentChatCalls=0,planCalls=0,simulateExternalGoalEdit=false;
+      let agentChatCalls=0,executionStartCalls=0,planCalls=0,simulateExternalGoalEdit=false;
       window.codenode=new Proxy({
         goalList:async()=>({ok:true,value:structuredClone(data)}),
-        goalCreate:async(_root,input)=>{const created={...structuredClone(data.goals[0]),id:'g2',title:input.title,objective:input.objective,status:'active',criteria:input.criteria.map((text,index)=>({id:'new-c'+index,text,required:true})),tasks:[],evidence:[],decisions:[],updatedAt:new Date().toISOString()};data.goals.unshift(created);data.revision++;return{ok:true,value:created};},
+        // This fixture tests the view delegation; real main-process execution is covered by goal-scheduler-ui-test.cjs.
+        goalExecutionStart:async(_root,goalId,expectedRevision)=>{if(expectedRevision!==data.revision)return{ok:false,error:'stale execution'};executionStartCalls++;const goal=data.goals.find(g=>g.id===goalId);goal.execution={id:'view-execution-'+executionStartCalls,status:'completed',reason:'全部必需验收条件已满足'};if(simulateExternalGoalEdit){goal.tasks[0].status='completed';goal.tasks[1].objective='另一会话修改了后续任务';goal.execution.status='blocked';goal.execution.reason='Goal 的任务或验收范围已由另一会话修改，请检查后重新开始';}else{goal.tasks.forEach(t=>t.status='completed');goal.status='completed';}data.revision++;return{ok:true,value:goal.execution};},
+        goalExecutionStop:async(_root,goalId)=>{const goal=data.goals.find(g=>g.id===goalId);goal.execution.status='stopped';data.revision++;return{ok:true,value:goal.execution};},
+        goalCreate:async(_root,input)=>{const created={...structuredClone(data.goals[0]),id:'g2',execution:undefined,title:input.title,objective:input.objective,status:'active',criteria:input.criteria.map((text,index)=>({id:'new-c'+index,text,required:true})),tasks:[],evidence:[],decisions:[],updatedAt:new Date().toISOString()};data.goals.unshift(created);data.revision++;return{ok:true,value:created};},
         goalTaskUpdate:async(_root,_goalId,taskId,patch)=>{if(patch.expectedRevision!==data.revision)return{ok:false,error:'revision mismatch'};const task=data.goals[0].tasks.find(t=>t.id===taskId);Object.assign(task,patch,{updatedAt:new Date().toISOString()});data.revision++;return{ok:true,value:task};},
         goalTaskBatchCreate:async(_root,_goalId,steps,expectedRevision)=>{if(expectedRevision!==data.revision)return{ok:false,error:'stale goal'};const ids=new Map(steps.map(step=>[step.key,'generated-'+step.key]));const added=steps.map(step=>({id:ids.get(step.key),title:step.title,objective:step.objective,status:'todo',updatedAt:new Date().toISOString(),dependsOn:step.dependsOn.map(id=>ids.get(id)),readScope:[],writeScope:step.writeScope,criteriaIds:['c1'],decisionIds:[],runIds:[]}));data.goals[0].tasks.push(...added);data.revision++;return{ok:true,value:added};},
         goalCanRun:async(_root,goalId)=>{const goal=data.goals.find(item=>item.id===goalId),next=goal.tasks.find(task=>task.status==='todo'&&task.dependsOn.every(id=>goal.tasks.find(dep=>dep.id===id)?.status==='completed'));return{ok:true,value:next?{decision:'run',task:structuredClone(next)}:{decision:'complete',reason:'all tasks complete'}};},
@@ -64,7 +67,7 @@ app.whenReady().then(async()=>{
       out.stageSummaryVisible=true;
       [...document.querySelectorAll('.goal-task-graph-toolbar button')].find(button=>button.textContent.includes('开始执行 Goal')).click();
       await until(()=>data.goals.find(item=>item.id==='g1').status==='completed');
-      out.goalRunCalls=agentChatCalls;out.goalRunOrder=data.goals.find(item=>item.id==='g1').tasks.map(item=>item.status);
+      out.goalStartCalls=executionStartCalls;out.goalRunCalls=agentChatCalls;out.goalRunOrder=data.goals.find(item=>item.id==='g1').tasks.map(item=>item.status);
       document.querySelector('[aria-label="关闭目标编辑"]').click();
       ui.getState().updatePreferences({workbenchView:'conversation'});
       session.getState().startOnCurrent('test plan');
@@ -94,17 +97,17 @@ app.whenReady().then(async()=>{
       [...document.querySelectorAll('.goal-task-graph-toolbar button')].find(button=>button.textContent.includes('开始执行 Goal')).click();
       await until(()=>document.querySelector('.goal-graph-message')?.textContent.includes('另一会话修改'));
       out.stoppedAfterExternalEdit=data.goals.find(item=>item.id==='g2').tasks.map(item=>item.status);
-      out.externalEditRunCalls=agentChatCalls-out.goalRunCalls;
+      out.externalEditStartCalls=executionStartCalls-out.goalStartCalls;
       return out;
     })()`);
     assert.equal(result.nodes,2);assert.equal(result.edges,1);assert.match(result.selectedTask,/定位问题/);
     assert.equal(result.themeChanged,true);assert.equal(result.nodesAfterTheme,2);assert.equal(result.selectedAfterTheme,true);
     assert.equal(result.previewBeforeSave,2);assert.equal(result.generatedGoalNodes,4);assert.equal(result.editedGoalNode,'确认登录入口');assert.equal(result.stageSummaryVisible,true);assert.equal(result.initialCriterionBinding,true);assert.equal(result.editedCriterionBinding,0);
-    assert.equal(result.goalRunCalls,4);assert.deepEqual(result.goalRunOrder,['completed','completed','completed','completed']);
+    assert.equal(result.goalStartCalls,1);assert.equal(result.goalRunCalls,0);assert.deepEqual(result.goalRunOrder,['completed','completed','completed','completed']);
     assert.equal(result.planNodes,2);assert.equal(result.planEdges,1);assert.equal(result.planPending,true);
-    assert.equal(result.slashPlanNodes,4);assert.equal(result.planCalls,2);assert.equal(result.agentChatCalls,4);
+    assert.equal(result.slashPlanNodes,4);assert.equal(result.planCalls,2);assert.equal(result.agentChatCalls,0);
     assert.equal(result.goalDraft,'改善登录稳定性');assert.equal(result.autoGoalPreview,2);assert.equal(result.autoGoalTasksBeforeConfirm,0);assert.equal(result.planCallsAfterGoal,3);
-    assert.deepEqual(result.stoppedAfterExternalEdit,['completed','todo']);assert.equal(result.externalEditRunCalls,1);
+    assert.deepEqual(result.stoppedAfterExternalEdit,['completed','todo']);assert.equal(result.externalEditStartCalls,1);
     console.log('GOAL TASK GRAPH UI: PASS (Goal graph, selection, theme state, plan import, /plan, /goal)');
     app.exit(0);
   }catch(error){console.error(error);try{console.error(await win.webContents.executeJavaScript(`({body:document.body.innerText.slice(0,1200),overview:!!document.querySelector('.goal-overview'),editor:!!document.querySelector('.overview-goal-editor'),goalRow:!!document.querySelector('[data-goal-id="g1"]'),graphNodes:document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length,planAction:!!document.querySelector('.ap-plan-canvas-action'),goalDraft:!!document.querySelector('.goal-create-form')})`));}catch{}app.exit(1);}

@@ -230,6 +230,11 @@ interface CodenodeApi {
   backendControl: (root: string | null, settings: import('./types').AgentBackendSettings, method: string, params?: Record<string, unknown>) => Promise<{ ok: boolean; error?: string; value?: any }>;
   backendStatus: (root: string | null, settings?: import('./types').AgentBackendSettings) => Promise<{ ok: boolean; error?: string; checkedSettings?: import('./types').AgentBackendSettings; capabilities?: { backend: string; available: boolean; authenticated?: boolean | null; protocolVersion?: string; protocol?: string; version?: string; resume?:boolean; hardBudget?: boolean; customTools?: boolean; error?: string; proxySource?: string; commandSandbox?: { readiness: string; lastSetupError: { code: string; message: string } | null; verified: boolean } | null } }>;
   goalList: (root:string|null)=>Promise<{ok:boolean;error?:string;value?:{revision:number;goals:any[];decisions:any[];admissions:any[];settlements:any[];recoveredAdmissions?:{count:number;recovered:any[]}}}>;
+  goalSchedulerBind: (root:string|null,ready:boolean)=>Promise<{ok:boolean;error?:string;value?:{root:string}}>;
+  goalExecutionStart: (root:string,goalId:string,expectedRevision?:number)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalExecutionStop: (root:string,goalId:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
+  onGoalSchedulerDispatch: (cb:(claim:{root:string;goalId:string;taskId:string;claimId:string;requestId:string;title:string;objective:string;executionId?:string})=>void)=>()=>void;
+  onGoalSchedulerChanged: (cb:(change:{root:string;revision?:number;error?:string})=>void)=>()=>void;
   goalCreate: (root:string|null,input:{title:string;objective?:string;scope?:string;exclusions?:string;criteria?:string[];maxTokens?:number;maxCostUsd?:number})=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalUpdate: (root:string|null,goalId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalAutoAdvanceClaim: (root:string|null,goalId:string,taskId:string)=>Promise<{ok:boolean;error?:string;value?:{goalId:string;taskId:string;title:string;objective:string;claimId:string;requestId:string;waitObservationId:string;usedRuns:number;maxRuns:number}}>;

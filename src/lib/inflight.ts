@@ -35,21 +35,28 @@ export interface InflightRegistry<T> {
   size: () => number;
   /** 派生值：有请求在跑（替代修复前的单值 `sending: boolean`） */
   isSending: () => boolean;
+  /** Observe admission/settlement so the main-process scheduler can track readiness. */
+  subscribe: (listener: () => void) => () => void;
 }
 
 export function createInflightRegistry<T extends AbortLike>(): InflightRegistry<T> {
   // 模块级/实例级 Map：键是 requestId，值是那一条请求自己的 controller。
   // 「集合」而不是「单值」正是这条修复的核心。
   const entries = new Map<string, InflightEntry<T>>();
+  const listeners = new Set<() => void>();
+  const notify = () => { for (const listener of listeners) { try { listener(); } catch { /* Observers cannot break request admission. */ } } };
 
   return {
     begin(id, controller, label) {
       if (!id || entries.has(id)) return false;
       entries.set(id, { controller, label });
+      notify();
       return true;
     },
     end(id) {
-      return entries.delete(id);
+      const deleted = entries.delete(id);
+      if (deleted) notify();
+      return deleted;
     },
     has(id) {
       return entries.has(id);
@@ -59,6 +66,7 @@ export function createInflightRegistry<T extends AbortLike>(): InflightRegistry<
       if (!entry) return false;
       entries.delete(id);
       entry.controller.abort();
+      notify();
       return true;
     },
     abortAll() {
@@ -68,6 +76,7 @@ export function createInflightRegistry<T extends AbortLike>(): InflightRegistry<
         entries.delete(id);
         if (entry) entry.controller.abort();
       }
+      if (ids.length) notify();
       return ids;
     },
     ids() {
@@ -78,6 +87,10 @@ export function createInflightRegistry<T extends AbortLike>(): InflightRegistry<
     },
     isSending() {
       return entries.size > 0;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
     },
   };
 }

@@ -11,6 +11,11 @@
     "requireCleanWorktree": true,
     "requireAllRequiredTasks": true
   },
+  "scheduler": {
+    "minDelayMs": 100,
+    "busyPollMs": 1000,
+    "maxDelayMs": 60000
+  },
   "autoAdvance": {
     "enabledByDefault": false,
     "maxRunsPerGoal": 3,

@@ -32,7 +32,7 @@ const EXPECTED = {
     'trellis:cli-browse',
     'agent:config', 'agent:rag-check', 'agent:rag-save', 'agent:editing-save', 'agent:execution-save', 'agent:greeting', 'agent:tools', 'agent:runs',
     'agent:scheduling-save',
-    'goal:list', 'goal:create', 'goal:update', 'goal:auto-advance-claim', 'goal:auto-advance-release', 'goal:task-create', 'goal:task-batch-create', 'goal:task-delete-planned', 'goal:task-update', 'goal:plan-propose', 'goal:run-review', 'goal:run-review-confirm',
+    'goal:list', 'goal:scheduler-bind', 'goal:execution-start', 'goal:execution-stop', 'goal:create', 'goal:update', 'goal:auto-advance-claim', 'goal:auto-advance-release', 'goal:task-create', 'goal:task-batch-create', 'goal:task-delete-planned', 'goal:task-update', 'goal:plan-propose', 'goal:run-review', 'goal:run-review-confirm',
     'goal:decision-create', 'goal:decision-resolve', 'goal:verify', 'goal:audit',
     'goal:can-run', 'goal:context-add', 'goal:experience-confirm', 'goal:context-for-role', 'goal:wait-observe', 'goal:wait-check',
     'agent:backend-save', 'agent:backend-status', 'agent:backend-control',
@@ -74,7 +74,7 @@ function main() {
 
   // 与 main.cjs 之外的源码对账：所有 ipcMain.handle/on 的通道都得在某个模块的注册里出现
   const sources = files.map((f) => fs.readFileSync(path.join(IPC_DIR, f), 'utf8')).join('\n');
-  const declared = new Set((sources.match(/ipcMain\.(?:handle|on)\('([^']+)'/g) || []).map((m) => m.replace(/.*'([^']+)'/, '$1')));
+  const declared = new Set((sources.match(/(?:ipcMain\.(?:handle|on)|handleGoal)\('([^']+)'/g) || []).map((m) => m.replace(/.*'([^']+)'/, '$1')));
   assert.strictEqual(declared.size, registeredTotal, `模块里声明的通道数(${declared.size})与实际注册数(${registeredTotal})不一致`);
 
   console.log(`IPC REGISTRY TEST: PASS  ${files.length} 个模块 / ${registeredTotal} 个通道`);

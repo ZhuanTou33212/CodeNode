@@ -23,6 +23,8 @@ app.whenReady().then(async () => {
     await new Promise(resolve => setTimeout(resolve, 700));
     const rendered = await win.webContents.executeJavaScript(`({canvas:!!document.querySelector('.canvas-wrap'),composer:!!document.querySelector('.pp-composer'),body:!!document.querySelector('.ap-body'),goalRunReview:typeof window.codenode?.goalRunReview==='function'&&typeof window.codenode?.goalRunReviewConfirm==='function',goalAutoAdvance:typeof window.codenode?.goalAutoAdvanceClaim==='function'&&typeof window.codenode?.goalAutoAdvanceRelease==='function'})`);
     if (!rendered.canvas || !rendered.composer || !rendered.body || !rendered.goalRunReview || !rendered.goalAutoAdvance) throw new Error(JSON.stringify(rendered));
+    const scheduler = await win.webContents.executeJavaScript(`typeof window.codenode.goalSchedulerBind==='function'&&typeof window.codenode.goalExecutionStart==='function'&&typeof window.codenode.goalExecutionStop==='function'&&typeof window.codenode.onGoalSchedulerDispatch==='function'`);
+    if(!scheduler)throw new Error('Packaged Goal scheduler IPC missing');
     console.log('PACKAGED STARTUP: PASS (actual app.asar main, preload, renderer, Goal review/auto-advance IPC, workspace and conversation composer)');
   } finally { win.destroy(); }
   app.exit(0);

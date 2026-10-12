@@ -116,6 +116,8 @@ const activeRequests = new Map();
 const activeGoalRuns = new Set();
 const activeAutoAdvanceClaims = new Map();
 const activeGoalWaitPolls = new Map();
+const activeGoalVerifications = new Map();
+const liveRunIds=()=>new Set([...activeRequests.keys(),...activeGoalRuns,...activeGoalVerifications.keys()]);
 /** @type {((event: any, payload: any) => Promise<any>) | null} */
 let registeredChatHandler = null;
 const WORKFLOW_TRELLIS = Symbol('main-process-trellis-workflow');
@@ -209,6 +211,9 @@ async function runSessionHook(kind, cfg, projectRoot, runId, sandboxPolicy, sign
 
 function register(ctx) {
   const { ipcMain, userDataDir } = ctx;
+  /** @type {import('../goalScheduler.cjs').GoalScheduler|null} */
+  let scheduler=null;
+  const handleGoal=(channel,handler)=>ipcMain.handle(channel,async(...args)=>{try{return await handler(...args);}finally{scheduler?.poke();}});
 
   ipcMain.handle('agent:config', async (_event, projectRoot, sessionId, conversationId) => {
     const cfg = agent.loadConfig(projectRoot);
@@ -336,35 +341,65 @@ function register(ctx) {
     })();
     activeGoalWaitPolls.set(root,poll);try{return await poll;}finally{if(activeGoalWaitPolls.get(root)===poll)activeGoalWaitPolls.delete(root);}
   };
-  ipcMain.handle('goal:list', async (_event, projectRoot) => {
+  const refreshGoals = async projectRoot => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value,now=Date.now(),claimLease=Math.max(1000,Number(require('../../config/goal.wait.json').autoAdvance.claimLeaseMs)||30000);
     for(const[claimId,claim]of activeAutoAdvanceClaims){if(claim.root===root&&!claim.dispatchedAt&&now-claim.claimedAt>claimLease){try{goalStore.releaseAutoAdvanceClaim(root,claim.goalId,claim.taskId,claimId,'claim_lease_expired_before_dispatch');}catch{}activeAutoAdvanceClaims.delete(claimId);}}
     goalStore.releaseDueTimeWaits(root);
     await pollDueExternalWaits(root);
-    const activeRunIds=new Set([...activeRequests.keys(),...activeGoalRuns]);
+    const activeRunIds=liveRunIds();
     runStore.recoverInterrupted(root,activeRunIds);
     const recoveredAdmissions=goalStore.reconcileAdmissions(root,activeRunIds);
     const liveClaims=new Set([...activeAutoAdvanceClaims].filter(([,claim])=>claim.root===root).map(([claimId])=>claimId));
     const recoveredAutoAdvanceClaims=goalStore.reconcileAutoAdvanceClaims(root,liveClaims);
     const data=goalStore.read(root);return{ok:true,value:{revision:data.revision,goals:data.goals.map(goal=>{const audit=goalStore.audit(root,goal.id);return{...audit.goal,...audit,decisions:data.decisions.filter(item=>item.goalId===goal.id)};}),decisions:data.decisions,admissions:data.admissions,settlements:data.settlements,recoveredAdmissions,recoveredAutoAdvanceClaims}};
+  };
+  handleGoal('goal:list', async (_event, projectRoot) => refreshGoals(projectRoot));
+  scheduler=new (require('../goalScheduler.cjs').GoalScheduler)({
+    refresh:refreshGoals,
+    busy:()=>activeRequests.size>0||activeGoalRuns.size>0||activeAutoAdvanceClaims.size>0||activeGoalVerifications.size>0,
+    pending:root=>[...activeAutoAdvanceClaims.values()].some(claim=>claim.root===root),
+    claim:async(root,candidate,senderId)=>{
+      if(activeRequests.size||activeGoalRuns.size||activeAutoAdvanceClaims.size||activeGoalVerifications.size)throw new Error('Agent 或独立验收正在运行');
+      const claimId=randomUUID(),requestId='auto-'+randomUUID();
+      const claim=candidate.mode==='execution'?goalStore.claimExecutionTask(root,candidate.goalId,candidate.taskId,claimId):goalStore.claimAutoAdvance(root,candidate.goalId,candidate.taskId,claimId);
+      activeAutoAdvanceClaims.set(claimId,{root,goalId:String(claim.goalId),taskId:String(claim.taskId),requestId,senderId,executionId:claim.executionId||null,requiresWaitAuthorization:claim.requiresWaitAuthorization===true,claimedAt:Date.now(),dispatchedAt:null});
+      return{...claim,requestId};
+    },
+    release:async(root,claim,reason)=>{goalStore.releaseAutoAdvanceClaim(root,claim.goalId,claim.taskId,claim.claimId,reason);activeAutoAdvanceClaims.delete(claim.claimId);},
+    detach:senderId=>{for(const[claimId,claim]of activeAutoAdvanceClaims)if(claim.senderId===senderId&&!claim.dispatchedAt){try{goalStore.releaseAutoAdvanceClaim(claim.root,claim.goalId,claim.taskId,claimId,'renderer_detached_before_dispatch');}catch{}activeAutoAdvanceClaims.delete(claimId);}},
+    onError:(root,error)=>{for(const binding of scheduler?.bindings.values()||[])if(binding.root===root&&!binding.sender.isDestroyed())binding.sender.send('goal:scheduler-changed',{root,error:String(error.message||error).slice(0,500)});},
   });
-  ipcMain.handle('goal:create', async (_event, projectRoot, input) => withGoalRoot(projectRoot, root => goalStore.createGoal(root,input||{})));
-  ipcMain.handle('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
-  ipcMain.handle('goal:auto-advance-claim', async (_event, projectRoot, goalId, taskId) => {
+  const checkedSender=event=>{
+    const sender=event?.sender;
+    if(!sender||typeof sender.isDestroyed!=='function'||sender.isDestroyed()||typeof sender.send!=='function'||(event.senderFrame&&sender.mainFrame&&event.senderFrame!==sender.mainFrame))throw new Error('Goal 调度仅允许当前主窗口调用');
+    return sender;
+  };
+  handleGoal('goal:scheduler-bind',async(event,projectRoot,ready)=>{
+    try{const sender=checkedSender(event);if(!projectRoot){scheduler.bind(sender,null,false);return{ok:true};}const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;scheduler.bind(sender,scoped.value,ready===true);return{ok:true,value:{root:scoped.value}};}catch(error){return{ok:false,error:String(error.message||error)};}
+  });
+  handleGoal('goal:execution-start',async(event,projectRoot,goalId,expectedRevision)=>{
+    try{const sender=checkedSender(event);const binding=scheduler.bindings.get(sender.id);const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;if(!binding||binding.root!==scoped.value)throw new Error('请先打开并绑定该项目');if(activeRequests.size||activeGoalRuns.size||activeAutoAdvanceClaims.size||activeGoalVerifications.size)throw new Error('另一个 Agent 或独立验收正在运行，请等待结束后启动 Goal');return{ok:true,value:goalStore.startExecution(scoped.value,goalId,expectedRevision)};}catch(error){return{ok:false,error:String(error.message||error)};}
+  });
+  handleGoal('goal:execution-stop',async(event,projectRoot,goalId)=>{
+    try{checkedSender(event);return withGoalRoot(projectRoot,root=>goalStore.stopExecution(root,goalId));}catch(error){return{ok:false,error:String(error.message||error)};}
+  });
+  handleGoal('goal:create', async (_event, projectRoot, input) => withGoalRoot(projectRoot, root => goalStore.createGoal(root,input||{})));
+  handleGoal('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
+  handleGoal('goal:auto-advance-claim', async (_event, projectRoot, goalId, taskId) => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value;
-    if(activeRequests.size)return{ok:false,error:'Agent 正在运行，自动推进会在当前 Run 结束后重试'};
+    if(activeRequests.size||activeGoalVerifications.size)return{ok:false,error:'Agent 或独立验收正在运行，自动推进会在当前 Run 结束后重试'};
     if([...activeAutoAdvanceClaims.values()].some(claim=>claim.root===root))return{ok:false,error:'该工程已有自动推进认领正在处理'};
     try{const claimId=randomUUID(),claim=goalStore.claimAutoAdvance(root,goalId,taskId,claimId),requestId='auto-'+randomUUID();activeAutoAdvanceClaims.set(claimId,{root,goalId:String(goalId),taskId:String(taskId),requestId,claimedAt:Date.now(),dispatchedAt:null});return{ok:true,value:{...claim,requestId}};}catch(error){return{ok:false,error:String(error?.message||error)};}
   });
-  ipcMain.handle('goal:auto-advance-release', async (_event, projectRoot, goalId, taskId, claimId, reason) => {
+  handleGoal('goal:auto-advance-release', async (_event, projectRoot, goalId, taskId, claimId, reason) => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value;
     try{const released=goalStore.releaseAutoAdvanceClaim(root,goalId,taskId,claimId,reason);const claim=activeAutoAdvanceClaims.get(String(claimId||''));if(claim?.root===root)activeAutoAdvanceClaims.delete(String(claimId));return{ok:true,value:released};}catch(error){return{ok:false,error:String(error?.message||error)};}
   });
-  ipcMain.handle('goal:task-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.createTask(root,goalId,input||{})));
-  ipcMain.handle('goal:task-batch-create', async (_event, projectRoot, goalId, steps, expectedRevision) => withGoalRoot(projectRoot, root => goalStore.createTaskBatch(root,goalId,steps,expectedRevision)));
-  ipcMain.handle('goal:task-delete-planned', async (_event, projectRoot, goalId, taskId, expectedRevision) => withGoalRoot(projectRoot, root => goalStore.deletePlannedTask(root,goalId,taskId,expectedRevision)));
-  ipcMain.handle('goal:task-update', async (_event, projectRoot, goalId, taskId, patch) => withGoalRoot(projectRoot, root => goalStore.updateTask(root,goalId,taskId,patch||{})));
-  ipcMain.handle('goal:plan-propose', async (event, projectRoot, request) => {
+  handleGoal('goal:task-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.createTask(root,goalId,input||{})));
+  handleGoal('goal:task-batch-create', async (_event, projectRoot, goalId, steps, expectedRevision) => withGoalRoot(projectRoot, root => goalStore.createTaskBatch(root,goalId,steps,expectedRevision)));
+  handleGoal('goal:task-delete-planned', async (_event, projectRoot, goalId, taskId, expectedRevision) => withGoalRoot(projectRoot, root => goalStore.deletePlannedTask(root,goalId,taskId,expectedRevision)));
+  handleGoal('goal:task-update', async (_event, projectRoot, goalId, taskId, patch) => withGoalRoot(projectRoot, root => goalStore.updateTask(root,goalId,taskId,patch||{})));
+  handleGoal('goal:plan-propose', async (event, projectRoot, request) => {
     try {
       const sender=event?.sender;
       if(!sender||sender.isDestroyed()||(event.senderFrame&&sender.mainFrame&&event.senderFrame!==sender.mainFrame))throw new Error('仅允许主窗口请求规划');
@@ -390,21 +425,23 @@ function register(ctx) {
       return {ok:true,value:kind==='goal'?planner.withGoalAcceptanceStep(parsed):parsed,model:response.actualModel||cfg.model};
     }catch(error){return{ok:false,error:String(error?.message||error)};}
   });
-  ipcMain.handle('goal:run-review', async (_event, projectRoot, goalId, taskId, runId) => withGoalRoot(projectRoot, root => goalStore.runReview(root,goalId,taskId,runId)));
-  ipcMain.handle('goal:run-review-confirm', async (_event, projectRoot, goalId, taskId, runId, projectFingerprint) => withGoalRoot(projectRoot, root => goalStore.confirmRunReview(root,goalId,taskId,runId,projectFingerprint)));
-  ipcMain.handle('goal:decision-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.addDecision(root,goalId,input||{})));
-  ipcMain.handle('goal:decision-resolve', async (_event, projectRoot, decisionId, value, reason) => withGoalRoot(projectRoot, root => goalStore.resolveDecision(root,decisionId,value,reason)));
-  ipcMain.handle('goal:verify', async (event, projectRoot, goalId, taskId, criterionId, command) => {
+  handleGoal('goal:run-review', async (_event, projectRoot, goalId, taskId, runId) => withGoalRoot(projectRoot, root => goalStore.runReview(root,goalId,taskId,runId)));
+  handleGoal('goal:run-review-confirm', async (_event, projectRoot, goalId, taskId, runId, projectFingerprint) => withGoalRoot(projectRoot, root => goalStore.confirmRunReview(root,goalId,taskId,runId,projectFingerprint)));
+  handleGoal('goal:decision-create', async (_event, projectRoot, goalId, input) => withGoalRoot(projectRoot, root => goalStore.addDecision(root,goalId,input||{})));
+  handleGoal('goal:decision-resolve', async (_event, projectRoot, decisionId, value, reason) => withGoalRoot(projectRoot, root => goalStore.resolveDecision(root,decisionId,value,reason)));
+  handleGoal('goal:verify', async (event, projectRoot, goalId, taskId, criterionId, command) => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;
     const root=scoped.value;const sender=event?.sender;
     if(!sender||typeof sender.isDestroyed!=='function'||sender.isDestroyed()||(event.senderFrame&&sender.mainFrame&&event.senderFrame!==sender.mainFrame))return{ok:false,error:'目标验收只允许当前主窗口调用'};
     const cmd=String(command||'').trim();if(!cmd||cmd.length>1500||/[\r\n\0]/.test(cmd))return{ok:false,error:'验收命令必须是单行且不超过 1500 字符'};
-    if(activeRequests.size||externalRuns.isProjectActive(root))return{ok:false,error:'Agent 正在修改项目，请等当前运行结束后再验收'};
+    if(activeRequests.size||activeAutoAdvanceClaims.size||activeGoalVerifications.size||externalRuns.isProjectActive(root))return{ok:false,error:'Agent 或独立验收正在运行，请等当前运行结束后再验收'};
     const record=goalStore.read(root);const goal=record.goals.find(item=>item.id===String(goalId));if(!goal)return{ok:false,error:'Goal 不存在'};
     if(taskId&&!goal.tasks.some(item=>item.id===String(taskId)))return{ok:false,error:'Task 不存在'};
     if(criterionId&&!goal.criteria.some(item=>item.id===String(criterionId)))return{ok:false,error:'验收条件不存在'};
+    const expectedGoalContract=require('../goalExecution.cjs').contract(goal);
     const verifyRunId=runStore.normalizeRunId('goal-verify-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8));
     const controller=new AbortController();const bridge=makeBridge(sender,controller.signal,{projectRoot:root});
+    activeGoalVerifications.set(verifyRunId,root);
     try{
       const approved=await bridge.confirm('HIGH','运行 Goal 独立验收命令',JSON.stringify({goal:goal.title,criterion:goal.criteria.find(item=>item.id===String(criterionId))?.text||null,command:cmd,projectRoot:root},null,2));
       if(!approved)return{ok:false,aborted:true,error:'用户取消 Goal 验收'};
@@ -415,21 +452,21 @@ function register(ctx) {
         {projectRoot:root,policy,signal:controller.signal,defaults:{timeoutMs:60000,maxOutputChars:12000}});
       const after=workspaceHash(root);const changed=before.fingerprint!==after.fingerprint;
       const status=result.ok&&!result.skipped&&!result.timedOut&&!changed?'passed':result.skipped?'not_run':'failed';
-      const evidence=goalStore.recordEvidence(root,goalId,{taskId,criterionId,runId:verifyRunId,check:'用户批准的 Goal 验收命令',command:cmd,status,
+      const evidence=goalStore.recordEvidence(root,goalId,{taskId,criterionId,expectedGoalContract,runId:verifyRunId,check:'用户批准的 Goal 验收命令',command:cmd,status,
         result:JSON.stringify({exitCode:result.exitCode,timedOut:result.timedOut,skipped:result.skipped,reason:result.reason,output:result.output,filesChangedDuringCheck:changed})});
       runStore.appendEvent(root,verifyRunId,'goal_evidence',{goalId,taskId:taskId||null,criterionId:criterionId||null,evidenceId:evidence.id,status,fingerprint:after.fingerprint,complete:after.complete,filesChangedDuringCheck:changed});
       runStore.finishRun(root,verifyRunId,status==='passed'?'completed':status,{state:status==='passed'?'COMPLETED':'FAILED',goalId,taskId:taskId||null,criterionId:criterionId||null,codeVerification:{verified:status==='passed',status,filesChangedDuringCheck:changed}});
       return{ok:status==='passed',runId:verifyRunId,evidence,status,output:result.output,exitCode:result.exitCode,filesChangedDuringCheck:changed};
     }catch(error){runStore.finishRun(root,verifyRunId,'error',{state:'FAILED',goalId,taskId:taskId||null,criterionId:criterionId||null,error:error.message});return{ok:false,error:error.message,runId:verifyRunId};}
-    finally{bridge.cleanup();}
+    finally{activeGoalVerifications.delete(verifyRunId);bridge.cleanup();}
   });
-  ipcMain.handle('goal:audit', async (_event, projectRoot, goalId) => withGoalRoot(projectRoot, root => goalStore.audit(root,goalId)));
-  ipcMain.handle('goal:can-run', async (_event, projectRoot, goalId, taskId) => withGoalRoot(projectRoot, root => goalStore.canRun(root,goalId,taskId)));
-  ipcMain.handle('goal:context-add', async (_event, projectRoot, goalId, kind, input) => withGoalRoot(projectRoot, root => goalStore.addContext(root,goalId,kind,input||{})));
-  ipcMain.handle('goal:experience-confirm', async (_event, projectRoot, goalId, itemId) => withGoalRoot(projectRoot, root => goalStore.confirmExperience(root,goalId,itemId)));
-  ipcMain.handle('goal:context-for-role', async (_event, projectRoot, goalId, taskId, role) => withGoalRoot(projectRoot, root => goalStore.contextForRole(root,goalId,taskId,role)));
-  ipcMain.handle('goal:wait-observe', async (_event, projectRoot, goalId, taskId, observation) => withGoalRoot(projectRoot, root => goalStore.observeWait(root,goalId,taskId,observation||{})));
-  ipcMain.handle('goal:wait-check', async (_event, projectRoot, goalId, taskId) => {
+  handleGoal('goal:audit', async (_event, projectRoot, goalId) => withGoalRoot(projectRoot, root => goalStore.audit(root,goalId)));
+  handleGoal('goal:can-run', async (_event, projectRoot, goalId, taskId) => withGoalRoot(projectRoot, root => goalStore.canRun(root,goalId,taskId)));
+  handleGoal('goal:context-add', async (_event, projectRoot, goalId, kind, input) => withGoalRoot(projectRoot, root => goalStore.addContext(root,goalId,kind,input||{})));
+  handleGoal('goal:experience-confirm', async (_event, projectRoot, goalId, itemId) => withGoalRoot(projectRoot, root => goalStore.confirmExperience(root,goalId,itemId)));
+  handleGoal('goal:context-for-role', async (_event, projectRoot, goalId, taskId, role) => withGoalRoot(projectRoot, root => goalStore.contextForRole(root,goalId,taskId,role)));
+  handleGoal('goal:wait-observe', async (_event, projectRoot, goalId, taskId, observation) => withGoalRoot(projectRoot, root => goalStore.observeWait(root,goalId,taskId,observation||{})));
+  handleGoal('goal:wait-check', async (_event, projectRoot, goalId, taskId) => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;
     try{
       const root=scoped.value,data=goalStore.read(root),goal=data.goals.find(item=>item.id===String(goalId));
@@ -527,7 +564,7 @@ function register(ctx) {
 
   ipcMain.handle('agent:runs', async (_event, projectRoot) => {
     if (!projectRoot) return [];
-    runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
+    runStore.recoverInterrupted(projectRoot, liveRunIds());
     return runStore.listRuns(projectRoot, 50);
   });
 
@@ -649,11 +686,12 @@ function register(ctx) {
 
   registeredChatHandler = async (event, payload) => {
     let { projectRoot, prompt, history, canvasSummary, nodeId, requestId, sessionId, memoryConversationId, memoryTaskEpoch, document, projectFile, modelId, model: reqModel, reasoningEffort: reqEffort, resumeRunId, resumeForce, attachments, forceCompact, goalId, taskId, autoAdvanceClaimId } = payload || {};
+    if(projectRoot&&[...activeGoalVerifications.values()].includes(path.resolve(String(projectRoot))))return{ok:false,error:'Goal 独立验收正在运行，请等待命令结束后再启动 Agent'};
     let autoAdvanceClaim=null;
     if(autoAdvanceClaimId){
       autoAdvanceClaim=activeAutoAdvanceClaims.get(String(autoAdvanceClaimId));
-      if(!autoAdvanceClaim||autoAdvanceClaim.root!==path.resolve(String(projectRoot||''))||autoAdvanceClaim.goalId!==String(goalId||'')||autoAdvanceClaim.taskId!==String(taskId||'')||autoAdvanceClaim.requestId!==String(requestId||''))return{ok:false,error:'自动推进认领与当前 Goal、Task、工程或 requestId 不匹配'};
-      try{const stored=goalStore.read(autoAdvanceClaim.root).goals.find(item=>item.id===autoAdvanceClaim.goalId);if(stored?.autoAdvanceAuthorized!==true)return{ok:false,error:'Goal 自动推进授权已撤销'};}catch(error){return{ok:false,error:String(error?.message||error)};}
+      if(!autoAdvanceClaim||autoAdvanceClaim.root!==path.resolve(String(projectRoot||''))||autoAdvanceClaim.goalId!==String(goalId||'')||autoAdvanceClaim.taskId!==String(taskId||'')||autoAdvanceClaim.requestId!==String(requestId||'')||(autoAdvanceClaim.senderId!=null&&autoAdvanceClaim.senderId!==event?.sender?.id))return{ok:false,error:'自动推进认领与当前 Goal、Task、工程、窗口或 requestId 不匹配'};
+      try{const stored=goalStore.read(autoAdvanceClaim.root).goals.find(item=>item.id===autoAdvanceClaim.goalId);if(autoAdvanceClaim.executionId){if(autoAdvanceClaim.requiresWaitAuthorization&&stored?.autoAdvanceAuthorized!==true)return{ok:false,error:'Goal 等待后自动推进授权已撤销'};if(stored?.execution?.status!=='active'||stored.execution.id!==autoAdvanceClaim.executionId)return{ok:false,error:'Goal 连续执行已停止'};}else if(stored?.autoAdvanceAuthorized!==true)return{ok:false,error:'Goal 自动推进授权已撤销'};}catch(error){return{ok:false,error:String(error?.message||error)};}
       autoAdvanceClaim.dispatchedAt=Date.now();
     }
     const sender = event.sender;
@@ -862,7 +900,7 @@ function register(ctx) {
         };
       }
       runId = runStore.normalizeRunId(requestId || 'run-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
-      runStore.recoverInterrupted(projectRoot, new Set(activeRequests.keys()));
+      runStore.recoverInterrupted(projectRoot, liveRunIds());
       admitGoalTask(runId);
 
       // ---- 断点续跑：先判定可续跑级别（auto / review），review 需要用户显式复核 ----
@@ -1810,13 +1848,14 @@ function register(ctx) {
       if (runSpan) runSpan.end(runTraceStatus);
     }
   };
-  ipcMain.handle('agent:chat', registeredChatHandler);
+  ipcMain.handle('agent:chat', async(event,payload)=>{try{if(!registeredChatHandler)throw new Error('Agent 聊天处理器尚未注册');return await registeredChatHandler(event,payload);}finally{scheduler?.poke();}});
 
   ipcMain.handle('agent:stop', (_event, requestId) => {
     const controller = requestId ? (activeRequests.get(requestId) || activeRequests.get(runStore.normalizeRunId(requestId))) : null;
     if (controller) controller.abort();
     return { ok: true };
   });
+  return {scheduler,close:()=>scheduler?.close()};
 }
 
 /**

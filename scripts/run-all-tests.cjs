@@ -32,6 +32,7 @@ const CORE = [
   'test:muse-backend',
   'test:acp-full',
   'test:goal-store',
+  'test:goal-scheduler',
   'test:goal-canvas-graph',
   'test:goal-plan-ipc',
   'test:goal-scope',
@@ -238,6 +239,7 @@ DISPLAY.push('test:workflow-canvas-ui');
 DISPLAY.push('test:token-cost-ui');
 DISPLAY.push('test:scheduling-ui');
 DISPLAY.push('test:backend-ui');
+DISPLAY.push('test:goal-scheduler-ui');
 DISPLAY.push('test:agent-switch-ui');
 DISPLAY.push('test:workspace-ux-ui');
 DISPLAY.push('test:streaming-ui');
