@@ -44,7 +44,8 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 - Handoff, actual post-reload requests and fixed-path delivery results: [2026-10-13 handoff validation](validation/goal-handoff-2026-10-13.json).
 - Acceptance and waiting-authorization holds affect their dependent branches; unrelated explicitly started stages may proceed. Failures and unknown outcomes still stop automatic continuation. A polling deadline alone does not release a waiting Task.
 - Reaching a budget ceiling prevents new Runs. Already completed, verified work can complete a Goal at the ceiling when usage has not exceeded it and capped costs are known. Overspend or unknown capped costs remain blocking.
-- Built-in requests reserve estimated input and output against the remaining Goal allowance, and lower request `max_tokens` to fit; a request whose input cannot fit stops before dispatch. ACP backends receive a cancellation request when they report a token overrun. Missing usage marks the cap for manual reconciliation before another limited run. In-run enforcement on external backends depends on their usage reporting.
+- Built-in model requests reserve estimated input and output against the remaining Goal allowance and lower the actual `max_tokens` accordingly; if the input cannot fit, the request is not sent. CodeNode requests cancellation when ACP reports an overrun. Missing usage requires a source-noted cumulative reconciliation that cannot lower already known usage. In-run external enforcement still depends on provider usage reporting.
+- Fixed package checks for Goal token admission, request reservations and ACP overrun handling: [2026-10-13 budget validation](validation/goal-budget-enforcement-2026-10-13.json).
 - Token reconciliation requires a source note, cannot lower the already recorded usage floor, and is retained in Goal budget history.
 
 ### The overview page
