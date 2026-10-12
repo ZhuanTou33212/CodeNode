@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T21:04:51.12Z",
-  "sourceCommit": "656ef72129cf85cfad5634c37402c49c01925dd7",
+  "recordedAt": "2026-10-12T21:21:36.994Z",
+  "sourceCommit": "556e62baa2d25ba9759687af06838d14a8f39664",
   "passed": true,
-  "scope": "Goal token and cumulative ACP USD budgets, shared user-owned budget attention actions, cross-Goal routing, request reservations, fixed Windows delivery and packaged acceptance",
+  "scope": "Goal token and cumulative ACP USD budgets, shared user-owned attention actions, release-sign PowerShell module isolation, fixed Windows delivery and packaged acceptance",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
     "asarSha256": "76ab19a29b35e3ed6d079e2d272564ec7f71c7abadd2c81a6c0c313fc78ca272",
-    "portableSha256": "ec9b2763a60b711227c6e2f548f5833dea8667e2ca08afe9daf9b204f80f9e4d",
+    "portableSha256": "0ba85c250bdbc9b069edeb17da5763a70290fef5c08da65a999f9a94956e6487",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -19,7 +19,7 @@
         "userDataDirWritable": true
       },
       "ok": true,
-      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker goal-attention-fixed"
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker release-sign-fixed"
     }
   },
   "verification": {
@@ -88,6 +88,14 @@
         "light",
         "dark"
       ]
+    },
+    "releaseSign": {
+      "regressionTest": "passed",
+      "command": "node scripts/run-all-tests.cjs --only test:release-sign",
+      "authenticodeAvailable": true,
+      "portableStatus": "NotSigned",
+      "unpackedStatus": "NotSigned",
+      "asarStatus": "NotApplicable"
     }
   },
   "budgetSemantics": {
@@ -97,8 +105,8 @@
   "limitations": [
     "Built-in input Token reservations use the existing conservative estimator; provider accounting can vary.",
     "External in-run enforcement depends on timely ACP usage reports; standard context occupancy is not a cumulative token counter.",
-    "Electron-builder reported rcedit unable to commit version-resource changes; the fixed-path executable hash matched the tested staged executable and the fixed-path selftest passed.",
-    "Artifacts remain unsigned; Authenticode inspection was unavailable in this environment.",
-    "Uncommitted config/soul.md changes were preserved and excluded from this commit."
+    "Artifacts are intentionally unsigned; the Windows Authenticode verifier reports NotSigned.",
+    "Electron-builder emitted an rcedit retry warning; the final executable metadata was verified as 0.13.0 and the fixed-path selftest passed.",
+    "Uncommitted config/soul.md changes were preserved and excluded from commits."
   ]
 }
