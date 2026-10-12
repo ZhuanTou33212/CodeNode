@@ -117,6 +117,7 @@ interface GoalPlanStep {
   title: string;
   objective: string;
   acceptance: string;
+  owner?: string;
   dependsOn: string[];
   writeScope: string[];
 }

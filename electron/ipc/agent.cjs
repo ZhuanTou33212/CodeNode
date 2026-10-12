@@ -420,7 +420,7 @@ function register(ctx) {
         const goal=goalStore.read(root).goals.find(item=>item.id===String(request?.goalId||''));
         if(!goal||goal.status!=='active')throw new Error('只能为进行中的 Goal 规划任务');
         objective=goal.objective;
-        context=JSON.stringify({scope:goal.scope,exclusions:goal.exclusions,criteria:goal.criteria.map(c=>c.text),existingTasks:goal.tasks.map(t=>({title:t.title,status:t.status}))});
+        context=JSON.stringify({scope:goal.scope,exclusions:goal.exclusions,criteria:goal.criteria.map(c=>c.text),existingTasks:goal.tasks.map(t=>({title:t.title,status:t.status,owner:t.owner||'main'}))});
       }
       const planner=require('../goalPlanProposal.cjs');
       const baseCfg=agent.loadConfig(null),cfg={...agent.loadConfig(root),maxTokens:4096,modelTaskType:'planning'};

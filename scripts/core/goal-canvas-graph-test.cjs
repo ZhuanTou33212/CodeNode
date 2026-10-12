@@ -8,12 +8,14 @@ try{
   const created=store.createGoal(root,{title:'改善登录',objective:'让登录可靠',criteria:['登录测试通过']});
   const revision=store.read(root).revision;
   const steps=proposal.parseProposal(JSON.stringify({steps:[
-    {key:'inspect',title:'检查登录代码',objective:'定位现状',acceptance:'找到入口和失败路径',dependsOn:[],writeScope:[]},
+    {key:'inspect',title:'检查登录代码',objective:'定位现状',acceptance:'找到入口和失败路径',owner:'security-review',dependsOn:[],writeScope:[]},
     {key:'fix',title:'修复登录',objective:'解决问题',acceptance:'行为符合预期',dependsOn:['inspect'],writeScope:['src']},
   ]})).steps;
+  assert.deepEqual(steps.map(step=>step.owner),['security-review','main'],'owner suggestions are retained and missing owner defaults to main');
   assert.equal(store.read(root).goals.find(g=>g.id===created.id).tasks.length,0,'planning is read only');
   const batch=store.createTaskBatch(root,created.id,steps,revision);
   assert.equal(batch.length,2);assert.deepEqual(batch[1].dependsOn,[batch[0].id]);
+  assert.deepEqual(batch.map(task=>task.owner),['security-review','main'],'confirmed planner owner markers persist on Tasks');
   assert.deepEqual(batch[0].criteriaIds,[],'intermediate tasks do not claim the whole Goal acceptance');
   assert.deepEqual(batch[1].criteriaIds,[created.criteria[0].id],'final task carries overall Goal acceptance');
   assert.equal(store.canRun(root,created.id,batch[1].id).decision,'idle','dependency waits for predecessor');
@@ -45,6 +47,7 @@ try{
   assert.equal(store.canRun(root,milestone.id,phase[1].id).decision,'run');
   assert.throws(()=>proposal.parseProposal('{"steps":[{"key":"x","title":"X","objective":"X","acceptance":"ok","dependsOn":["missing"]}]}'),/不存在的依赖/);
   assert.throws(()=>proposal.parseProposal('{"steps":[{"key":"x","title":"X","objective":"X","acceptance":"ok","dependsOn":[],"writeScope":["../outside"]}]}'),/写入范围无效/);
+  assert.throws(()=>proposal.parseProposal(JSON.stringify({steps:[{key:'x',title:'X',objective:'X',acceptance:'ok',owner:'x'.repeat(101),dependsOn:[]}]})),/负责人标记无效/);
   const joined=proposal.withGoalAcceptanceStep({steps:[
     {key:'read',title:'读取',objective:'读文件',acceptance:'已读',dependsOn:[]},
     {key:'tests',title:'测试',objective:'跑测试',acceptance:'已通过',dependsOn:[]},

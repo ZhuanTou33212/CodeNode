@@ -25,11 +25,11 @@ app.whenReady().then(async()=>{
         goalExecutionStop:async(_root,goalId)=>{const goal=data.goals.find(g=>g.id===goalId);goal.execution.status='stopped';data.revision++;return{ok:true,value:goal.execution};},
         goalCreate:async(_root,input)=>{const created={...structuredClone(data.goals[0]),id:'g2',execution:undefined,title:input.title,objective:input.objective,status:'active',criteria:input.criteria.map((text,index)=>({id:'new-c'+index,text,required:true})),tasks:[],evidence:[],decisions:[],updatedAt:new Date().toISOString()};data.goals.unshift(created);data.revision++;return{ok:true,value:created};},
         goalTaskUpdate:async(_root,_goalId,taskId,patch)=>{if(patch.expectedRevision!==data.revision)return{ok:false,error:'revision mismatch'};const task=data.goals[0].tasks.find(t=>t.id===taskId);Object.assign(task,patch,{updatedAt:new Date().toISOString()});data.revision++;return{ok:true,value:task};},
-        goalTaskBatchCreate:async(_root,_goalId,steps,expectedRevision)=>{if(expectedRevision!==data.revision)return{ok:false,error:'stale goal'};const ids=new Map(steps.map(step=>[step.key,'generated-'+step.key]));const added=steps.map(step=>({id:ids.get(step.key),title:step.title,objective:step.objective,status:'todo',updatedAt:new Date().toISOString(),dependsOn:step.dependsOn.map(id=>ids.get(id)),readScope:[],writeScope:step.writeScope,criteriaIds:['c1'],decisionIds:[],runIds:[]}));data.goals[0].tasks.push(...added);data.revision++;return{ok:true,value:added};},
+        goalTaskBatchCreate:async(_root,_goalId,steps,expectedRevision)=>{if(expectedRevision!==data.revision)return{ok:false,error:'stale goal'};const ids=new Map(steps.map(step=>[step.key,'generated-'+step.key]));const added=steps.map(step=>({id:ids.get(step.key),title:step.title,objective:step.objective,owner:step.owner||'main',status:'todo',updatedAt:new Date().toISOString(),dependsOn:step.dependsOn.map(id=>ids.get(id)),readScope:[],writeScope:step.writeScope,criteriaIds:['c1'],decisionIds:[],runIds:[]}));data.goals[0].tasks.push(...added);data.revision++;return{ok:true,value:added};},
         goalCanRun:async(_root,goalId)=>{const goal=data.goals.find(item=>item.id===goalId),next=goal.tasks.find(task=>task.status==='todo'&&task.dependsOn.every(id=>goal.tasks.find(dep=>dep.id===id)?.status==='completed'));return{ok:true,value:next?{decision:'run',task:structuredClone(next)}:{decision:'complete',reason:'all tasks complete'}};},
         goalAudit:async(_root,goalId)=>({ok:true,value:{qualified:data.goals.find(item=>item.id===goalId).tasks.every(task=>task.status==='completed')}}),
         goalUpdate:async(_root,goalId,patch)=>{const goal=data.goals.find(item=>item.id===goalId);Object.assign(goal,patch);data.revision++;return{ok:true,value:structuredClone(goal)};},
-        goalPlanPropose:async()=>{planCalls++;return{ok:true,value:{steps:[{key:'s1',title:'检查现状',objective:'读取现有实现',acceptance:'找到入口',dependsOn:[],writeScope:[]},{key:'s2',title:'完成修改',objective:'实施修复',acceptance:'检查通过',dependsOn:['s1'],writeScope:['src']}]}};},
+        goalPlanPropose:async()=>{planCalls++;return{ok:true,value:{steps:[{key:'s1',title:'检查现状',objective:'读取现有实现',acceptance:'找到入口',owner:'investigator',dependsOn:[],writeScope:[]},{key:'s2',title:'完成修改',objective:'实施修复',acceptance:'检查通过',owner:'main',dependsOn:['s1'],writeScope:['src']}]}};},
         agentChat:async payload=>{agentChatCalls++;const goal=data.goals.find(item=>item.id===payload.goalId),task=goal?.tasks.find(item=>item.id===payload.taskId);if(task){task.status='completed';task.lastRun={runId:'ui-run-'+agentChatCalls,status:'completed',summary:'做了什么：'+task.title,finishedAt:new Date().toISOString()};data.revision++;if(simulateExternalGoalEdit&&goal.id==='g2'&&task.id==='generated-s1'){goal.tasks.find(item=>item.id==='generated-s2').objective='另一会话修改了后续任务';data.revision++;}}return{ok:true,reply:task?'完成 '+task.title:'unused',tools:[]};},
       },{get(target,name){if(name in target)return target[name];if(String(name).startsWith('on'))return()=>()=>{};return async()=>({ok:false,models:[],files:[],tools:[],runs:[],events:[],backend:{},settings:{},goals:[]});}});
       project.setState({root:${JSON.stringify(root)}});
@@ -46,10 +46,10 @@ app.whenReady().then(async()=>{
       await sleep(80);out.themeChanged=ui.getState().theme!==oldTheme;out.nodesAfterTheme=document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length;out.selectedAfterTheme=!!document.querySelector('.goal-graph-editor');
       [...document.querySelectorAll('.goal-task-graph-toolbar button')].find(button=>button.textContent.includes('规划任务')).click();
       await until(()=>document.querySelector('.goal-graph-proposal'));
-      out.previewBeforeSave=document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length;
+      out.previewBeforeSave=document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length;out.ownerPreview=document.querySelector('.goal-graph-proposal').innerText.includes('负责人：investigator');
       [...document.querySelectorAll('.goal-graph-proposal button')].find(button=>button.textContent.includes('确认加入')).click();
       await until(()=>document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length===4);
-      out.generatedGoalNodes=document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length;
+      out.generatedGoalNodes=document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length;out.generatedOwners=data.goals[0].tasks.filter(task=>task.id.startsWith('generated-')).map(task=>task.owner);
       const criterionBox=document.querySelector('.goal-graph-criteria input[type="checkbox"]');
       out.initialCriterionBinding=criterionBox.checked;
       criterionBox.click();
@@ -103,6 +103,7 @@ app.whenReady().then(async()=>{
     assert.equal(result.nodes,2);assert.equal(result.edges,1);assert.match(result.selectedTask,/定位问题/);
     assert.equal(result.themeChanged,true);assert.equal(result.nodesAfterTheme,2);assert.equal(result.selectedAfterTheme,true);
     assert.equal(result.previewBeforeSave,2);assert.equal(result.generatedGoalNodes,4);assert.equal(result.editedGoalNode,'确认登录入口');assert.equal(result.stageSummaryVisible,true);assert.equal(result.initialCriterionBinding,true);assert.equal(result.editedCriterionBinding,0);
+    assert.equal(result.ownerPreview,true,'the user reviews the suggested owner before confirming a Goal plan');assert.deepEqual(result.generatedOwners,['investigator','main'],'owner suggestions survive plan confirmation');
     assert.equal(result.goalStartCalls,1);assert.equal(result.goalRunCalls,0);assert.deepEqual(result.goalRunOrder,['completed','completed','completed','completed']);
     assert.equal(result.planNodes,2);assert.equal(result.planEdges,1);assert.equal(result.planPending,true);
     assert.equal(result.slashPlanNodes,4);assert.equal(result.planCalls,2);assert.equal(result.agentChatCalls,0);

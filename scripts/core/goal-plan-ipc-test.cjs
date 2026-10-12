@@ -8,13 +8,15 @@ const root=fs.mkdtempSync(path.join(os.tmpdir(),'codenode-goal-plan-ipc-'));
 const originalChat=agent.chatCompletion;
 (async()=>{try{
   const goal=goalStore.createGoal(root,{title:'稳定登录',objective:'改善登录稳定性',criteria:['登录测试通过']});
+  goalStore.createTask(root,goal.id,{title:'已有负责人示例',owner:'security-review'});
   const handlers=new Map();ipc.register({ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},userDataDir:()=>root,dialog:{},getFocusedWindow:()=>null});
-  let calls=0;agent.chatCompletion=async(_cfg,messages)=>{calls++;assert.match(messages[1].content,/改善登录稳定性/);assert.match(messages[1].content,/登录测试通过/);assert.match(messages[1].content,/独立验收证据/);return{content:'```json\n'+JSON.stringify({steps:[{key:'inspect',title:'检查入口',objective:'读取登录代码',acceptance:'定位问题',dependsOn:[],writeScope:[]}]})+'\n```'};};
+  let calls=0;agent.chatCompletion=async(_cfg,messages)=>{calls++;assert.match(messages[1].content,/改善登录稳定性/);assert.match(messages[1].content,/登录测试通过/);assert.match(messages[1].content,/独立验收证据/);assert.match(messages[1].content,/security-review/);return{content:'```json\n'+JSON.stringify({steps:[{key:'inspect',title:'检查入口',objective:'读取登录代码',acceptance:'定位问题',owner:'release-review',dependsOn:[],writeScope:[]}]})+'\n```'};};
   const sender={isDestroyed:()=>false,mainFrame:{}};
   const before=goalStore.read(root).revision;
   const result=await handlers.get('goal:plan-propose')({sender},root,{kind:'goal',goalId:goal.id});
-  assert.equal(result.ok,true,result.error);assert.equal(result.value.steps[0].title,'检查入口');assert.equal(calls,1);
+  assert.equal(result.ok,true,result.error);assert.equal(result.value.steps[0].title,'检查入口');assert.equal(result.value.steps[0].owner,'release-review');assert.equal(calls,1);
   assert.equal(goalStore.read(root).revision,before,'proposal never writes Goal tasks');
+  const imported=goalStore.createTaskBatch(root,goal.id,result.value.steps,goalStore.read(root).revision);assert.equal(imported[0].owner,'release-review','confirmed planner owner reaches the stored Task');
   const blocked=await handlers.get('goal:plan-propose')({sender,isDestroyed:()=>false,senderFrame:{}},root,{kind:'goal',goalId:goal.id});
   assert.equal(blocked.ok,false,'non-main frame cannot request planning');
   console.log('GOAL PLAN IPC: PASS (read-only proposal, Goal context, main-frame boundary)');

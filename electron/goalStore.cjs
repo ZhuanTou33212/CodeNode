@@ -52,7 +52,7 @@ function createTaskBatch(root,goalId,steps,expectedRevision){return mutate(root,
   const created=steps.map((step,index)=>{
     const deps=Array.isArray(step.dependsOn)?[...new Set(step.dependsOn.map(String))]:[];
     if(deps.some(dep=>!ids.has(dep)&&!g.tasks.some(t=>t.id===dep)))throw new Error('步骤 '+keys[index]+' 引用了不存在的前置任务');
-    const task={id:ids.get(keys[index]),title:text(step.title,'Task 标题',300),objective:text(step.objective||step.title,'Task 目标'),status:'todo',dependsOn:deps.map(dep=>ids.get(dep)||dep),owner:'main',readScope:Array.isArray(step.readScope)?[...new Set(step.readScope.map(String))]:[],writeScope:Array.isArray(step.writeScope)?[...new Set(step.writeScope.map(String))]:[],criteriaIds:index===steps.length-1?required:[],decisionIds:[],runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
+    const task={id:ids.get(keys[index]),title:text(step.title,'Task 标题',300),objective:text(step.objective||step.title,'Task 目标'),status:'todo',dependsOn:deps.map(dep=>ids.get(dep)||dep),owner:text(step.owner||'main','Task 负责人',100),readScope:Array.isArray(step.readScope)?[...new Set(step.readScope.map(String))]:[],writeScope:Array.isArray(step.writeScope)?[...new Set(step.writeScope.map(String))]:[],criteriaIds:index===steps.length-1?required:[],decisionIds:[],runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
     safeScope(task.readScope,'读取');safeScope(task.writeScope,'写入');
     return task;
   });
