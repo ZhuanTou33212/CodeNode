@@ -152,7 +152,17 @@ app.whenReady().then(async()=>{try{
   await until(()=>js(`!!document.querySelector('[data-goal-id="${unknown.value.id}"]')`),'unknown budget Goal listed');
   await js(`document.querySelector('.overview-refresh').click()`);
   await until(()=>js('document.querySelector(".goal-overview").innerText.includes("Token 待核对")'),'overview reads the refreshed unknown-token state');
-  await js(`document.querySelector('[data-goal-id="${unknown.value.id}"]').click()`);
+  for(const theme of ['light','dark']){
+    await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)},sideOpen:true})`);
+    await until(()=>js(`(()=>{const actions=[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage'));return ['reconcile-token-usage','reconcile-cost-usage'].every(action=>actions.some(b=>b.dataset.action===action&&b.dataset.owner==='user'));})()`),`overview budget follow-ups remain available in ${theme} theme`);
+    assert.deepEqual(await js(`[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage')).map(b=>b.dataset.action).sort()`),['reconcile-cost-usage','reconcile-token-usage'],`${theme} theme exposes the same reconciliation actions`);
+  }
+  await js(`document.querySelector('[data-goal-id="${exact.value.id}"]').click()`);
+  await until(()=>js(`document.querySelector('.goal-summary strong')?.textContent==='Exact token ceiling'`),'open another Goal before following the cross-goal budget action');
+  await until(()=>js(`(()=>{const actions=[...document.querySelectorAll('.goal-focus-queue button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage'));return ['reconcile-token-usage','reconcile-cost-usage'].every(action=>actions.some(b=>b.dataset.action===action&&b.dataset.owner==='user'));})()`),'Goal editor focus queue matches the overview budget actions');
+  await js(`document.querySelector('.goal-focus-queue summary').click()`);
+  await js(`document.querySelector('.goal-focus-queue button[data-action="reconcile-token-usage"]').click()`);
+  await until(()=>js(`document.querySelector('.goal-summary strong')?.textContent==='Unknown provider token usage'`),'budget attention routes to the owning Goal from another Goal editor');
   await js(`(()=>{const summary=[...document.querySelectorAll('.goal-management-section summary')].find(item=>item.textContent.includes('目标范围与预算'));if(!summary)throw Error('Goal budget disclosure missing');summary.click();})()`);
   await until(()=>js('!!document.querySelector(".goal-token-reconcile")'),'unknown token reconciliation control');
   await js(`(()=>{const input=document.querySelector('[aria-label="核对后的累计 Token 用量"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'37');input.dispatchEvent(new Event('input',{bubbles:true}));const reason=document.querySelector('[aria-label="Token 用量核对说明"]');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(reason,'已核对外部 Agent 的 usage 日志');reason.dispatchEvent(new Event('input',{bubbles:true}));})()`);

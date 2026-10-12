@@ -5,6 +5,7 @@ import { useUiStore } from '../../store/uiStore';
 import waitConfig from '../../../config/goal.wait.json';
 import GoalTaskGraph from '../GoalTaskGraph';
 import {toLocalDateTimeInput} from '../../lib/dateTime';
+import {goalBudgetAttention} from '../../lib/goalBudgetAttention';
 
 const statusLabel:Record<string,string>={active:'进行中',paused:'已暂停',stopped:'已停止',completed:'已完成',archived:'已归档',todo:'待办',ready:'可运行',in_progress:'执行中',waiting:'等待',blocked:'阻塞',failed:'失败',cancelled:'已取消',unknown:'结果未知',settled:'已结算',claimed:'已认领',started:'已启动',superseded:'已由手动运行接管'};
 export default function GoalControlPanel({creating=false,onCreated,autoPlanGoalId=null,onAutoPlanConsumed}:{creating?:boolean;onCreated?:(goalId:string)=>void;autoPlanGoalId?:string|null;onAutoPlanConsumed?:()=>void}={}){
@@ -14,11 +15,14 @@ export default function GoalControlPanel({creating=false,onCreated,autoPlanGoalI
   useEffect(()=>{if(creating){setTitle(pendingDraft?.slice(0,300)||'');setObjective(pendingDraft||'');setGoalScope('');setGoalExclusions('');setCriteriaText('');setMaxTokens('');setMaxCostUsd('');}},[creating]);
   const api=window.codenode;
   const invoke=async(action:()=>Promise<any>,success='已保存')=>{if(!root||!api)return;setBusy(true);setMessage('');try{const result=await action();if(useProjectStore.getState().root!==root)return;if(!result?.ok)throw new Error(result?.error||'操作失败');setMessage(success);await refresh(root);}catch(error){if(useProjectStore.getState().root===root)setMessage(error instanceof Error?error.message:String(error));}finally{setBusy(false);}};
-  const focusQueue=goals.flatMap(g=>[
+  const focusQueue=goals.flatMap(g=>{
+    const items=[
     ...(g.decisions||[]).filter((d:any)=>d.status==='open').map((d:any)=>({goal:g,kind:'decision',id:d.id,taskId:d.taskIds?.[0]||null,label:'待决定 · '+d.question})),
     ...(g.tasks||[]).filter((t:any)=>['blocked','failed','waiting'].includes(t.status)||t.executionStatus==='unknown').map((t:any)=>({goal:g,kind:'task',id:t.id,taskId:t.id,label:(t.executionStatus==='unknown'?'结果未知 · ':t.status==='waiting'&&t.waitDue?'到检查时间 · ':`${statusLabel[t.status]||t.status} · `)+t.title})),
-    ...(g.budget?.maxCostUsd!=null&&g.budget?.costBudgetUnknown?[{goal:g,kind:'budget',id:g.id,taskId:null,label:'费用未知，需复核预算'}]:[]),
-  ]);
+    ...goalBudgetAttention(g).map(item=>({goal:g,kind:'budget',...item})),
+    ];
+    return items.map(item=>({...item,owner:'owner' in item?item.owner:'user' as const,action:'action' in item?item.action:item.kind,text:'text' in item?item.text:''}));
+  });
   useEffect(()=>{void refresh(root);},[root,refresh]);
   useEffect(()=>{setGate(null);setMessage('');setRunReview(null);setRunReviewAcknowledged(false);},[selectedGoalId,selectedTaskId,task?.pendingReviewRunId]);
   useEffect(()=>{setWaitKind(task?.waitCondition?.kind||'external_status');setWaitProvider(task?.waitCondition?.provider||'manual');setWaitDescription(task?.waitCondition?.description||'');setWaitExpected(task?.waitCondition?.expected||'');setWaitCommitSha(task?.waitCondition?.commitSha||'');setWaitEvalMode(task?.waitCondition?.mode||waitConfig.agentEval.defaultMode);setWaitDatasetVersion(task?.waitCondition?.datasetVersion||waitConfig.agentEval.defaultDatasetVersion);setWaitNextCheckAt(task?.waitCondition?.nextCheckAt?toLocalDateTimeInput(task.waitCondition.nextCheckAt):'');},[task?.id]);
@@ -50,7 +54,7 @@ export default function GoalControlPanel({creating=false,onCreated,autoPlanGoalI
     <div className="goal-control-body">
       {!root&&<p className="settings-scope">先打开项目，Goal 与任务会保存在该项目中。</p>}
       {root&&<>
-        {focusQueue.length>0&&<details className="goal-focus-queue"><summary>待处理事项 · {focusQueue.length}</summary>{focusQueue.map(item=><button key={item.kind+item.id} disabled={busy} onClick={()=>select(item.goal.id,item.taskId)}>{item.goal.title} · {item.label}</button>)}</details>}
+        {focusQueue.length>0&&<details className="goal-focus-queue"><summary>待处理事项 · {focusQueue.length}</summary>{focusQueue.map(item=><button key={item.kind+item.id} data-owner={item.owner||'user'} data-action={item.action||item.kind} aria-label={`需要你处理：${item.label}${item.text?' · '+item.text:''} · ${item.goal.title}`} disabled={busy} onClick={()=>select(item.goal.id,item.taskId)}>{item.goal.title} · {item.label}{item.text?' · '+item.text:''}</button>)}</details>}
         <div className="goal-toolbar" hidden={creating}><select aria-label="项目 Goal" value={goal?.id||''} disabled={busy||!goals.length} onChange={e=>select(e.target.value||null,null)}><option value="">选择 Goal</option>{goals.map(g=><option key={g.id} value={g.id}>{g.title} · {statusLabel[g.status]||g.status}</option>)}</select><button onClick={()=>void refresh(root)} disabled={busy}>刷新</button></div>
         {!goal&&<div className="goal-form goal-create-form"><label>目标名称<input aria-label="Goal 标题" value={title} onChange={e=>setTitle(e.target.value)} placeholder="例如：完成登录功能"/></label><label>希望完成什么<textarea aria-label="Goal 目标" value={objective} onChange={e=>setObjective(e.target.value)} placeholder="说明希望得到的结果" rows={3}/></label><label>怎样算完成<textarea aria-label="验收条件" value={criteriaText} onChange={e=>setCriteriaText(e.target.value)} placeholder="每行一条完成标准" rows={3}/></label><details className="goal-create-advanced"><summary>范围与预算（可选）</summary><textarea aria-label="Goal 范围" value={goalScope} onChange={e=>setGoalScope(e.target.value)} placeholder="包含的范围" rows={2}/><textarea aria-label="Goal 排除项" value={goalExclusions} onChange={e=>setGoalExclusions(e.target.value)} placeholder="不包含的内容" rows={2}/><input aria-label="Goal Token 预算" type="number" min="1" value={maxTokens} onChange={e=>setMaxTokens(e.target.value)} placeholder="Token 上限（可选）"/><input aria-label="Goal 费用预算 USD" type="number" min="0" step="0.01" value={maxCostUsd} onChange={e=>setMaxCostUsd(e.target.value)} placeholder="费用上限 USD（可选）"/></details><button className="goal-create-submit" disabled={busy||!title.trim()||!criteriaText.trim()} onClick={createGoal}>创建目标</button></div>}
         {goal&&<>
