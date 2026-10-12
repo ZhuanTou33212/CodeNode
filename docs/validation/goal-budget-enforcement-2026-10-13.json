@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T23:05:46.602Z",
-  "sourceCommit": "85d5dbaee78832ee95cf6bfebb67e3c55519ebd5",
+  "recordedAt": "2026-10-12T23:21:58.486Z",
+  "sourceCommit": "0238689f1cdec7b356fb5e06f216dc47a68d8808",
   "passed": true,
-  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed attention actions, risk-prioritized follow-ups and fixed Windows delivery",
+  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed owner actions, secret-redacted Task owner handoffs and fixed Windows delivery",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "3a248eb88aa4e70b45cd7bc03094ad7bf15523dee46501791fef32639cc958ab",
-    "portableSha256": "de63fda393cacbf5b0f83f63074e7c920e001d5e319e9c7610ff988a706c4735",
+    "asarSha256": "80714278cf111fd841b6cfb5ff1875fd6b1d331c594df73f839d39c67e784952",
+    "portableSha256": "24921c89e5cd116706c920f7b563bea85a42c9e3762f90d5ef4baaa06fe8242e",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -19,7 +19,7 @@
         "userDataDirWritable": true
       },
       "ok": true,
-      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker attention-priority-fixed"
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker owner-redaction-fixed"
     }
   },
   "verification": {
@@ -177,6 +177,15 @@
       "lightTheme": true,
       "darkTheme": true,
       "overflowRouteToFullQueue": true
+    },
+    "taskOwnerRedaction": {
+      "sourceGoalHandoffTest": true,
+      "sourceGoalStoreContextTest": true,
+      "actualAsarOwnerSecretRedaction": true,
+      "ownerValuePreservedLocally": true,
+      "ownerRoutingHintFalse": true,
+      "secretShape": "password=owner-secret",
+      "fixedPathSelftest": true
     }
   },
   "budgetSemantics": {
