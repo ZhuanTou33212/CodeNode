@@ -193,13 +193,14 @@ try {
   goal.admit(root,generatedGoal.id,generatedTask.id,'run-experience-candidate');
   const verifiedRun={verified:true,status:'passed',files:['src/module.cjs'],checks:[{kind:'test',status:'passed',command:'node --test src/module.test.cjs',exitCode:0}]};
   const generatedEvidence=goal.recordRunEvidence(root,generatedGoal.id,generatedTask.id,'run-experience-candidate',verifiedRun);
+  generatedEvidence.push(goal.recordEvidence(root,generatedGoal.id,{taskId:generatedTask.id,criterionId:generatedGoal.criteria[0].id,runId:'run-experience-candidate',check:'explicit related-test acceptance',command:verifiedRun.checks[0].command,status:'passed',result:'related test passed'}));
   goal.settle(root,'run-experience-candidate',{status:'completed',verification:verifiedRun});
   let generatedContext=goal.read(root).goals.find(g=>g.id===generatedGoal.id).context.confirmedExperience;
   assert.equal(generatedContext.length,1,'a verified Goal Run automatically creates one reviewable experience candidate');
   assert.equal(generatedContext[0].generated,true);
   assert.equal(generatedContext[0].confirmed,false,'generated experience is never auto-confirmed');
   assert.equal(generatedContext[0].sourceRunId,'run-experience-candidate');
-  assert.deepEqual(generatedContext[0].evidenceIds,generatedEvidence.map(item=>item.id));
+  assert.deepEqual(new Set(generatedContext[0].evidenceIds),new Set(generatedEvidence.map(item=>item.id)));
   assert.match(generatedContext[0].content,/node --test src\/module\.test\.cjs/);
   assert.equal(goal.contextForRole(root,generatedGoal.id,generatedTask.id,'implement').context.confirmedExperience.length,0,'implementers cannot see an unreviewed generated suggestion');
   const generatedRevision=goal.read(root).revision;
@@ -223,6 +224,7 @@ try {
   const staleVerification={...verifiedRun,files:['src/stale-module.cjs']};
   goal.admit(root,staleSuggestionGoal.id,staleSuggestionTask.id,'run-stale-experience-candidate');
   goal.recordRunEvidence(root,staleSuggestionGoal.id,staleSuggestionTask.id,'run-stale-experience-candidate',staleVerification);
+  goal.recordEvidence(root,staleSuggestionGoal.id,{taskId:staleSuggestionTask.id,criterionId:staleSuggestionGoal.criteria[0].id,runId:'run-stale-experience-candidate',check:'explicit related-test acceptance',status:'passed',result:'related test passed'});
   fs.appendFileSync(staleModule,'module.exports=2;\n');
   goal.settle(root,'run-stale-experience-candidate',{status:'completed',verification:staleVerification});
   const staleSuggestion=goal.read(root).goals.find(g=>g.id===staleSuggestionGoal.id);
@@ -273,6 +275,39 @@ try {
   assert.equal(stopped.stopReason,'external blocker');
   assert.equal(goal.canRun(root,created.id).reason,'external blocker');
   assert.throws(()=>goal.updateGoal(root,created.id,{status:'active'}),/不能从 stopped 切换/);
+
+  const acceptanceGoal=goal.createGoal(root,{title:'Independent acceptance',criteria:['unit tests pass','deployment works']});
+  const acceptanceTask=goal.createTask(root,acceptanceGoal.id,{title:'Final acceptance',criteriaIds:acceptanceGoal.criteria.map(c=>c.id)});
+  goal.admit(root,acceptanceGoal.id,acceptanceTask.id,'local-only-run');
+  const localEvidence=goal.recordRunEvidence(root,acceptanceGoal.id,acceptanceTask.id,'local-only-run',verifiedRun);
+  assert.equal(localEvidence.length,1,'one local report produces one stage evidence record');
+  assert.equal(localEvidence[0].criterionId,null,'local tests cannot certify arbitrary acceptance criteria');
+  goal.settle(root,'local-only-run',{status:'completed',verification:verifiedRun});
+  assert.equal(goal.audit(root,acceptanceGoal.id).tasks[0].status,'blocked');
+  assert.equal(goal.audit(root,acceptanceGoal.id).criteria.every(c=>c.evidence.length===0),true);
+  assert.throws(()=>goal.updateGoal(root,acceptanceGoal.id,{status:'completed'}),/尚未满足完成条件/);
+  goal.recordEvidence(root,acceptanceGoal.id,{taskId:acceptanceTask.id,criterionId:acceptanceGoal.criteria[0].id,runId:'explicit-unit-test-run',check:'unit tests',command:'npm test',status:'passed',result:'tests passed'});
+  assert.equal(goal.audit(root,acceptanceGoal.id).tasks[0].status,'blocked','one checked criterion cannot satisfy another');
+  goal.recordEvidence(root,acceptanceGoal.id,{taskId:acceptanceTask.id,criterionId:acceptanceGoal.criteria[1].id,runId:'explicit-deployment-run',check:'deployment health',command:'node deployment-check.cjs',status:'passed',result:'deployment healthy'});
+  assert.equal(goal.audit(root,acceptanceGoal.id).tasks[0].status,'completed');
+  assert.equal(goal.updateGoal(root,acceptanceGoal.id,{status:'completed'}).status,'completed');
+
+  const legacyGoal=goal.createGoal(root,{title:'Legacy automatic criterion evidence',criteria:['deployment works']});
+  const legacyEvidence=goal.recordEvidence(root,legacyGoal.id,{criterionId:legacyGoal.criteria[0].id,runId:'legacy-local-run',check:'CodeNode 独立代码校验',status:'passed',result:'local tests passed'});
+  assert.match(goal.audit(root,legacyGoal.id).evidence[0].freshness.reason,/未逐条核验/);
+  assert.equal(goal.evidenceStatus(legacyGoal,legacyEvidence,legacyEvidence.sourceFingerprint,true).valid,false);
+  const legacyData=goal.read(root);legacyData.goals.find(g=>g.id===legacyGoal.id).status='completed';
+  fs.writeFileSync(path.join(root,'.codenode','goals.json'),JSON.stringify(legacyData));
+  assert.equal(goal.audit(root,legacyGoal.id).complete,false,'previously completed Goals with legacy evidence must be re-audited after restart');
+
+  const stageGoal=goal.createGoal(root,{title:'Stage report validation',criteria:['overall acceptance']});
+  const stageTask=goal.createTask(root,stageGoal.id,{title:'Local stage'});
+  for(const report of [null,{verified:true,status:'passed',checks:[]},{verified:true,status:'stale',checks:verifiedRun.checks},{verified:true,status:'passed',checks:[{status:'failed'}]}]){
+    assert.equal(goal.recordRunEvidence(root,stageGoal.id,stageTask.id,'invalid-stage-'+goal.read(root).revision,report)[0].status,'unknown','unexecuted, stale or contradictory reports cannot qualify stage proof');
+  }
+  const stageEvidence=goal.recordRunEvidence(root,stageGoal.id,null,'goal-wide-local-run',verifiedRun);
+  assert.equal(stageEvidence[0].criterionId,null,'Goal-wide local verification must not fan out onto all required criteria');
+  assert.equal(goal.audit(root,stageGoal.id).qualified,false);
 
   const finishGoal=goal.createGoal(root,{title:'Qualified completion',criteria:['artifact verified']});
   goal.recordEvidence(root,finishGoal.id,{criterionId:finishGoal.criteria[0].id,runId:'goal-only-verification',check:'reviewed artifact',status:'passed',result:'verified'});

@@ -59,6 +59,7 @@ app.whenReady().then(async () => {
     fs.mkdirSync(path.join(projectRoot,'src'),{recursive:true});fs.writeFileSync(path.join(projectRoot,'src','ui-module.cjs'),'module.exports=1;\n');
     goalStore.admit(projectRoot,goal.value.id,task.value.id,'ui-generated-experience-run');
     goalStore.recordRunEvidence(projectRoot,goal.value.id,task.value.id,'ui-generated-experience-run',verifiedRun);
+    for(const criterionId of task.value.criteriaIds||[])goalStore.recordEvidence(projectRoot,goal.value.id,{taskId:task.value.id,criterionId,runId:'ui-generated-experience-run',check:'explicit UI fixture acceptance',status:'passed',result:'fixture criterion checked'});
     goalStore.settle(projectRoot,'ui-generated-experience-run',{status:'completed',verification:verifiedRun});
 
     await js(`document.querySelector('.goal-toolbar button').click()`);
@@ -193,7 +194,28 @@ app.whenReady().then(async () => {
     assert.equal(JSON.parse(fs.readFileSync(path.join(projectRoot,'report.json'),'utf8')).mcpRead.result.isError,false,'MCP relay executes the real CodeNode workbench tool');
     await js(`window.__codenodeSession.getState().stopTurn()`);
     for(const theme of ['light','dark']) { await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`); await sleep(80); assert.equal(await js(`document.querySelectorAll('.cs-msg-agent audio').length > 0`),true,'audio events render in '+theme); assert.equal(await js(`document.querySelectorAll('.cs-msg-agent details').length > 0`),true,'ACP events render in '+theme); }
-    console.log('BACKEND SETTINGS UI: PASS (real IPC save/reload/inherit, Goal panel and backend controls shared in both themes, session/draft/model/sidebar preserved)');
+    for(const theme of ['light','dark']){
+      await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)}})`);
+      const acceptanceGoal=goalStore.createGoal(projectRoot,{title:'Independent acceptance '+theme,criteria:['first command passes','second command passes']});
+      const acceptanceTask=goalStore.createTask(projectRoot,acceptanceGoal.id,{title:'Final acceptance',criteriaIds:acceptanceGoal.criteria.map(c=>c.id)});
+      goalStore.admit(projectRoot,acceptanceGoal.id,acceptanceTask.id,'acceptance-local-'+theme);
+      goalStore.recordRunEvidence(projectRoot,acceptanceGoal.id,acceptanceTask.id,'acceptance-local-'+theme,verifiedRun);
+      goalStore.settle(projectRoot,'acceptance-local-'+theme,{status:'completed',verification:verifiedRun});
+      const audit=()=>js(`window.codenode.goalAudit(${JSON.stringify(projectRoot)},${JSON.stringify(acceptanceGoal.id)})`);
+      assert.equal((await audit()).value.tasks[0].status,'blocked','local checks do not complete overall acceptance in '+theme);
+      const verify=(criterionId,exitCode)=>js(`(async()=>{const off=window.codenode.onToolRequest(r=>{if(r.type==='confirm')window.codenode.respondToolRequest(r.id,{ok:true});});try{return await window.codenode.goalVerify(${JSON.stringify(projectRoot)},${JSON.stringify(acceptanceGoal.id)},${JSON.stringify(acceptanceTask.id)},${JSON.stringify(criterionId)},${JSON.stringify('node -e "process.exit('+exitCode+')"')});}finally{off();}})()`);
+      assert.equal((await verify(acceptanceGoal.criteria[0].id,1)).ok,false,'a failed real command is not acceptance');
+      assert.equal((await audit()).value.qualified,false);
+      const firstCheck=await verify(acceptanceGoal.criteria[0].id,0);
+      assert.equal(firstCheck.ok,true,firstCheck.error||firstCheck.output);
+      assert.equal((await audit()).value.tasks[0].status,'blocked','one explicit check cannot satisfy the other criterion');
+      const secondCheck=await verify(acceptanceGoal.criteria[1].id,0);
+      assert.equal(secondCheck.ok,true,secondCheck.error||secondCheck.output);
+      const accepted=(await audit()).value;
+      assert.equal(accepted.tasks[0].status,'completed');assert.equal(accepted.qualified,true);
+      assert.equal(accepted.evidence.filter(e=>e.criterionId&&e.freshness.valid).length,2);
+    }
+    console.log('BACKEND SETTINGS UI: PASS (real IPC save/reload/inherit, independent per-criterion command acceptance in both themes, Goal panel and backend controls, session/draft/model/sidebar preserved)');
     app.exit(0);
   } catch (error) { console.error(error); app.exit(1); }
 });
