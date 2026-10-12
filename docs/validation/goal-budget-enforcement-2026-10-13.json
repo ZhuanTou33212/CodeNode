@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T21:56:25.469Z",
-  "sourceCommit": "b3aaa7c60ba55505bb5de1c936e3659f8086ae96",
+  "recordedAt": "2026-10-12T22:14:27.879Z",
+  "sourceCommit": "f7ca61522427604f267edd486dc3913b3f1fc4be",
   "passed": true,
-  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed user-action projection, fixed Windows delivery and release-sign verification",
+  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed user-action projection, cancelled-task follow-up, attention overflow routing and fixed Windows delivery",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "c0f316df36adb8b548bb0dea58625a591cb060af5604dac7a1c7844c33ea7c73",
-    "portableSha256": "e53bc4da685010133678949ebe6e4ed805486cc3075bdcc7146827b06eff1012",
+    "asarSha256": "e462af840b7e132fd9434817be24e67064f6072cf8d47bd555285053002a41a3",
+    "portableSha256": "955a7f4952af2a0ff436f888e3bd5c69fc2717d3f21b16ae7795f6f9d5d11003",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -135,7 +135,9 @@
         "continue-goal"
       ],
       "archivedFiltered": true,
+      "cancelledTaskFollowUp": true,
       "duplicateExecutionAttentionSuppressed": true,
+      "overflowRouteToFullQueue": true,
       "crossGoalRouting": true,
       "lightTheme": true,
       "darkTheme": true
