@@ -155,6 +155,7 @@ app.whenReady().then(async()=>{try{
   for(const theme of ['light','dark']){
     await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)},sideOpen:true})`);
     await until(()=>js(`(()=>{const actions=[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage'));return ['reconcile-token-usage','reconcile-cost-usage'].every(action=>actions.some(b=>b.dataset.action===action&&b.dataset.owner==='user'));})()`),`overview budget follow-ups remain available in ${theme} theme`);
+    await until(()=>js(`document.querySelector('.overview-brief p')?.textContent.includes('核对预算')`),`overview brief explains budget follow-ups in ${theme} theme`);
     assert.deepEqual(await js(`[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage')).map(b=>b.dataset.action).sort()`),['reconcile-cost-usage','reconcile-token-usage'],`${theme} theme exposes the same reconciliation actions`);
   }
   await js(`document.querySelector('[data-goal-id="${exact.value.id}"]').click()`);
