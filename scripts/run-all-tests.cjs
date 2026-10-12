@@ -38,6 +38,8 @@ const CORE = [
   'test:goal-canvas-graph',
   'test:goal-plan-ipc',
   'test:goal-scope',
+  'test:release-sign',
+  'test:release-sign',
   'test:goal-ipc-recovery',
   'test:goal-github-actions',
   'test:agent-eval-wait',

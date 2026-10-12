@@ -170,10 +170,17 @@ function runPowerShell(script, timeoutMs = 180000) {
   fs.writeFileSync(file, PS_PRELUDE + '\n' + script, 'utf8');
   try {
     const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+    // Do not let PowerShell 7 modules shadow Windows PowerShell 5.1 inbox
+    // modules. In particular, the bundled pwsh module path can make
+    // Microsoft.PowerShell.Security fail to import with duplicate type data.
+    const env = process.platform === 'win32'
+      ? { ...process.env, PSModulePath: windowsPowerShellModulePath() }
+      : undefined;
     const result = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], {
       encoding: 'utf8',
       timeout: timeoutMs,
       windowsHide: true,
+      ...(env ? { env } : {}),
     });
     return {
       ok: result.status === 0,
@@ -187,15 +194,30 @@ function runPowerShell(script, timeoutMs = 180000) {
   }
 }
 
+function windowsPowerShellModulePath() {
+  const windows = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  const candidates = [
+    path.join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'WindowsPowerShell', 'Modules'),
+    path.join(os.homedir(), 'Documents', 'WindowsPowerShell', 'Modules'),
+  ];
+  return [...new Set(candidates.filter(directory => fs.existsSync(directory)))].join(path.delimiter);
+}
+
 function powerShellAvailable() {
   if (process.platform !== 'win32') return false;
-  const probe = runPowerShell("Write-Output 'ok'", 30000);
+  const probe = runPowerShell([
+    'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
+    'if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction Stop)) { throw "Authenticode cmdlet unavailable" }',
+    "Write-Output 'ok'",
+  ].join('\n'), 30000);
   return probe.ok && probe.stdout.includes('ok');
 }
 
 function verifySignature(file) {
   const script = [
     '$ErrorActionPreference = "Stop"',
+    'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
     '$sig = Get-AuthenticodeSignature -FilePath ' + JSON.stringify(file),
     '$out = @{',
     '  status = [string]$sig.Status',
@@ -257,6 +279,7 @@ function trustDevCert(thumbprint) {
 function signWithCertStore(file, thumbprint, timestampUrl) {
   const script = [
     '$ErrorActionPreference = "Stop"',
+    'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
     '$cert = Get-ChildItem -Path Cert:\\CurrentUser\\My -CodeSigningCert | Where-Object { $_.Thumbprint -eq ' + JSON.stringify(thumbprint) + ' } | Select-Object -First 1',
     'if (-not $cert) { throw "找不到代码签名证书：" + ' + JSON.stringify(thumbprint) + ' }',
     timestampUrl
@@ -272,6 +295,7 @@ function signWithCertStore(file, thumbprint, timestampUrl) {
 function signWithPfx(file, pfxPath, password, timestampUrl) {
   const script = [
     '$ErrorActionPreference = "Stop"',
+    'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
     '$secure = ConvertTo-SecureString -String ' + JSON.stringify(password) + ' -Force -AsPlainText',
     '$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(' + JSON.stringify(pfxPath) + ', $secure)',
     timestampUrl
