@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-12T17:46:20.630Z",
+  "sourceCommit": "39511f91564a50a3a9137d977b1bc1749a78d99b",
+  "passed": true,
+  "scope": "Main-process Goal scheduling and approved-contract acceptance; not a claim of full unattended project management",
+  "package": {
+    "path": "release/win-unpacked",
+    "version": "0.13.0",
+    "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
+    "asarSha256": "aefa6263cbb8378cbf93c3084c68ecfc564e53703278f5f57c34b2cc7afd9d61",
+    "portableSha256": "615f2ed446476332ca74466d32fe67d36139647f69063b3898fdda343b69bd15",
+    "selftest": {
+      "ok": true,
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      }
+    }
+  },
+  "checks": {
+    "build": true,
+    "checkJs": true,
+    "coreSuite": {
+      "passed": 14,
+      "total": 14,
+      "scripts": [
+        "test:goal-store",
+        "test:goal-scheduler",
+        "test:goal-canvas-graph",
+        "test:goal-plan-ipc",
+        "test:goal-scope",
+        "test:goal-ipc-recovery",
+        "test:goal-github-actions",
+        "test:agent-eval-wait",
+        "test:backend-workflow",
+        "test:backends",
+        "test:backend-port",
+        "test:agent-handoff",
+        "test:frontend-incremental",
+        "test:ipc"
+      ]
+    },
+    "desktopRestart": true,
+    "taskGraphView": true,
+    "backendSettings": {
+      "source": true,
+      "actualAsar": true
+    },
+    "packagedStartup": true,
+    "packagedSourceIdentity": true,
+    "goalSchedulerUi": {
+      "source": true,
+      "actualAsar": true,
+      "backend": "offline deterministic ACP fixture with real stdio transport",
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "covers": [
+        "persisted intent after renderer reload",
+        "next dependency stage with old graph unmounted",
+        "independent command mutex and live-run recovery protection",
+        "criteria revised during a passing command reject acceptance",
+        "session/draft/model/sidebar retained on theme switch",
+        "stale completed Goal surfaced for recheck",
+        "local datetime UTC round trip and unchanged save"
+      ]
+    }
+  },
+  "coreSafetyCases": [
+    "duplicate claims and window ownership",
+    "renderer readiness",
+    "stop before admission and after active run",
+    "pause/stop lifecycle preserved by settlement",
+    "project detach does not dispatch against a new root",
+    "graph contract edits block continuation",
+    "waiting authorization revocation and attempt cap",
+    "frequent IPC reads cannot postpone the timer",
+    "restart before admission does not retry",
+    "unknown admitted Run requires review",
+    "lifecycle listener cleanup"
+  ],
+  "limitations": [
+    "Scheduling requires the application to be running with a live project-bound renderer.",
+    "CLI/model quality across real cloud providers was not evaluated by the offline ACP fixture.",
+    "Existing uncommitted config/soul.md changes were preserved and not included in this source commit."
+  ]
+}

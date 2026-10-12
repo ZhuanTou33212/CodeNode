@@ -37,6 +37,7 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 - Automatic code verification records stage evidence only; it does not satisfy the Task's bound Goal criteria. After execution, select each applicable criterion under independent acceptance and run a command that checks it. The Task completes once all its bound criteria have valid evidence. Legacy local verification copied onto Goal criteria remains in history but no longer qualifies acceptance.
 - Per-criterion regression and fixed-path package self-test results: [2026-10-12 validation](validation/goal-criterion-acceptance-2026-10-12.json).
 - Independent acceptance commands are mutually exclusive with Agent writes. Evidence recording atomically checks the approved Goal contract: a passing command cannot certify criteria or scope revised while it was running.
+- Main-process scheduling, renderer reload, waiting authorization and package results: [2026-10-13 validation](validation/goal-main-scheduler-2026-10-13.json). Deadline inputs use the device's local time zone; completed Goals with stale evidence are marked for recheck in the overview.
 - The planning model and the execution backend are configured separately (see [backends](backends.md)).
 
 ### The overview page
