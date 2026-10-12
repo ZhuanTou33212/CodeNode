@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T22:40:05.382Z",
-  "sourceCommit": "8e7896fe4a4525a7a4756d29a0d0862c2a0f42f3",
+  "recordedAt": "2026-10-12T22:55:40.092Z",
+  "sourceCommit": "c2077b510096c3681ce943b49180ca11e4eb95da",
   "passed": true,
-  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared attention actions, persisted Task owner handoff and fixed Windows delivery",
+  "scope": "Long-term Goal gates, cumulative ACP USD budgets, shared typed actions, persisted Task owners, owner-aware planning and fixed Windows delivery",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "ec1f8ccac95184a4d397a34ee8bf959cf285e195848ef5fc32f450f7689daf2a",
-    "portableSha256": "5a45cf976e7f8237e1d0baa2c67f437c4323ba8963fa42dea1bdcdd39bb7581c",
+    "asarSha256": "f06b02a97ea5296b7c48437c27a5ae013ead4579b1aad754e4e4b5621ae7577b",
+    "portableSha256": "69f0ffd1a2e52cbd3e372a5897fb506f563edbe0700ed95b3fcf8f28e7f75635",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -19,7 +19,7 @@
         "userDataDirWritable": true
       },
       "ok": true,
-      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker task-owner-fixed"
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker planner-owner-fixed"
     }
   },
   "verification": {
@@ -152,6 +152,19 @@
       "graphOwnerVisible": true,
       "ownerEditable": true,
       "bothThemes": true
+    },
+    "planOwnerSuggestions": {
+      "proposalIncludesOwner": true,
+      "existingOwnersProvidedToPlanner": true,
+      "previewShowsOwner": true,
+      "userConfirmationRequired": true,
+      "confirmedOwnerPersists": true,
+      "missingOwnerDefaultsTo": "main",
+      "ownerIsRoutingHint": false,
+      "ipcProposalRemainsReadOnly": true,
+      "goalPlanOwnerIpcTest": "passed",
+      "goalCanvasBatchOwnerTest": "passed",
+      "packagedGraphOwnerUi": "passed"
     }
   },
   "budgetSemantics": {
