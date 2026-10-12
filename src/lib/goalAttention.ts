@@ -59,6 +59,7 @@ export function goalAttention(goals:GoalAttentionGoal[]):GoalAttentionItem[] {
     for(const task of tasks){
       if(task.executionStatus==='unknown')items.push(makeItem(goal,task.id,task.id,'review-run','待复核',`Run 结果未知：${task.title}`));
       else if(task.status==='failed')items.push(makeItem(goal,task.id,task.id,'retry-task','执行失败',task.title));
+      else if(task.status==='cancelled')items.push(makeItem(goal,task.id,task.id,'retry-task','已取消',`任务已取消，可复核后重新排队：${task.title}`));
       else if(task.status==='blocked')items.push(makeItem(goal,task.id,task.id,'resolve-task','有阻塞',task.title));
       else if(task.status==='waiting')items.push(makeItem(goal,task.id,task.id,task.waitDue?'check-wait':'view-wait',task.waitDue?'到检查时间':'等待',task.waitCondition?.description||task.title));
     }

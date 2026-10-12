@@ -53,7 +53,7 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 
 The **Overview / Conversation** buttons at the top of the workbench switch between two independent pages. Overview shows a short project brief, pending items and a single-column goal list; with no goals it shows neither statistic cards nor a permanent form, and the editor opens only after you click "New" or a goal entry. The Conversation page keeps the canvas and the chat and shows a short goal hint only when a task is bound.
 
-Overview and the Goal editor share one typed, user-owned follow-up projection for stale acceptance, Token/USD reconciliation, business decisions, unknown Runs, failed or blocked tasks, and wait checks. Selecting an item opens its owning Goal and Task in either surface.
+Overview and the Goal editor share one typed, user-owned follow-up projection for stale acceptance, Token/USD reconciliation, business decisions, unknown Runs, failed, cancelled or blocked tasks, and wait checks. Selecting an item opens its owning Goal and Task in either surface. Overview keeps the brief list to six items and provides a direct route to the complete Goal editor queue when more remain.
 
 Both pages stay mounted, so switching back and forth preserves messages, input drafts, canvas, model and any unsaved goal form. The current page is persisted in the shared UI configuration and can also be set in **Settings → General → Default workbench**.
 

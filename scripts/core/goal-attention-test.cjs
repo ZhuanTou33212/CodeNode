@@ -13,15 +13,17 @@ const {goalAttention}=loaded.exports;
 const active=goalAttention([{id:'active',title:'Active goal',status:'active',budget:{maxTokens:1000,tokenUnknown:true,maxCostUsd:0.5,costUnknown:true},decisions:[{id:'decision',status:'open',question:'Choose deployment region'}],tasks:[
   {id:'unknown',title:'Interrupted task',status:'blocked',executionStatus:'unknown'},
   {id:'failed',title:'Failed task',status:'failed'},
+  {id:'cancelled',title:'Cancelled task',status:'cancelled'},
   {id:'blocked',title:'Blocked task',status:'blocked'},
   {id:'due',title:'Due wait',status:'waiting',waitDue:true,waitCondition:{description:'CI finished'}},
   {id:'future',title:'Future wait',status:'waiting',waitDue:false,waitCondition:{description:'Service ready'}},
 ],execution:{id:'execution',status:'blocked',actionRequired:true,currentTaskId:'unknown',reason:'Task requires review'}}]);
 assert.deepEqual(active.map(item=>item.action),[
-  'reconcile-token-usage','reconcile-cost-usage','resolve-decision','review-run','retry-task','resolve-task','check-wait','view-wait',
+  'reconcile-token-usage','reconcile-cost-usage','resolve-decision','review-run','retry-task','retry-task','resolve-task','check-wait','view-wait',
 ]);
 assert.equal(active.find(item=>item.action==='resolve-decision').taskId,null);
 assert.equal(active.find(item=>item.action==='review-run').taskId,'unknown');
+assert.equal(active.find(item=>item.id==='cancelled').label,'已取消');
 assert.equal(active.filter(item=>item.action==='review-execution').length,0,'task/decision blockers suppress duplicate execution attention');
 assert(active.every(item=>item.owner==='user'&&item.goalId==='active'&&item.key));
 assert.equal(new Set(active.map(item=>item.key)).size,active.length);
