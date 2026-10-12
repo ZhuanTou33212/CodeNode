@@ -41,6 +41,7 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 - The planning model and the execution backend are configured separately (see [backends](backends.md)).
 - Each Goal Task request derives a fresh handoff from persisted project records: direct and earlier predecessors, latest Run outcomes and summaries, evidence freshness, relevant decisions and current acceptance criteria. Foreign Goals and unrelated branches are excluded; historical completion never upgrades stale evidence.
 - Handoffs are reference data. Long summaries, commands and results are explicitly marked excerpts; command previews are not complete executable commands. Optional handoff data is reduced to fit the existing dynamic context budget. Required criteria and rules retain their original text, and an oversized required context stops explicitly. Internal bounds are centralized in `config/goal.handoff.json`.
+- Handoff, actual post-reload requests and fixed-path delivery results: [2026-10-13 handoff validation](validation/goal-handoff-2026-10-13.json).
 
 ### The overview page
 

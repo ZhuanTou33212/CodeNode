@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-12T18:11:44.499Z",
+  "sourceCommit": "aa92f2242910dde73ada2c92d7f1e7c11bf36f0d",
+  "passed": true,
+  "scope": "Persisted Goal dependency handoff and required context preservation",
+  "checks": {
+    "build": true,
+    "checkJs": true,
+    "coreSuite": {
+      "passed": 8,
+      "total": 8,
+      "scripts": [
+        "test:goal-store",
+        "test:goal-handoff",
+        "test:goal-scheduler",
+        "test:goal-plan-ipc",
+        "test:goal-ipc-recovery",
+        "test:backend-workflow",
+        "test:agent-handoff",
+        "test:ipc"
+      ]
+    },
+    "ui": {
+      "source": true,
+      "actualAsar": true,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "backend": "offline ACP fixture over real stdio",
+      "assertions": [
+        "actual downstream prompt contains predecessor id, summary and fresh evidence after renderer reload",
+        "full bound criterion reaches the actual ACP request",
+        "session/draft/model/sidebar remain stable across theme changes"
+      ]
+    },
+    "packagedSourceIdentity": true
+  },
+  "coreCases": [
+    "direct and transitive predecessors only",
+    "foreign Goal and unrelated branch isolation",
+    "latest failed/unknown outcome retained",
+    "stale evidence never promoted by completed task status",
+    "resolved and open decision provenance",
+    "secret redaction",
+    "bounded packet and explicit omissions",
+    "required criteria are not silently clipped",
+    "derived context does not mutate goal history",
+    "store reload retains handoff"
+  ],
+  "package": {
+    "path": "release/win-unpacked",
+    "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
+    "asarSha256": "c5be2384e7a729fe3ee0a4ddc726a20184f07d2af193347846f1f652f69d9683",
+    "portableSha256": "07492464a618f5f65c39f300f4692b0ba4fadc3600dc7b2a7ae28f022cf2ccea",
+    "selftest": {
+      "ok": true,
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      }
+    }
+  },
+  "limitations": [
+    "Handoff summaries and command previews are reference data, not proof or new authority.",
+    "The offline peer validates runtime delivery, not real cloud model quality.",
+    "Existing config/soul.md edits were preserved outside this commit."
+  ]
+}
