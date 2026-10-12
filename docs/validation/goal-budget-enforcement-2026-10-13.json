@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T21:21:36.994Z",
-  "sourceCommit": "556e62baa2d25ba9759687af06838d14a8f39664",
+  "recordedAt": "2026-10-12T21:38:07.679Z",
+  "sourceCommit": "2c96b075829b027df19173b65b34a7534456734d",
   "passed": true,
-  "scope": "Goal token and cumulative ACP USD budgets, shared user-owned attention actions, release-sign PowerShell module isolation, fixed Windows delivery and packaged acceptance",
+  "scope": "Goal token and cumulative ACP USD budgets, shared user-owned attention actions, truthful overview budget guidance, Authenticode verification and fixed Windows delivery",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "76ab19a29b35e3ed6d079e2d272564ec7f71c7abadd2c81a6c0c313fc78ca272",
-    "portableSha256": "0ba85c250bdbc9b069edeb17da5763a70290fef5c08da65a999f9a94956e6487",
+    "asarSha256": "78f68b7339aaeb656ed6270dbb466017db4609dedd25c5b985a6883d827218d7",
+    "portableSha256": "c631665e079119483232bdcde84de586c7ce320e7453a918f418adb01cb6962d",
     "selftest": {
       "checks": {
         "markerIntact": true,
@@ -19,7 +19,7 @@
         "userDataDirWritable": true
       },
       "ok": true,
-      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker release-sign-fixed"
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated seeded user data and project; version 0.13.0; marker budget-brief-fixed"
     }
   },
   "verification": {
@@ -96,6 +96,13 @@
       "portableStatus": "NotSigned",
       "unpackedStatus": "NotSigned",
       "asarStatus": "NotApplicable"
+    },
+    "goalOverviewBudgetBrief": {
+      "source": true,
+      "actualAsar": true,
+      "lightTheme": true,
+      "darkTheme": true,
+      "mentionsBudgetReconciliation": true
     }
   },
   "budgetSemantics": {
