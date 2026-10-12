@@ -1,56 +1,46 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-12T19:42:26.378Z",
-  "sourceCommit": "0e83b1b20e7a19fe3991983edaaf67b3c7a00479",
+  "recordedAt": "2026-10-12T20:45:55.587Z",
+  "sourceCommit": "fd0a2259dce9c6f25d4257972d3e45679929c705",
   "passed": true,
-  "scope": "Goal token and cost budget admission, per-request reservation, unknown-usage recovery, branch progress and fixed Windows delivery",
+  "scope": "Goal token and cumulative ACP USD budget admission, per-request reservations, unknown-usage recovery, branch progress, fixed Windows delivery and packaged acceptance",
   "package": {
     "path": "release/win-unpacked",
     "version": "0.13.0",
     "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
-    "asarSha256": "9e127df4786fbffcbf1edec5066c18b2fec207d9cbf85565c67f3221a050a525",
-    "portableSha256": "56ab51585d951ceabe2a8fabe03c5082a96e882eab672b350e854e922f11f8cf",
+    "asarSha256": "23eb16c5a0b83417b879e96b4a1c67dee43acbb15d2269d1ed1e8515165e87f3",
+    "portableSha256": "f0d546877bd289e9bee81b50cc335fef0fe7eedf27406a41ae0538b9d020456b",
     "selftest": {
-      "ok": true,
       "checks": {
-        "projectRootExists": true,
-        "userDataDirWritable": true,
-        "modelsConfigReadable": true,
         "markerIntact": true,
-        "versionMatch": true
-      }
+        "projectRootExists": true,
+        "modelsConfigReadable": true,
+        "versionMatch": true,
+        "userDataDirWritable": true
+      },
+      "ok": true,
+      "execution": "fixed release/win-unpacked/CodeNode.exe; isolated user data and project; version 0.13.0"
     }
   },
   "verification": {
     "build": true,
     "checkJs": true,
     "coreSuite": {
-      "passed": 16,
-      "total": 16,
+      "passed": 170,
       "scripts": [
-        "test:cost-budget",
-        "test:goal-store",
-        "test:goal-progression",
-        "test:goal-scheduler",
-        "test:goal-handoff",
-        "test:goal-canvas-graph",
-        "test:goal-plan-ipc",
-        "test:goal-scope",
-        "test:goal-ipc-recovery",
-        "test:goal-github-actions",
-        "test:agent-eval-wait",
-        "test:backend-workflow",
-        "test:backend-port",
-        "test:agent-handoff",
-        "test:frontend-incremental",
-        "test:ipc"
-      ]
+        "node scripts/run-all-tests.cjs"
+      ],
+      "total": 170
     },
     "desktopRestart": true,
     "ui": {
       "scheduler": {
         "source": true,
-        "actualAsar": true
+        "actualAsar": true,
+        "themes": [
+          "light",
+          "dark"
+        ]
       },
       "backendSettings": {
         "source": true,
@@ -68,15 +58,29 @@
       "newRequestIsDeniedAtCeiling": true,
       "reportedExternalOverrunRequestsCancellation": true,
       "missingExternalUsageRequiresManualReconciliation": true,
-      "manualReconciliationCannotLowerKnownUsage": true
-    }
+      "manualReconciliationCannotLowerKnownUsage": true,
+      "cumulativeUsdCostDeltaAndOverrunCancellation": true,
+      "unknownCumulativeCostRequiresReconciliation": true,
+      "costReconciliationCannotLowerKnownFloor": true
+    },
+    "sourceFilesVerified": [
+      "electron/backends/runExternal.cjs",
+      "electron/goalStore.cjs",
+      "electron/ipc/agent.cjs",
+      "electron/preload.cjs"
+    ],
+    "packagedGoalUi": true,
+    "portableArtifact": true
   },
   "budgetSemantics": {
     "builtin": "Admission snapshots remaining Goal allowance; each HTTP attempt reserves estimated input, caps actual max_tokens to remaining capacity, and records conservative reservations when provider usage is missing.",
-    "external": "ACP usage_update overrun triggers a cancellation request; ACP advertises hardBudget=false, so in-run enforcement depends on provider usage reporting. Missing usage blocks capped Goals until the owner records a reasoned cumulative usage reconciliation."
+    "external": "ACP v1 usage_update used/size is context-window occupancy, not cumulative token consumption; CodeNode uses explicit total_tokens only for token overrun. Cumulative USD session cost is charged as the same-session delta from the last persisted frame. Missing or non-USD baselines and counter regressions mark cost unknown; capped Goals require source-noted cumulative reconciliation. In-run cancellation depends on timely provider usage reports."
   },
   "limitations": [
-    "Input Token reservation uses the existing conservative estimator; provider accounting can vary.",
+    "Built-in input Token reservations use the existing conservative estimator; provider accounting can vary.",
+    "External in-run enforcement depends on timely ACP usage reports; standard context occupancy is not a cumulative token counter.",
+    "Electron-builder reported rcedit unable to commit version-resource changes; the fixed-path executable hash matched the tested staged executable and the fixed-path selftest passed.",
+    "Artifacts remain unsigned; Authenticode inspection was unavailable in this environment.",
     "Uncommitted config/soul.md changes were preserved and excluded from this commit."
   ]
 }
