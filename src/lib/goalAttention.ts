@@ -30,17 +30,25 @@ export interface GoalAttentionItem {
   taskId:string|null;
   owner:'user';
   action:GoalAttentionAction;
+  priority:number;
   label:string;
   text:string;
 }
 
+function actionPriority(action:GoalAttentionAction):number {
+  if(['revalidate-goal','reconcile-token-usage','reconcile-cost-usage','review-run'].includes(action))return 0;
+  if(['resolve-decision','retry-task','resolve-task','review-execution'].includes(action))return 1;
+  if(['check-wait','continue-goal'].includes(action))return 2;
+  return 3;
+}
+
 function makeItem(goal:GoalAttentionGoal,id:string,taskId:string|null,action:GoalAttentionAction,label:string,text:string):GoalAttentionItem {
-  return {key:`${goal.id}:${action}:${id}`,id,goalId:goal.id,goal,taskId,owner:'user',action,label,text};
+  return {key:`${goal.id}:${action}:${id}`,id,goalId:goal.id,goal,taskId,owner:'user',action,priority:actionPriority(action),label,text};
 }
 
 /** One read-only user-action projection shared by the overview and Goal editor. */
 export function goalAttention(goals:GoalAttentionGoal[]):GoalAttentionItem[] {
-  return goals.filter(goal=>goal.status!=='archived').flatMap(goal=>{
+  const items=goals.filter(goal=>goal.status!=='archived').flatMap(goal=>{
     const items:GoalAttentionItem[]=[];
     if(goal.status==='completed'&&goal.complete===false){
       items.push(makeItem(goal,`recheck-${goal.id}`,null,'revalidate-goal','需重新核验','完成条件已失效，请重新验收或复核预算'));
@@ -72,4 +80,5 @@ export function goalAttention(goals:GoalAttentionGoal[]):GoalAttentionItem[] {
     }
     return items;
   });
+  return items.map((item,index)=>({item,index})).sort((a,b)=>a.item.priority-b.item.priority||a.index-b.index).map(entry=>entry.item);
 }

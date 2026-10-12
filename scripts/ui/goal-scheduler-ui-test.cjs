@@ -170,6 +170,7 @@ app.whenReady().then(async()=>{try{
     await until(()=>js(`(()=>{const actions=[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage'));return ['reconcile-token-usage','reconcile-cost-usage'].every(action=>actions.some(b=>b.dataset.action===action&&b.dataset.owner==='user'));})()`),`overview budget follow-ups remain available in ${theme} theme`);
     await until(()=>js(`document.querySelector('.overview-brief p')?.textContent.includes('核对预算')`),`overview brief explains budget follow-ups in ${theme} theme`);
     assert.deepEqual(await js(`[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage')).map(b=>b.dataset.action).sort()`),['reconcile-cost-usage','reconcile-token-usage'],`${theme} theme exposes the same reconciliation actions`);
+    assert.deepEqual(await js(`[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage')).map(b=>b.dataset.priority)`),['0','0'],`${theme} theme ranks unknown capped budgets as urgent`);
   }
   await until(()=>js(`!!document.querySelector('.overview-attention-overflow button[data-action="open-full-attention"]')`),'overview exposes follow-ups beyond its compact first six');
   const overflowTarget=await js(`(()=>{const button=document.querySelector('.overview-attention-overflow button');return{goalId:button.dataset.goalId,title:button.dataset.goalTitle};})()`);
@@ -182,8 +183,8 @@ app.whenReady().then(async()=>{try{
   await until(()=>js(`document.querySelector('.goal-summary strong')?.textContent==='Exact token ceiling'`),'open another Goal before following the cross-goal budget action');
   await until(()=>js(`(()=>{const actions=[...document.querySelectorAll('.goal-focus-queue button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage'));return ['reconcile-token-usage','reconcile-cost-usage'].every(action=>actions.some(b=>b.dataset.action===action&&b.dataset.owner==='user'));})()`),'Goal editor focus queue matches the overview budget actions');
   await js(`document.querySelector('.goal-focus-queue summary').click()`);
-  const overviewActions=await js(`[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action!=='open-full-attention').map(b=>b.dataset.action+':'+b.dataset.owner+':'+b.getAttribute('aria-label')).sort()`);
-  const editorActions=await js(`[...document.querySelectorAll('.goal-focus-queue button')].slice(0,6).map(b=>b.dataset.action+':'+b.dataset.owner+':'+b.getAttribute('aria-label')).sort()`);
+  const overviewActions=await js(`[...document.querySelectorAll('.overview-attention button')].filter(b=>b.dataset.action!=='open-full-attention').map(b=>b.dataset.action+':'+b.dataset.owner+':'+b.dataset.priority+':'+b.getAttribute('aria-label')).sort()`);
+  const editorActions=await js(`[...document.querySelectorAll('.goal-focus-queue button')].slice(0,6).map(b=>b.dataset.action+':'+b.dataset.owner+':'+b.dataset.priority+':'+b.getAttribute('aria-label')).sort()`);
   assert.deepEqual(editorActions,overviewActions,'overview and editor expose the same first six typed user follow-ups');
   await js(`document.querySelector('.goal-focus-queue button[data-action="reconcile-token-usage"]').click()`);
   await until(()=>js(`document.querySelector('.goal-summary strong')?.textContent==='Unknown provider token usage'`),'budget attention routes to the owning Goal from another Goal editor');

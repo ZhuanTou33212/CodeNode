@@ -19,8 +19,9 @@ const active=goalAttention([{id:'active',title:'Active goal',status:'active',bud
   {id:'future',title:'Future wait',status:'waiting',waitDue:false,waitCondition:{description:'Service ready'}},
 ],execution:{id:'execution',status:'blocked',actionRequired:true,currentTaskId:'unknown',reason:'Task requires review'}}]);
 assert.deepEqual(active.map(item=>item.action),[
-  'reconcile-token-usage','reconcile-cost-usage','resolve-decision','review-run','retry-task','retry-task','resolve-task','check-wait','view-wait',
+  'reconcile-token-usage','reconcile-cost-usage','review-run','resolve-decision','retry-task','retry-task','resolve-task','check-wait','view-wait',
 ]);
+assert.deepEqual(active.map(item=>item.priority),[0,0,0,1,1,1,1,2,3],'risk priority is deterministic and puts capped unknowns and Run review first');
 assert.equal(active.find(item=>item.action==='resolve-decision').taskId,null);
 assert.equal(active.find(item=>item.action==='review-run').taskId,'unknown');
 assert.equal(active.find(item=>item.id==='cancelled').label,'已取消');
@@ -36,6 +37,7 @@ const global=goalAttention([
   {id:'uncapped',title:'Uncapped unknown usage',status:'active',budget:{tokenUnknown:true,costUnknown:true},tasks:[],decisions:[]},
 ]);
 assert.deepEqual(global.map(item=>item.action),['revalidate-goal','review-execution','continue-goal']);
+assert.deepEqual(global.map(item=>item.priority),[0,1,2]);
 assert.equal(global.some(item=>item.goalId==='archived'),false);
 assert.equal(global.some(item=>item.goalId==='uncapped'),false,'uncapped unknown usage does not create a blocking reconciliation task');
 assert.equal(global[1].taskId,null);
