@@ -1,22 +1,22 @@
 import themes from '../../config/ui.themes.json';
 
-/** 主题标识：日间 / 夜间 / 透明玻璃（纯透明无色玻璃，桌面穿透）。 */
-export type Theme = 'light' | 'dark' | 'glass';
+/** 主题标识：日间 / 夜间 / 无色玻璃。三套都是不透明皮肤，都不穿透桌面。 */
+export type Theme = 'light' | 'dark' | 'bright';
 
 /** 主题顺序即设置面板里的选项顺序；三套主题共用同一套控件结构与布局。 */
-export const THEMES: readonly Theme[] = ['light', 'dark', 'glass'] as const;
+export const THEMES: readonly Theme[] = ['light', 'dark', 'bright'] as const;
 
 export const THEME_LABELS: Record<Theme, string> = {
   light: '日间',
   dark: '夜间',
-  glass: '透明玻璃',
+  bright: '无色玻璃',
 };
 
-/** 设置入口的补充说明；「透明玻璃」依赖窗口材质（Windows 亚克力）透出桌面。 */
+/** 设置入口的补充说明。 */
 export const THEME_HINTS: Record<Theme, string> = {
   light: '明亮配色',
   dark: '低眩光石墨灰磨砂',
-  glass: '纯透明无色玻璃 · 桌面透亮',
+  bright: '纯无色玻璃质感 · 界面不透明',
 };
 
 /** 主题选择的持久化键位于 localStorage；主进程另存一份用于启动时决定窗口材质。 */

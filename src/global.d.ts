@@ -143,8 +143,6 @@ interface WorkflowGraphDto {
 }
 
 interface CodenodeApi {
-  /** 把主题上报给主进程，由主进程切换窗口底色与系统材质（玻璃主题 = Windows 亚克力）。 */
-  applyTheme: (theme: import('./lib/theme').Theme) => Promise<{ theme: string; persisted: boolean }>;
   workflowState: (root: string, workflowId: string, request: {
     action: 'read' | 'prepare' | 'settle' | 'restart'; graph: WorkflowGraphDto;
     expectedRevision?: number; nodeId?: string; reviewedAttemptIds?: string[];

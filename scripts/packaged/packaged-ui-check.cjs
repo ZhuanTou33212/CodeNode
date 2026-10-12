@@ -154,31 +154,31 @@ app.whenReady().then(async () => {
     await sleep(400);
     ok('项目标签含文件树与过滤框', await js(`!!document.querySelector('.pm-tree') && !!document.querySelector('.pm-search')`));
 
-    // ---- 第三个主题「透明玻璃」：打包产物里的色值、入口、透明规则与窗口透明能力 ----
-    const packagedTheme = require(path.join(ASAR, 'electron', 'theme.cjs'));
-    ok('asar 包含主题→窗口透明模块', ['windowOptions', 'applyToWindow', 'bindWindow', 'register', 'backgroundColorFor'].every((name) => typeof packagedTheme[name] === 'function') && packagedTheme.GLASS === 'glass');
-    ok('玻璃主题窗口全透明、昼夜主题不透明', packagedTheme.backgroundColorFor('glass') === '#00000000' && packagedTheme.backgroundColorFor('dark') === '#14161a' && packagedTheme.backgroundColorFor('light') === '#14161a');
-    ok('窗口建窗期即具备透明能力（transparent 运行时改不了）', packagedTheme.windowOptions().transparent === true);
+    // ---- 第三套主题「无色玻璃」：不透明皮肤，打包产物里不得再引入透明窗口 ----
     const asarThemes = JSON.parse(fs.readFileSync(path.join(ASAR, 'config', 'ui.themes.json'), 'utf8'));
-    ok('asar 三套主题色值齐全且 token 键一致', ['light', 'dark', 'glass'].every((id) => asarThemes[id]) && JSON.stringify(Object.keys(asarThemes.light).sort()) === JSON.stringify(Object.keys(asarThemes.glass).sort()));
-    ok('玻璃主题底色是半透明白膜而不是全透明或不透明', /rgba\(255,\s*255,\s*255,\s*\.\d+\)/.test(asarThemes.glass['--app-background']) && /rgba\(255,\s*255,\s*255,\s*\.\d+\)/.test(asarThemes.glass['--gate-background']));
-    ok('asar preload 暴露主题材质 IPC', fs.readFileSync(path.join(ASAR, 'electron', 'preload.cjs'), 'utf8').includes('theme:apply'));
+    ok('asar 三套主题色值齐全且 token 键一致', ['light', 'dark', 'bright'].every((id) => asarThemes[id]) && JSON.stringify(Object.keys(asarThemes.light).sort()) === JSON.stringify(Object.keys(asarThemes.bright).sort()));
+    ok('无色玻璃主题的底色是不透明色', /^#[0-9a-f]{6}$/i.test(asarThemes.bright['--bg']) && /^#[0-9a-f]{6}$/i.test(asarThemes.bright['--glass-base']));
+    const packagedMain = fs.readFileSync(path.join(ASAR, 'electron', 'main.cjs'), 'utf8');
+    ok('打包主进程不使用透明窗口（主界面必须不透明）', packagedMain.includes('backgroundColor: ') && !/transparent:\s*true/.test(packagedMain) && !packagedMain.includes('theme.cjs'));
+    ok('打包产物不含主题→窗口材质模块', !fs.existsSync(path.join(ASAR, 'electron', 'theme.cjs')));
+    ok('asar preload 不再暴露窗口材质 IPC', !fs.readFileSync(path.join(ASAR, 'electron', 'preload.cjs'), 'utf8').includes('theme:apply'));
     const cssBundles = assetNames.filter((name) => name.endsWith('.css')).map((name) => fs.readFileSync(path.join(assetsDir, name), 'utf8'));
-    // 压缩后的选择器会去掉属性值引号，这里两种写法都认。
-    ok('asar 渲染包包含第三个主题入口与整体透明规则', rendererBundles.some((bundle) => bundle.includes('透明玻璃') && bundle.includes('data-theme-select')) && cssBundles.some((bundle) => /\[data-theme=["']?glass["']?\]/.test(bundle)));
-    ok('打包产物不再使用系统磨砂材质', !fs.readFileSync(path.join(ASAR, 'electron', 'theme.cjs'), 'utf8').includes("setBackgroundMaterial('acrylic')"));
+    ok('asar 渲染包包含第三个主题入口且没有整页透明规则', rendererBundles.some((bundle) => bundle.includes('无色玻璃') && bundle.includes('data-theme-select')) && !cssBundles.some((bundle) => /\[data-theme=["']?glass["']?\]/.test(bundle)));
 
-    await js(`window.__codenodeUi.getState().setTheme('glass')`);
-    await sleep(350);
-    ok('切换到透明玻璃后页面整体透明', await js(`document.documentElement.dataset.theme==='glass' && getComputedStyle(document.querySelector('.app')).backgroundColor==='rgba(0, 0, 0, 0)' && getComputedStyle(document.body).backgroundColor==='rgba(0, 0, 0, 0)'`));
-    ok('切换到透明玻璃后主进程换成全透明窗口底色', String(win.getBackgroundColor()).slice(0, 7).toUpperCase() === '#000000');
-    // 包内玻璃主题的“透亮”不由截图断言：隐藏窗口会被 Chromium 节流重绘，截到的是旧帧。
-    // 真实透光率由 npm run test:glass-theme-ui 在真实屏幕合成结果上测量（支持 CODENODE_UI_TEST_PACKAGE）。
+    // 应用主窗口由打包 main.cjs 创建（本检查另开了一个自己的窗口），
+    // 主题只改页面配色，绝不能碰窗口：底色必须恒为不透明深色。
+    const appWindow = BrowserWindow.getAllWindows().find((w) => w !== win && w.getTitle() === 'CodeNode');
+    ok('应用主窗口按不透明底色创建', Boolean(appWindow) && String(appWindow.getBackgroundColor()).slice(0, 7).toUpperCase() === '#14161A', appWindow ? String(appWindow.getBackgroundColor()) : '未找到应用窗口');
+
+    for (const theme of ['light', 'dark', 'bright']) {
+      await js(`window.__codenodeUi.getState().setTheme(${JSON.stringify(theme)})`);
+      await sleep(300);
+      ok('切换到 ' + theme + ' 后应用主窗口底色不变', String(appWindow.getBackgroundColor()).slice(0, 7).toUpperCase() === '#14161A', String(appWindow.getBackgroundColor()));
+      const opaque = await js(`(() => { const body=getComputedStyle(document.body); return { theme: document.documentElement.dataset.theme, bodyAlpha: body.backgroundColor, hasImage: getComputedStyle(document.querySelector('.app')).backgroundImage !== 'none' }; })()`);
+      ok('切换到 ' + theme + ' 后页面有不透明底', opaque.theme === theme && /^rgb\(/.test(opaque.bodyAlpha), JSON.stringify(opaque));
+    }
     await js(`window.__codenodeUi.getState().setTheme('dark')`);
     await sleep(300);
-    // 透明 → 不透明在 Windows 上不可逆（实测会回报 #FFFFFF），因此保证的是「不留在白屏兜底值 +
-    // 页面自己画不透明底」；像素层面的不透明性由 test:glass-theme-ui 用真实屏幕取样断言。
-    ok('切回夜间后窗口底色未落在白屏兜底值', String(win.getBackgroundColor()).slice(0, 7).toUpperCase() !== '#FFFFFF', String(win.getBackgroundColor()));
     ok('切回夜间后页面底色恢复墨黑', await js(`getComputedStyle(document.querySelector('.app')).backgroundColor==='rgb(23, 25, 29)'`));
 
     const img = await win.webContents.capturePage();

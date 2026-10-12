@@ -548,3 +548,13 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 
 **打包自检。** `packaged-ui-check` 的主题检查扩到 11 项（asar 内主题→窗口透明模块、玻璃主题全透明且昼夜主题不透明、建窗期即具透明能力、三套色值齐全且 token 键一致、玻璃底色是半透明白膜、preload 暴露 `theme:apply`、渲染包含第三个主题入口与整体透明规则、**打包产物不再使用系统磨砂材质**、切玻璃后页面整体透明且窗口底色全透明、切回夜间不留白屏兜底值、页面底色恢复墨黑）：暂存包与固定路径均为 **32/32** 通过；`packaged-startup-check` 与 Soul 成长专项同样通过。把 `CODENODE_UI_TEST_PACKAGE` 指向交付包再跑一次 `test:glass-theme-ui`，透亮指标与源码一致（标准差比 0.273、结构相关性 0.614）。已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行，不保留旧包备份；暂存目录 `.stage-glass-clear`、临时打包配置与隔离自检数据均已清理。app.asar SHA-256：`FFA38821843C46D58E1F5A62A78E6E6CFA0D44F60B565C6EF1E7DEDCCFF943FB`；CodeNode.exe SHA-256：`9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59`（与替换前逐字节一致，本次交付只更新包内容）；便携版 CodeNode-0.13.0.exe SHA-256：`DE8BB852B9FB3B0E68CF9D76AFB3248672474221D4E69A1F30F1398350F28EF3`。用户本地未提交的 Soul 修改与私有配置未提交、未被改写。
 
+### 2026-10-12 主界面回退为不透明：第三套主题改为「无色玻璃」
+
+用户看到透明版后明确要求：**主界面不允许做成透明玻璃**，并选择「保留第三套主题但不透明」。据此回退：窗口不再开 `transparent`（底色固定 `#14161a`），系统标题栏与 DWM 外阴影一并回到原状；`electron/theme.cjs`、`theme:apply` IPC、preload 的 `applyTheme`、`global.d.ts` 声明与 `html[data-theme="glass"]` 整页透明规则全部删除 —— 主题状态重新只存在渲染层（`localStorage`），切换主题不产生任何 IPC、也不重建窗口。第三套主题由「透明玻璃」改为 **「无色玻璃」（id `bright`）**：纯无色（RGB 极差 ≤12）的亮色玻璃质感，靠不透明白底 + 白色薄膜层叠出玻璃感，而不是靠透明。
+
+**为什么回退（实测数据保留在 [主题文档](theme-glass.md)）。** 同一套真屏幕取样方法量出四代实现：`acrylic` 标准差 2.35（桌面结构全丢，就是「灰蒙蒙」）、真透明+白膜 33.7（结构保住但桌面内容与界面抢注意力，启动门禁页尤其明显，用户截图确认）、不透明皮肤 11。主界面是长时间盯着干活的地方，可读性优先于透明；顺带排除了「用 CSS 模糊桌面」（做不到，`backdrop-filter` 只作用于页面自身内容）和「透明窗口+系统材质」（糊成灰雾，且丢掉 DWM 外阴影）。
+
+**验收。** 新增 `npm run test:bright-theme-ui` 并纳入显示环境测试组，核心是**像素级不透明断言**：窗口背后放高频棋盘格（参照标准差 123.51），三套主题取样区标准差都必须 ≤20（实测 日间 11.2 / 夜间 11.0 / 无色玻璃 11.8）且与棋盘格均值差 >40，任何一套漏出桌面内容都会失败；另断言窗口底色在三套主题下恒为不透明 `#14161A`、第三套无色且有不透明兜底色、设置入口是 `select` 下拉框、切换主题保留工程/消息/偏好/侧栏/工作台状态。`packaged-ui-check` 的主题检查同步改写为「打包主进程不使用透明窗口」「打包产物不含主题→窗口材质模块」「preload 不再暴露材质 IPC」「渲染包没有整页透明规则」「应用主窗口按不透明底色创建且切主题后不变」等 14 项，暂存包与固定路径均为 **34/34** 通过，`packaged-startup-check` 与 Soul 专项通过；把 `CODENODE_UI_TEST_PACKAGE` 指向交付包再跑一次第三套主题测试，三套不透明度指标与源码一致。`npx tsc --noEmit`、`npm run check:js`、核心套件 167/167 与显示组相关用例全部通过。证据图：[无色玻璃工作台](validation/glass-theme-preview/workspace.png)、[主题下拉框](validation/glass-theme-preview/settings.png)。
+
+**打包自检。** 已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行，不保留旧包备份；暂存目录 `.stage-bright-theme`、临时打包配置与隔离自检数据均已清理。app.asar SHA-256：`6AA5852AD0DFB54D1FB354C89EC69202FA407EB9FE732C12215BE8E31EC34377`；CodeNode.exe SHA-256：`9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59`（与替换前逐字节一致，本次交付只更新包内容）；便携版 CodeNode-0.13.0.exe SHA-256：`C414030DCB009FDAC8CB1BDC7E201AB5F1CECAABCE70DC5A4418D699DADA89A1`。用户本地未提交的 Soul 修改与私有配置未提交、未被改写。
+

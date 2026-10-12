@@ -4099,11 +4099,6 @@ textarea:focus-visible {
 /* Day / night glass material shared by every workbench surface. */
 /* Theme colors are loaded from config/ui.themes.json; geometry and behavior are shared. */
 .app.glass-theme { background: var(--app-background); }
-/* 第三主题「透明玻璃」：窗口底色由主进程换成系统亚克力材质（见 electron/theme.cjs），
-   页面必须整体透明，否则会盖住桌面。昼夜主题保持各自不透明底色，不受影响。 */
-html[data-theme="glass"],
-html[data-theme="glass"] body,
-html[data-theme="glass"] #root { background: transparent; }
 .glass-theme.ui-clean { color: var(--glass-text); }
 .glass-theme.ui-clean .app-body, .glass-theme.ui-clean .canvas-wrap { background: transparent; }
 .glass-theme.ui-clean :is(.toolbar,.side-panel,.status-bar,.workbench-dock,.side-badge) {
