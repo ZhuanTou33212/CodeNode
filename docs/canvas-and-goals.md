@@ -33,6 +33,7 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 - "Start executing goal" advances stage by stage under the Goal's own admission, budget, write-scope, settlement and evidence rules, and stops on a wait, a failure, insufficient evidence or a required manual review.
 - Acceptance evidence carries a source fingerprint, commit and environment; changing the files or the condition invalidates it. A Goal is never marked complete on a model's own claim.
 - Automatic code verification records stage evidence only; it does not satisfy the Task's bound Goal criteria. After execution, select each applicable criterion under independent acceptance and run a command that checks it. The Task completes once all its bound criteria have valid evidence. Legacy local verification copied onto Goal criteria remains in history but no longer qualifies acceptance.
+- Per-criterion regression and fixed-path package self-test results: [2026-10-12 validation](validation/goal-criterion-acceptance-2026-10-12.json).
 - The planning model and the execution backend are configured separately (see [backends](backends.md)).
 
 ### The overview page

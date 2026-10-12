@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-12T15:37:50.347Z",
+  "sourceCommit": "63206ad127ab62a6b79e9b59cf509bf9d681a63e",
+  "passed": true,
+  "scope": "Stage verification separated from per-criterion Goal acceptance; not a full audit of long-term scheduling",
+  "package": {
+    "path": "release/win-unpacked",
+    "version": "0.13.0",
+    "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
+    "asarSha256": "c3597d0cfdbd1b59da68b423203fcbb39bcd368cd9acab694813c3322dfa1901",
+    "selftest": {
+      "ok": true,
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      }
+    }
+  },
+  "checks": [
+    {
+      "command": "node scripts/core/goal-store-test.cjs",
+      "passed": true,
+      "covers": [
+        "local evidence does not fan out onto criteria",
+        "one explicit criterion cannot satisfy another",
+        "legacy automatic criterion evidence invalidated after restart",
+        "stale and unexecuted reports rejected"
+      ]
+    },
+    {
+      "command": "node scripts/core/goal-canvas-graph-test.cjs",
+      "passed": true
+    },
+    {
+      "command": "node scripts/core/goal-ipc-recovery-test.cjs",
+      "passed": true
+    },
+    {
+      "command": "node scripts/core/goal-plan-ipc-test.cjs",
+      "passed": true
+    },
+    {
+      "command": "npm run check:js",
+      "passed": true
+    },
+    {
+      "command": "npm run build",
+      "passed": true
+    },
+    {
+      "command": "node scripts/run-electron.cjs scripts/packaged/packaged-startup-check.cjs",
+      "passed": true,
+      "artifact": "actual staged app.asar"
+    },
+    {
+      "command": "node scripts/run-electron.cjs scripts/ui/backend-settings-ui-test.cjs",
+      "passed": true,
+      "variants": [
+        "source",
+        "actual staged app.asar"
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "covers": [
+        "real approved failing and passing commands",
+        "per-criterion acceptance",
+        "session/draft/model/sidebar preservation"
+      ]
+    }
+  ],
+  "notes": [
+    "Independent EXE startup failed in staging locations even with original ASAR and identical runtime files; the fixed-path EXE was retained because its hash matched staging, and its final self-test passed after application resources were replaced. Cause of staging-location startup failure remains undetermined.",
+    "Existing uncommitted config/soul.md changes were preserved and not included in the optimization commit."
+  ]
+}
