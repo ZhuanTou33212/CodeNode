@@ -34,6 +34,7 @@ const CORE = [
   'test:goal-store',
   'test:goal-scheduler',
   'test:goal-handoff',
+  'test:goal-progression',
   'test:goal-canvas-graph',
   'test:goal-plan-ipc',
   'test:goal-scope',

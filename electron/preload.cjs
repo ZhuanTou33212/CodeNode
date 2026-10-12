@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('codenode', {
   onGoalSchedulerChanged: cb => { const listener=(_event,data)=>cb(data);ipcRenderer.on('goal:scheduler-changed',listener);return()=>ipcRenderer.removeListener('goal:scheduler-changed',listener); },
   goalCreate: (root, input) => ipcRenderer.invoke('goal:create', root, input),
   goalUpdate: (root, goalId, patch) => ipcRenderer.invoke('goal:update', root, goalId, patch),
+  goalTokenUsageReconcile: (root, goalId, totalTokens, reason) => ipcRenderer.invoke('goal:token-usage-reconcile', root, goalId, totalTokens, reason),
   goalAutoAdvanceClaim: (root, goalId, taskId) => ipcRenderer.invoke('goal:auto-advance-claim', root, goalId, taskId),
   goalAutoAdvanceRelease: (root, goalId, taskId, claimId, reason) => ipcRenderer.invoke('goal:auto-advance-release', root, goalId, taskId, claimId, reason),
   goalTaskCreate: (root, goalId, input) => ipcRenderer.invoke('goal:task-create', root, goalId, input),

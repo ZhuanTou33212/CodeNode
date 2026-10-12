@@ -13,6 +13,7 @@ export default function GoalOverview(){
  const visible=goals.filter(g=>g.status!=='archived');
  const attention=visible.flatMap(g=>[
   ...(g.status==='completed'&&g.complete===false?[{goal:g,id:'recheck-'+g.id,taskId:null as string|null,text:'完成条件已失效，请重新验收或复核预算',label:'需重新核验'}]:[]),
+  ...(g.budget?.maxTokens!=null&&g.budget?.tokenUnknown?[{goal:g,id:'token-budget-'+g.id,taskId:null as string|null,text:'存在未知 Token 用量，请核对累计用量后继续',label:'Token 待核对'}]:[]),
   ...(g.decisions||[]).filter(d=>d.status==='open').map(d=>({goal:g,id:d.id,taskId:null as string|null,text:d.question,label:'待决定'})),
   ...(g.tasks||[]).filter(t=>['blocked','failed'].includes(t.status)||t.executionStatus==='unknown').map(t=>({goal:g,id:t.id,taskId:t.id as string|null,text:t.title,label:t.executionStatus==='unknown'?'待复核':t.status==='failed'?'执行失败':'有阻塞'})),
   ...((g.execution?.status==='blocked'||g.execution?.actionRequired)&&!g.tasks.some(t=>['blocked','failed'].includes(t.status)||t.executionStatus==='unknown')&&!g.decisions.some(d=>d.status==='open')?[{goal:g,id:g.execution!.id,taskId:g.execution!.currentTaskId||null,text:g.execution!.reason,label:g.execution!.status==='blocked'?'执行待复核':'等待继续'}]:[]),

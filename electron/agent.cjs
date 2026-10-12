@@ -1369,7 +1369,7 @@ async function chatCompletion(cfg, messages, options = {}) {
         }, options.onModelEvent || cfg.onModelEvent, attemptsRef,
         (actualCfg, attemptOptions) => require('./requestBudget.cjs').withAttemptBudget(
           { ...actualCfg, traceContext: span ? span.context : actualCfg.traceContext, traceProjectRoot: cfg.traceProjectRoot }, messages, [],
-          () => chatCompletionInternal(actualCfg, messages, { ...attemptOptions, attemptsRef }), attemptsRef,
+          budgetedCfg => chatCompletionInternal({ ...actualCfg, maxTokens: budgetedCfg.maxTokens }, messages, { ...attemptOptions, attemptsRef }), attemptsRef,
         ));
         if (span) span.end(result?.error ? 'error' : 'ok', { model: result.actualModel || cfg.model, usage: result.usage });
         return { ...result, traceContext: span?.context || cfg.traceContext,
@@ -1579,7 +1579,7 @@ async function chatCompletionStream(cfg, messages, onEvent, options = {}) {
         }, onEvent, attemptsRef,
         (actualCfg, attemptOptions) => require('./requestBudget.cjs').withAttemptBudget(
           { ...actualCfg, traceContext: span ? span.context : actualCfg.traceContext, traceProjectRoot: cfg.traceProjectRoot }, messages, options.tools,
-          () => chatCompletionStreamInternal(actualCfg, messages, onEvent, { ...attemptOptions, attemptsRef }), attemptsRef,
+          budgetedCfg => chatCompletionStreamInternal({ ...actualCfg, maxTokens: budgetedCfg.maxTokens }, messages, onEvent, { ...attemptOptions, attemptsRef }), attemptsRef,
         ));
         if (span) span.end(result?.error ? 'error' : 'ok', { model: result.actualModel || cfg.model, usage: result.usage });
         return { ...result, traceContext: span?.context || cfg.traceContext,

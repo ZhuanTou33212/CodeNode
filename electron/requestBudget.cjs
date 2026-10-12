@@ -87,6 +87,7 @@ class RequestBudget {
     this.scope = o.scope || 'run';
     this.used = 0;
     this.reserved = 0;
+    this.unknownSettlements = 0;
     // Retry credits live at the run root. Child budgets delegate to their parent.
     this.retryLimit = Number.isFinite(Number(o.retryLimit)) ? Math.max(0, Math.floor(Number(o.retryLimit))) : null;
     this.retriesUsed = 0;
@@ -108,6 +109,24 @@ class RequestBudget {
   /** 本层配额是否不够（只看自己，不碰父） */
   wouldExceed(amount) {
     return !Number.isFinite(amount) || amount < 0 || this.used + this.reserved + amount > this.limit;
+  }
+
+  remaining() {
+    const local=this.limit-this.used-this.reserved;
+    return this.parent?Math.min(local,this.parent.remaining()):local;
+  }
+
+  outputAllowance(input,requested) {
+    const inputTokens=Math.max(0,Math.ceil(Number(input)||0));
+    const wanted=Math.max(1,Math.floor(Number(requested)||8192));
+    const available=this.remaining();
+    const output=Number.isFinite(available)?Math.min(wanted,Math.floor(available-inputTokens)):wanted;
+    if(output<1)throw Object.assign(new Error('本次运行 Token 预算不足以覆盖当前输入；请求尚未发送。'),{code:'BUDGET_EXCEEDED',scope:this.scope,need:inputTokens+1,used:this.used,reserved:this.reserved,limit:this.limit});
+    return output;
+  }
+
+  tokenSnapshot() {
+    return {limit:this.limit,used:this.used,reserved:this.reserved,remaining:this.remaining(),unknownSettlements:this.unknownSettlements};
   }
 
   /** Atomically reserve both resources before a network request can start. */
@@ -160,10 +179,12 @@ class RequestBudget {
       this.reserved -= amount;
       // Missing usage or an uncertain failed request retains its full reservation.
       const actual = usageTotal(usage);
-      const usedAmount = Number.isFinite(actual) && actual >= 0 ? actual : amount;
+      const known = Number.isFinite(actual) && actual >= 0 && usage?.estimated!==true;
+      const usedAmount = known ? actual : amount;
+      if(!known)this.unknownSettlements++;
       this.used += usedAmount;
       // 父按**实际**用量结算（不是按预留额）：两个维度都反映真实消耗，父总量依然守恒
-      if (parentSettle) parentSettle({ total_tokens: usedAmount });
+      if (parentSettle) parentSettle({ total_tokens: usedAmount, estimated:!known });
     };
   }
 }
@@ -225,14 +246,15 @@ async function withBudget(cfg, messages, tools, operation, attemptsRef) {
  * @param {any} cfg
  * @param {any[]} messages
  * @param {any} tools
- * @param {() => Promise<any>} operation
+ * @param {(budgetedCfg?: any) => Promise<any>} operation
  * @param {any} attemptsRef
  */
 async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
   const ref = /** @type {any} */ (attemptsRef || { count: 0 });
   const input = estimateInputTokens(messages, tools);
-  const output = Number(cfg && cfg.maxTokens) || 8192;
   const budget = cfg && cfg.requestBudget;
+  const configuredOutput = Number(cfg && cfg.maxTokens) || 8192;
+  const output = budget ? budget.outputAllowance(input, configuredOutput) : configuredOutput;
   const images = collectImageUrls(messages);
   let costInputTokens = input;
   if (images.length && budget && budget.costSnapshot().enabled) {
@@ -327,7 +349,7 @@ async function withAttemptBudget(cfg, messages, tools, operation, attemptsRef) {
     return finish;
   };
   try {
-    return await operation();
+    return await operation(output === configuredOutput ? cfg : { ...cfg, maxTokens: output });
   } finally {
     for (const finish of [...pending]) finish(null, { failed: true, cancelled: cfg.traceSignal?.aborted === true });
     delete ref.beginAttempt;

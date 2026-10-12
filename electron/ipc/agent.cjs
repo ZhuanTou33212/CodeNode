@@ -385,6 +385,10 @@ function register(ctx) {
   });
   handleGoal('goal:create', async (_event, projectRoot, input) => withGoalRoot(projectRoot, root => goalStore.createGoal(root,input||{})));
   handleGoal('goal:update', async (_event, projectRoot, goalId, patch) => withGoalRoot(projectRoot, root => goalStore.updateGoal(root,goalId,patch||{})));
+  handleGoal('goal:token-usage-reconcile',async(event,projectRoot,goalId,totalTokens,reason)=>{
+    try{checkedSender(event);return withGoalRoot(projectRoot,root=>goalStore.reconcileTokenUsage(root,goalId,totalTokens,reason));}
+    catch(error){return{ok:false,error:String(error?.message||error)};}
+  });
   handleGoal('goal:auto-advance-claim', async (_event, projectRoot, goalId, taskId) => {
     const scoped=withGoalRoot(projectRoot,root=>root);if(!scoped.ok)return scoped;const root=scoped.value;
     if(activeRequests.size||activeGoalVerifications.size)return{ok:false,error:'Agent 或独立验收正在运行，自动推进会在当前 Run 结束后重试'};
@@ -741,11 +745,17 @@ function register(ctx) {
       goalContextApplied = true;
       return roleContext;
     };
-    const admitGoalTask = (admissionRunId) => {
+    const admitGoalTask = (admissionRunId, options={}) => {
       if (!goalId && !taskId) return null;
       applyGoalContext();
       const admission = goalStore.admit(projectRoot, goalId, taskId, admissionRunId, autoAdvanceClaimId?{autoAdvanceClaimId:String(autoAdvanceClaimId)}:{});
       goalAdmission = { goalId: String(goalId), taskId: String(taskId), runId: String(admissionRunId) };
+      if(options.external===true)runCfg.goalExternalBackend=true;
+      runCfg.goalTokenBudgetAllowance=admission.tokenAllowance;
+      if(options.external!==true){
+        require('../goalRunBudget.cjs').apply(runCfg,admission);
+        runCfg.goalRunBudget=true;
+      }
       if(autoAdvanceClaimId)activeAutoAdvanceClaims.delete(String(autoAdvanceClaimId));
       activeGoalRuns.add(String(admissionRunId));
       goalScopeBefore = require('../backends/workspaceDiff.cjs').capture(projectRoot);
@@ -761,7 +771,8 @@ function register(ctx) {
       try {
         const costUsd=Number(result?.cost?.costUsd);
         const costKnown=result?.cost?.costKnown===true&&Number.isFinite(costUsd)&&costUsd>=0;
-        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, costUsd:costKnown?costUsd:null, costKnown, verification:result?.codeVerification||null, summary:result?.reply||'' });
+        const budgetUsage=runCfg?.goalRunBudget?runCfg.requestBudget?.tokenSnapshot?.()||null:null;
+        goalStore.settle(projectRoot, goalAdmission.runId, { status, usage: result?.usage || null, budgetUsage, costUsd:costKnown?costUsd:null, costKnown, verification:result?.codeVerification||null, summary:result?.reply||'' });
         goalAdmissionSettled = true;
         activeGoalRuns.delete(goalAdmission.runId);
         try { runStore.appendEvent(projectRoot, goalAdmission.runId, 'goal_task_settled', { goalId: goalAdmission.goalId, taskId: goalAdmission.taskId, status }); } catch {}
@@ -823,7 +834,7 @@ function register(ctx) {
             goalContextRevision, goalAcceptanceRevision,
             toolRegistry: externalRegistry, toolContext: externalContext,
             readEditorText: async file => { const result = await externalBridge.request('editor_read', { path: file }); return result?.content; },
-            onDelta: sendDelta, confirm: externalBridge.confirm, askUser: externalBridge.askUser, goalWriteScope, onStart: () => admitGoalTask(externalId) });
+            onDelta: sendDelta, confirm: externalBridge.confirm, askUser: externalBridge.askUser, goalWriteScope, onStart: () => admitGoalTask(externalId,{external:true}) });
           if (goalAdmission) settleGoalTask(externalResult?.state === 'COMPLETED' ? 'completed' : externalResult?.state === 'CANCELLED' ? 'cancelled' : 'failed', externalResult);
           return { ...externalResult, document: externalModel.doc };
         } finally {

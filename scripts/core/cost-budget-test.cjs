@@ -34,6 +34,20 @@ async function main() {
   cancelled(null, { notSent: true });
   assert.equal(budget.costSnapshot().usedUsd, 0.495);
 
+  const goalRunBudget=new RequestBudget(1200);
+  const boundedInput=estimateInputTokens([{role:'user',content:'bounded request'}],[]);
+  const boundedRef={count:0,maxAttempts:1};let dispatchedMaxTokens=0;
+  await withAttemptBudget({model:'main',maxTokens:4000,requestBudget:goalRunBudget},[{role:'user',content:'bounded request'}],[],async budgeted=>{
+    dispatchedMaxTokens=budgeted.maxTokens;assert.ok(boundedInput+dispatchedMaxTokens<=1200,'provider output max_tokens is bounded by remaining run allowance');
+    boundedRef.beginAttempt()({total_tokens:boundedInput+dispatchedMaxTokens});
+    return{usage:{total_tokens:boundedInput+dispatchedMaxTokens}};
+  },boundedRef);
+  assert.equal(goalRunBudget.tokenSnapshot().remaining,0);
+  assert.equal(goalRunBudget.tokenSnapshot().unknownSettlements,0);
+  await assert.rejects(withAttemptBudget({model:'main',maxTokens:10,requestBudget:goalRunBudget},[],[],async()=>{throw new Error('request must not dispatch');},{count:0,maxAttempts:1}),{code:'BUDGET_EXCEEDED'});
+  const insufficientInput=new RequestBudget(boundedInput);
+  await assert.rejects(withAttemptBudget({model:'main',maxTokens:100,requestBudget:insufficientInput},[{role:'user',content:'bounded request'}],[],async()=>{throw new Error('request must not dispatch');},{count:0,maxAttempts:1}),{code:'BUDGET_EXCEEDED'},'input that consumes the allowance is rejected before network dispatch');
+
   // Unknown usage keeps the complete reservation and can stop a retry before IO.
   const oneAttemptCost = (estimateInputTokens([], []) + 10) / 1e6;
   const retryBudget = new RequestBudget(100000, { costLimitUsd: oneAttemptCost * 1.5, prices: { main: { in: 1, out: 1 } } });

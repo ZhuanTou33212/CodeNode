@@ -58,6 +58,7 @@ async function runExternal(input, deps = {}) {
   const backend = (deps.createBackend || backendFactory.createBackend)(backendName, adapterSettings, deps);
   const permissions = {owner:'acp-agent-runtime',transport:'acp',requestPolicy:adapterSettings.sandbox,osSandboxEnforcedByCodeNode:false};
   const runId = runStore.normalizeRunId(requestId);
+  let goalTokenAllowance=null,goalBudgetExceeded=false,latestGoalUsage=null;
   if (runStore.readRun(root, runId).length) return { ok: false, runId, error: '该请求编号已有执行记录，请查看原运行结果，避免重复执行' };
   const machine = createStateMachine({ onTransition: info => emit({ kind: 'state', state: info.to, previous: info.from, sequence: info.sequence, reason: info.reason }) });
   function emit(delta) {
@@ -71,6 +72,7 @@ async function runExternal(input, deps = {}) {
   activeProjects.add(key);
   try {
     input.onStart?.();
+    goalTokenAllowance=Number.isSafeInteger(cfg?.goalTokenBudgetAllowance)&&cfg.goalTokenBudgetAllowance>=0?cfg.goalTokenBudgetAllowance:null;
     if (!runStore.startRun(root, runId, { prompt: String(input.prompt || '').slice(0, 4000), backend: backendName,
       memoryConversationId:input.memoryConversationId||null,backendEpoch:resumeRunId?previous?.start?.backendEpoch||null:input.backendEpoch||null,
       model: adapterSettings.model || backendName, nodeId: input.nodeId || null, planSessionId: sessionId || null,
@@ -85,11 +87,23 @@ async function runExternal(input, deps = {}) {
     const contextFingerprint = crypto.createHash('sha256').update(JSON.stringify([...before.entries].sort())).digest('hex');
     runStore.appendEvent(root, runId, 'backend_context', { contextRevision: input.document?.root?.revision || 0, contextFingerprint, complete: before.complete });
     const port=require('./backendPort.cjs');port.assertBackendPort(backend);
-    const unsubscribe=backend.subscribe(event=>{const delta=port.toAgentDelta(event);if(delta.kind==='state')return;if(delta.kind==='backend_approval')machine.go(delta.phase==='requested'?'WAITING_USER':'RUNNING',delta.phase);emit(delta);});
+    const unsubscribe=backend.subscribe(event=>{
+      const delta=port.toAgentDelta(event);if(delta.kind==='state')return;
+      if(delta.kind==='backend_approval')machine.go(delta.phase==='requested'?'WAITING_USER':'RUNNING',delta.phase);
+      const usage=delta.kind==='backend_info'&&delta.info?.sessionUpdate==='usage_update'?delta.info:null;
+      const total=usage?Number(usage.total_tokens??usage.totalTokens):NaN;
+      if(usage&&Number.isFinite(total)&&total>=0)latestGoalUsage=usage;
+      if(usage&&goalTokenAllowance!=null&&Number.isFinite(total)&&total>goalTokenAllowance&&!goalBudgetExceeded){
+        goalBudgetExceeded=true;emit({kind:'error',error:'外部 Agent 已报告用量超过 Goal Token 预算；正在请求停止本次运行。'});
+        void backend.cancel(runId,{ownerId:'local'}).catch(()=>{});
+      }
+      emit(delta);
+    });
     let result;
     try{result = await backend.submit({ ...input, onDelta:undefined, backendSession: previous?.session,
       onSession: session => { if (!runStore.appendEvent(root, runId, 'backend_session', session)) throw new Error('无法持久化 ACP 会话，停止执行'); },
       confirm });}finally{unsubscribe();await backend.close();}
+    if(goalBudgetExceeded)result={...result,state:'FAILED',error:'外部 Agent 用量超过 Goal Token 预算，已停止本次运行。',stopReason:'goal_token_budget_exceeded',usage:result?.usage||latestGoalUsage};
     const changes = diff.compare(before, diff.capture(root));
     const goalScopeViolations = goalScope.violations(changes.files, input.goalWriteScope);
     const goalScopeUnverified = Array.isArray(input.goalWriteScope) && input.goalWriteScope.length > 0 && !changes.complete;

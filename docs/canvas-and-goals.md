@@ -42,6 +42,10 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 - Each Goal Task request derives a fresh handoff from persisted project records: direct and earlier predecessors, latest Run outcomes and summaries, evidence freshness, relevant decisions and current acceptance criteria. Foreign Goals and unrelated branches are excluded; historical completion never upgrades stale evidence.
 - Handoffs are reference data. Long summaries, commands and results are explicitly marked excerpts; command previews are not complete executable commands. Optional handoff data is reduced to fit the existing dynamic context budget. Required criteria and rules retain their original text, and an oversized required context stops explicitly. Internal bounds are centralized in `config/goal.handoff.json`.
 - Handoff, actual post-reload requests and fixed-path delivery results: [2026-10-13 handoff validation](validation/goal-handoff-2026-10-13.json).
+- Acceptance and waiting-authorization holds affect their dependent branches; unrelated explicitly started stages may proceed. Failures and unknown outcomes still stop automatic continuation. A polling deadline alone does not release a waiting Task.
+- Reaching a budget ceiling prevents new Runs. Already completed, verified work can complete a Goal at the ceiling when usage has not exceeded it and capped costs are known. Overspend or unknown capped costs remain blocking.
+- Built-in requests reserve estimated input and output against the remaining Goal allowance, and lower request `max_tokens` to fit; a request whose input cannot fit stops before dispatch. ACP backends receive a cancellation request when they report a token overrun. Missing usage marks the cap for manual reconciliation before another limited run. In-run enforcement on external backends depends on their usage reporting.
+- Token reconciliation requires a source note, cannot lower the already recorded usage floor, and is retained in Goal budget history.
 
 ### The overview page
 
