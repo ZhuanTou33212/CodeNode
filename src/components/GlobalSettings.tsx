@@ -10,7 +10,7 @@ import SchedulingSettingsPanel from './SchedulingSettingsPanel';
 import outputUi from '../../config/ui.output.json';
 import CostSettingsPanel from './CostSettingsPanel';
 import TrellisCliSettings from './TrellisCliSettings';
-import { THEMES, THEME_HINTS, THEME_LABELS } from '../lib/theme';
+import { THEMES, THEME_HINTS, THEME_LABELS, type Theme } from '../lib/theme';
 
 
 export default function GlobalSettings() {
@@ -38,11 +38,11 @@ export default function GlobalSettings() {
     <div className="settings-layout"><nav aria-label="设置分类">{([['general','常规'],['layout','界面'],['agents','Agent 连接'],['execution','执行'],['trellis','Trellis'],['costs','成本与模型'],['rag','检索'],['editing','安全编辑'],['archived','已归档聊天']] as const).map(([id,label]) => <button key={id} aria-pressed={tab === id} onClick={() => openSettings(id)}>{label}</button>)}</nav>
     <div className="settings-content" key={tab}>
       {tab === 'general' && <><h2>常规</h2>
-        <section className="settings-group"><div className="settings-row"><span id="settings-theme-label">主题<small className="settings-theme-hint">{THEME_HINTS[theme]}</small></span>
-          <div className="settings-theme-choice" role="radiogroup" aria-labelledby="settings-theme-label">
-            {THEMES.map(id => <button key={id} type="button" role="radio" aria-checked={theme === id} data-theme-option={id} className={theme === id ? 'is-active' : undefined} onClick={() => setTheme(id)}>{THEME_LABELS[id]}</button>)}
-          </div>
-        </div>
+        <section className="settings-group"><label className="settings-row" htmlFor="settings-theme"><span>主题<small className="settings-theme-hint">{THEME_HINTS[theme]}</small></span>
+          <select id="settings-theme" data-theme-select aria-label="主题" value={theme} onChange={event => setTheme(event.target.value as Theme)}>
+            {THEMES.map(id => <option key={id} value={id}>{THEME_LABELS[id]}</option>)}
+          </select>
+        </label>
         <label className="settings-row"><span>默认工作台</span><select aria-label="工作台页面" value={preferences.workbenchView} onChange={e=>updatePreferences({workbenchView:e.target.value as 'overview'|'conversation'})}><option value="overview">总览</option><option value="conversation">对话</option></select></label>
         </section>
         <section className="settings-group"><label className="settings-row"><span>自动保存</span><input aria-label="自动保存项目" type="checkbox" checked={preferences.autoSaveEnabled} onChange={e=>updatePreferences({autoSaveEnabled:e.target.checked})}/></label>

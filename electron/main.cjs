@@ -126,8 +126,8 @@ function isInternalUrl(url) {
 const ALLOWED_PERMISSIONS = new Set([]);
 
 function createWindow() {
-  // 主题决定窗口底色与系统材质：第三个主题「透明玻璃」用 Windows 亚克力透出桌面，
-  // 昼夜主题仍然是不透明底色（见 electron/theme.cjs 的实测结论）。
+  // 主题决定窗口底色与透明能力：第三个主题「透明玻璃」靠真实透明透出桌面（无系统材质，
+  // 否则会糊成灰雾），昼夜主题仍是不透明底色（见 electron/theme.cjs 的实测结论）。
   const themeOptions = windowTheme.windowOptions();
   const win = new BrowserWindow({
     width: 1280,
@@ -137,8 +137,8 @@ function createWindow() {
     minWidth: 720,
     minHeight: 560,
     title: 'CodeNode',
+    transparent: themeOptions.transparent,
     backgroundColor: themeOptions.backgroundColor,
-    backgroundMaterial: themeOptions.backgroundMaterial,
     icon: resolveAppIcon(),
     autoHideMenuBar: true,
     webPreferences: {
@@ -148,7 +148,7 @@ function createWindow() {
       sandbox: true,
     },
   });
-  // 绑定后，该窗口的玻璃材质会在最大化/还原/重新聚焦时自动补施一次。
+  // 绑定后，该窗口的主题切换只改底色，不重建窗口，因此不会打断会话与草稿。
   windowTheme.bindWindow(win, themeOptions.theme);
 
   // ---- 窗口加固：外链交系统浏览器、站外导航一律拦截、浏览器权限默认拒绝 ----

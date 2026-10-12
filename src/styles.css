@@ -4186,7 +4186,7 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .ui-clean .sp-pane-agent .ap-head { margin-bottom: 6px; }
 .ui-clean .sp-pane-agent .ap-body { padding-top: 6px; }
 .canvas-welcome { pointer-events: none; }
-.glass-theme.ui-clean .canvas-welcome p { font-size: 12px; color: var(--glass-faint); }
+.glass-theme.ui-clean .canvas-welcome p { font-size: 12px; color: var(--glass-muted); }
 @media(max-width:1100px) { .glass-theme .project-navigation { width: 180px; flex-basis: 180px; } }
 @media(max-width:860px) { .glass-theme .project-navigation { width: 160px; flex-basis: 160px; } .ui-clean .side-panel { left: 172px; max-width: calc(100% - 184px); } }
 @media(max-width:600px) { .glass-theme .project-navigation { position: absolute; left: 0; top: 0; bottom: 0; width: 200px; z-index: 150; background: var(--glass-sheet); box-shadow: var(--glass-shadow); } .ui-clean .side-panel { left: 10px; max-width: calc(100% - 20px); } }
@@ -4517,12 +4517,9 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .global-settings .settings-row input[type="range"] { width: 120px; min-width: 60px; accent-color: var(--glass-accent); }
 .global-settings .settings-row output { min-width: 46px; font-size: 11px; color: var(--glass-muted); }
 .global-settings input[type="checkbox"] { accent-color: var(--glass-accent); }
-/* 主题选择：三套皮肤共用同一控件结构，差异只由配色变量表达。 */
+/* 主题选择：三套皮肤共用同一个下拉控件，差异只由配色变量表达。 */
 .settings-theme-hint { display: block; margin-top: 2px; font-size: 11px; color: var(--glass-muted); }
-.settings-theme-choice { display: inline-flex; flex: none; gap: 3px; padding: 3px; border: 1px solid var(--glass-border); border-radius: 10px; background: var(--glass-control); }
-.global-settings .settings-theme-choice button { min-height: 28px; padding: 5px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--glass-muted); font-size: 12px; }
-.global-settings .settings-theme-choice button:hover:not(.is-active) { background: var(--glass-selected); color: var(--glass-text); }
-.global-settings .settings-theme-choice button.is-active { background: var(--glass-sheet); border-color: var(--glass-border); color: var(--glass-text); box-shadow: inset 0 1px 0 var(--glass-edge); }
+.global-settings .settings-row select[data-theme-select] { min-width: 148px; max-width: 200px; flex: none; }
 .settings-menu-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px; border: 1px solid var(--glass-border); border-radius: 8px; }
 .settings-menu-actions legend { font-size: 12px; color: var(--glass-muted); }
 .settings-menu-actions label { display: flex; align-items: center; gap: 8px; font-size: 12px; }

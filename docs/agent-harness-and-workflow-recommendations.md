@@ -530,3 +530,21 @@ Hermes v0.20.0 在 `HERMES_SAFE_MODE=1` 下的短文本 ACP 请求通过，说�
 
 **打包自检。** `packaged-ui-check` 增加 6 项主题检查（asar 内主题→材质模块、三套色值齐全且 token 键一致、asar preload 暴露 `theme:apply`、渲染包包含第三个主题入口与整体透明规则、切玻璃后页面整体透明且主进程换成系统玻璃底色、切回夜间恢复不透明）：暂存包与固定路径均为 **28/28** 通过，`packaged-startup-check` 与 Soul 成长专项同样通过。把 `CODENODE_UI_TEST_PACKAGE` 指向交付包再跑一次 `test:glass-theme-ui`，透光率与源码一致（99.8%、亮度差 69.3）。已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行，不保留旧包备份；独立暂存目录 `.stage-glass-theme`、临时打包配置与隔离自检数据均已清理。app.asar SHA-256：`A7020D35AA040D101B58DE035CF58F297465EA1D190C1497BC4C8408060207F2`；CodeNode.exe SHA-256：`9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59`（与替换前逐字节一致，本次交付只更新包内容）；便携版 CodeNode-0.13.0.exe SHA-256：`D47DF8A76A77659EBC72F5BD46B6208DB1A271A8C4A3F38B8C91AB4CD0F27495`。用户本地未提交的 Soul 修改与私有配置未提交、未被改写。
 
+### 2026-10-12 透明玻璃改为真透明（去掉系统磨砂）＋主题选择改下拉框
+
+用户看到上一版后提出两点：玻璃**灰蒙蒙**、要透亮；常规设置里的主题选择必须是**下拉式**，不要横排三个按钮。两点都改完了。
+
+**先量清楚「灰蒙蒙」是怎么来的。** 用高频棋盘格做参照（棋盘格自身标准差 123.51），逐配置量取样区：不设系统材质的透明窗口**逐像素原样透出**（标准差 123.51、结构相关性 1.000），而 `acrylic` 把同一块区域糊到标准差 **2.35**、`mica` 1.48 —— 结构完全消失，只剩一片灰，这就是「灰蒙蒙」的来源。顺带确认两件事：CSS 的 `backdrop-filter` **模糊不到桌面**（`blur(28px)` 面板与纯半透明色块的屏幕像素逐点一致，均值同为 245.75、标准差 26.50），所以桌面透亮只能在窗口层面决定；`transparent: true` 在**有边框**窗口上同样生效，因此不需要无边框、不需要自绘标题栏，昼夜主题的标题栏外观完全不变。
+
+**改法。** 窗口一律按透明能力创建（`transparent` 是建窗期选项，运行时改不了），玻璃主题把窗口底色设为全透明 `#00000000`，昼夜主题保持不透明 `#14161a`；页面负责薄膜，`html[data-theme="glass"]` 下 `html/body/#root` 整体透明，`.app` 铺一层半透明白膜。没有任何系统材质参与，所以不可能再出现系统级的灰雾。
+
+**为什么画布不做到 0% 薄膜。** 试过 `--app-background: transparent`：桌面上任意高对比内容（文档、IDE、聊天窗口）会和界面自己的文字抢注意力，画布提示淹没在别人的正文里。最终取平衡点——画布 `linear-gradient(rgba(255,255,255,.74),rgba(255,255,255,.68))`、启动页同档、工具栏/侧栏/对话栏/节点卡片 `0.88`、控件 `0.82`、菜单与对话框 `0.94`。桌面结构保住约 27%（实测标准差比 0.273、结构相关性 0.614），能看清壁纸的颜色与形状又不会喧宾夺主；文字面 ≥0.82 是为了在最坏情况（纯黑壁纸）下仍守住对比度底线（正文 ≥11:1、次要 ≥6:1、最弱提示 ≥5:1）。属性面板的 `Shift + A 添加节点` 提示也从 `--glass-faint` 提到 `--glass-muted`，否则在半透明画布上低于对比度底线。
+
+**主题选择改下拉框。** 设置 → 常规 → 主题由横排三个按钮改成 `select[data-theme-select]`（选项：日间／夜间／透明玻璃），选中态与提示文案保留。
+
+**取舍与边界（写进 docs/theme-glass.md）。** ① `transparent: true` 的窗口失去 DWM 外阴影（外扩 10dip 实测亮度差 8.57 → 0，`hasShadow` 补不回来）——这是三套主题共担的一处损失，换来玻璃主题可随时切换而无需重建窗口（重建会打断进行中的会话）。② 「透明 → 不透明」不可逆：`setBackgroundColor('#00000000')` 生效，但反向设回不透明色在 Windows 上不生效、`getBackgroundColor()` 的回报也不可信（同一调用先后回报 `#FFFFFF` / `#000000`），所以只在需要透明时动窗口，昼夜主题的不透明底由页面自己画。③ 非 Windows 平台窗口保持不透明底色，玻璃主题退化为「明亮无色的半透明界面」。④ `test:glass-theme-ui` 把「透亮」写成可测量断言：玻璃主题取样区标准差保住 ≥18%（实测 27.3%）、与棋盘格结构相关性 ≥0.4（实测 0.614），一旦退回系统磨砂两者会塌到个位数百分比与 ~0；昼夜主题在同样背景下标准差 ≤20（实测 10.7 / 11.0）作为「取样区确实是应用本体」的对照。证据图：[真实桌面下的玻璃主题](validation/glass-theme-preview/workspace.png)、[棋盘格原样透出](validation/glass-theme-preview/checkerboard.png)、[主题下拉框](validation/glass-theme-preview/settings.png)。
+
+**验收。** `npx tsc --noEmit`、`npm run check:js` 通过；`npm test` 核心套件 167/167 通过；显示组受影响用例同步改为驱动下拉框（`test:project-ui`、`test:coding-settings-ui`、`test:token-cost-ui`、`test:simple-settings-ui`）后全部通过，`test:node-inspector-ui`、`test:agent-switch-ui`、`test:ime-shortcut-ui`、`test:workflow-canvas-ui`、`test:scheduling-ui`、`test:workspace-ux-ui` 一并复跑通过。
+
+**打包自检。** `packaged-ui-check` 的主题检查扩到 11 项（asar 内主题→窗口透明模块、玻璃主题全透明且昼夜主题不透明、建窗期即具透明能力、三套色值齐全且 token 键一致、玻璃底色是半透明白膜、preload 暴露 `theme:apply`、渲染包含第三个主题入口与整体透明规则、**打包产物不再使用系统磨砂材质**、切玻璃后页面整体透明且窗口底色全透明、切回夜间不留白屏兜底值、页面底色恢复墨黑）：暂存包与固定路径均为 **32/32** 通过；`packaged-startup-check` 与 Soul 成长专项同样通过。把 `CODENODE_UI_TEST_PACKAGE` 指向交付包再跑一次 `test:glass-theme-ui`，透亮指标与源码一致（标准差比 0.273、结构相关性 0.614）。已覆盖固定目录 `E:\CodeNode\release\win-unpacked`，覆盖前确认 CodeNode 未运行，不保留旧包备份；暂存目录 `.stage-glass-clear`、临时打包配置与隔离自检数据均已清理。app.asar SHA-256：`FFA38821843C46D58E1F5A62A78E6E6CFA0D44F60B565C6EF1E7DEDCCFF943FB`；CodeNode.exe SHA-256：`9A931D4ECE0281E171D7D4087AE3687B399E443088E190D4F7405F81A8BFCC59`（与替换前逐字节一致，本次交付只更新包内容）；便携版 CodeNode-0.13.0.exe SHA-256：`DE8BB852B9FB3B0E68CF9D76AFB3248672474221D4E69A1F30F1398350F28EF3`。用户本地未提交的 Soul 修改与私有配置未提交、未被改写。
+

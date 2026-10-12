@@ -769,7 +769,7 @@ app.whenReady().then(async () => {
       assert.equal(await win.webContents.executeJavaScript('!!document.querySelector(".toolbar-theme")'), false);
       await win.webContents.executeJavaScript('window.__codenodeUi.getState().openSettings("general")');
       await sleep(80);
-      await win.webContents.executeJavaScript('document.querySelector(\'[data-theme-option="light"]\').click()');
+      await win.webContents.executeJavaScript('(() => { const s=document.querySelector(\'[data-theme-select]\'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,\'value\').set.call(s,\'light\'); s.dispatchEvent(new Event(\'change\',{bubbles:true})); })()');
       await win.webContents.executeJavaScript('window.__codenodeUi.getState().closeSettings()');
       await waitFor(async () => await win.webContents.executeJavaScript('document.documentElement.dataset.theme==="light"'), '日间主题');
       await sleep(250);

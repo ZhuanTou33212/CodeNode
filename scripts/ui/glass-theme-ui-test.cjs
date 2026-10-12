@@ -4,24 +4,25 @@
  * 第三个主题「纯透明无色玻璃」的端到端验收。
  *
  * 验收的不是「看起来像玻璃」，而是三件可测量的事：
- *   1. 三套主题共用同一套 token 键，切换主题不会残留上一套色值；
- *   2. 玻璃主题下页面真的透明 —— 窗口背后换成亮黄/深藏青两种底色后，
- *      同一块屏幕区域的亮度必须跟着大幅变化（不透明主题必须基本不变）；
- *   3. 切换主题不重置会话、输入草稿、模型选择与侧栏状态，且昼夜主题行为不变。
+ *   1. 三套主题共用同一套 token 键，切换主题不会残留上一套色值，且玻璃主题无色；
+ *   2. 玻璃主题下桌面**原样**透出（不是糊、不是灰雾）——窗口背后放高频棋盘格，
+ *      取样区的像素分布必须与棋盘格自身高度一致（标准差与结构相关性双重判定）；
+ *      一旦用系统材质磨砂，标准差与相关性都会塌掉；
+ *   3. 切换主题不重置会话、输入草稿、模型选择与侧栏状态，切回昼夜主题像素层面仍完全不透明。
  *
- * 为什么必须用真实屏幕截图而不是 capturePage：CSS backdrop-filter 模糊不到桌面
- * （实测 blur 面板与纯 tint 面板的屏幕像素完全一致），桌面透亮只可能来自窗口材质，
- * 因此只有在真实屏幕合成结果里才能判定。
+ * 为什么必须用真实屏幕截图而不是 capturePage：CSS backdrop-filter 模糊不到桌面，
+ * 桌面透亮只可能来自窗口层面，因此只有在真实屏幕合成结果里才能判定。
+ *
+ * 设置 CODENODE_UI_TEST_PACKAGE=<交付包根目录> 时改测包内 asar。
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, desktopCapturer, nativeTheme, screen } = require('electron');
+const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
 
 const themesJson = require('../../config/ui.themes.json');
 
-/** 设置 CODENODE_UI_TEST_PACKAGE=<交付包根目录> 时，改测包内 asar 的 main/preload/theme/色值。 */
 const packageRoot = process.env.CODENODE_UI_TEST_PACKAGE ? path.resolve(process.env.CODENODE_UI_TEST_PACKAGE) : null;
 const runtimeAsar = packageRoot ? path.join(packageRoot, 'resources', 'app.asar') : null;
 const sourceFile = (relative) => (runtimeAsar ? path.join(runtimeAsar, relative) : path.join(__dirname, '../..', relative));
@@ -50,7 +51,7 @@ async function waitFor(check, label) {
 
 let backdrop = null;
 
-/** Electron 在 getBackgroundColor() 里丢掉 alpha，这里只比对不透明的 6 位十六进制。 */
+/** Electron 在 getBackgroundColor() 里丢掉 alpha，这里只比对前 6 位十六进制。 */
 function windowBg() { return String(win.getBackgroundColor() || '').slice(0, 7).toUpperCase(); }
 
 /** 窗口在屏幕上的取样区域（物理像素），避开标题栏与边框。 */
@@ -68,24 +69,29 @@ function sampleRegion(scale) {
 
 function luminanceStats(image) {
   const buf = image.toBitmap();
-  let n = 0, sum = 0, sumSq = 0, opaque = 0;
-  for (let i = 0; i + 3 < buf.length; i += 4) {
+  let n = 0, sum = 0, sumSq = 0;
+  const samples = [];
+  for (let i = 0, k = 0; i + 3 < buf.length; i += 4, k++) {
     const lum = 0.114 * buf[i] + 0.587 * buf[i + 1] + 0.299 * buf[i + 2];
     sum += lum; sumSq += lum * lum; n++;
-    if (buf[i + 3] === 255) opaque++;
+    if (k % 3 === 0) samples.push(lum);
   }
   const mean = sum / n;
-  return { mean: +mean.toFixed(2), sd: +Math.sqrt(Math.max(0, sumSq / n - mean * mean)).toFixed(2), opaqueRatio: +(opaque / n).toFixed(3), buf, n };
+  return { mean: +mean.toFixed(2), sd: +Math.sqrt(Math.max(0, sumSq / n - mean * mean)).toFixed(2), samples };
 }
 
-function changedRatio(a, b) {
-  let changed = 0;
-  for (let i = 0; i + 3 < a.length; i += 4) {
-    const la = 0.114 * a[i] + 0.587 * a[i + 1] + 0.299 * a[i + 2];
-    const lb = 0.114 * b[i] + 0.587 * b[i + 1] + 0.299 * b[i + 2];
-    if (Math.abs(la - lb) > 12) changed++;
+/** 两个取样区的结构相关性：桌面原样透出时高度相关，被磨砂糊掉时趋近 0。 */
+function correlation(a, b) {
+  const n = Math.min(a.length, b.length);
+  let sa = 0, sb = 0;
+  for (let i = 0; i < n; i++) { sa += a[i]; sb += b[i]; }
+  const ma = sa / n, mb = sb / n;
+  let cov = 0, va = 0, vb = 0;
+  for (let i = 0; i < n; i++) {
+    const da = a[i] - ma, db = b[i] - mb;
+    cov += da * db; va += da * da; vb += db * db;
   }
-  return +(changed / (a.length / 4)).toFixed(3);
+  return va > 0 && vb > 0 ? +(cov / Math.sqrt(va * vb)).toFixed(3) : 0;
 }
 
 async function grabScreen(scale) {
@@ -96,9 +102,7 @@ async function grabScreen(scale) {
   return sources[0].thumbnail;
 }
 
-async function measureWithBackdrop(region, scale, color, file) {
-  backdrop.setBackgroundColor(color);
-  await sleep(750);
+async function captureRegion(region, scale, file) {
   const shot = await grabScreen(scale);
   const crop = shot.crop(region);
   if (file) fs.writeFileSync(file, crop.toPNG());
@@ -117,9 +121,14 @@ app.whenReady().then(async () => {
     const reference = Object.keys(themesJson.light).sort();
     for (const id of ids) assert.deepEqual(Object.keys(themesJson[id]).sort(), reference, id + ' 主题 token 键与 light 不一致');
     assert.deepEqual(windowTheme.THEME_IDS, ids, '主进程主题列表必须与色值配置一致');
-    assert.equal(themesJson.glass['--app-background'], 'transparent', '玻璃主题的应用底色必须是 transparent');
-    assert.equal(themesJson.glass['--gate-background'], 'transparent', '玻璃主题的启动页底色必须是 transparent');
-    // 「无色」是这套皮肤的定义：除语义状态色外，任何色值都不得带可见色偏。
+    // 玻璃主题的底色是「半透明白膜」：既不能是不透明白（那就成了第四套不透明主题），
+    // 也不能是全透明（画布上的节点与网格会失去可读底）。
+    for (const key of ['--app-background', '--gate-background']) {
+      const value = themesJson.glass[key];
+      assert.match(value, /rgba\(255,\s*255,\s*255,\s*\.\d+\)/, key + ' 必须是半透明白膜，实际 ' + value);
+      const alphas = [...value.matchAll(/rgba\(255,\s*255,\s*255,\s*\.(\d+)\)/g)].map((m) => Number('0.' + m[1]));
+      assert.ok(alphas.every((a) => a >= 0.4 && a <= 0.8), key + ' 的白膜不透明度必须落在 0.4–0.8，实际 ' + alphas.join('/'));
+    }
     const CHROMATIC_ALLOWED = new Set(['--stage-running', '--stage-done', '--stage-failed', '--stage-blocked', '--menu-danger']);
     for (const [key, value] of Object.entries(themesJson.glass)) {
       if (CHROMATIC_ALLOWED.has(key)) continue;
@@ -141,23 +150,29 @@ app.whenReady().then(async () => {
     win.showInactive();
     await sleep(400);
 
-    // ---- 3. 设置入口：三选一，选中态可读 ----
+    // ---- 3. 设置入口必须是下拉式选择，而不是横排按钮 ----
     await js('window.__codenodeUi.getState().openSettings()');
-    await waitFor(async () => await js('!!document.querySelector(".settings-theme-choice")'), '主题设置入口');
-    const choices = await js(`Array.from(document.querySelectorAll('.settings-theme-choice [data-theme-option]')).map(b=>({id:b.dataset.themeOption,label:b.textContent,checked:b.getAttribute('aria-checked')}))`);
-    assert.deepEqual(choices.map((c) => c.id), ['light', 'dark', 'glass']);
-    assert.deepEqual(choices.map((c) => c.label), ['日间', '夜间', '透明玻璃']);
-    assert.equal(choices.filter((c) => c.checked === 'true').length, 1, '必须恰好有一个主题处于选中态');
+    await waitFor(async () => await js('!!document.querySelector("[data-theme-select]")'), '主题设置入口');
+    const choice = await js(`(() => {
+      const select = document.querySelector('[data-theme-select]');
+      return { tag: select.tagName, value: select.value, options: [...select.options].map(o => ({ id: o.value, label: o.textContent })), buttons: document.querySelectorAll('.settings-theme-choice [data-theme-option]').length };
+    })()`);
+    assert.equal(choice.tag, 'SELECT', '主题必须用下拉式选择');
+    assert.equal(choice.buttons, 0, '不应再有横排的主题按钮');
+    assert.deepEqual(choice.options.map((o) => o.id), ['light', 'dark', 'glass']);
+    assert.deepEqual(choice.options.map((o) => o.label), ['日间', '夜间', '透明玻璃']);
+    assert.equal(choice.value, await js('window.__codenodeUi.getState().theme'), '下拉框当前值必须等于当前主题');
     await js('window.__codenodeUi.getState().closeSettings()');
 
-    // ---- 4. 昼夜主题行为不变 ----
-    await js(`window.__codenodeUi.getState().setTheme('dark')`); await sleep(200);
+    // ---- 4. 昼夜主题行为不变（窗口不透明，底色不透明） ----
+    await js(`window.__codenodeUi.getState().setTheme('dark')`); await sleep(250);
     assert.equal(await js('getComputedStyle(document.querySelector(".app")).backgroundColor'), 'rgb(23, 25, 29)', '夜间主题底色不得变化');
-    assert.equal(windowBg(), '#14161A', '夜间主题窗口底色必须保持不透明');
-    await js(`window.__codenodeUi.getState().setTheme('light')`); await sleep(200);
+    assert.equal(windowBg(), '#14161A', '夜间主题窗口底色必须不透明，实际 ' + JSON.stringify(win.getBackgroundColor()));
+    await js(`window.__codenodeUi.getState().setTheme('light')`); await sleep(250);
     assert.notEqual(await js('getComputedStyle(document.querySelector(".app")).backgroundColor'), 'rgb(23, 25, 29)', '日间主题必须有不同底色');
+    assert.equal(windowBg(), '#14161A', '日间主题窗口底色同样不透明，实际 ' + JSON.stringify(win.getBackgroundColor()));
 
-    // ---- 5. 切到玻璃主题：窗口材质、页面透明、持久化 ----
+    // ---- 5. 切到玻璃主题：窗口底色透明、页面整体透明、持久化 ----
     await js(`window.__codenodeUi.getState().setTheme('glass')`);
     await waitFor(async () => await js('document.documentElement.dataset.theme === "glass"'), '玻璃主题生效');
     await waitFor(async () => windowBg() === '#000000', '主进程切换窗口底色');
@@ -169,65 +184,79 @@ app.whenReady().then(async () => {
     }
     const savedFile = path.join(app.getPath('userData'), 'window-theme.json');
     assert.equal(JSON.parse(fs.readFileSync(savedFile, 'utf8')).theme, 'glass', '主进程必须持久化主题以便下次启动直接建玻璃窗口');
+    assert.equal(windowTheme.windowOptions().transparent, true, '窗口必须建窗期就具备透明能力（运行时改不了）');
+    assert.equal(windowTheme.backgroundColorFor('glass'), '#00000000', '玻璃主题的窗口底色必须是全透明');
+    assert.equal(windowTheme.backgroundColorFor('dark'), '#14161a', '昼夜主题的窗口底色必须不透明');
 
-    // ---- 6. 透亮实测：换个窗口背后的底色，看屏幕像素跟不跟着变 ----
+    // ---- 6. 透亮实测：窗口背后放高频棋盘格，界面必须让它原样透出 ----
     const display = screen.getPrimaryDisplay();
     const scale = display.scaleFactor;
     const region = sampleRegion(scale);
-    backdrop = new BrowserWindow({ ...win.getBounds(), show: false, frame: false, focusable: false, skipTaskbar: true, backgroundColor: '#ffff00' });
-    await backdrop.loadURL('data:text/html,<body style="margin:0;background:transparent"></body>');
+    const checkerboard = 'data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><body style="margin:0;width:100vw;height:100vh;background-image:repeating-linear-gradient(45deg,#000 0 8px,#fff 8px 16px)"></body>');
+    backdrop = new BrowserWindow({ ...win.getBounds(), show: false, frame: false, focusable: false, skipTaskbar: true, backgroundColor: '#000000' });
+    await backdrop.loadURL(checkerboard);
+    backdrop.setAlwaysOnTop(true, 'screen-saver');
     backdrop.showInactive();
-    // 屏上可能有别的窗口，这里把被测窗口提到最上层，保证取样区就是应用本体。
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.moveTop();
     await sleep(500);
 
     const outDir = path.join(__dirname, '../../out');
     fs.mkdirSync(outDir, { recursive: true });
-    const shot = (name) => path.join(outDir, 'glass-theme-' + name + (packageRoot ? '-packaged' : '') + '.png');
-    console.log('MEASURE CONTEXT', JSON.stringify({ target: packageRoot || 'source', winBounds: win.getBounds(), visible: win.isVisible(), minimized: win.isMinimized(), scale, region, display: display.size }));
-    const glassBright = await measureWithBackdrop(region, scale, '#ffff00', shot('bright-backdrop'));
-    const glassDark = await measureWithBackdrop(region, scale, '#000814', shot('dark-backdrop'));
-    const glassDelta = Math.abs(glassBright.mean - glassDark.mean);
-    const glassChanged = changedRatio(glassBright.buf, glassDark.buf);
-    console.log('GLASS TRANSPARENCY', JSON.stringify({ bright: glassBright.mean, dark: glassDark.mean, delta: +glassDelta.toFixed(2), changedRatio: glassChanged }));
+    const shotPath = (name) => path.join(outDir, 'glass-theme-' + name + (packageRoot ? '-packaged' : '') + '.png');
 
-    await js(`window.__codenodeUi.getState().setTheme('dark')`); await sleep(400);
-    const darkBright = await measureWithBackdrop(region, scale, '#ffff00');
-    const darkDark = await measureWithBackdrop(region, scale, '#000814');
-    const darkDelta = Math.abs(darkBright.mean - darkDark.mean);
-    const darkChanged = changedRatio(darkBright.buf, darkDark.buf);
-    console.log('DARK CONTROL', JSON.stringify({ bright: darkBright.mean, dark: darkDark.mean, delta: +darkDelta.toFixed(2), changedRatio: darkChanged }));
+    // 三次像素测量必须处在同一套布局，否则量到的是界面内容差异而不是不透明度。
+    const normalizeLayout = () => js(`window.__codenodeUi.setState({navigationOpen:false,conversationOpen:false,sideOpen:false,dockOpen:false,sideTab:'agent',appPage:'workbench'}); window.__codenodeUi.getState().closeSettings()`);
+    await normalizeLayout();
+    await sleep(300);
 
-    // 深色主题必须完全不透明，否则说明测的根本不是窗口本体（顺序/几何错误），玻璃结论也就无效。
-    assert.ok(darkDark.mean < 60, '对照组必须是暗色不透明窗口，实际亮度 ' + darkDark.mean);
-    assert.ok(darkChanged < 0.02, '对照组不应随背后底色变化，实际变化像素比例 ' + darkChanged);
-    // 玻璃主题必须显著透光。
-    assert.ok(glassDelta > 45, '玻璃主题必须随背后底色明显变化，实际亮度差 ' + glassDelta);
-    assert.ok(glassChanged > 0.5, '玻璃主题大部分像素应当是透光的，实际 ' + glassChanged);
-    win.setAlwaysOnTop(false);
+    win.hide();
+    await sleep(500);
+    const backdropOnly = await captureRegion(region, scale, shotPath('backdrop-reference'));
+    assert.ok(backdropOnly.sd > 60, '参照棋盘格必须是高频图案，实际标准差 ' + backdropOnly.sd);
+
+    const measure = async (theme, name) => {
+      await js(`window.__codenodeUi.getState().setTheme(${JSON.stringify(theme)})`);
+      await sleep(250);
+      backdrop.showInactive();
+      win.setAlwaysOnTop(true, 'screen-saver');
+      win.showInactive();
+      win.moveTop();
+      await sleep(700);
+      return captureRegion(region, scale, name);
+    };
+
+    const glass = await measure('glass', shotPath('clear-glass'));
+    const sdRatio = glass.sd / backdropOnly.sd;
+    const structureMatch = correlation(glass.samples, backdropOnly.samples);
+    console.log('BACKDROP REFERENCE', { mean: backdropOnly.mean, sd: backdropOnly.sd }, '| GLASS', { mean: glass.mean, sd: glass.sd }, '| sdRatio', sdRatio.toFixed(3), '| structure', structureMatch);
+    // 阈值只用来区分「真透」与「磨砂糊成灰」：系统材质会把两项压到 ~0.02 / ~0。
+    assert.ok(sdRatio >= 0.18, '玻璃主题不能让桌面失去结构（这就是「灰蒙蒙」）：标准差必须保住 ≥18%，实际 ' + (sdRatio * 100).toFixed(1) + '%（系统材质磨砂会塌到个位数百分比）');
+    assert.ok(structureMatch >= 0.4, '玻璃主题必须让桌面结构可辨：与参照棋盘格的结构相关性必须 ≥0.4，实际 ' + structureMatch);
+    assert.ok(glass.mean >= backdropOnly.mean - 8, '玻璃主题不应比桌面更暗，实际 ' + glass.mean + ' vs ' + backdropOnly.mean);
+
+    // 对照组：昼夜主题必须完全不透明，否则说明取样区根本不是应用本体
+    const dark = await measure('dark', shotPath('dark-control'));
+    const light = await measure('light', shotPath('light-control'));
+    console.log('DARK CONTROL', { mean: dark.mean, sd: dark.sd }, '| LIGHT CONTROL', { mean: light.mean, sd: light.sd });
+    assert.ok(dark.sd <= 20, '夜间主题必须不透明（棋盘格不得透出），实际标准差 ' + dark.sd);
+    assert.ok(light.sd <= 20, '日间主题必须不透明（棋盘格不得透出），实际标准差 ' + light.sd);
+    assert.ok(Math.abs(dark.mean - backdropOnly.mean) > 40, '对照组必须与棋盘格明显不同，实际 ' + dark.mean);
 
     // ---- 7. 切换主题不得重置会话 / 草稿 / 模型 / 侧栏 ----
     await js(`window.__codenodeUi.setState({navigationOpen:true,conversationOpen:true,sideOpen:true,sideTab:'project',dockOpen:true,dockTab:'runs',appPage:'workbench'})`);
     await js(`window.__codenodeSession.getState().pushUser('玻璃主题下的草稿与侧栏状态')`);
-    const before = await js(`JSON.stringify({
+    const snapshot = `JSON.stringify({
       root: window.__codenodeProject.getState().root,
       file: window.__codenodeProject.getState().projectFile,
       messages: window.__codenodeSession.getState().messages.length,
       model: JSON.stringify(window.__codenodeUi.getState().preferences),
       ui: (({theme,navigationOpen,conversationOpen,sideOpen,sideTab,dockOpen,dockTab,appPage})=>({theme,navigationOpen,conversationOpen,sideOpen,sideTab,dockOpen,dockTab,appPage}))(window.__codenodeUi.getState())
-    })`);
+    })`;
+    const before = await js(snapshot);
     for (const theme of ['glass', 'light', 'dark', 'glass']) {
       await js(`window.__codenodeUi.getState().setTheme(${JSON.stringify(theme)})`);
       await sleep(160);
     }
-    const after = await js(`JSON.stringify({
-      root: window.__codenodeProject.getState().root,
-      file: window.__codenodeProject.getState().projectFile,
-      messages: window.__codenodeSession.getState().messages.length,
-      model: JSON.stringify(window.__codenodeUi.getState().preferences),
-      ui: (({theme,navigationOpen,conversationOpen,sideOpen,sideTab,dockOpen,dockTab,appPage})=>({theme,navigationOpen,conversationOpen,sideOpen,sideTab,dockOpen,dockTab,appPage}))(window.__codenodeUi.getState())
-    })`);
+    const after = await js(snapshot);
     assert.equal(JSON.parse(after).root, JSON.parse(before).root);
     assert.equal(JSON.parse(after).file, JSON.parse(before).file);
     assert.equal(JSON.parse(after).messages, JSON.parse(before).messages);
@@ -237,11 +266,16 @@ app.whenReady().then(async () => {
       assert.equal(JSON.parse(after).ui[key], JSON.parse(before).ui[key], '切换主题不得改动 ' + key);
     }
 
-    // ---- 8. 切回夜间：材质必须撤销，不能留下半透明窗口 ----
-    await js(`window.__codenodeUi.getState().setTheme('dark')`); await sleep(300);
-    assert.equal(windowBg(), '#14161A');
-    assert.equal(nativeTheme.themeSource, 'system', '离开玻璃主题必须恢复系统原生主题设置');
+    // ---- 8. 切回夜间：像素层面必须重新完全不透明（透明 → 不透明由页面负责） ----
+    await normalizeLayout();
+    await sleep(300);
+    const darkAgain = await measure('dark', shotPath('dark-after-roundtrip'));
+    console.log('DARK AFTER ROUND TRIP', { mean: darkAgain.mean, sd: darkAgain.sd });
+    assert.ok(darkAgain.sd <= 20, '玻璃切回夜间后必须完全不透明（棋盘格不得透出），实际标准差 ' + darkAgain.sd);
+    assert.ok(Math.abs(darkAgain.mean - backdropOnly.mean) > 40, '切回夜间后必须与棋盘格明显不同，实际 ' + darkAgain.mean);
     assert.equal(await js('getComputedStyle(document.querySelector(".app")).backgroundColor'), 'rgb(23, 25, 29)');
+    win.setAlwaysOnTop(false);
+    if (backdrop && !backdrop.isDestroyed()) { backdrop.destroy(); backdrop = null; }
 
     console.log('GLASS THEME UI TEST: PASS' + (packageRoot ? ' (交付包 ' + packageRoot + ')' : ' (源码)'));
     process.exitCode = 0;
