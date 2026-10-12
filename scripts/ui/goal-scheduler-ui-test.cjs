@@ -29,7 +29,7 @@ app.whenReady().then(async()=>{try{
   await js(`window.__codenodeUi.getState().updatePreferences({autoSaveEnabled:false})`);
   await js(`window.__codenodeProject.getState().loadRoot(${JSON.stringify(project)})`);
   await until(()=>js('!!document.querySelector(".pp-input")'),'composer');
-  const backend={backend:'opencode',executable:process.execPath,args:[path.resolve(__dirname,'../fixtures/acp-basic.cjs')],sandbox:'workspace-write'};
+  const backend={backend:'opencode',executable:process.execPath,args:[path.resolve(__dirname,'../fixtures/acp-basic.cjs'),'--record-prompts'],sandbox:'workspace-write'};
   assert.equal((await api('backendSave',project,'project',backend)).ok,true);
   for(const theme of ['light','dark']){
     await js(`window.__codenodeUi.setState({theme:${JSON.stringify(theme)},sideOpen:true})`);
@@ -78,6 +78,11 @@ app.whenReady().then(async()=>{try{
     const firstCheck=await pendingCheck;assert.equal(firstCheck.ok,true,firstCheck.error||firstCheck.output);
     await until(async()=>{const state=await audit(goalId);return state.tasks[1].executionStatus==='completed'&&state.goal.execution.status==='waiting';},'next stage runs with editor closed');
     const after=await audit(goalId);
+    const prompts=fs.readFileSync(path.join(project,'.codenode','handoff-prompts.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line).prompt.map(part=>part.text||'').join('\n'));
+    const delivered=prompts.find(text=>text.includes(second.value.id)&&text.includes('"predecessors"'));
+    assert.ok(delivered,'the actual ACP request carries the downstream handoff');
+    assert.ok(delivered.includes(first.value.id)&&delivered.includes('ACP_RUNTIME_OK')&&delivered.includes('"valid":true'),'the real request contains persisted predecessor result and independently accepted evidence after reload');
+    assert.ok(delivered.includes('source.txt contains baseline')&&delivered.includes('"appliesToTask":true'),'the actual request carries the full bound criterion');
     assert.equal(after.goal.execution.id,executionId);
     assert.equal(after.tasks[0].runIds.filter(id=>id.startsWith('auto-')).length,1);
     assert.equal(after.tasks[1].runIds.filter(id=>id.startsWith('auto-')).length,1,'exactly one real Agent run per stage');

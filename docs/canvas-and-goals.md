@@ -39,6 +39,8 @@ An existing agent `update_plan` plan can also be imported once from the plan car
 - Independent acceptance commands are mutually exclusive with Agent writes. Evidence recording atomically checks the approved Goal contract: a passing command cannot certify criteria or scope revised while it was running.
 - Main-process scheduling, renderer reload, waiting authorization and package results: [2026-10-13 validation](validation/goal-main-scheduler-2026-10-13.json). Deadline inputs use the device's local time zone; completed Goals with stale evidence are marked for recheck in the overview.
 - The planning model and the execution backend are configured separately (see [backends](backends.md)).
+- Each Goal Task request derives a fresh handoff from persisted project records: direct and earlier predecessors, latest Run outcomes and summaries, evidence freshness, relevant decisions and current acceptance criteria. Foreign Goals and unrelated branches are excluded; historical completion never upgrades stale evidence.
+- Handoffs are reference data. Long summaries, commands and results are explicitly marked excerpts; command previews are not complete executable commands. Optional handoff data is reduced to fit the existing dynamic context budget. Required criteria and rules retain their original text, and an oversized required context stops explicitly. Internal bounds are centralized in `config/goal.handoff.json`.
 
 ### The overview page
 

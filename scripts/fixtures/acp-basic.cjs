@@ -11,6 +11,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     else{session=m.params.sessionId||'acp-fixture';if(process.env.FIXTURE_SESSION_PARAMS)require('node:fs').writeFileSync(process.env.FIXTURE_SESSION_PARAMS,JSON.stringify({method:m.method,params:m.params}));result(m.method==='session/new'?{sessionId:session}:{});}
   }
   else if(m.method==='session/prompt'){
+    if(process.argv.includes('--record-prompts')){const fs=require('node:fs'),path=require('node:path');const dir=path.join(process.cwd(),'.codenode');fs.mkdirSync(dir,{recursive:true});fs.appendFileSync(path.join(dir,'handoff-prompts.jsonl'),JSON.stringify(m.params)+'\n');}
     pendingPrompt=m.id;
     send({jsonrpc:'2.0',method:'session/update',params:{sessionId:session,update:{sessionUpdate:'agent_message_chunk',messageId:'msg-1',content:{type:'text',text:'ACP_RUNTIME_OK'}}}});
     if(process.env.FIXTURE_PERMISSION==='1')send({jsonrpc:'2.0',id:'permission-1',method:'session/request_permission',params:{sessionId:session,title:'Read file',subject:{kind:'read',path:'sample.txt'},toolCall:{toolCallId:'read-1',kind:'read'},options:[{optionId:'allow',kind:'allow_once',name:'Read once'},{optionId:'deny',kind:'reject_once',name:'Deny'}]}});

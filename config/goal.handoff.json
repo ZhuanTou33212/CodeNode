@@ -1,0 +1,9 @@
+{
+  "maxPredecessors": 12,
+  "maxTraversalTasks": 512,
+  "maxEvidencePerTask": 3,
+  "maxDecisions": 12,
+  "summaryChars": 1200,
+  "previewChars": 400,
+  "maxPacketChars": 24000
+}

@@ -33,6 +33,7 @@ const CORE = [
   'test:acp-full',
   'test:goal-store',
   'test:goal-scheduler',
+  'test:goal-handoff',
   'test:goal-canvas-graph',
   'test:goal-plan-ipc',
   'test:goal-scope',
