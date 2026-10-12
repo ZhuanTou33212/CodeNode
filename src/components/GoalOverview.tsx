@@ -3,7 +3,7 @@ import { useGoalControlStore } from '../store/goalControlStore';
 import { useProjectStore } from '../store/projectStore';
 import { useUiStore } from '../store/uiStore';
 import GoalControlPanel from './side/GoalControlPanel';
-import { goalBudgetAttention } from '../lib/goalBudgetAttention';
+import { goalAttention } from '../lib/goalAttention';
 const stateName:Record<string,string>={active:'进行中',completed:'已完成',paused:'已暂停',stopped:'已停止',archived:'已归档'};
 export default function GoalOverview(){
  const root=useProjectStore(s=>s.root),{goals,selectedGoalId,select,refresh,error,pendingDraft,clearDraft}=useGoalControlStore();
@@ -12,16 +12,7 @@ export default function GoalOverview(){
  const editorRef=useRef<HTMLElement>(null),returnFocus=useRef<HTMLElement|null>(null);
  const detail=goals.find(g=>g.id===selectedGoalId);
  const visible=goals.filter(g=>g.status!=='archived');
- const attention=visible.flatMap(g=>{
-  const items=[
-  ...(g.status==='completed'&&g.complete===false?[{goal:g,id:'recheck-'+g.id,taskId:null as string|null,text:'完成条件已失效，请重新验收或复核预算',label:'需重新核验'}]:[]),
-  ...goalBudgetAttention(g).map(item=>({goal:g,...item})),
-  ...(g.decisions||[]).filter(d=>d.status==='open').map(d=>({goal:g,id:d.id,taskId:null as string|null,text:d.question,label:'待决定'})),
-  ...(g.tasks||[]).filter(t=>['blocked','failed'].includes(t.status)||t.executionStatus==='unknown').map(t=>({goal:g,id:t.id,taskId:t.id as string|null,text:t.title,label:t.executionStatus==='unknown'?'待复核':t.status==='failed'?'执行失败':'有阻塞'})),
-  ...((g.execution?.status==='blocked'||g.execution?.actionRequired)&&!g.tasks.some(t=>['blocked','failed'].includes(t.status)||t.executionStatus==='unknown')&&!g.decisions.some(d=>d.status==='open')?[{goal:g,id:g.execution!.id,taskId:g.execution!.currentTaskId||null,text:g.execution!.reason,label:g.execution!.status==='blocked'?'执行待复核':'等待继续'}]:[]),
-  ];
-  return items.map(item=>({...item,owner:'owner' in item?item.owner:'user' as const,action:'action' in item?item.action:'review-goal'}));
- });
+ const attention=goalAttention(goals);
  const openEditor=(goalId:string|null,taskId:string|null=null)=>{returnFocus.current=document.activeElement as HTMLElement;setCreating(!goalId);if(goalId)select(goalId,taskId);setEditor(true);};
  const close=()=>{setEditor(false);setAutoPlanGoalId(null);clearDraft();returnFocus.current?.focus();};
  useEffect(()=>{setEditor(false);setCreating(false);},[root]);
@@ -34,8 +25,8 @@ export default function GoalOverview(){
  },[editor]);
  return <section className="goal-overview" aria-label="目标总览">
   <header className="overview-project-header"><span>{root?.split(/[\\/]/).pop()||'当前项目'}</span><div><button className="overview-refresh" aria-label="刷新目标总览" title="刷新目标" onClick={()=>void refresh(root)}>↻</button><button className="overview-create" onClick={()=>openEditor(null)}>＋ 新建目标</button></div></header>
-  <div className="overview-brief"><div className="overview-brief-icon" aria-hidden="true">✦</div><div><span>项目简报</span><h1>{attention.length?'有一些事项需要你处理':visible.length?'继续推进你的目标':'从一个目标开始'}</h1><p>{attention.length?`${attention.length} 项待处理事项，先核对预算、处理决定或阻塞，再继续推进。`:visible.length?`${visible.filter(g=>g.status==='active').length} 个目标正在进行，任务与验收进度都在这里。`:'描述你想完成的事，CodeNode 会帮你管理任务和验收。'}</p></div></div>
-  {!!attention.length&&<section className="overview-attention"><h2>需要你处理 <span>{attention.length}</span></h2>{attention.slice(0,6).map(item=><button key={item.goal.id+item.id} data-owner={item.owner||'user'} data-action={item.action||'review-goal'} aria-label={`需要你处理：${item.label} · ${item.text} · ${item.goal.title}`} onClick={()=>openEditor(item.goal.id,item.taskId)}><span className="overview-attention-label">{item.label}</span><span><strong>{item.text}</strong><small>{item.goal.title}</small></span><span aria-hidden="true">›</span></button>)}</section>}
+  <div className="overview-brief"><div className="overview-brief-icon" aria-hidden="true">✦</div><div><span>项目简报</span><h1>{attention.length?'有一些事项需要你处理':visible.length?'继续推进你的目标':'从一个目标开始'}</h1><p>{attention.length?`${attention.length} 项待处理事项，先核对预算、处理决定或运行复核，再跟进阻塞与等待。`:visible.length?`${visible.filter(g=>g.status==='active').length} 个目标正在进行，任务与验收进度都在这里。`:'描述你想完成的事，CodeNode 会帮你管理任务和验收。'}</p></div></div>
+  {!!attention.length&&<section className="overview-attention"><h2>需要你处理 <span>{attention.length}</span></h2>{attention.slice(0,6).map(item=><button key={item.key} data-owner={item.owner} data-action={item.action} aria-label={`需要你处理：${item.label} · ${item.text} · ${item.goal.title}`} onClick={()=>openEditor(item.goalId,item.taskId)}><span className="overview-attention-label">{item.label}</span><span><strong>{item.text}</strong><small>{item.goal.title}</small></span><span aria-hidden="true">›</span></button>)}</section>}
   <section className="overview-goals"><div className="overview-list-heading"><h2>全部目标{visible.length>0&&<span>{visible.length}</span>}</h2></div>
    {visible.length===0?<div className="overview-empty"><p>还没有目标</p><span>可以从一个功能、一项修复或一个项目计划开始。</span><button onClick={()=>openEditor(null)}>创建第一个目标</button></div>:<div className="overview-goal-list" aria-label="项目目标列表">{visible.map(g=>{const done=g.tasks.filter(t=>t.status==='completed').length;return <button key={g.id} data-goal-id={g.id} onClick={()=>openEditor(g.id)}><span className={'overview-state-dot status-'+g.status}/><span className="overview-row-copy"><strong>{g.title}</strong><small>{g.objective}</small></span><span className="overview-row-progress">{done}/{g.tasks.length} 任务</span><span className="overview-row-status">{g.status==='completed'&&g.complete===false?'需重新核验':stateName[g.status]||g.status}</span><span aria-hidden="true">›</span></button>;})}</div>}
   </section>

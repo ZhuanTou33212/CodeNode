@@ -162,6 +162,9 @@ app.whenReady().then(async()=>{try{
   await until(()=>js(`document.querySelector('.goal-summary strong')?.textContent==='Exact token ceiling'`),'open another Goal before following the cross-goal budget action');
   await until(()=>js(`(()=>{const actions=[...document.querySelectorAll('.goal-focus-queue button')].filter(b=>b.dataset.action?.startsWith('reconcile-')&&b.textContent.includes('Unknown provider token usage'));return ['reconcile-token-usage','reconcile-cost-usage'].every(action=>actions.some(b=>b.dataset.action===action&&b.dataset.owner==='user'));})()`),'Goal editor focus queue matches the overview budget actions');
   await js(`document.querySelector('.goal-focus-queue summary').click()`);
+  const overviewActions=await js(`[...document.querySelectorAll('.overview-attention button')].map(b=>b.dataset.action+':'+b.dataset.owner+':'+b.getAttribute('aria-label')).sort()`);
+  const editorActions=await js(`[...document.querySelectorAll('.goal-focus-queue button')].map(b=>b.dataset.action+':'+b.dataset.owner+':'+b.getAttribute('aria-label')).sort()`);
+  assert.deepEqual(editorActions,overviewActions,'overview and editor expose the same typed user follow-ups');
   await js(`document.querySelector('.goal-focus-queue button[data-action="reconcile-token-usage"]').click()`);
   await until(()=>js(`document.querySelector('.goal-summary strong')?.textContent==='Unknown provider token usage'`),'budget attention routes to the owning Goal from another Goal editor');
   await js(`(()=>{const summary=[...document.querySelectorAll('.goal-management-section summary')].find(item=>item.textContent.includes('目标范围与预算'));if(!summary)throw Error('Goal budget disclosure missing');summary.click();})()`);
