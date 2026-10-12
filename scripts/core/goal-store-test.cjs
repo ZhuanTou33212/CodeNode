@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const goal = require('../../electron/goalStore.cjs');
+const execution = require('../../electron/goalExecution.cjs');
 const runStore = require('../../electron/runStore.cjs');
 const waitConfig = require('../../config/goal.wait.json');
 
@@ -11,6 +12,17 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codenode-goal-store-'));
 try {
   fs.writeFileSync(path.join(root, 'source.txt'), 'baseline\n');
   assert.throws(() => goal.createGoal(root, { title: 'No acceptance' }), /必需验收条件/);
+
+  const ownerGoal=goal.createGoal(root,{title:'Task ownership metadata',criteria:['owner contract checked']});
+  const ownedTask=goal.createTask(root,ownerGoal.id,{title:'Assigned review',owner:'release-review'});
+  assert.equal(ownedTask.owner,'release-review');
+  const beforeOwnerChange=execution.contract(goal.read(root).goals.find(item=>item.id===ownerGoal.id));
+  goal.updateTask(root,ownerGoal.id,ownedTask.id,{owner:'security-review'});
+  const afterOwnerChange=execution.contract(goal.read(root).goals.find(item=>item.id===ownerGoal.id));
+  assert.notEqual(afterOwnerChange,beforeOwnerChange,'Task owner participates in the persisted execution contract');
+  assert.equal(goal.read(root).goals.find(item=>item.id===ownerGoal.id).tasks[0].owner,'security-review','Task owner changes persist');
+  assert.throws(()=>goal.createTask(root,ownerGoal.id,{title:'Invalid owner',owner:'x'.repeat(101)}),/Task 负责人/);
+  assert.throws(()=>goal.updateTask(root,ownerGoal.id,ownedTask.id,{owner:'x'.repeat(101)}),/Task 负责人/);
 
   const created = goal.createGoal(root, { title: 'Release quality', criteria: ['tests pass'], maxTokens: 500 });
   assert.throws(() => goal.updateGoal(root, created.id, { criteria: [] }), /必需验收条件/);

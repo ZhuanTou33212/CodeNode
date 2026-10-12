@@ -5,7 +5,7 @@ const root=fs.mkdtempSync(path.join(os.tmpdir(),'codenode-goal-handoff-'));
 try{
   fs.writeFileSync(path.join(root,'source.txt'),'baseline');
   const goal=store.createGoal(root,{title:'Handoff goal',criteria:['final source verified']});
-  const a=store.createTask(root,goal.id,{title:'Investigate'}),b=store.createTask(root,goal.id,{title:'Implement',dependsOn:[a.id]}),current=store.createTask(root,goal.id,{title:'Verify',dependsOn:[b.id],criteriaIds:[goal.criteria[0].id]});
+  const a=store.createTask(root,goal.id,{title:'Investigate',owner:'explorer'}),b=store.createTask(root,goal.id,{title:'Implement',owner:'release-review',dependsOn:[a.id]}),current=store.createTask(root,goal.id,{title:'Verify',owner:'verifier',dependsOn:[b.id],criteriaIds:[goal.criteria[0].id]});
   const unrelated=store.createTask(root,goal.id,{title:'Unrelated branch'});
   const passed={verified:true,status:'passed',files:['source.txt'],checks:[{kind:'test',status:'passed',command:'node source-test.cjs',exitCode:0}]};
   for(const task of [a,b]){const runId='run-'+task.id;store.admit(root,goal.id,task.id,runId);store.recordRunEvidence(root,goal.id,task.id,runId,passed);store.settle(root,runId,{status:'completed',summary:'Result for '+task.title,verification:passed});}
@@ -14,7 +14,9 @@ try{
   const open=store.addDecision(root,goal.id,{question:'Final delivery choice?',options:['A','B']});
   const foreign=store.createGoal(root,{title:'Foreign goal',criteria:['foreign criterion']});const foreignTask=store.createTask(root,foreign.id,{title:'Foreign task'});store.admit(root,foreign.id,foreignTask.id,'foreign-run');store.settle(root,'foreign-run',{status:'failed',summary:'FOREIGN_GOAL_MUST_NOT_LEAK'});
   const context=store.contextForRole(root,goal.id,current.id,'implement');
+  assert.equal(context.task.owner,'verifier');assert.equal(context.handoff.currentTask.owner,'verifier');assert.equal(context.handoff.currentTask.ownerIsRoutingHint,false,'owner metadata does not grant a new executor or permission');
   assert.deepEqual(context.handoff.predecessors.map(t=>t.taskId),[b.id,a.id]);assert.equal(context.handoff.predecessors[0].direct,true);assert.equal(context.handoff.predecessors[1].direct,false);
+  assert.deepEqual(context.handoff.predecessors.map(t=>t.owner),['release-review','explorer'],'predecessor ownership reaches the Task handoff');
   assert.match(context.handoff.predecessors[0].latestRun.summary,/Implement/);assert.equal(context.handoff.predecessors[0].evidence[0].freshness.valid,true);
   assert.equal(context.handoff.referenceOnly,true);assert.equal(JSON.stringify(context).includes('MUST_NOT_LEAK'),false);
   assert.equal(context.handoff.decisions.find(d=>d.id===decision.id).value,'yes');assert.equal(context.handoff.decisions.find(d=>d.id===open.id).status,'open');

@@ -241,7 +241,7 @@ interface CodenodeApi {
   goalCostReconcile: (root:string|null,goalId:string,totalCostUsd:number,reason:string)=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalAutoAdvanceClaim: (root:string|null,goalId:string,taskId:string)=>Promise<{ok:boolean;error?:string;value?:{goalId:string;taskId:string;title:string;objective:string;claimId:string;requestId:string;waitObservationId:string;usedRuns:number;maxRuns:number}}>;
   goalAutoAdvanceRelease: (root:string|null,goalId:string,taskId:string,claimId:string,reason?:string)=>Promise<{ok:boolean;error?:string;value?:boolean}>;
-  goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
+  goalTaskCreate: (root:string|null,goalId:string,input:{title:string;objective?:string;owner?:string;dependsOn?:string[];readScope?:string[];writeScope?:string[];criteriaIds?:string[];decisionIds?:string[]})=>Promise<{ok:boolean;error?:string;value?:any}>;
   goalTaskBatchCreate: (root:string|null,goalId:string,steps:GoalPlanStep[],expectedRevision?:number)=>Promise<{ok:boolean;error?:string;value?:any[]}>;
   goalTaskDeletePlanned: (root:string|null,goalId:string,taskId:string,expectedRevision?:number)=>Promise<{ok:boolean;error?:string;value?:{id:string}}>;
   goalTaskUpdate: (root:string|null,goalId:string,taskId:string,patch:Record<string,unknown>)=>Promise<{ok:boolean;error?:string;value?:any}>;

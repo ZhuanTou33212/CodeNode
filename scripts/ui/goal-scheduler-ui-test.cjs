@@ -42,6 +42,13 @@ app.whenReady().then(async()=>{try{
     await js(`document.querySelector('[data-goal-id="${goalId}"]').click()`);
     await until(()=>js('!!document.querySelector(".goal-task-graph-toolbar")'),'Goal editor');
     await until(()=>js(`document.querySelectorAll('.goal-task-graph-canvas .react-flow__node').length===2&&![...document.querySelectorAll('.goal-task-graph-toolbar button')].find(b=>b.textContent==='开始执行 Goal').disabled`),'task graph refreshed and executable');
+    await js(`document.querySelector('.goal-task-graph-canvas .react-flow__node').click()`);
+    await until(()=>js(`!!document.querySelector('[aria-label="Task 负责人编辑"]')`),'Task owner editor');
+    const firstOwner='release-review-'+theme;
+    assert.equal(await js(`document.querySelector('[aria-label="Task 负责人编辑"]').value`),'main','new Tasks default to the main Agent owner marker');
+    await js(`(()=>{const input=document.querySelector('[aria-label="Task 负责人编辑"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(firstOwner)});input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.goal-graph-editor button').click();})()`);
+    await until(async()=>(await audit(goalId)).tasks[0].owner===firstOwner,'Task owner saved into the Goal contract');
+    await until(()=>js(`document.querySelector('.goal-graph-node .goal-graph-owner')?.textContent.includes(${JSON.stringify(firstOwner)})`),'Task owner displayed on its graph node');
     await js(`(()=>{const input=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'调度期间保留的草稿');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await js(`[...document.querySelectorAll('.goal-task-graph-toolbar button')].find(b=>b.textContent==='开始执行 Goal').click()`);
     await until(async()=>{const state=await audit(goalId);return state.tasks[0].executionStatus==='completed'&&state.goal.execution?.status==='waiting';},'real first Agent run settled');
@@ -82,6 +89,8 @@ app.whenReady().then(async()=>{try{
     const delivered=prompts.find(text=>text.includes(second.value.id)&&text.includes('"predecessors"'));
     assert.ok(delivered,'the actual ACP request carries the downstream handoff');
     assert.ok(delivered.includes(first.value.id)&&delivered.includes('ACP_RUNTIME_OK')&&delivered.includes('"valid":true'),'the real request contains persisted predecessor result and independently accepted evidence after reload');
+    assert.ok(delivered.includes(firstOwner),'the actual Agent handoff includes the persisted Task owner marker');
+    assert.ok(delivered.includes(firstOwner),'the actual handoff carries the predecessor owner marker');
     assert.ok(delivered.includes('source.txt contains baseline')&&delivered.includes('"appliesToTask":true'),'the actual request carries the full bound criterion');
     assert.equal(after.goal.execution.id,executionId);
     assert.equal(after.tasks[0].runIds.filter(id=>id.startsWith('auto-')).length,1);

@@ -5,9 +5,10 @@ function excerpt(value,max){const raw=redact(String(value||''));return{value:raw
 
 /** Derive reference data from this Goal only; never mutate history or grant authority. */
 function build(data,goal,task,freshness){
-  /** @type {{schemaVersion:number,source:string,referenceOnly:boolean,currentAttempt:any,predecessors:any[],decisions:any[],omitted:{predecessors:number,decisions:number,traversalIncomplete:boolean}}} */
-  const packet={schemaVersion:1,source:'.codenode/goals.json',referenceOnly:true,currentAttempt:null,predecessors:[],decisions:[],omitted:{predecessors:0,decisions:0,traversalIncomplete:false}};
+  /** @type {{schemaVersion:number,source:string,referenceOnly:boolean,currentTask:any,currentAttempt:any,predecessors:any[],decisions:any[],omitted:{predecessors:number,decisions:number,traversalIncomplete:boolean}}} */
+  const packet={schemaVersion:1,source:'.codenode/goals.json',referenceOnly:true,currentTask:null,currentAttempt:null,predecessors:[],decisions:[],omitted:{predecessors:0,decisions:0,traversalIncomplete:false}};
   if(!task)return packet;
+  packet.currentTask={taskId:task.id,title:excerpt(task.title,300).value,owner:String(task.owner||'main').slice(0,100),ownerIsRoutingHint:false};
   const byId=new Map(goal.tasks.map(t=>[t.id,t])),seen=new Set([task.id]),ancestors=[];
   const queue=[...(task.dependsOn||[])];
   const queued=new Set([task.id,...queue]);
@@ -27,7 +28,7 @@ function build(data,goal,task,freshness){
   packet.currentAttempt=outcome(task);
   for(const predecessor of ancestors.slice(0,limits.maxPredecessors)){
     const evidence=(goal.evidence||[]).filter(e=>e.goalId===goal.id&&e.taskId===predecessor.id&&(predecessor.runIds||[]).includes(e.runId));
-    const row={taskId:predecessor.id,title:excerpt(predecessor.title,300).value,direct:(task.dependsOn||[]).includes(predecessor.id),taskStatus:predecessor.status,
+    const row={taskId:predecessor.id,title:excerpt(predecessor.title,300).value,owner:String(predecessor.owner||'main').slice(0,100),direct:(task.dependsOn||[]).includes(predecessor.id),taskStatus:predecessor.status,
       latestRun:outcome(predecessor),evidence:evidence.slice(0,limits.maxEvidencePerTask).map(e=>{
         const check=excerpt(e.check,limits.previewChars),command=excerpt(e.command,limits.previewChars),result=excerpt(e.result,limits.previewChars);
         return{id:e.id,runId:e.runId,criterionId:e.criterionId||null,status:e.status,checkedAt:e.checkedAt,check:check.value,commandPreview:command.value,resultPreview:result.value,truncated:check.truncated||command.truncated||result.truncated,freshness:freshness(e)};

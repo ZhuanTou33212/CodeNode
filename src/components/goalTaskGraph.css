@@ -13,6 +13,7 @@
 .goal-graph-node strong { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .goal-graph-node span { font-size:10px; color:var(--glass-muted); }
 .goal-graph-node small { font-size:10px; line-height:1.35; color:var(--glass-muted); overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.goal-graph-node .goal-graph-owner { -webkit-line-clamp:1; }
 .goal-graph-node.status-in_progress { border-color:var(--stage-running); box-shadow:0 0 0 2px color-mix(in srgb,var(--stage-running) 35%,transparent),0 0 18px color-mix(in srgb,var(--stage-running) 30%,transparent); }
 .goal-graph-node.status-completed { border-color:var(--stage-done); background:color-mix(in srgb,var(--glass-sheet) 89%,var(--stage-done) 11%); }
 .goal-graph-node.status-failed,.goal-graph-node.status-blocked { border-color:var(--stage-failed); }
