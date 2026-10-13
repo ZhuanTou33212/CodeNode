@@ -61,6 +61,8 @@ Both pages stay mounted, so switching back and forth preserves messages, input d
 
 Task priority is edited in the task creation form or selected graph node and persisted in project Goal data. `config/goal.task-priorities.json` defines urgent, high, normal (default) and low. Eligible tasks run in that order; equal priorities retain their existing order. Priority does not bypass dependencies, accepted evidence, budget, wait observations or authorization. Changing it updates the execution contract and requires restarting a previously authorized execution. Planner suggestions are previewed and stored only after confirmation. The follow-up queue keeps risk categories first, then uses Task priority within each category.
 
+Priority delivery evidence: [2026-10-13 validation](validation/goal-task-priority-2026-10-13.json), with [light](validation/goal-task-priority-preview/light.png) and [dark](validation/goal-task-priority-preview/dark.png) editor previews.
+
 ## Node deletion
 
 To delete a node, click its title or border and press Delete / Backspace / X; Ctrl+Z undoes it.

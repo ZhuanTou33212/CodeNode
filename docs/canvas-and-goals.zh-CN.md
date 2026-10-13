@@ -61,6 +61,8 @@
 
 Task 优先级在新增任务或选中节点的编辑区设置，并持久化在项目 Goal 数据中。`config/goal.task-priorities.json` 集中定义紧急、高、普通（默认）、低。符合执行条件的任务按优先级推进，同级保留原顺序；优先级不能越过依赖、有效验收、预算、等待观测或授权门槛。修改优先级会更新执行合同，已有授权执行需检查后重新开始。规划器建议先展示给用户，确认后才保存。待处理队列先按风险类别排序，再在同类中按 Task 优先级排序。
 
+优先级交付证据：[2026-10-13 验证记录](validation/goal-task-priority-2026-10-13.json)；节点编辑预览：[日间](validation/goal-task-priority-preview/light.png)、[夜间](validation/goal-task-priority-preview/dark.png)。
+
 ## 节点删除
 
 点击节点标题或边框后按 Delete／Backspace／X 删除整个节点；Ctrl+Z 撤销。

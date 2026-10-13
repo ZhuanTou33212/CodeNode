@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-13T05:53:44.224Z",
+  "localDate": "2026-10-13",
+  "timezone": "Asia/Shanghai",
+  "sourceCommit": "73d3fe78b193a433cc361a59c18abafb517d8a67",
+  "passed": true,
+  "scope": "Persisted Task priorities, stable eligible-task scheduling, reviewed planner priorities, shared follow-up ordering and fixed Windows delivery",
+  "package": {
+    "path": "release/win-unpacked",
+    "version": "0.13.0",
+    "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
+    "asarSha256": "1ee3279c0e88d437fc17d5cd7acc8172b53ddd6b15c88520f97e4c5700291c01",
+    "portableSha256": "676dcccf203d58cf4bdee08f13f675f8d38cae31415dc98431805f7b32344c4f",
+    "fixedSelftest": {
+      "ok": true,
+      "marker": "task-priority-fixed",
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      },
+      "standardLaunch": true,
+      "requiresNoSandbox": false
+    },
+    "stagedSelftest": {
+      "ok": true,
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      },
+      "diagnosticFlags": [
+        "--no-sandbox"
+      ]
+    }
+  },
+  "verification": {
+    "build": true,
+    "checkJs": true,
+    "coreSuite": {
+      "command": "npm test",
+      "passed": 173,
+      "total": 173
+    },
+    "targetedRegressions": {
+      "command": "node scripts/run-all-tests.cjs --only test:goal-task-priority,test:goal-store,test:goal-scheduler,test:goal-handoff,test:goal-progression,test:goal-attention,test:goal-canvas-graph,test:goal-plan-ipc",
+      "passed": 8,
+      "total": 8
+    },
+    "ui": {
+      "sourceGraph": true,
+      "sourceScheduler": true,
+      "actualAsarGraph": true,
+      "fixedPathScheduler": true,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "bothTaskCreationEntrypoints": true,
+      "editedPriorityPersists": true,
+      "plannerPreviewAndConfirmedPriority": true,
+      "themeKeepsSessionDraftModelAndSidebar": true,
+      "actualMainSchedulerPicksUrgentBeforeEarlierLow": true
+    },
+    "gates": {
+      "dependencies": true,
+      "budget": true,
+      "unknownRunReview": true,
+      "priorityChangesInvalidateExecutionContract": true,
+      "normalPriorityPreservesLegacyContract": true,
+      "equalPriorityStable": true,
+      "riskCategoriesBeforeTaskPriority": true
+    },
+    "packagedStartup": true,
+    "packagedSourceIdentity": {
+      "currentWorktreeFilesPerArchive": 217,
+      "portableAndUnpackedArchivesIdentical": true
+    },
+    "nativeRuntimeFilesUnchanged": 71,
+    "releaseManifest": true,
+    "screenshots": [
+      "goal-task-priority-preview/light.png",
+      "goal-task-priority-preview/dark.png"
+    ]
+  },
+  "notes": [
+    "New per-Task fields share centrally defined options in config/goal.task-priorities.json and persist in project Goal data.",
+    "On this host native staging executables exited with 2147483651 under standard Chromium sandbox parameters, including with the old fixed archive. Staging selftest used --no-sandbox solely for diagnosis; the final fixed-path EXE passed standard selftest without that flag. Production sandbox settings are unchanged.",
+    "Artifacts remain unsigned (NotSigned); app.asar is NotApplicable.",
+    "Pre-existing config/soul.md changes were preserved and excluded from commits."
+  ]
+}
