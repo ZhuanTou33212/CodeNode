@@ -1,6 +1,7 @@
 {
   "menuWidth": 220,
   "menuRowHeight": 34,
+  "agentMenuMaxHeight": 280,
   "showShortcuts": true,
   "showGroupLabels": true,
   "hideDisabledActions": false,

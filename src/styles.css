@@ -4754,13 +4754,13 @@ html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(-
 .agent-switch-trigger:disabled { opacity: .5; cursor: not-allowed; }
 .agent-switch-layer { position: fixed; inset: 0; z-index: 1100; pointer-events: none; }
 .agent-switch-menu { position: fixed; width: min(218px,calc(100vw - 16px)); display: flex; flex-direction: column; padding-top: 5px; border: 1px solid var(--glass-border); border-radius: 10px; background: var(--glass-sheet); color: var(--glass-text); box-shadow: var(--glass-shadow); backdrop-filter: blur(22px); pointer-events: auto; overflow: hidden; }
-.agent-switch-list { padding: 0 5px 5px; overflow-y: auto; min-height: 0; }
+.agent-switch-list { padding: 0 5px 5px; overflow-y: auto; min-height: 0; flex: 1 1 auto; overscroll-behavior: contain; }
 .agent-switch-list button { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; text-align: left; gap: 10px; padding: 7px 8px; border: 0; border-radius: 5px; font-size: 11px; color: var(--glass-text); background: transparent; }
 .agent-switch-list button:hover,.agent-switch-list button.is-selected { background: var(--glass-selected); }
 .agent-switch-list button:disabled { color: var(--glass-muted); opacity: .55; cursor: not-allowed; }
 .agent-switch-list button:disabled:hover { background: transparent; }
 .agent-unavailable { font-size: 10px; }
-.agent-switch-confirm { border-top: 1px solid var(--glass-border); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; }
+.agent-switch-confirm { border-top: 1px solid var(--glass-border); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; flex-shrink: 0; }
 .agent-switch-confirm p { margin: 0; color: var(--glass-muted); font-size: 10px; line-height: 1.5; }
 .agent-switch-confirm button { border: 1px solid var(--glass-border); border-radius: 8px; font-size: 11px; padding: 7px; color: var(--glass-text); }
 .agent-switch-apply { background: var(--glass-selected); }

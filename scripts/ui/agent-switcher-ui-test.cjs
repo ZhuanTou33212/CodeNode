@@ -46,6 +46,14 @@ app.whenReady().then(async()=>{
     assert.equal(await js('document.documentElement.dataset.theme'),theme);
     console.log('THEME_STYLE '+theme+' '+await js("getComputedStyle(document.querySelector('.agent-switch-menu')).backgroundColor"));
     assert.equal(await structure(),before);assert.equal(await js("document.querySelector('.pp-input').value"),draft);assert.equal(await js('window.__codenodeSession.getState().activeId'),oldSession);assert.equal(await js('window.__codenodeUi.getState().sideTab'),model);
+    const geometry=await js("(()=>{const list=document.querySelector('.agent-switch-list'),r=list.getBoundingClientRect();return {height:document.querySelector('.agent-switch-menu').getBoundingClientRect().height,client:list.clientHeight,scroll:list.scrollHeight,x:Math.floor(r.x+r.width/2),y:Math.floor(r.y+r.height/2)};})()");
+    assert(geometry.height<=require(path.join(appRoot,'config/ui.defaults.json')).agentMenuMaxHeight+2,'Agent dropdown has a compact height in both themes');
+    assert(geometry.scroll>geometry.client,'remaining Agents are inside a scrollable list');
+    win.webContents.sendInputEvent({type:'mouseMove',x:geometry.x,y:geometry.y});
+    win.webContents.sendInputEvent({type:'mouseWheel',x:geometry.x,y:geometry.y,deltaY:-650,deltaX:0,canScroll:true});
+    await wait(()=>js("document.querySelector('.agent-switch-list').scrollTop>0"),'wheel scroll within Agent dropdown');
+    assert.equal(await js("document.querySelector('.pp-input').value"),draft);
+    await js("document.querySelector('.agent-switch-list').scrollTop=0");await sleep(80);
     const region=await js("(()=>{const r=document.querySelector('#conversation-panel').getBoundingClientRect();return{x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.min(Math.ceil(r.height),Math.ceil(document.querySelector('.agent-switch-menu').getBoundingClientRect().bottom-r.y+24))};})()");
     win.showInactive();await sleep(150);const shot=await win.webContents.capturePage(region,{stayHidden:true,stayAwake:true});fs.writeFileSync(path.join(shots,theme+'.png'),shot.toPNG());win.hide();
   }
@@ -63,7 +71,7 @@ app.whenReady().then(async()=>{
   await js("[...document.querySelectorAll('[aria-label=\"设置分类\"] button')].find(b=>b.textContent==='Agent 连接').click()");await wait(()=>js("!!document.querySelector('[data-testid=backend-settings]')"),'Agent connection settings');
   assert.equal(await js('window.__codenodeSession.getState().streaming'),false);
   console.log('AGENT SWITCH UI: PASS (header placement, preview/confirmation, Escape, profile restoration, retained history/draft, running guard, custom connection setup, both themes)');
-  console.log('PREVIEWS='+shots);app.exit(0);
+  console.log('PREVIEWS='+shots);app.quit();
  }catch(error){console.error(error);app.exit(1);}
 });
 app.on('will-quit',()=>{if(path.dirname(temp)!==fs.realpathSync(os.tmpdir())||!path.basename(temp).startsWith('codenode-agent-switch-ui-'))return;try{fs.rmSync(temp,{recursive:true,force:true,maxRetries:10,retryDelay:200});}catch{}});

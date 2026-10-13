@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import backendConfig from '../../config/agent.backends.json';
+import uiDefaults from '../../config/ui.defaults.json';
 import type { AgentBackendSettings } from '../types';
 import { useProjectStore } from '../store/projectStore';
 import { useSessionStore } from '../store/sessionStore';
@@ -77,7 +78,7 @@ export default function AgentSwitcher() {
   return <div className="agent-switcher">
     <button ref={trigger} className="agent-switch-trigger" aria-label="选择 Agent" aria-haspopup="dialog" aria-expanded={open} disabled={busy||loading} title={busy?'任务运行或切换期间不能更换 Agent':'选择执行任务的 Agent'} onClick={()=>{setTarget(selected);setError('');setOpen(!open);}}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4M8 12v3M16 12v3M1 12v5M23 12v5"/></svg><span className="agent-switch-caption">Chat</span><span className="agent-switch-name">{shortLabel(selected)}</span><span aria-hidden="true">⌄</span></button>
     {error&&!open&&<span className="agent-switch-error" role="status">{error}</span>}
-    {open&&createPortal(<div className={`glass-theme theme-${theme} agent-switch-layer`}><div ref={menu} className="agent-switch-menu" role="dialog" aria-label="切换 Agent" style={{...position,maxHeight:`calc(100vh - ${position.top+12}px)`}}>
+    {open&&createPortal(<div className={`glass-theme theme-${theme} agent-switch-layer`}><div ref={menu} className="agent-switch-menu" role="dialog" aria-label="切换 Agent" style={{...position,maxHeight:`min(${uiDefaults.agentMenuMaxHeight}px, calc(100vh - ${position.top+12}px))`}}>
 
       <div className="agent-switch-list" role="radiogroup" aria-label="可用 Agent" onKeyDown={event=>{
           if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return;
