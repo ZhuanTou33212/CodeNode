@@ -1,11 +1,12 @@
 'use strict';
 const {createHash}=require('node:crypto');
 const waitConfig=require('../config/goal.wait.json');
+const taskPriority=require('./goalTaskPriority.cjs');
 
 // Runtime status, canvas positions and evidence do not change the authorized graph.
 function contract(goal){
   return createHash('sha256').update(JSON.stringify({objective:goal.objective,scope:goal.scope,exclusions:goal.exclusions,criteria:goal.criteria,
-    tasks:goal.tasks.map(t=>({id:t.id,title:t.title,objective:t.objective,owner:t.owner,dependsOn:t.dependsOn,readScope:t.readScope,writeScope:t.writeScope,criteriaIds:t.criteriaIds,decisionIds:t.decisionIds}))})).digest('hex');
+    tasks:goal.tasks.map(t=>({id:t.id,title:t.title,objective:t.objective,owner:t.owner,priority:taskPriority.stored(t.priority)==='normal'?undefined:taskPriority.stored(t.priority),dependsOn:t.dependsOn,readScope:t.readScope,writeScope:t.writeScope,criteriaIds:t.criteriaIds,decisionIds:t.decisionIds}))})).digest('hex');
 }
 
 function plan(data,goal,canRun,audit){
@@ -32,7 +33,7 @@ function plan(data,goal,canRun,audit){
   const waited=new Set(execution.waitedTaskIds||[]);
   const waiting=goal.tasks.filter(t=>t.status==='waiting');
   const waitingTaskIds=waiting.map(t=>t.id);
-  for(const task of goal.tasks){
+  for(const task of taskPriority.order(goal.tasks)){
     if(['completed','waiting','in_progress','blocked','cancelled'].includes(task.status))continue;
     if((execution.attemptedTaskIds||[]).includes(task.id))return{decision:'blocked',reason:'本次执行已尝试该任务，不会自动重试'};
     const gate=canRun(task.id);

@@ -8,6 +8,7 @@ const {atomicWriteFile}=require('./atomicFile.cjs');
 const {capture}=require('./backends/workspaceDiff.cjs');
 const {redact}=require('./redaction.cjs');
 const waitConfig=require('../config/goal.wait.json');
+const taskPriority=require('./goalTaskPriority.cjs');
 const executionModel=require('./goalExecution.cjs');
 const FILE='goals.json';
 const MAX_BYTES=8*1024*1024;
@@ -33,7 +34,7 @@ function canvasPoint(value){if(value==null)return null;if(!value||!Number.isFini
 function createTask(root,goalId,input={}){return mutate(root,d=>{
   const g=findGoal(d,goalId);if(g.status!=='active')throw new Error('只有 active Goal 可以新增 Task');
   const now=new Date().toISOString();
-  const task={id:id(),title:text(input.title,'Task 标题',300),objective:text(input.objective||input.title,'Task 目标'),status:'todo',dependsOn:Array.isArray(input.dependsOn)?[...new Set(input.dependsOn.map(String))]:[],owner:text(input.owner||'main','Task 负责人',100),readScope:Array.isArray(input.readScope)?[...new Set(input.readScope.map(String))]:[],writeScope:Array.isArray(input.writeScope)?[...new Set(input.writeScope.map(String))]:[],criteriaIds:Array.isArray(input.criteriaIds)?[...new Set(input.criteriaIds.map(String))]:[],decisionIds:Array.isArray(input.decisionIds)?[...new Set(input.decisionIds.map(String))]:[],canvasPosition:canvasPoint(input.canvasPosition),runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
+  const task={id:id(),title:text(input.title,'Task 标题',300),objective:text(input.objective||input.title,'Task 目标'),status:'todo',dependsOn:Array.isArray(input.dependsOn)?[...new Set(input.dependsOn.map(String))]:[],owner:text(input.owner||'main','Task 负责人',100),priority:taskPriority.normalize(input.priority),readScope:Array.isArray(input.readScope)?[...new Set(input.readScope.map(String))]:[],writeScope:Array.isArray(input.writeScope)?[...new Set(input.writeScope.map(String))]:[],criteriaIds:Array.isArray(input.criteriaIds)?[...new Set(input.criteriaIds.map(String))]:[],decisionIds:Array.isArray(input.decisionIds)?[...new Set(input.decisionIds.map(String))]:[],canvasPosition:canvasPoint(input.canvasPosition),runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
   safeScope(task.readScope,'读取');safeScope(task.writeScope,'写入');
   if(task.criteriaIds.some(cid=>!g.criteria.some(c=>c.id===cid)))throw new Error('Task 引用了不存在的验收条件');
   if(task.decisionIds.some(did=>!d.decisions.some(item=>item.id===did&&item.goalId===g.id)))throw new Error('Task 引用了不存在的业务决定');
@@ -52,7 +53,7 @@ function createTaskBatch(root,goalId,steps,expectedRevision){return mutate(root,
   const created=steps.map((step,index)=>{
     const deps=Array.isArray(step.dependsOn)?[...new Set(step.dependsOn.map(String))]:[];
     if(deps.some(dep=>!ids.has(dep)&&!g.tasks.some(t=>t.id===dep)))throw new Error('步骤 '+keys[index]+' 引用了不存在的前置任务');
-    const task={id:ids.get(keys[index]),title:text(step.title,'Task 标题',300),objective:text(step.objective||step.title,'Task 目标'),status:'todo',dependsOn:deps.map(dep=>ids.get(dep)||dep),owner:text(step.owner||'main','Task 负责人',100),readScope:Array.isArray(step.readScope)?[...new Set(step.readScope.map(String))]:[],writeScope:Array.isArray(step.writeScope)?[...new Set(step.writeScope.map(String))]:[],criteriaIds:index===steps.length-1?required:[],decisionIds:[],runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
+    const task={id:ids.get(keys[index]),title:text(step.title,'Task 标题',300),objective:text(step.objective||step.title,'Task 目标'),status:'todo',dependsOn:deps.map(dep=>ids.get(dep)||dep),owner:text(step.owner||'main','Task 负责人',100),priority:taskPriority.normalize(step.priority),readScope:Array.isArray(step.readScope)?[...new Set(step.readScope.map(String))]:[],writeScope:Array.isArray(step.writeScope)?[...new Set(step.writeScope.map(String))]:[],criteriaIds:index===steps.length-1?required:[],decisionIds:[],runIds:[],runReviews:[],pendingReviewRunId:null,createdAt:now,updatedAt:now};
     safeScope(task.readScope,'读取');safeScope(task.writeScope,'写入');
     return task;
   });
@@ -99,11 +100,12 @@ function confirmRunReview(root,goalId,taskId,runId,expectedFingerprint){return m
 function updateTask(root,goalId,taskId,patch={}){return mutate(root,d=>{
   const g=findGoal(d,goalId),t=findTask(g,taskId);
   if(Number.isInteger(patch.expectedRevision)&&d.revision!==patch.expectedRevision)throw new Error('Goal 已由其他会话更新，请刷新后再编辑');
-  const contractChange=['title','objective','owner','readScope','writeScope','criteriaIds','decisionIds','dependsOn'].some(key=>patch[key]!=null);
+  const contractChange=['title','objective','owner','priority','readScope','writeScope','criteriaIds','decisionIds','dependsOn'].some(key=>patch[key]!=null);
   if(contractChange&&(t.status==='in_progress'||t.status==='completed'||d.admissions.some(a=>a.taskId===t.id&&!a.settledAt)))throw new Error('执行中或已完成的 Task 不能直接修改任务合同；请先结束执行，必要时新增后续 Task');
   if(t.executionStatus==='unknown'&&((patch.status!=null&&!['blocked','cancelled'].includes(patch.status))||(patch.waitCondition&&patch.waitCondition!==null)))requireUnknownRunReview(root,d,g,t);
   for(const key of ['title','objective'])if(patch[key]!=null)t[key]=text(patch[key],'Task '+key,8000);
   if(patch.owner!=null)t.owner=text(patch.owner,'Task 负责人',100);
+  if(patch.priority!=null)t.priority=taskPriority.normalize(patch.priority);
   if(patch.canvasPosition!==undefined)t.canvasPosition=canvasPoint(patch.canvasPosition);
   for(const key of ['readScope','writeScope','criteriaIds','decisionIds','dependsOn'])if(patch[key]!=null){if(!Array.isArray(patch[key]))throw new Error(key+' 必须是数组');t[key]=[...new Set(patch[key].map(String))];}
   safeScope(t.readScope,'读取');safeScope(t.writeScope,'写入');
@@ -180,7 +182,7 @@ function canRun(root,goalId,taskId){
   if(g.budget.maxTokens!=null&&g.budget.tokenUnknown)return{decision:'needs-user',reason:'存在 Token 用量未知的 Run，请复核运行记录或核对累计用量'};
   if(g.budget.maxCostUsd!=null&&g.budget.costUnknown)return{decision:'needs-user',reason:'存在费用未知的 Run，无法证明仍在费用预算内；请复核或调整预算'};
   if((g.budget.maxTokens!=null&&g.budget.usedTokens>=g.budget.maxTokens)||(g.budget.maxCostUsd!=null&&g.budget.knownCostUsd>=g.budget.maxCostUsd))return{decision:'stopped',reason:'Goal 总预算已用尽'};
-  const candidates=taskId?[findTask(g,taskId)]:g.tasks.filter(t=>['todo','ready','failed','waiting'].includes(t.status)||(t.status==='completed'&&!taskProof(root,g,t)));
+  const candidates=taskId?[findTask(g,taskId)]:taskPriority.order(g.tasks.filter(t=>['todo','ready','failed','waiting'].includes(t.status)||(t.status==='completed'&&!taskProof(root,g,t))));
   for(const t of candidates){
     if(t.executionStatus==='unknown'&&!freshUnknownRunReview(root,d,g,t).review)return{decision:'needs-user',reason:'该 Task 的 Run 结果未知；请先查看差异并确认复核',task:t,runId:pendingUnknownSettlement(d,g.id,t.id)?.runId||null};
     const open=(t.decisionIds||[]).map(decisionId=>d.decisions.find(x=>x.id===decisionId)).filter(x=>x&&x.status==='open');

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "default": "normal",
+  "priorities": [
+    { "id": "urgent", "label": "紧急", "rank": 0 },
+    { "id": "high", "label": "高", "rank": 1 },
+    { "id": "normal", "label": "普通", "rank": 2 },
+    { "id": "low", "label": "低", "rank": 3 }
+  ]
+}

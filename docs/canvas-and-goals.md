@@ -59,6 +59,8 @@ Overview and the Goal editor share one typed, user-owned follow-up projection fo
 
 Both pages stay mounted, so switching back and forth preserves messages, input drafts, canvas, model and any unsaved goal form. The current page is persisted in the shared UI configuration and can also be set in **Settings → General → Default workbench**.
 
+Task priority is edited in the task creation form or selected graph node and persisted in project Goal data. `config/goal.task-priorities.json` defines urgent, high, normal (default) and low. Eligible tasks run in that order; equal priorities retain their existing order. Priority does not bypass dependencies, accepted evidence, budget, wait observations or authorization. Changing it updates the execution contract and requires restarting a previously authorized execution. Planner suggestions are previewed and stored only after confirmation. The follow-up queue keeps risk categories first, then uses Task priority within each category.
+
 ## Node deletion
 
 To delete a node, click its title or border and press Delete / Backspace / X; Ctrl+Z undoes it.

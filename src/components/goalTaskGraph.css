@@ -1,7 +1,7 @@
 .goal-task-graph { display:grid; gap:12px; padding:12px; border:1px solid var(--glass-border); border-radius:10px; background:var(--glass-control); color:var(--glass-text); }
 .goal-task-graph-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; }
 .goal-task-graph-toolbar span { flex:1; min-width:180px; color:var(--glass-muted); }
-.goal-task-graph :is(button,input,textarea) { border:1px solid var(--glass-border); border-radius:7px; background:var(--glass-sheet); color:var(--glass-text); padding:7px 9px; font:inherit; }
+.goal-task-graph :is(button,input,textarea,select) { border:1px solid var(--glass-border); border-radius:7px; background:var(--glass-sheet); color:var(--glass-text); padding:7px 9px; font:inherit; }
 .goal-task-graph button { cursor:pointer; }
 .goal-task-graph button:disabled { opacity:.5; cursor:not-allowed; }
 .goal-task-graph-canvas { width:100%; height:310px; border:1px solid var(--glass-border); border-radius:8px; overflow:hidden; background:var(--glass-surface); }
@@ -18,11 +18,11 @@
 .goal-graph-node.status-completed { border-color:var(--stage-done); background:color-mix(in srgb,var(--glass-sheet) 89%,var(--stage-done) 11%); }
 .goal-graph-node.status-failed,.goal-graph-node.status-blocked { border-color:var(--stage-failed); }
 .goal-graph-node.is-selected { outline:2px solid var(--glass-accent); outline-offset:2px; }
-.goal-graph-create { display:flex; gap:8px; }
+.goal-graph-create { display:flex; flex-wrap:wrap; gap:8px; }
 .goal-graph-create input { flex:1; min-width:0; }
 .goal-graph-editor { display:grid; gap:8px; border-top:1px solid var(--glass-border); padding-top:10px; font-size:12px; }
 .goal-graph-editor label { display:grid; gap:4px; color:var(--glass-muted); }
-.goal-graph-editor label :is(input,textarea) { width:100%; box-sizing:border-box; color:var(--glass-text); }
+.goal-graph-editor label :is(input,textarea,select) { width:100%; box-sizing:border-box; color:var(--glass-text); }
 .goal-graph-editor > div { display:flex; flex-wrap:wrap; gap:8px; }
 .goal-graph-criteria { display:grid; gap:5px; margin:0; border:1px solid var(--glass-border); border-radius:7px; color:var(--glass-muted); }
 .goal-graph-criteria label { display:flex; align-items:center; gap:7px; color:var(--glass-text); }

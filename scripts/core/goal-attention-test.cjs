@@ -4,11 +4,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const ts=require('@typescript/typescript6');
 
-const source=fs.readFileSync(path.join(__dirname,'../../src/lib/goalAttention.ts'),'utf8');
-const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
-const loaded={exports:{}};
-new Function('exports','require','module',compiled)(loaded.exports,require,loaded);
-const {goalAttention}=loaded.exports;
+function load(file){const source=fs.readFileSync(file,'utf8');const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;const loaded={exports:{}};const localRequire=id=>id==='./goalTaskPriority'?load(path.join(path.dirname(file),'goalTaskPriority.ts')):require(path.resolve(path.dirname(file),id));new Function('exports','require','module',compiled)(loaded.exports,localRequire,loaded);return loaded.exports;}
+const {goalAttention}=load(path.join(__dirname,'../../src/lib/goalAttention.ts'));
 
 const active=goalAttention([{id:'active',title:'Active goal',status:'active',budget:{maxTokens:1000,tokenUnknown:true,maxCostUsd:0.5,costUnknown:true},decisions:[{id:'decision',status:'open',question:'Choose deployment region'}],tasks:[
   {id:'unknown',title:'Interrupted task',status:'blocked',executionStatus:'unknown'},
@@ -41,4 +38,5 @@ assert.deepEqual(global.map(item=>item.priority),[0,1,2]);
 assert.equal(global.some(item=>item.goalId==='archived'),false);
 assert.equal(global.some(item=>item.goalId==='uncapped'),false,'uncapped unknown usage does not create a blocking reconciliation task');
 assert.equal(global[1].taskId,null);
+const ranked=goalAttention([{id:'ranked',title:'Priority within risk',status:'active',tasks:[{id:'low',title:'Low',status:'failed',priority:'low'},{id:'urgent',title:'Urgent',status:'failed',priority:'urgent'},{id:'unknown-low',title:'Unknown',status:'blocked',executionStatus:'unknown',priority:'low'}]}]);assert.deepEqual(ranked.map(item=>item.id),['unknown-low','urgent','low'],'risk categories take precedence over Task priority');
 console.log('GOAL ATTENTION: PASS (shared overview/editor action types, owner, waiting, blockers, reconciliation and archive filtering)');

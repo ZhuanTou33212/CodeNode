@@ -23,6 +23,7 @@ const agentBackends = require('../backends/index.cjs');
 const backendSettings = require('../backends/settings.cjs');
 const externalRuns = require('../backends/runExternal.cjs');
 const goalStore = require('../goalStore.cjs');
+const goalTaskPriority = require('../goalTaskPriority.cjs');
 const githubActionsWait = require('../goalWaitProviders/githubActions.cjs');
 const agentEvalWait = require('../goalWaitProviders/agentEval.cjs');
 const goalScope = require('../goalScope.cjs');
@@ -420,7 +421,7 @@ function register(ctx) {
         const goal=goalStore.read(root).goals.find(item=>item.id===String(request?.goalId||''));
         if(!goal||goal.status!=='active')throw new Error('只能为进行中的 Goal 规划任务');
         objective=goal.objective;
-        context=JSON.stringify({scope:goal.scope,exclusions:goal.exclusions,criteria:goal.criteria.map(c=>c.text),existingTasks:goal.tasks.map(t=>({title:t.title,status:t.status,owner:t.owner||'main'}))});
+        context=JSON.stringify({scope:goal.scope,exclusions:goal.exclusions,criteria:goal.criteria.map(c=>c.text),existingTasks:goal.tasks.map(t=>({title:t.title,status:t.status,owner:t.owner||'main',priority:goalTaskPriority.stored(t.priority)}))});
       }
       const planner=require('../goalPlanProposal.cjs');
       const baseCfg=agent.loadConfig(null),cfg={...agent.loadConfig(root),maxTokens:4096,modelTaskType:'planning'};

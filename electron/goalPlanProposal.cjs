@@ -1,5 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
+const taskPriority=require('./goalTaskPriority.cjs');
 
 function projectOutline(root) {
   const entries=[],skip=new Set(['.git','.codenode','.cache','node_modules','release','out','dist']);
@@ -34,7 +35,7 @@ function parseProposal(content) {
     if(dependsOn.length>30)throw new Error('步骤依赖过多');
     const writeScope=Array.isArray(step.writeScope)?[...new Set(step.writeScope.map(String).filter(Boolean))]:[];
     if(writeScope.length>30||writeScope.some(scope=>scope.length>500||/^[a-zA-Z]:[\\/]/.test(scope)||scope.startsWith('/')||scope.split(/[\\/]/).includes('..')))throw new Error('步骤写入范围无效');
-    return {key,title,objective,acceptance,owner,dependsOn,writeScope};
+    return {key,title,objective,acceptance,owner,priority:taskPriority.normalize(step.priority),dependsOn,writeScope};
   });
   const keys=new Set(steps.map(step=>step.key));
   if(keys.size!==steps.length)throw new Error('规划步骤编号重复');
@@ -60,9 +61,10 @@ function messages(input) {
   const goal=String(input.objective||'').trim();
   if(!goal||goal.length>8000)throw new Error('请提供不超过 8000 字的规划目标');
   const context=String(input.context||'').slice(0,10000);
+  const priorityGuidance='任务优先级可用值：'+taskPriority.config.priorities.map(item=>item.id+'（'+item.label+'）').join('、')+'。未指定时使用 '+taskPriority.config.default+'；仅影响多个符合执行条件的任务的先后顺序，不越过依赖、验收、授权和预算门槛。';
   const goalGuidance=input.kind==='goal'?'这是持久 Goal 的任务图。每项 Task 需要独立验收证据；纯阅读或调查若无可独立核验的产物，请并入后续实现步骤。最后一步应运行或核对 Goal 的整体验收条件。':'';
   return [
-    {role:'system',content:'你是 CodeNode 的只读规划器。只输出一个 JSON 对象，不调用工具，也不声称已修改文件。格式：{"steps":[{"key":"step-1","title":"短标题","objective":"具体任务","acceptance":"可核对的完成条件","owner":"main","dependsOn":[],"writeScope":[]}]}. 依赖只引用同一数组内的 key，形成无环图。任务应是用户能审阅和修改的有限步骤；负责人标记优先复用已有任务或用户明确指定的名字，无法判断时使用 main。负责人只是计划与交接元数据，不授予权限也不切换 Agent 后端。写入范围使用项目相对路径，不确定时留空。最后一步应负责独立验收整个目标，依赖前面所有分支的末端任务。不要把规划当成已经完成的工作。'},
+    {role:'system',content:priorityGuidance+'你是 CodeNode 的只读规划器。只输出一个 JSON 对象，不调用工具，也不声称已修改文件。格式：{"steps":[{"key":"step-1","title":"短标题","objective":"具体任务","acceptance":"可核对的完成条件","owner":"main","priority":"normal","dependsOn":[],"writeScope":[]}]}. 依赖只引用同一数组内的 key，形成无环图。任务应是用户能审阅和修改的有限步骤；负责人标记优先复用已有任务或用户明确指定的名字，无法判断时使用 main。负责人只是计划与交接元数据，不授予权限也不切换 Agent 后端。写入范围使用项目相对路径，不确定时留空。最后一步应负责独立验收整个目标，依赖前面所有分支的末端任务。不要把规划当成已经完成的工作。'},
     {role:'user',content:`目标：${goal}\n\n约束与已有上下文：${context||'无'}\n\n${goalGuidance}\n请规划 2 至 12 个清晰步骤，必要时可以更少。只返回 JSON。`},
   ];
 }

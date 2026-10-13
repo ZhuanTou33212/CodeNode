@@ -35,6 +35,7 @@ const CORE = [
   'test:goal-scheduler',
   'test:goal-handoff',
   'test:goal-progression',
+  'test:goal-task-priority',
   'test:goal-attention',
   'test:goal-canvas-graph',
   'test:goal-plan-ipc',

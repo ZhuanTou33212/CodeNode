@@ -1,0 +1,43 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const store=require('../../electron/goalStore.cjs'),execution=require('../../electron/goalExecution.cjs'),priority=require('../../electron/goalTaskPriority.cjs');
+const {createHash}=require('node:crypto');
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'codenode-goal-priority-'));
+try{
+  assert.equal(priority.normalize(), 'normal');assert.throws(()=>priority.normalize('highest'),/优先级无效/);
+  assert.deepEqual(priority.order([{id:'a',priority:'low'},{id:'b'},{id:'c',priority:'urgent'},{id:'d',priority:'high'},{id:'e',priority:'urgent'}]).map(t=>t.id),['c','e','d','b','a']);
+  const goal=store.createGoal(root,{title:'Priority with dependency gates',criteria:['accepted']});
+  const low=store.createTask(root,goal.id,{title:'Earlier low branch',priority:'low'});
+  const high=store.createTask(root,goal.id,{title:'High branch',priority:'high'});
+  const urgent=store.createTask(root,goal.id,{title:'Urgent but dependent',priority:'urgent',dependsOn:[low.id]});
+  const stable=store.createTask(root,goal.id,{title:'Later high branch',priority:'high'});
+  assert.equal(store.canRun(root,goal.id).task.id,high.id,'a blocked urgent dependency cannot outrank runnable work');
+  assert.equal(store.startExecution(root,goal.id).status,'active');
+  assert.equal(store.advanceExecution(root,goal.id).task.id,high.id);
+  store.claimExecutionTask(root,goal.id,high.id,'priority-claim-12345678');
+  store.admit(root,goal.id,high.id,'priority-run',{autoAdvanceClaimId:'priority-claim-12345678'});
+  assert.throws(()=>store.updateTask(root,goal.id,high.id,{priority:'urgent'}),/执行中或已完成/);
+  store.recordEvidence(root,goal.id,{taskId:high.id,runId:'priority-run',check:'independent stage proof',status:'passed'});
+  store.settle(root,'priority-run',{status:'completed'});
+  assert.equal(store.advanceExecution(root,goal.id).task.id,stable.id,'equal priority retains insertion order');
+  store.updateTask(root,goal.id,low.id,{priority:'urgent'});
+  assert.equal(store.read(root).goals.find(g=>g.id===goal.id).tasks[0].priority,'urgent','priority persists after reloading project data');
+  assert.equal(store.advanceExecution(root,goal.id).decision,'blocked','priority changes invalidate prior execution authorization');
+  const before=store.read(root).revision;
+  assert.throws(()=>store.createTask(root,goal.id,{title:'Invalid',priority:'admin'}),/优先级无效/);
+  assert.throws(()=>store.updateTask(root,goal.id,urgent.id,{priority:'admin'}),/优先级无效/);
+  assert.equal(store.read(root).revision,before,'invalid changes are atomic');
+  const legacy=store.createGoal(root,{title:'Legacy authorization',criteria:['accepted']});
+  store.createTask(root,legacy.id,{title:'Default task'});
+  const g=store.read(root).goals.find(item=>item.id===legacy.id);
+  const old=createHash('sha256').update(JSON.stringify({objective:g.objective,scope:g.scope,exclusions:g.exclusions,criteria:g.criteria,tasks:g.tasks.map(t=>({id:t.id,title:t.title,objective:t.objective,owner:t.owner,dependsOn:t.dependsOn,readScope:t.readScope,writeScope:t.writeScope,criteriaIds:t.criteriaIds,decisionIds:t.decisionIds}))})).digest('hex');
+  assert.equal(execution.contract(g),old,'normal/default priority preserves legacy authorized contract hashes');
+  delete g.tasks[0].priority;assert.equal(execution.contract(g),old);
+  const capped=store.createGoal(root,{title:'Budget still gates urgent',criteria:['accepted'],maxTokens:1});
+  const ct=store.createTask(root,capped.id,{title:'Urgent',priority:'urgent'});
+  store.admit(root,capped.id,ct.id,'capped');store.settle(root,'capped',{status:'failed',usage:{total_tokens:1}});
+  assert.equal(store.canRun(root,capped.id,ct.id).decision,'stopped');
+  console.log('GOAL TASK PRIORITY: PASS (persistence, legacy contracts, stable scheduling, dependencies, authorization and budget)');
+}finally{
+  const resolved=path.resolve(root);assert.equal(path.dirname(resolved),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('codenode-goal-priority-'));fs.rmSync(resolved,{recursive:true,force:true});
+}

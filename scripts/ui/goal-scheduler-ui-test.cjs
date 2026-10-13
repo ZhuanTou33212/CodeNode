@@ -48,6 +48,9 @@ app.whenReady().then(async()=>{try{
     assert.equal(await js(`document.querySelector('[aria-label="Task 负责人编辑"]').value`),'main','new Tasks default to the main Agent owner marker');
     await js(`(()=>{const input=document.querySelector('[aria-label="Task 负责人编辑"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(firstOwner)});input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.goal-graph-editor button').click();})()`);
     await until(async()=>(await audit(goalId)).tasks[0].owner===firstOwner,'Task owner saved into the Goal contract');
+    await js(`(()=>{const select=document.querySelector('[aria-label="Task 优先级编辑"]');select.value='high';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await sleep(80);await js(`document.querySelector('.goal-graph-editor button').click()`);
+    await until(async()=>(await audit(goalId)).tasks[0].priority==='high','Task priority persisted from the shared theme editor');
     await until(()=>js(`document.querySelector('.goal-graph-node .goal-graph-owner')?.textContent.includes(${JSON.stringify(firstOwner)})`),'Task owner displayed on its graph node');
     await js(`(()=>{const input=document.querySelector('.pp-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'调度期间保留的草稿');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await js(`[...document.querySelectorAll('.goal-task-graph-toolbar button')].find(b=>b.textContent==='开始执行 Goal').click()`);
@@ -100,6 +103,15 @@ app.whenReady().then(async()=>{try{
     await until(async()=>(await audit(goalId)).goal.execution.status==='completed','Goal and persisted execution completed');
     assert.equal((await audit(goalId)).complete,true);
   }
+  const ranked=await api('goalCreate',project,{title:'Priority dispatch',criteria:['accepted']});
+  const low=await api('goalTaskCreate',project,ranked.value.id,{title:'Low ready branch',priority:'low'});
+  const urgent=await api('goalTaskCreate',project,ranked.value.id,{title:'Urgent ready branch',priority:'urgent'});
+  assert.equal((await api('goalExecutionStart',project,ranked.value.id)).ok,true);
+  await until(async()=>(await audit(ranked.value.id)).tasks.find(t=>t.id===urgent.value.id).runIds.length>0,'urgent branch dispatched through actual main scheduler');
+  const rankedState=await audit(ranked.value.id);
+  assert.equal(rankedState.tasks.find(t=>t.id===low.value.id).runIds.length,0,'urgent eligible branch runs before the earlier low branch');
+  await api('goalExecutionStop',project,ranked.value.id);
+  await until(async()=>(await audit(ranked.value.id)).goal.execution.status==='stopped','priority execution stopped after current stage');
   const race=await api('goalCreate',project,{title:'Acceptance contract race',criteria:['source.txt contains baseline']});
   const raceTask=await api('goalTaskCreate',project,race.value.id,{title:'Race stage',objective:'核对 source.txt',criteriaIds:[race.value.criteria[0].id]});
   assert.equal((await api('goalExecutionStart',project,race.value.id)).ok,true);

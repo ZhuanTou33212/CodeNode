@@ -28,6 +28,7 @@
     "test:goal-scheduler": "node scripts/core/goal-scheduler-test.cjs",
     "test:goal-handoff": "node scripts/core/goal-handoff-test.cjs",
     "test:goal-progression": "node scripts/core/goal-progression-test.cjs",
+    "test:goal-task-priority": "node scripts/core/goal-task-priority-test.cjs",
     "test:goal-attention": "node scripts/core/goal-attention-test.cjs",
     "test:goal-scheduler-ui": "node scripts/run-electron.cjs scripts/ui/goal-scheduler-ui-test.cjs",
     "test:goal-canvas-graph": "node scripts/core/goal-canvas-graph-test.cjs",

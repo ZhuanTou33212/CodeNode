@@ -1,3 +1,5 @@
+import {taskPriorityRank} from './goalTaskPriority';
+
 export type GoalAttentionAction =
   | 'revalidate-goal'
   | 'reconcile-token-usage'
@@ -18,7 +20,7 @@ export interface GoalAttentionGoal {
   complete?:boolean;
   budget?:{maxTokens?:number|null;tokenUnknown?:boolean;maxCostUsd?:number|null;costUnknown?:boolean};
   decisions?:Array<{id:string;status:string;question:string}>;
-  tasks?:Array<{id:string;title:string;owner?:string;status:string;executionStatus?:string|null;waitDue?:boolean;waitCondition?:{description?:string}|null}>;
+  tasks?:Array<{id:string;title:string;owner?:string;priority?:string;status:string;executionStatus?:string|null;waitDue?:boolean;waitCondition?:{description?:string}|null}>;
   execution?:{id:string;status:string;currentTaskId?:string|null;reason?:string;actionRequired?:boolean}|null;
 }
 
@@ -80,5 +82,5 @@ export function goalAttention(goals:GoalAttentionGoal[]):GoalAttentionItem[] {
     }
     return items;
   });
-  return items.map((item,index)=>({item,index})).sort((a,b)=>a.item.priority-b.item.priority||a.index-b.index).map(entry=>entry.item);
+  return items.map((item,index)=>({item,index,taskRank:taskPriorityRank(item.goal.tasks?.find(task=>task.id===item.taskId)?.priority)})).sort((a,b)=>a.item.priority-b.item.priority||a.taskRank-b.taskRank||a.index-b.index).map(entry=>entry.item);
 }
