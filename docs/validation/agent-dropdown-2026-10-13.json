@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-13T10:08:49.387Z",
+  "localDate": "2026-10-13",
+  "timezone": "Asia/Shanghai",
+  "sourceCommit": "36015085146485baf19d8b686324db683af6195e",
+  "passed": true,
+  "change": "Compact Agent dropdown with a shared 280 CSS-pixel maximum height, an internally scrollable list and a visible confirmation section.",
+  "configuration": "config/ui.defaults.json:agentMenuMaxHeight",
+  "package": {
+    "path": "release/win-unpacked",
+    "version": "0.13.0",
+    "exeSha256": "9a931d4ece0281e171d7d4087ae3687b399e443088e190d4f7405f81a8bfcc59",
+    "asarSha256": "4b42a3d3f0970b40acc4398e660a255468306547f62eef229f3d526eb829d99a",
+    "portableSha256": "3693b5dcf0006ab98419a62e9de1487fd21fb24193ebed5309145efa836bf18b",
+    "fixedSelftest": {
+      "ok": true,
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      },
+      "standardLaunch": true
+    },
+    "stagedSelftest": {
+      "ok": true,
+      "checks": {
+        "projectRootExists": true,
+        "userDataDirWritable": true,
+        "modelsConfigReadable": true,
+        "markerIntact": true,
+        "versionMatch": true
+      },
+      "diagnosticFlags": [
+        "--no-sandbox"
+      ]
+    }
+  },
+  "verification": {
+    "build": true,
+    "checkJs": true,
+    "sourceAgentSwitcherUi": true,
+    "fixedAsarAgentSwitcherUi": true,
+    "bidirectionalNativeWheelEvents": true,
+    "menuHeightBoundedInBothThemes": true,
+    "selectionPreviewAndConfirmation": true,
+    "unavailableAgentsRemainDisabled": true,
+    "escapeDismissal": true,
+    "runningTaskSwitchGuard": true,
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "themePreserves": {
+      "session": true,
+      "messages": true,
+      "draft": true,
+      "model": true,
+      "sidebar": true
+    },
+    "packagedSourceFilesMatch": 217,
+    "releaseManifest": true
+  },
+  "previews": [
+    "agent-dropdown-preview/light.png",
+    "agent-dropdown-preview/dark.png"
+  ],
+  "notes": [
+    "The temporary-path native Chromium sandbox startup issue was previously isolated to this host. Staging selftest used the diagnostic flag only; fixed-path EXE passed standard launch and production sandbox settings remain unchanged.",
+    "The existing config/soul.md changes, original short launcher and logs were preserved."
+  ]
+}
