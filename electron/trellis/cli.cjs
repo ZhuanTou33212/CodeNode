@@ -45,7 +45,8 @@ function commandOf(executable) {
     const text = fs.readFileSync(command, 'utf8');
     const match = text.match(/"%dp0%\\([^"\r\n]+\.(?:js|mjs))"/i);
     if (!match) throw new Error('此 CMD 不是可识别的 npm 启动器；请选择实际 JS 或 EXE 入口');
-    command = path.resolve(path.dirname(command), match[1]);
+    const relative = match[1].split(/[\\/]+/).join(path.sep);
+    command = path.resolve(path.dirname(command), relative);
   }
   if (/\.(?:js|mjs|cjs)$/i.test(command) && path.isAbsolute(command)) {
     if (!fs.statSync(command).isFile()) throw new Error('CLI 入口不是文件');

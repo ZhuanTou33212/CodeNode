@@ -21,7 +21,7 @@ export const THEME_HINTS: Record<Theme, string> = {
 
 /** 主题选择的持久化键位于 localStorage；主进程另存一份用于启动时决定窗口材质。 */
 export const THEME_STORAGE_KEY = 'codenode.theme';
-export const DEFAULT_THEME: Theme = 'dark';
+export const DEFAULT_THEME: Theme = 'light';
 
 export function isTheme(value: unknown): value is Theme {
   return typeof value === 'string' && (THEMES as readonly string[]).includes(value);
