@@ -2,8 +2,17 @@ import type { AgentAttachment } from '../types';
 
 /** 与 electron/attachments.cjs 保持一致的限制 */
 export const ALLOWED_IMAGE_MIME = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-export const MAX_IMAGES_PER_MESSAGE = 6;
+export const MAX_ATTACHMENTS_PER_MESSAGE = 6;
+export const MAX_IMAGES_PER_MESSAGE = MAX_ATTACHMENTS_PER_MESSAGE;
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+export const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
+export const TEXT_FILE_ACCEPT = '.txt,.md,.markdown,.json,.jsonl,.yaml,.yml,.toml,.xml,.csv,.tsv,.log,.js,.jsx,.mjs,.cjs,.ts,.tsx,.css,.scss,.html,.htm,.py,.rb,.go,.rs,.java,.kt,.kts,.swift,.c,.h,.cpp,.hpp,.cs,.php,.sh,.zsh,.bash,.fish,.ps1,.sql,.graphql,.gql,.env,.properties,.ini,.conf';
+
+const TEXT_EXTENSIONS = new Set(TEXT_FILE_ACCEPT.split(',').map((value) => value.slice(1)));
+const STRUCTURED_TEXT_MIME = new Set([
+  'application/json', 'application/ld+json', 'application/xml', 'application/javascript',
+  'application/x-javascript', 'application/typescript', 'application/sql',
+]);
 
 /** 压缩目标：最长边 1280px（视觉识别足够，且能显著减小 base64 体积） */
 const TARGET_MAX_EDGE = 1280;
@@ -24,13 +33,38 @@ export function fmtBytes(n: number): string {
 }
 
 /** 把 File 读成 data URL */
-function readAsDataUrl(file: File): Promise<string> {
+export function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onload = () => resolve(String(fr.result || ''));
     fr.onerror = () => reject(new Error('读取图片失败'));
     fr.readAsDataURL(file);
   });
+}
+
+export function inferredTextMime(file: File): string | null {
+  const declared = String(file.type || '').toLowerCase();
+  if (declared.startsWith('text/') || STRUCTURED_TEXT_MIME.has(declared)) return declared;
+  const ext = String(file.name || '').toLowerCase().split('.').pop() || '';
+  if (!TEXT_EXTENSIONS.has(ext)) return null;
+  if (ext === 'json' || ext === 'jsonl') return 'application/json';
+  if (ext === 'xml') return 'application/xml';
+  if (['js', 'jsx', 'mjs', 'cjs'].includes(ext)) return 'application/javascript';
+  if (['ts', 'tsx'].includes(ext)) return 'application/typescript';
+  return 'text/plain';
+}
+
+export async function fileToResourceAttachment(file: File): Promise<{ ok: true; attachment: AgentAttachment } | { ok: false; error: string }> {
+  const mime = inferredTextMime(file);
+  if (!mime) return { ok: false, error: `暂不支持该文件类型：${file.name || file.type || '未知文件'}` };
+  if (file.size > MAX_TEXT_FILE_BYTES) return { ok: false, error: `文件过大（${fmtBytes(file.size)}，文本文件上限 2MB）` };
+  try {
+    const original = await readAsDataUrl(file);
+    const dataUrl = original.replace(/^data:[^;]*;/, `data:${mime};`);
+    return { ok: true, attachment: { mime, dataUrl, name: file.name, bytes: file.size } };
+  } catch {
+    return { ok: false, error: `无法读取文件：${file.name || '未知文件'}` };
+  }
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -116,6 +150,19 @@ export function imagesFromDataTransfer(dt: DataTransfer | null): File[] {
         if (f) out.push(f);
       }
     }
+  }
+  return out;
+}
+
+/** 从拖放事件读取全部文件；具体类型由 addFiles 统一校验。 */
+export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
+  if (!dt) return [];
+  if (dt.files?.length) return Array.from(dt.files);
+  const out: File[] = [];
+  for (const item of Array.from(dt.items || [])) {
+    if (item.kind !== 'file') continue;
+    const file = item.getAsFile();
+    if (file) out.push(file);
   }
   return out;
 }

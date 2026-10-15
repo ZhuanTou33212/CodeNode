@@ -462,7 +462,7 @@ interface CodenodeApi {
     memoryTaskEpoch?: number;
     prompt: string;
     history?: { role: string; content: string }[];
-    /** 图片附件（多模态）：仅当所选模型 vision=true 时允许 */
+    /** 用户附件：文本/代码适用于普通模型，图片仅在 vision=true 时允许 */
     attachments?: { mime: string; dataUrl: string; name?: string; bytes?: number }[];
     acpContent?: import('./types').AgentAcpContent[];
     canvasSummary?: string;

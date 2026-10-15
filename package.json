@@ -216,6 +216,7 @@
     "test:approval-rules": "node scripts/core/approval-rules-test.cjs",
     "test:skill-index": "node scripts/core/skill-index-test.cjs",
     "test:view-image": "node scripts/core/view-image-test.cjs",
+    "test:attachments": "node scripts/core/attachment-file-test.cjs",
     "test:mcp-session": "node scripts/core/mcp-session-test.cjs",
     "test:mcp-http": "node scripts/core/mcp-http-test.cjs",
     "test:web-search": "node scripts/core/web-search-test.cjs",

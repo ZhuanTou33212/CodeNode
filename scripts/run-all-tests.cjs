@@ -224,6 +224,7 @@ const CORE = [
   'test:skill-index',
   // 看图（对照 Codex 的 view_image）：格式与上限校验 / 多模态消息真的进了下一次请求 / 零痕迹
   'test:view-image',
+  'test:attachments',
   // MCP 会话复用 + tools/list 缓存（§5 #5）：spawn 次数 / 握手次数 / 清单只问一次 / 崩溃重拉 / 空闲回收
   'test:mcp-session',
   // MCP streamable HTTP transport（§5 #5 剩余项）：JSON/SSE 应答 / 会话头 / 出网策略 / 错误语义

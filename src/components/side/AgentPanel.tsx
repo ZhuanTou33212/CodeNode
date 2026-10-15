@@ -14,7 +14,7 @@ import { reportError } from '../../lib/reportError';
 import type { AgentAttachment } from '../../types';
 import backendConfig from '../../../config/agent.backends.json';
 import {useBackendSwitchStore} from '../../store/backendSwitchStore';
-import { ALLOWED_IMAGE_MIME, MAX_IMAGES_PER_MESSAGE, fileToAttachment, fmtBytes, imagesFromDataTransfer } from '../../lib/imageAttach';
+import { ALLOWED_IMAGE_MIME, MAX_ATTACHMENTS_PER_MESSAGE, TEXT_FILE_ACCEPT, fileToAttachment, fileToResourceAttachment, filesFromDataTransfer, fmtBytes, imagesFromDataTransfer, readAsDataUrl } from '../../lib/imageAttach';
 import { MessageViewMemo } from './MessageList';
 import { PlanCard } from '../PlanCard';
 import ResumePlanNotice from './ResumePlanNotice';
@@ -211,37 +211,43 @@ function PromptComposer() {
 
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
-    if (!canVision) {
-      useUiStore.getState().setToast(`当前模型「${model?.label || '未配置'}」未开启视觉能力，无法接收图片`);
-      return;
-    }
-    const room = MAX_IMAGES_PER_MESSAGE - attachments.length;
+    const room = MAX_ATTACHMENTS_PER_MESSAGE - attachments.length;
     if (room <= 0) {
-      useUiStore.getState().setToast(`一次最多发送 ${MAX_IMAGES_PER_MESSAGE} 张图片`);
+      useUiStore.getState().setToast(`一次最多添加 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件`);
       return;
     }
     const picked = files.slice(0, room);
     const next: AgentAttachment[] = [];
     for (const f of picked) {
+      if (f.type.startsWith('image/')) {
+        if (!canVision) {
+          useUiStore.getState().setToast(`当前模型「${model?.label || '未配置'}」未开启视觉能力，不能添加图片`);
+          continue;
+        }
+        const result = await fileToAttachment(f);
+        if (!result.ok) { useUiStore.getState().setToast(result.error); continue; }
+        next.push(result.attachment);
+        continue;
+      }
       if (!f.type.startsWith('image/')) {
         if (isMsp) { useUiStore.getState().setToast('Muse Code 当前只接收内联图片附件'); continue; }
         if (isAcp) {
           if (f.size > backendConfig.acpLimits.contentBytes / 2) { useUiStore.getState().setToast('附件超过 ACP 内容上限'); continue; }
-          const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(f); });
+          const dataUrl = await readAsDataUrl(f);
           next.push({ name: f.name, mime: f.type || 'application/octet-stream', bytes: f.size, dataUrl }); continue;
         }
       }
-      const r = await fileToAttachment(f);
-      if (!r.ok) {
-        useUiStore.getState().setToast(r.error);
+      const result = await fileToResourceAttachment(f);
+      if (!result.ok) {
+        useUiStore.getState().setToast(result.error);
         continue;
       }
-      next.push(r.attachment);
+      next.push(result.attachment);
     }
     if (next.length) {
-      setAttachments((cur) => [...cur, ...next].slice(0, MAX_IMAGES_PER_MESSAGE));
+      setAttachments((cur) => [...cur, ...next].slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
       const total = next.reduce((n, a) => n + (a.bytes || 0), 0);
-      useUiStore.getState().setToast(`已附加 ${next.length} 张图片（${fmtBytes(total)}）`);
+      useUiStore.getState().setToast(`已添加 ${next.length} 个附件（${fmtBytes(total)}）`);
     }
   };
 
@@ -270,16 +276,14 @@ function PromptComposer() {
     <div
       className={`pp-composer${dragOver ? ' is-dragover' : ''}`}
       onDragOver={(e) => {
-        if (!canVision) return;
-        const hasImage = Array.from(e.dataTransfer?.items || []).some((it) => it.kind === 'file' && String(it.type).startsWith('image/'));
-        if (!hasImage) return;
+        const hasFile = Array.from(e.dataTransfer?.items || []).some((it) => it.kind === 'file');
+        if (!hasFile) return;
         e.preventDefault();
         setDragOver(true);
       }}
       onDragLeave={() => setDragOver(false)}
       onDrop={(e) => {
-        if (!canVision) return;
-        const files = imagesFromDataTransfer(e.dataTransfer);
+        const files = filesFromDataTransfer(e.dataTransfer);
         if (!files.length) return;
         e.preventDefault();
         setDragOver(false);
@@ -290,11 +294,11 @@ function PromptComposer() {
       {!selectedNode && attachments.length > 0 && (
         <div className="pp-attach-list">
           {attachments.map((a, i) => (
-            <div className="pp-attach" key={i} title={`${a.name || '图片'}（${fmtBytes(a.bytes || 0)}）`}>
+            <div className="pp-attach" key={i} title={`${a.name || '附件'}（${fmtBytes(a.bytes || 0)}）`}>
               {a.mime.startsWith('image/') ? <img src={a.dataUrl} alt={a.name || '附件'} /> : <span>{a.name || '附件'}</span>}
               <button
                 className="pp-attach-del"
-                title="移除这张图片"
+                title="移除附件"
                 onClick={() => setAttachments((cur) => cur.filter((_, idx) => idx !== i))}
               >
                 ×
@@ -315,8 +319,8 @@ function PromptComposer() {
         onFocus={() => { if (selectedNode) useGraphStore.getState().commit(); }}
         placeholder={
           selectedNode ? '输入此阶段的任务…' : canVision
-            ? '描述任务，或粘贴图片…'
-            : '描述你想完成的任务…'
+            ? '描述任务，或添加文件 / 粘贴图片…'
+            : '描述任务，或添加文本与代码文件…'
         }
         onChange={(e) => {
           if (selectedNode) useGraphStore.getState().updateNodeData(selectedNode.id, { prompt: e.target.value }); else setText(e.target.value);
@@ -348,7 +352,7 @@ function PromptComposer() {
         <input
           ref={fileRef}
           type="file"
-          accept={isAcp ? [...ALLOWED_IMAGE_MIME, 'audio/*', 'text/*', 'application/pdf'].join(',') : ALLOWED_IMAGE_MIME.join(',')}
+          accept={isAcp ? [...ALLOWED_IMAGE_MIME, 'audio/*', 'text/*', 'application/pdf', TEXT_FILE_ACCEPT].join(',') : isMsp ? ALLOWED_IMAGE_MIME.join(',') : [...ALLOWED_IMAGE_MIME, TEXT_FILE_ACCEPT].join(',')}
           multiple
           style={{ display: 'none' }}
           onChange={(e) => {
@@ -358,18 +362,10 @@ function PromptComposer() {
           }}
         />
         <button
-          className={`pp-attach-btn${canVision ? '' : ' is-off'}`}
+          className="pp-attach-btn"
           disabled={!!selectedNode}
-          title={
-            canVision
-              ? '添加图片（也可直接粘贴 / 拖入）'
-              : `当前模型「${model?.label || '未配置'}」未开启视觉能力；请在模型管理中勾选「视觉（图片输入）」`
-          }
+          title={canVision ? '添加文件或图片' : '添加文本或代码文件；当前模型不支持图片'}
           onClick={() => {
-            if (!canVision) {
-              useUiStore.getState().setToast('当前模型未开启视觉能力，无法添加图片');
-              return;
-            }
             fileRef.current?.click();
           }}
         >

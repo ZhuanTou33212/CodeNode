@@ -52,10 +52,11 @@ app.whenReady().then(async () => {
     await js(`(()=>{ const u=window.__codenodeUi.getState(); u.setSideWidth(340); u.setSideTab('agent'); return true; })()`);
     await sleep(700);
 
-    // 通过 UI store 选视觉模型（usageStore 未挂 window，走 select 交互）
-    const picked = await js(`(()=>{ const sel=document.querySelector('.pp-model'); if(!sel) return null; const opt=[...sel.options].find(o=>o.value==='deepseek-v4-flash'); if(!opt) return null; sel.value='deepseek-v4-flash'; sel.dispatchEvent(new Event('change',{bubbles:true})); return sel.value; })()`);
-    await sleep(500);
-    ok('模型下拉存在并可切换', picked === 'deepseek-v4-flash', String(picked));
+    // 通过当前模型选择器切到视觉模型
+    await js(`document.querySelector('.pp-model')?.click()`); await sleep(200);
+    const picked = await js(`(()=>{const button=[...document.querySelectorAll('.hermes-model-row button')].find(b=>/DeepSeek V4(\.1)? Flash/i.test(b.textContent||''));if(!button)return null;button.click();return button.textContent;})()`);
+    await sleep(700);
+    ok('模型选择器存在并可切换', /Flash/i.test(String(picked || '')), String(picked));
 
     const attachUi = await js(`(()=>{
       const btn = document.querySelector('.pp-attach-btn');
@@ -70,7 +71,7 @@ app.whenReady().then(async () => {
     ok('输入提示提到可粘贴/拖入图片', String(attachUi.placeholder || '').includes('图片'), String(attachUi.placeholder));
 
     // 模拟往输入区粘贴一张图片（走真实 paste 事件 + DataTransfer）
-    const smallPngB64 = fs.readFileSync(path.join(ROOT, '.cache', 'vision-test.png')).toString('base64');
+    const smallPngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlWX8sAAAAASUVORK5CYII=';
     await js(`(()=>{
       const ta = document.querySelector('.pp-input');
       const bin = atob(${JSON.stringify(smallPngB64)});
@@ -109,43 +110,14 @@ app.whenReady().then(async () => {
     await sleep(300);
     ok('缩略图可移除', await js(`document.querySelectorAll('.pp-attach').length === 0`));
 
-    // 非视觉模型：按钮置灰
-    await js(`(()=>{ const sel=document.querySelector('.pp-model'); sel.value='deepseek-v4-pro'; sel.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`);
+    // “＋”是通用文件入口；代码文件不依赖视觉能力
+    const fileButton = await js(`(()=>{const b=document.querySelector('.pp-attach-btn');return {off:b?.className.includes('is-off'),title:b?.title};})()`);
+    ok('添加文件按钮始终可用', fileButton.off === false && /文件/.test(String(fileButton.title || '')), JSON.stringify(fileButton));
+    const textFile = await js(`(()=>{ const input=document.querySelector('.pp-composer input[type="file"]'); const file=new File(['export const answer = 42;\\n'],'sample.ts',{type:'application/typescript'}); const dt=new DataTransfer();dt.items.add(file);Object.defineProperty(input,'files',{value:dt.files,configurable:true});input.dispatchEvent(new Event('change',{bubbles:true}));return input.accept; })()`);
     await sleep(500);
-    const proUi = await js(`(()=>{ const b=document.querySelector('.pp-attach-btn'); return { off: b ? b.className.includes('is-off') : null, title: b ? b.title : null }; })()`);
-    console.log('  (debug) proUi=' + JSON.stringify(proUi));
-    ok('非视觉模型下图片按钮置灰并给出原因', proUi.off === true && /视觉/.test(String(proUi.title || '')), JSON.stringify(proUi));
-
-    // 模型管理里的视觉开关
-    await js(`(()=>{ window.__codenodeUi.getState().openModelManager(); return true; })()`);
-    await sleep(800);
-    const mm = await js(`(()=>{
-      const checks=[...document.querySelectorAll('.mm-check')];
-      const vision=checks.find(l=>l.textContent.includes('视觉'));
-      return { found: !!vision, checked: vision ? !!vision.querySelector('input').checked : null, labels: checks.map(l=>l.textContent.trim()) };
-    })()`);
-    console.log('  (debug) mm(当前模型)=' + JSON.stringify(mm));
-    ok('模型管理存在「视觉（图片输入）」开关', mm.found === true, JSON.stringify(mm.labels));
-
-    // 切到 flash 条目，开关应勾选（验证 vision 字段随配置持久化并正确回显）
-    const switched = await js(`(()=>{
-      const items=[...document.querySelectorAll('.mm-item')];
-      const flash=items.find(i=>i.textContent.includes('deepseek-flash'));
-      if(!flash) return null;
-      flash.click();
-      return true;
-    })()`);
-    await sleep(600);
-    const mmFlash = await js(`(()=>{
-      const checks=[...document.querySelectorAll('.mm-check')];
-      const vision=checks.find(l=>l.textContent.includes('视觉'));
-      const nameField=[...document.querySelectorAll('.mm-field')].find(f=>{ const l=f.querySelector('label'); return l && l.textContent.includes('显示名称'); });
-      return { checked: vision ? !!vision.querySelector('input').checked : null, name: nameField ? nameField.querySelector('input').value : null };
-    })()`);
-    console.log('  (debug) mm(flash)=' + JSON.stringify(mmFlash));
-    ok('切到 flash 后视觉开关为勾选', switched === true && mmFlash.checked === true, JSON.stringify(mmFlash));
-    fs.writeFileSync(path.join(OUT, 'vision-modelmanager.png'), (await win.webContents.capturePage()).toPNG());
-    await js(`(()=>{ window.__codenodeUi.getState().closeModelManager(); return true; })()`);
+    const textAttachment = await js(`(()=>{const item=document.querySelector('.pp-attach');return {count:document.querySelectorAll('.pp-attach').length,text:item?.textContent||'',sendDisabled:document.querySelector('.pp-send')?.disabled};})()`);
+    ok('可通过“＋”添加代码文件', textAttachment.count === 1 && textAttachment.text.includes('sample.ts') && textAttachment.sendDisabled === false && String(textFile).includes('.ts'), JSON.stringify(textAttachment));
+    await js(`document.querySelector('.pp-attach-del')?.click()`);
   } catch (e) {
     failures.push('harness error');
     console.error('VUI ERROR: ' + (e && e.stack ? e.stack : e));

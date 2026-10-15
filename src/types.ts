@@ -124,11 +124,11 @@ export type RagGrounding = {
 };
 
 
-/** 随消息发送的图片附件（多模态输入）。dataUrl 是已在渲染端压缩过的 data: URL */
+/** 随消息发送的附件。图片走多模态输入，文本/代码文件会转成有边界的文本上下文。 */
 export type AgentAttachment = {
-  /** 仅接受 image/png | image/jpeg | image/webp | image/gif */
+  /** 图片 MIME 或受支持的文本/代码 MIME */
   mime: string;
-  /** data:image/...;base64,... （可直接作为 img.src） */
+  /** data:<mime>;base64,... */
   dataUrl: string;
   /** 原始文件名，仅用于界面展示 */
   name?: string;
@@ -154,7 +154,7 @@ export type SessionMsg = {
   status?: string;
   grounding?: RagGrounding;
   codeVerification?: CodeVerificationReport;
-  /** 用户消息携带的图片（仅用户消息会有） */
+  /** 用户消息携带的附件（仅用户消息会有） */
   attachments?: AgentAttachment[];
   /**
    * 上下文压缩（照 Codex CLI）：这条消息已经被摘要取代 —— 仍留在界面上供回溯，
