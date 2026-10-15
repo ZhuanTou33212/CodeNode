@@ -15,8 +15,7 @@ import {
  * 没有打开任何工程时只显示这一页：必须先「打开工程」「新建工程」或「从最近列表进入」，
  * 才能进工作台，避免在没有工程根目录的情况下直接进画布/Agent。
  *
- * 布局：左侧是三个入口按钮（打开工程 / 新建工程 / 打开工程文件），
- *       右侧是「最近打开」列表（不再自动进入最近工程，改由用户点选）。
+ * 布局：主操作居中，两个次操作等宽排列；有历史记录时在下方显示最近项目。
  */
 export default function ProjectGate() {
   const error = useProjectStore((s) => s.error);
@@ -65,12 +64,10 @@ export default function ProjectGate() {
       <div className={`gate-card${recent.length ? ' has-recent' : ''}`}>
         <div className="gate-main">
           <header className="gate-head">
-            <div className="gate-logo">CN</div>
+            <div className="gate-logo" aria-hidden="true">CN</div>
             <div className="gate-head-text">
               <h1>CodeNode</h1>
-              <p className="gate-sub">
-                节点画布 + 内嵌 Agent 的桌面工作台：把项目解析成节点图，用连线编排流程，并让 Agent 按图执行。
-              </p>
+              <p className="gate-sub">打开一个项目，开始与 Agent 协作。</p>
             </div>
           </header>
 
@@ -82,7 +79,6 @@ export default function ProjectGate() {
               onClick={() => void run('打开工程', openProject)}
             >
               <span className="gate-btn-title">打开工程</span>
-              <span className="gate-btn-desc">选择一个已有的工程目录</span>
             </button>
             <button
               type="button"
@@ -91,7 +87,6 @@ export default function ProjectGate() {
               onClick={() => void run('新建工程', newProject)}
             >
               <span className="gate-btn-title">新建工程</span>
-              <span className="gate-btn-desc">创建一个新的 .cnode 工程</span>
             </button>
             <button
               type="button"
@@ -100,13 +95,10 @@ export default function ProjectGate() {
               onClick={() => void run('打开工程文件', openProjectFile)}
             >
               <span className="gate-btn-title">打开工程文件</span>
-              <span className="gate-btn-desc">直接指定一个 .cnode 文件</span>
             </button>
           </div>
 
-          <div className="gate-hint">
-            启动后不再自动进入上次的工程；画布、会话与检查点都保存在工程目录的 <code>.cnode</code> 文件中。
-          </div>
+          <div className="gate-hint">项目、会话与检查点保存在本机。</div>
 
           {status ? <div className="gate-status">{status}</div> : null}
           {error ? <div className="gate-status err">{error}</div> : null}
@@ -117,68 +109,59 @@ export default function ProjectGate() {
           ) : null}
         </div>
 
-        <aside className="gate-recent">
+        {recent.length > 0 && <aside className="gate-recent">
           <div className="gate-recent-head">
             <span className="gate-recent-title">最近打开</span>
-            {recent.length > 0 && (
-              <button
-                className="gate-recent-clear"
-                title="清空最近打开列表（不会删除工程文件）"
-                disabled={busy}
-                onClick={() => {
-                  clearRecentProjects();
-                  setRecent([]);
-                  setStatus('已清空最近打开列表');
-                }}
-              >
-                清空
-              </button>
-            )}
+            <button
+              className="gate-recent-clear"
+              title="清空最近打开列表（不会删除工程文件）"
+              disabled={busy}
+              onClick={() => {
+                clearRecentProjects();
+                setRecent([]);
+                setStatus('已清空最近打开列表');
+              }}
+            >
+              清空
+            </button>
           </div>
 
-          {recent.length === 0 ? (
-            <div className="gate-recent-empty">
-              还没有记录。
-              <div className="gate-recent-empty-sub">用左侧「打开工程」或「新建工程」后，这里会出现最近使用的工程。</div>
-            </div>
-          ) : (
-            <ul className="gate-recent-list">
-              {recent.map((item) => {
-                const key = item.file || item.root;
-                const isActive = activePath === key;
-                return (
-                  <li key={key}>
-                    <button
-                      type="button"
-                      className={`gate-recent-item${isActive ? ' is-active' : ''}`}
-                      disabled={busy}
-                      title={item.file ? `${item.name}\n${item.file}` : `${item.name}\n${item.root}`}
-                      onClick={() => void openRecent(item)}
-                    >
-                      <span className="gate-recent-name">{item.name}</span>
-                      <span className="gate-recent-path">{item.file || item.root}</span>
-                      <span className="gate-recent-meta">
-                        {item.file ? '工程文件' : '工程目录'}
-                        {item.openedAt ? ' · ' + relativeTime(item.openedAt) : ''}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="gate-recent-del"
-                      title="从最近列表移除"
-                      disabled={busy}
-                      onClick={() => {
-                        setRecent(forgetRecentProject({ root: item.root, file: item.file }));
-                      }}
-                    >
-                      ×
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </aside>
+          <ul className="gate-recent-list">
+            {recent.map((item) => {
+              const key = item.file || item.root;
+              const isActive = activePath === key;
+              return (
+                <li key={key}>
+                  <button
+                    type="button"
+                    className={`gate-recent-item${isActive ? ' is-active' : ''}`}
+                    disabled={busy}
+                    title={item.file ? `${item.name}\n${item.file}` : `${item.name}\n${item.root}`}
+                    onClick={() => void openRecent(item)}
+                  >
+                    <span className="gate-recent-name">{item.name}</span>
+                    <span className="gate-recent-path">{item.file || item.root}</span>
+                    <span className="gate-recent-meta">
+                      {item.file ? '工程文件' : '工程目录'}
+                      {item.openedAt ? ' · ' + relativeTime(item.openedAt) : ''}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="gate-recent-del"
+                    title="从最近列表移除"
+                    disabled={busy}
+                    onClick={() => {
+                      setRecent(forgetRecentProject({ root: item.root, file: item.file }));
+                    }}
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </aside>}
       </div>
     </div>
   );

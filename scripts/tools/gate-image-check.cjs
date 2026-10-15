@@ -1,5 +1,5 @@
 /**
- * 校验：① 启动门禁不再自动进入最近工程 + 最近打开列表在右栏
+ * 校验：① 启动门禁不再自动进入最近工程 + 最近打开列表在主操作下方
  *      ② Shift+A 菜单含「图像节点」，点击后创建图像节点，并支持粘贴/读项目图片
  * 用法：node scripts/run-electron.cjs scripts/tools/gate-image-check.cjs
  */
@@ -37,6 +37,7 @@ const ok = (n, c, extra = '') => {
 };
 
 let appWin = null;
+let previousRecent = null;
 app.on('browser-window-created', (_e, win) => { if (!appWin) appWin = win; });
 require("../../electron/main.cjs");
 
@@ -47,6 +48,7 @@ app.whenReady().then(async () => {
     win.show();
     await sleep(900);
     const js = (c) => win.webContents.executeJavaScript(c);
+    previousRecent = await js(`(()=>{try{const items=JSON.parse(localStorage.getItem('codenode.recentProjects')||'[]').filter(item=>!String(item.root||'').includes('cn-gate-dirA-')&&!String(item.root||'').includes('cn-gate-dirB-'));return items.length?JSON.stringify(items):null}catch{return null}})()`);
 
     // ---------- 准备两个"工程"：一个目录 + 一个 .cnode 文件 ----------
     const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cn-gate-dirA-'));
@@ -82,17 +84,17 @@ app.whenReady().then(async () => {
         leftActions: [...document.querySelectorAll('.gate-actions .gate-btn-title')].map((e) => e.textContent.trim()),
         recentCount: items.length,
         recentNames: items.map((i) => i.querySelector('.gate-recent-name').textContent.trim()),
-        mainLeftOfRecent: !!(mr && rr && mr.right <= rr.left + 1),
+        recentBelowMain: !!(mr && rr && rr.top >= mr.bottom - 1),
         workspaceVisible: !!document.querySelector('.canvas-wrap'),
-        recentOnRight: !!(rr && mr && rr.left > mr.left)
+        recentAligned: !!(rr && mr && Math.abs(rr.left - mr.left) <= 2 && Math.abs(rr.right - mr.right) <= 2)
       };
     })()`);
     console.log('  (debug) gate=' + JSON.stringify(gate));
     ok('启动停在门禁页（没有自动进入最近工程）', gate.atGate === true && gate.workspaceVisible === false, JSON.stringify(gate));
     ok('左侧保留三个入口按钮', gate.leftActions.join('/') === '打开工程/新建工程/打开工程文件', gate.leftActions.join('/'));
-    ok('右栏显示最近打开列表', gate.recentCount === 2, JSON.stringify(gate.recentNames));
-    ok('最近列表确实在入口按钮右侧', gate.mainLeftOfRecent === true, JSON.stringify(gate));
-    fs.writeFileSync(path.join(OUT, 'gate-two-column.png'), (await win.webContents.capturePage()).toPNG());
+    ok('下方显示最近打开列表', gate.recentCount === 2, JSON.stringify(gate.recentNames));
+    ok('最近列表与主操作共用同一条对齐轴', gate.recentBelowMain === true && gate.recentAligned === true, JSON.stringify(gate));
+    fs.writeFileSync(path.join(OUT, 'gate-centered.png'), (await win.webContents.capturePage()).toPNG());
 
     // 点最近列表里的目录工程 → 进入工作台
     await js(`(()=>{ const items=[...document.querySelectorAll('.gate-recent-item')]; const dirItem=items.find(i=>!i.textContent.includes('.cnode')); dirItem.click(); return true; })()`);
@@ -179,6 +181,13 @@ app.whenReady().then(async () => {
     failures.push('harness error');
     console.error('CHECK ERROR: ' + (e && e.stack ? e.stack : e));
   } finally {
+    if (appWin && !appWin.isDestroyed()) {
+      try {
+        await appWin.webContents.executeJavaScript(previousRecent == null
+          ? `localStorage.removeItem('codenode.recentProjects')`
+          : `localStorage.setItem('codenode.recentProjects', ${JSON.stringify(previousRecent)})`);
+      } catch {}
+    }
     console.log('\nGATE+IMAGE CHECK: ' + (failures.length ? 'FAIL(' + failures.length + ') ' + failures.join(' | ') : 'PASS') + ` [${passed} passed]`);
     app.exit(failures.length ? 1 : 0);
   }
