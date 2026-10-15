@@ -7,7 +7,7 @@
     "--menu-hover": "#e6eef9",
     "--menu-danger": "#b73943",
     "--app-background": "radial-gradient(ellipse at 9% 15%,rgba(255,255,255,.94),transparent 55%),radial-gradient(ellipse at 84% 18%,rgba(193,226,239,.85),transparent 52%),radial-gradient(ellipse at 70% 87%,rgba(213,205,241,.8),transparent 55%),linear-gradient(125deg,#d5e9ef,#edf2f8 50%,#d8e3f1)",
-    "--gate-background": "linear-gradient(145deg,#f6f8fb,#edf1f7)",
+    "--gate-background": "radial-gradient(ellipse at 15% 20%,#ffffff,transparent 60%),linear-gradient(135deg,#d9edf3,#e9e4f6)",
     "--glass-text": "#21334e",
     "--glass-muted": "#51647d",
     "--glass-faint": "#637892",

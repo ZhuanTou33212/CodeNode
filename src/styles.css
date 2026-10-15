@@ -3810,30 +3810,74 @@ textarea:focus-visible {
 
 /* Refined start screen: one visual axis, one primary action, no nested empty panel. */
 .gate {
-  padding: clamp(24px, 5vw, 64px);
+  --gate-accent: #5856d6;
+  --gate-accent-hover: #4f4dc6;
+  --gate-page: #f2f2f7;
+  --gate-surface: #ffffff;
+  --gate-control: #f2f2f7;
+  --gate-control-hover: #e7e7ee;
+  --gate-text: #1c1c1e;
+  --gate-muted: #6e6e73;
+  --gate-line: #e5e5ea;
+  --gate-shadow: 0 28px 72px rgba(28, 28, 30, 0.1), 0 2px 8px rgba(28, 28, 30, 0.04);
+}
+
+html[data-theme='dark'] .gate {
+  --gate-accent: #7d7aff;
+  --gate-accent-hover: #8b88ff;
+  --gate-page: #1c1c1e;
+  --gate-surface: #2c2c2e;
+  --gate-control: #3a3a3c;
+  --gate-control-hover: #48484a;
+  --gate-text: #f2f2f7;
+  --gate-muted: #aeaeb2;
+  --gate-line: #48484a;
+  --gate-shadow: 0 30px 80px rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme='bright'] .gate {
+  --gate-page: #f5f5f7;
+  --gate-surface: #ffffff;
+  --gate-control: #f2f2f7;
+  --gate-control-hover: #e7e7ee;
+  --gate-text: #1c1c1e;
+  --gate-muted: #6e6e73;
+  --gate-line: #e5e5ea;
+}
+
+.gate {
+  padding: clamp(28px, 5vw, 64px);
 }
 
 .gate-card,
 .gate-card.has-recent {
-  display: block;
-  width: min(620px, calc(100vw - 48px));
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) minmax(420px, 1fr);
+  width: min(1120px, calc(100vw - 80px));
+  height: min(680px, calc(100vh - 80px));
+  min-height: 540px;
   max-width: none;
-  padding: 44px;
-  text-align: center;
-  border-radius: 24px;
-  box-shadow: 0 24px 70px rgba(42, 56, 78, 0.14);
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  border-radius: 22px;
+  box-shadow: var(--gate-shadow);
 }
 
 .gate-main {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 52px 42px 40px;
 }
 
 .gate-head {
   flex-direction: column;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 14px;
-  margin-bottom: 30px;
-  text-align: center;
+  margin-bottom: 42px;
+  text-align: left;
 }
 
 .gate-head-text {
@@ -3847,32 +3891,33 @@ textarea:focus-visible {
   margin: 0;
   border-radius: 15px;
   font-size: 19px;
-  box-shadow: 0 10px 26px rgba(91, 99, 238, 0.2);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--gate-accent) 72%, #fff 28%), var(--gate-accent));
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--gate-accent) 22%, transparent);
 }
 
 .gate-card h1 {
   margin: 0;
-  font-size: 28px;
+  font-size: 32px;
   line-height: 1.15;
   letter-spacing: -0.025em;
 }
 
 .gate-sub,
 .gate-card.has-recent .gate-sub {
-  margin: 8px auto 0;
-  max-width: 380px;
-  text-align: center;
+  margin: 9px 0 0;
+  max-width: 290px;
+  text-align: left;
   font-size: 13px;
   line-height: 1.55;
 }
 
 .gate-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
 }
 
 .gate-btn {
-  min-height: 44px;
+  min-height: 48px;
   flex-direction: row;
   align-items: center;
   justify-content: center;
@@ -3885,13 +3930,13 @@ textarea:focus-visible {
     border-color 140ms ease;
 }
 
-.gate-btn.primary {
-  grid-column: 1 / -1;
-  min-height: 48px;
-}
-
 .gate-btn:hover:not(:disabled) {
   transform: none;
+}
+
+.gate-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gate-accent) 70%, transparent);
+  outline-offset: 2px;
 }
 
 .gate-btn:active:not(:disabled) {
@@ -3908,8 +3953,9 @@ textarea:focus-visible {
 }
 
 .gate-hint {
-  margin-top: 18px;
-  text-align: center;
+  margin-top: auto;
+  padding-top: 28px;
+  text-align: left;
   font-size: 11px;
   line-height: 1.5;
 }
@@ -3919,10 +3965,12 @@ textarea:focus-visible {
 }
 
 .gate-recent {
-  padding: 22px 0 0;
-  margin-top: 28px;
-  border-left: 0;
-  border-top: 1px solid rgba(112, 130, 155, 0.15);
+  min-width: 0;
+  margin: 0;
+  padding: 48px 42px 40px;
+  border-left: 1px solid var(--gate-line);
+  border-top: 0;
+  background: color-mix(in srgb, var(--gate-control) 58%, var(--gate-surface) 42%);
   text-align: left;
 }
 
@@ -3942,12 +3990,36 @@ textarea:focus-visible {
 }
 
 .gate-recent-list {
-  max-height: 252px;
+  max-height: calc(100% - 40px);
   padding-top: 0;
 }
 
+.gate-recent-empty {
+  min-height: calc(100% - 44px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--gate-muted);
+}
+
+.gate-recent-empty strong {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--gate-text);
+}
+
+.gate-recent-empty span {
+  max-width: 230px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .gate-recent-list li + li {
-  border-top: 1px solid rgba(112, 130, 155, 0.1);
+  border-top: 1px solid var(--gate-line);
 }
 
 .gate-recent-item {
@@ -3967,21 +4039,40 @@ textarea:focus-visible {
   text-align: left;
 }
 
-@media (max-width: 620px) {
+@media (max-width: 900px) {
   .gate-card,
   .gate-card.has-recent {
-    width: min(100%, 460px);
-    padding: 34px 24px;
-  }
-
-  .gate-actions {
     grid-template-columns: 1fr;
+    width: min(620px, calc(100vw - 48px));
+    height: auto;
+    min-height: 0;
   }
 
-  .gate-btn.primary {
-    grid-column: auto;
+  .gate-main {
+    padding: 38px 32px 30px;
+  }
+
+  .gate-head {
+    margin-bottom: 30px;
+  }
+
+  .gate-hint {
+    margin-top: 20px;
+    padding-top: 0;
+  }
+
+  .gate-recent {
+    min-height: 220px;
+    padding: 28px 32px 30px;
+    border-left: 0;
+    border-top: 1px solid var(--gate-line);
+  }
+
+  .gate-recent-empty {
+    min-height: 150px;
   }
 }
+
 
 /* ==================== 渲染崩溃兜底页（顶层 ErrorBoundary） ==================== */
 .crash {
@@ -4323,12 +4414,12 @@ textarea:focus-visible {
 .glass-theme .dock-code-editor { color: var(--glass-text); caret-color: var(--glass-text); }
 .glass-theme .dock-code-highlight { color: var(--glass-text); }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) { .glass-theme { --glass-surface: var(--glass-base); --glass-sheet: var(--glass-base); } .glass-theme :is(.toolbar,.side-panel,.workbench-dock,.mm-dialog,.tool-dialog,.wf-node,.pp-composer) { backdrop-filter: none; } }
-html[data-theme] .gate { background: var(--gate-background); color: var(--glass-text); }
-html[data-theme] .gate-card { background: var(--glass-sheet); border-color: var(--glass-border); color: var(--glass-text); backdrop-filter: none; box-shadow: 0 24px 70px rgba(42,56,78,.14); }
-html[data-theme] .gate-card :is(h1,.gate-sub,.gate-btn,.gate-recent-title,.gate-recent-path) { color: var(--glass-text); }
-html[data-theme] .gate-card :is(.gate-btn:not(.primary),.gate-recent-item) { background: var(--glass-control); border-color: var(--glass-border); }
-html[data-theme] .gate-card .gate-btn.primary { background: var(--glass-accent); border-color: var(--glass-accent); color: #fff; }
-html[data-theme] .gate-card .gate-btn.primary:hover:not(:disabled) { background: color-mix(in srgb,var(--glass-accent) 88%,#fff 12%); }
+html[data-theme] .gate { background: var(--gate-page); color: var(--gate-text); }
+html[data-theme] .gate-card { background: var(--gate-surface); border-color: var(--gate-line); color: var(--gate-text); backdrop-filter: none; box-shadow: var(--gate-shadow); }
+html[data-theme] .gate-card :is(h1,.gate-btn,.gate-recent-title,.gate-recent-name) { color: var(--gate-text); }
+html[data-theme] .gate-card :is(.gate-sub,.gate-hint,.gate-recent-path,.gate-recent-meta,.gate-recent-clear) { color: var(--gate-muted); }
+html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item) { background: var(--gate-control); border-color: transparent; }
+html[data-theme] .gate-card :is(.gate-btn,.gate-recent-item):hover:not(:disabled) { background: var(--gate-control-hover); }
 .glass-theme :is(.tool-dialog-detail,.tool-dialog-level,.tool-dialog-options,.tool-dialog-free,.tool-dialog-btn,.dock-run-item pre,.dock-replay-main,.dock-replay-kind,.dock-replay-ts) { color: var(--glass-text); border-color: var(--glass-border); }
 .glass-theme :is(.dock-run-item,.dock-checkpoint,.dock-tool-row,.tool-dialog-options,.pm-preview-head) { background: var(--glass-control); border-color: var(--glass-border); }
 @media (max-width: 480px) { .glass-theme.ui-clean .toolbar { gap: 2px; padding-inline: 7px; } .glass-theme.ui-clean .toolbar-theme { width: 28px; padding-inline: 3px; } .glass-theme.ui-clean .toolbar button,.glass-theme.ui-clean .toolbar summary { padding-inline: 5px; } }

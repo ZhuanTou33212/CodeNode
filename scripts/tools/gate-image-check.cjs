@@ -1,5 +1,5 @@
 /**
- * 校验：① 启动门禁不再自动进入最近工程 + 最近打开列表在主操作下方
+ * 校验：① 启动门禁不再自动进入最近工程 + 宽屏最近项目区位于操作区右侧
  *      ② Shift+A 菜单含「图像节点」，点击后创建图像节点，并支持粘贴/读项目图片
  * 用法：node scripts/run-electron.cjs scripts/tools/gate-image-check.cjs
  */
@@ -84,17 +84,17 @@ app.whenReady().then(async () => {
         leftActions: [...document.querySelectorAll('.gate-actions .gate-btn-title')].map((e) => e.textContent.trim()),
         recentCount: items.length,
         recentNames: items.map((i) => i.querySelector('.gate-recent-name').textContent.trim()),
-        recentBelowMain: !!(mr && rr && rr.top >= mr.bottom - 1),
+        mainLeftOfRecent: !!(mr && rr && mr.right <= rr.left + 1),
         workspaceVisible: !!document.querySelector('.canvas-wrap'),
-        recentAligned: !!(rr && mr && Math.abs(rr.left - mr.left) <= 2 && Math.abs(rr.right - mr.right) <= 2)
+        fillsWindow: !!(rr && mr && card.getBoundingClientRect().width >= 800 && card.getBoundingClientRect().height >= 500)
       };
     })()`);
     console.log('  (debug) gate=' + JSON.stringify(gate));
     ok('启动停在门禁页（没有自动进入最近工程）', gate.atGate === true && gate.workspaceVisible === false, JSON.stringify(gate));
     ok('左侧保留三个入口按钮', gate.leftActions.join('/') === '打开工程/新建工程/打开工程文件', gate.leftActions.join('/'));
-    ok('下方显示最近打开列表', gate.recentCount === 2, JSON.stringify(gate.recentNames));
-    ok('最近列表与主操作共用同一条对齐轴', gate.recentBelowMain === true && gate.recentAligned === true, JSON.stringify(gate));
-    fs.writeFileSync(path.join(OUT, 'gate-centered.png'), (await win.webContents.capturePage()).toPNG());
+    ok('右侧显示最近打开列表', gate.recentCount === 2, JSON.stringify(gate.recentNames));
+    ok('启动器在宽屏使用双栏并占据主要窗口空间', gate.mainLeftOfRecent === true && gate.fillsWindow === true, JSON.stringify(gate));
+    fs.writeFileSync(path.join(OUT, 'gate-wide-launcher.png'), (await win.webContents.capturePage()).toPNG());
 
     // 点最近列表里的目录工程 → 进入工作台
     await js(`(()=>{ const items=[...document.querySelectorAll('.gate-recent-item')]; const dirItem=items.find(i=>!i.textContent.includes('.cnode')); dirItem.click(); return true; })()`);

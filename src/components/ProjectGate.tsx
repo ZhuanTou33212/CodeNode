@@ -15,7 +15,7 @@ import {
  * 没有打开任何工程时只显示这一页：必须先「打开工程」「新建工程」或「从最近列表进入」，
  * 才能进工作台，避免在没有工程根目录的情况下直接进画布/Agent。
  *
- * 布局：主操作居中，两个次操作等宽排列；有历史记录时在下方显示最近项目。
+ * 布局：左侧是品牌与项目入口，右侧是最近项目；宽屏充分使用桌面窗口，窄屏再折叠。
  */
 export default function ProjectGate() {
   const error = useProjectStore((s) => s.error);
@@ -74,7 +74,7 @@ export default function ProjectGate() {
           <div className="gate-actions">
             <button
               type="button"
-              className="gate-btn primary"
+              className="gate-btn"
               disabled={busy || !hasApi}
               onClick={() => void run('打开工程', openProject)}
             >
@@ -109,10 +109,10 @@ export default function ProjectGate() {
           ) : null}
         </div>
 
-        {recent.length > 0 && <aside className="gate-recent">
+        <aside className="gate-recent">
           <div className="gate-recent-head">
             <span className="gate-recent-title">最近打开</span>
-            <button
+            {recent.length > 0 && <button
               className="gate-recent-clear"
               title="清空最近打开列表（不会删除工程文件）"
               disabled={busy}
@@ -123,10 +123,13 @@ export default function ProjectGate() {
               }}
             >
               清空
-            </button>
+            </button>}
           </div>
 
-          <ul className="gate-recent-list">
+          {recent.length === 0 ? <div className="gate-recent-empty">
+            <strong>还没有最近项目</strong>
+            <span>打开或新建项目后，会显示在这里。</span>
+          </div> : <ul className="gate-recent-list">
             {recent.map((item) => {
               const key = item.file || item.root;
               const isActive = activePath === key;
@@ -160,8 +163,8 @@ export default function ProjectGate() {
                 </li>
               );
             })}
-          </ul>
-        </aside>}
+          </ul>}
+        </aside>
       </div>
     </div>
   );
