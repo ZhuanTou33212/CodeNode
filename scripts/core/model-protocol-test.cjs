@@ -662,10 +662,12 @@ async function main() {
       const dts = read('src/global.d.ts');
       const ipcSrc = read('electron/ipc/models.cjs');
       const agentIpc = read('electron/ipc/agent.cjs');
-      const removed = ['接入协议', '从预设添加', '拉取模型列表', '测试连接', '认证头', '端点风格', '厂商预设'];
+      const removed = ['从预设添加', '拉取模型列表', '测试连接', '认证头', '端点风格', '厂商预设'];
       const left = removed.filter((word) => uiSrc.includes(word));
-      check('I1 模型管理界面里没有预设/协议/认证/端点/测连接/拉列表（只剩原有的名称/ID/地址/Key/上下文/价格/开关）',
+      check('I1 模型管理界面移除旧预设/认证/端点/测连接/拉列表，并只在自定义供应商暴露 API 格式',
         left.length === 0, left.join(','));
+      check('I1b 自定义供应商明确支持 OpenAI / Anthropic / Gemini 三种中转协议',
+        uiSrc.includes('OpenAI Compatible') && uiSrc.includes('Anthropic Messages') && uiSrc.includes('Google Gemini'));
       const removedMethods = ['modelsPresets', 'modelsPresetApply', 'modelsTest', 'modelsFetch'];
       check('I2 preload 不再暴露这四条通道', removedMethods.every((m) => !preloadSrc.includes(m)));
       check('I3 类型声明同步（global.d.ts 里也没有）', removedMethods.every((m) => !dts.includes(m)));

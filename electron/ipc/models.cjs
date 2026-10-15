@@ -36,12 +36,20 @@ function register(ctx) {
     try {
       for (const [id, entry] of pending) if (entry.expires < Date.now() || entry.sender === event.sender.id) pending.delete(id);
       if (pending.size >= 16) return { ok: false, error: '连接请求过多，请稍后重试' };
-      const models = await providerModels.discover(provider, apiKey, undefined, options || {});
+      const normalizedOptions = options || {};
+      let effectiveKey = String(apiKey || '').trim();
+      if (!effectiveKey) {
+        const store = modelStore.readUsableModels(userDataDir(), agent.loadConfig(null));
+        const probe = { provider, apiBase: normalizedOptions.apiBase, protocol: normalizedOptions.protocol };
+        const scope = modelStore.providerIdentity(probe);
+        effectiveKey = String(store.models.find(model => modelStore.providerIdentity(model) === scope && model.apiKey)?.apiKey || '');
+      }
+      const models = await providerModels.discover(provider, effectiveKey, undefined, normalizedOptions);
       const ticket = randomUUID();
-      pending.set(ticket, { sender: event.sender.id, models, apiKey: apiKey.trim(), expires: Date.now() + 600000 });
+      pending.set(ticket, { sender: event.sender.id, models, apiKey: effectiveKey, expires: Date.now() + 600000 });
       const timer = setTimeout(() => pending.delete(ticket), 600000); timer.unref();
       event.sender.once('destroyed', () => { clearTimeout(timer); pending.delete(ticket); });
-      return { ok: true, ticket, models, apiKeyPreview: modelStore.maskApiKey(apiKey.trim()) };
+      return { ok: true, ticket, models, apiKeyPreview: modelStore.maskApiKey(effectiveKey) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
   ipcMain.handle('models:connect', async (event, ticket, selectedId) => {

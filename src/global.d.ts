@@ -100,6 +100,11 @@ interface ModelSpecDto {
   apiKeySet?: boolean;
   apiKeyPreview?: string;
   apiKeyError?: boolean;
+  provider?: string;
+  providerLabel?: string;
+  providerKey?: string;
+  protocol?: string;
+  auth?: string;
   contextWindow: number;
   priceInput: number;
   priceInputHit: number;
@@ -263,7 +268,7 @@ interface CodenodeApi {
   schedulingSave: (settings: import('./types').SchedulingSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').SchedulingSettings }>;
   costSettingsSave: (root: string, settings: import('./types').CostSettings) => Promise<{ ok: boolean; error?: string; settings?: import('./types').CostSettings }>;
   modelsList: () => Promise<{ models: ModelSpecDto[]; activeId: string | null; modelAliases?: Record<string,string> }>;
-  modelsDiscover: (provider: string, apiKey: string, options?: { apiBase?: string; modelId?: string }) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; apiKeyPreview?: string; error?: string }>;
+  modelsDiscover: (provider: string, apiKey: string, options?: { apiBase?: string; modelId?: string; protocol?: string; providerLabel?: string }) => Promise<{ ok: boolean; ticket?: string; models?: ModelSpecDto[]; apiKeyPreview?: string; error?: string }>;
   modelsConnect: (ticket: string, selectedId: string) => Promise<{ ok: boolean; error?: string }>;
   modelsSave: (model: ModelSpecDto) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;
   modelsDelete: (id: string) => Promise<{ ok: boolean; models?: ModelSpecDto[]; activeId?: string | null; error?: string }>;

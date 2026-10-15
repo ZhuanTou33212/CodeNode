@@ -196,6 +196,7 @@
     "test:extension-contract": "node scripts/core/extensions-contract-test.cjs",
     "test:pii": "node scripts/core/pii-test.cjs",
     "test:provider-models": "node scripts/core/provider-models-test.cjs",
+    "test:provider-credentials": "node scripts/core/provider-credentials-test.cjs",
     "test:model-connection-ui": "node scripts/run-electron.cjs scripts/ui/model-connection-ui-test.cjs",
     "test:workbench-clean-ui": "node scripts/run-electron.cjs scripts/ui/workbench-clean-ui-test.cjs",
     "test:context-capability": "node scripts/core/context-capability-test.cjs",

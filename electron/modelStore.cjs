@@ -59,7 +59,39 @@ function toPublicModel(model) {
 }
 
 function toPublicModels(models) {
-  return (Array.isArray(models) ? models : []).map(toPublicModel);
+  return shareProviderCredentials(Array.isArray(models) ? models : []).map((model) => ({ ...toPublicModel(model), providerKey: providerIdentity(model) }));
+}
+
+function inferredProvider(model) {
+  const explicit = String(model && model.provider || '').trim().toLowerCase();
+  if (explicit) return explicit;
+  const haystack = String(model && model.apiBase || '') + ' ' + String(model && model.model || '');
+  if (/deepseek/i.test(haystack)) return 'deepseek';
+  if (/api\.openai/i.test(haystack)) return 'openai';
+  if (/anthropic/i.test(haystack)) return 'anthropic';
+  if (/googleapis|gemini/i.test(haystack)) return 'gemini';
+  return 'custom';
+}
+
+/** 供应商凭据作用域：官方供应商按 id，自定义供应商按协议 + Base URL。 */
+function providerIdentity(model) {
+  const provider = inferredProvider(model);
+  if (provider !== 'custom') return provider;
+  const protocol = String(model && model.protocol || 'openai').trim().toLowerCase() || 'openai';
+  const base = String(model && model.apiBase || '').trim().replace(/\/+$/, '').toLowerCase();
+  return `custom:${protocol}:${base}`;
+}
+
+function shareProviderCredentials(models) {
+  const list = (Array.isArray(models) ? models : []).map(model => ({ ...model }));
+  const credentials = new Map();
+  for (const model of list) {
+    if (model && model.apiKey && !model.apiKeyError) credentials.set(providerIdentity(model), model.apiKey);
+  }
+  return list.map(model => {
+    const shared = credentials.get(providerIdentity(model));
+    return shared && (!model.apiKey || model.apiKeyError) ? { ...model, apiKey: shared, apiKeyError: false } : model;
+  });
 }
 
 /** 从 agent.properties 配置生成默认模型列表（保留用户已有的 apiBase/apiKey） */
@@ -107,7 +139,7 @@ function readModels(userDataDir) {
     const data = JSON.parse(raw);
     if (!data || !Array.isArray(data.models)) throw new Error('模型配置格式错误，拒绝覆盖原文件');
     return {
-      models: data.models.map((model) => ({ ...model, apiKey: decryptSecret(model && model.apiKey) })),
+      models: shareProviderCredentials(data.models.map((model) => ({ ...model, apiKey: decryptSecret(model && model.apiKey) }))),
       activeId: data.activeId || null,
     };
   } catch (error) {
@@ -118,7 +150,7 @@ function readModels(userDataDir) {
 
 function writeModels(userDataDir, models, activeId) {
   fs.mkdirSync(userDataDir, { recursive: true });
-  const persisted = (Array.isArray(models) ? models : []).map((model) => ({
+  const persisted = shareProviderCredentials(Array.isArray(models) ? models : []).map((model) => ({
     ...model,
     apiKey: encryptSecret(model && model.apiKey),
   }));
@@ -165,16 +197,20 @@ function readRawModels(userDataDir) {
 function readUsableModels(userDataDir, cfg) {
   const raw = readRawModels(userDataDir);
   if (!raw) return getModels(userDataDir, cfg);
-  return deduplicateModels(raw.models.map((model) => {
+  const decoded = raw.models.map((model) => {
     try { return { ...model, apiKey: decryptSecret(model.apiKey) }; }
     catch { return { ...model, apiKey: '', apiKeyError: true }; }
-  }), raw.activeId);
+  });
+  const shared = shareProviderCredentials(decoded);
+  return deduplicateModels(shared, raw.activeId);
 }
 function saveConnection(userDataDir, models, apiKey, activeId) {
   const raw = readRawModels(userDataDir) || { models: [] };
   const encrypted = encryptSecret(apiKey);
   const ids = new Set(models.map((model) => model.id));
-  const next = [...raw.models.filter((model) => !ids.has(model.id)), ...models.map((model) => ({ ...model, apiKey: encrypted }))];
+  const scopes = new Set(models.map(providerIdentity));
+  const retained = raw.models.filter((model) => !ids.has(model.id)).map(model => scopes.has(providerIdentity(model)) ? { ...model, apiKey: encrypted, apiKeyError: false } : model);
+  const next = [...retained, ...models.map((model) => ({ ...model, apiKey: encrypted }))];
   fs.mkdirSync(userDataDir, { recursive: true });
   const file = modelsFile(userDataDir); const temp = file + '.' + require('crypto').randomUUID() + '.tmp';
   try { fs.writeFileSync(temp, JSON.stringify({ models: next, activeId }, null, 2), { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
@@ -184,7 +220,9 @@ function activateModel(userDataDir, id) {
   const raw = readRawModels(userDataDir);
   if (!raw || !raw.models.some((model) => model.id === id)) throw new Error('模型不存在');
   const selected = raw.models.find((model) => model.id === id);
-  decryptSecret(selected.apiKey); // Only the selected Key needs to be readable.
+  const scope = providerIdentity(selected);
+  const credential = selected.apiKey || raw.models.find(model => providerIdentity(model) === scope && model.apiKey)?.apiKey;
+  if (String(selected.auth || '').toLowerCase() !== 'none') decryptSecret(credential); // A provider credential may be stored on any sibling model.
   const file = modelsFile(userDataDir); const temp = file + '.' + require('crypto').randomUUID() + '.tmp';
   try { fs.writeFileSync(temp, JSON.stringify({ ...raw, activeId: id }, null, 2), { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
   finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
@@ -234,4 +272,6 @@ module.exports = {
   normalizeModelInput,
   encryptSecret,
   decryptSecret,
+  providerIdentity,
+  shareProviderCredentials,
 };

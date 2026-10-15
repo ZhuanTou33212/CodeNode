@@ -35,6 +35,8 @@ export interface ModelSpec {
   maxTokensField?: string;
   provider?: string;
   providerLabel?: string;
+  /** 供应商凭据作用域；同值模型共享 API Key。 */
+  providerKey?: string;
 }
 
 /** 该模型是不是 DeepSeek（高峰价只对 DeepSeek 成立；别的厂商按同时段 ×2 会把账算错） */

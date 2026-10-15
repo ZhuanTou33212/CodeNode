@@ -122,6 +122,7 @@ const CORE = [
   'test:extension-contract',
   'test:pii',
   'test:provider-models',
+  'test:provider-credentials',
   'test:context-capability',
   'test:side-effect-idem',
   'test:save-project',

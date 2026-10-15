@@ -34,6 +34,15 @@ const { discover, PROVIDERS } = require("../../electron/providerModels.cjs");
   assert.equal(localPrivate, true); assert.equal(local[0].auth, 'none');
   const remote = await discover('custom', 'synthetic-key', async () => ({ status: 200, text: JSON.stringify({ data: [{ id: 'llama-local' }] }) }), { apiBase: 'https://gateway.example/v1' });
   assert.notEqual(local[0].id, remote[0].id, 'custom endpoints must not share model IDs');
+  /** @type {any} */ let customAnthropicRequest = null;
+  const customAnthropic = await discover('custom', 'synthetic-key', async (url, options) => {
+    customAnthropicRequest = { url, options };
+    return { status: 200, text: JSON.stringify({ data: [{ id: 'claude-relay' }] }) };
+  }, { apiBase: 'https://relay.example/v1', protocol: 'anthropic', providerLabel: '公司中转站' });
+  assert.equal(customAnthropicRequest.url, 'https://relay.example/v1/models');
+  assert.equal(customAnthropicRequest.options.headers['x-api-key'], 'synthetic-key');
+  assert.equal(customAnthropic[0].providerLabel, '公司中转站');
+  assert.notEqual(customAnthropic[0].id, remote[0].id, 'custom protocol must participate in provider identity');
   await assert.rejects(discover('custom', 'key', stub, { apiBase: 'http://remote.example/v1' }), /HTTPS/);
   await assert.rejects(discover('custom', 'key', stub, { apiBase: 'https://user:pass@remote.example/v1' }));
   await assert.rejects(discover('custom', 'key', stub, { apiBase: 'https://remote.example/v1?key=secret' }));

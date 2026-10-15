@@ -30,8 +30,12 @@ async function discover(provider, key, transport = request, options = {}) {
     local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
     if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(local && url.protocol === 'http:'))) throw new Error('远程服务须使用 HTTPS；本机服务可使用 HTTP，地址不能含密码或查询参数');
     const base = url.href.replace(/\/+$/, '');
-    spec = { label: local ? '本地模型' : '兼容服务', base, list: '/models', protocol: 'openai' };
-    identity = 'custom-' + require('crypto').createHash('sha256').update(base).digest('hex').slice(0, 12);
+    const requestedProtocol = String(options.protocol || 'openai').trim().toLowerCase();
+    if (!['openai', 'anthropic', 'gemini'].includes(requestedProtocol)) throw new Error('自定义供应商 API 格式无效');
+    const label = String(options.providerLabel || '').trim().slice(0, 80) || (local ? '本地模型' : '兼容服务');
+    const list = requestedProtocol === 'anthropic' && !/\/v1$/i.test(base) ? '/v1/models' : requestedProtocol === 'gemini' && !/\/v1beta$/i.test(base) ? '/v1beta/models' : '/models';
+    spec = { label, base, list, protocol: requestedProtocol };
+    identity = 'custom-' + require('crypto').createHash('sha256').update(requestedProtocol + '\n' + base).digest('hex').slice(0, 12);
   }
   if (!spec) throw new Error('请选择 API Key 所属供应商');
   if (typeof key !== 'string' || (!local && !key.trim()) || /[\r\n]/.test(key) || key.length > 4096) throw new Error('请填写有效 API Key');
