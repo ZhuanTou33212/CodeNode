@@ -136,6 +136,7 @@
     "test:side-effect-idem": "node scripts/core/side-effect-idempotency-test.cjs",
     "test:save-project": "node scripts/core/save-project-boundary-test.cjs",
     "test:project-create": "node scripts/core/project-create-test.cjs",
+    "test:recent-projects": "node scripts/core/recent-projects-test.cjs",
     "test:project-ui": "node scripts/run-electron.cjs scripts/ui/project-ui-test.cjs",
     "test:bright-theme-ui": "node scripts/run-electron.cjs scripts/ui/bright-theme-ui-test.cjs",
     "test:shell-timeout": "node scripts/core/shell-timeout-result-test.cjs",

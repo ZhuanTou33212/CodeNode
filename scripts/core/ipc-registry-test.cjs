@@ -19,7 +19,7 @@ const EXPECTED = {
   'metrics.cjs': ['agent:metrics'],
   'project.cjs': [
     'graph:save', 'graph:open',
-    'project:choose', 'project:create', 'project:list', 'project:read', 'project:write', 'project:search',
+    'project:choose', 'project:create', 'project:recent-list', 'project:recent-remember', 'project:recent-forget', 'project:recent-clear', 'project:list', 'project:read', 'project:write', 'project:search',
     'project:run', 'project:run:start', 'project:run:stop', 'project:run:input', 'project:workflow-state', 'project:workflow-execute',
     'project:save', 'project:load', 'extensions:list', 'extensions:add',
   ],

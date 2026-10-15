@@ -161,6 +161,10 @@ interface CodenodeApi {
   saveGraph: (payload: ProjectPayloadDto) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   openGraph: () => Promise<{ ok: boolean; filePath?: string; data?: ProjectLoadDto; error?: string }>;
   chooseProject: () => Promise<{ ok: boolean; root?: string }>;
+  recentProjectsList: () => Promise<{ ok: boolean; projects: Array<{ root: string; file?: string; name: string; openedAt: number }>; error?: string }>;
+  recentProjectsRemember: (entry: { root?: string | null; file?: string | null; name?: string; openedAt?: number }) => Promise<{ ok: boolean; projects: Array<{ root: string; file?: string; name: string; openedAt: number }>; error?: string }>;
+  recentProjectsForget: (entry: { root?: string; file?: string }) => Promise<{ ok: boolean; projects: Array<{ root: string; file?: string; name: string; openedAt: number }>; error?: string }>;
+  recentProjectsClear: () => Promise<{ ok: boolean; projects: Array<{ root: string; file?: string; name: string; openedAt: number }>; error?: string }>;
   trellisProject: (root: string, conversationId: string) => Promise<{ok: boolean; value?: import('./lib/trellisTypes').TrellisProject; error?: string}>;
   trellisContext: (root: string, taskPath: string) => Promise<{ok: boolean; value?: import('./lib/trellisTypes').TrellisContext; error?: string}>;
   trellisSelect: (root: string, conversationId: string, taskPath: string | null) => Promise<{ok: boolean; value?: string | null; error?: string}>;

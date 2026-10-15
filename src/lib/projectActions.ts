@@ -4,7 +4,7 @@ import { useUiStore } from '../store/uiStore';
 import { useSessionStore } from '../store/sessionStore';
 import { useCheckpointStore, type Checkpoint } from '../store/checkpointStore';
 import { useProjectSaveStore } from '../store/projectSaveStore';
-import { readRecentProjects, rememberRecentProject } from './recentProjects';
+import { loadRecentProjects, rememberRecentProject } from './recentProjects';
 import type { Graph, SessionCanvas, SessionDoc, SessionMsg } from '../types';
 
 const LAST_ROOT_KEY = 'codenode.lastProjectRoot';
@@ -321,7 +321,7 @@ export async function restoreLastProject(): Promise<void> {
   try {
     if (!window.codenode) return;
     // 兼容旧版本：把单条"上次打开"迁移进最近列表（只做迁移，不自动打开）
-    readRecentProjects();
+    await loadRecentProjects();
   } catch (e) {
     console.error('[CodeNode] 读取最近工程失败:', e);
   } finally {

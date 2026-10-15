@@ -4,6 +4,7 @@ import { newProject, openProject, openProjectFile, openRecentProject } from '../
 import {
   clearRecentProjects,
   forgetRecentProject,
+  loadRecentProjects,
   readRecentProjects,
   relativeTime,
   type RecentProject,
@@ -26,7 +27,9 @@ export default function ProjectGate() {
   const hasApi = typeof window !== 'undefined' && Boolean(window.codenode);
 
   useEffect(() => {
-    setRecent(readRecentProjects());
+    let alive = true;
+    void loadRecentProjects().then(projects => { if (alive) setRecent(projects); });
+    return () => { alive = false; };
   }, []);
 
   const run = useCallback(

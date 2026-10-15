@@ -19,6 +19,7 @@ const toolkit = require('../tools/toolkit.cjs');
 const ragIndex = require('../rag/index.cjs');
 const runStore = require('../runStore.cjs');
 const agent = require('../agent.cjs');
+const recentProjects = require('../recentProjects.cjs');
 
 const IGNORE_DIRS = new Set([
   'node_modules',
@@ -126,10 +127,12 @@ function auditLog(projectRoot, entry) {
  *   getFocusedWindow: () => import('electron').BrowserWindow | null,
  *   sandbox: any,
  *   runWorkflowChat: (event: any, payload: any) => Promise<any>,
+ *   userDataDir?: () => string,
  * }} ctx
  */
 function register(ctx) {
   const { ipcMain, dialog, getFocusedWindow, sandbox, runWorkflowChat } = ctx;
+  const userDataDir = ctx.userDataDir || (() => process.cwd());
 
   /** 与 Agent 工具共用同一套执行隔离策略（同一把锁，不留后门） */
   function spawnProjectProcess(tokens, base, cwd) {
@@ -279,6 +282,23 @@ function register(ctx) {
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }
+  });
+
+  ipcMain.handle('project:recent-list', async () => {
+    try { return { ok: true, projects: recentProjects.read(userDataDir()) }; }
+    catch (error) { return { ok: false, projects: [], error: String(error && error.message || error) }; }
+  });
+  ipcMain.handle('project:recent-remember', async (_event, entry) => {
+    try { return { ok: true, projects: recentProjects.remember(userDataDir(), entry) }; }
+    catch (error) { return { ok: false, projects: [], error: String(error && error.message || error) }; }
+  });
+  ipcMain.handle('project:recent-forget', async (_event, entry) => {
+    try { return { ok: true, projects: recentProjects.forget(userDataDir(), entry) }; }
+    catch (error) { return { ok: false, projects: [], error: String(error && error.message || error) }; }
+  });
+  ipcMain.handle('project:recent-clear', async () => {
+    try { return { ok: true, projects: recentProjects.clear(userDataDir()) }; }
+    catch (error) { return { ok: false, projects: [], error: String(error && error.message || error) }; }
   });
 
   ipcMain.handle('project:list', async (_event, root) => {

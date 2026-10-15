@@ -97,6 +97,25 @@ export function rememberRecentProject(input: { root?: string | null; file?: stri
   };
   const list = [entry, ...readRecentProjects().filter((x) => !sameProject(x, entry))];
   writeRecent({ list, entry });
+  void window.codenode?.recentProjectsRemember?.(entry).catch(() => {});
+}
+
+/** 从主进程的 userData 恢复持久记录，并与当前来源的 localStorage 缓存合并。 */
+export async function loadRecentProjects(): Promise<RecentProject[]> {
+  const local = readRecentProjects();
+  const api = typeof window !== 'undefined' ? window.codenode : null;
+  if (!api?.recentProjectsList) return local;
+  try {
+    // 先把旧版本仅存在 localStorage 的记录迁移到稳定存储。
+    for (const entry of [...local].reverse()) await api.recentProjectsRemember(entry);
+    const result = await api.recentProjectsList();
+    if (!result?.ok) return local;
+    const persisted = (result.projects || []).map(entry => ({ ...entry, openedAt: Number(entry.openedAt) || 0 }));
+    const merged: RecentProject[] = [];
+    for (const entry of [...persisted, ...local].sort((a, b) => b.openedAt - a.openedAt)) if (!merged.some(item => sameProject(item, entry))) merged.push(entry);
+    writeRecent({ list: merged });
+    return merged.slice(0, MAX);
+  } catch { return local; }
 }
 
 export function forgetRecentProject(target: { root?: string; file?: string }): RecentProject[] {
@@ -108,6 +127,7 @@ export function forgetRecentProject(target: { root?: string; file?: string }): R
   };
   const list = readRecentProjects().filter((x) => !sameProject(x, key));
   writeRecent({ list });
+  void window.codenode?.recentProjectsForget?.(target).catch(() => {});
   return list;
 }
 
@@ -115,6 +135,7 @@ export function clearRecentProjects(): void {
   if (typeof localStorage === 'undefined') return;
   try {
     localStorage.removeItem(KEY);
+    void window.codenode?.recentProjectsClear?.().catch(() => {});
   } catch {
     /* ignore */
   }

@@ -127,6 +127,7 @@ const CORE = [
   'test:side-effect-idem',
   'test:save-project',
   'test:project-create',
+  'test:recent-projects',
   'test:shell-timeout',
   'test:sandbox-stdin',
   'test:security',
