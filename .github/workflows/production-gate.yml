@@ -137,7 +137,7 @@ jobs:
           CODENODE_EVAL_MODEL: ${{ vars.CODENODE_EVAL_MODEL }}
       - name: 上传真机子集评测报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-eval-report-model-pr
           path: docs/eval-reports/
