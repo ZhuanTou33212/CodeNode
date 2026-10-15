@@ -39,5 +39,5 @@ try{
   assert.equal(store.canRun(root,capped.id,ct.id).decision,'stopped');
   console.log('GOAL TASK PRIORITY: PASS (persistence, legacy contracts, stable scheduling, dependencies, authorization and budget)');
 }finally{
-  const resolved=path.resolve(root);assert.equal(path.dirname(resolved),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('codenode-goal-priority-'));fs.rmSync(resolved,{recursive:true,force:true});
+  const resolved=path.resolve(root);assert.equal(fs.realpathSync(path.dirname(resolved)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('codenode-goal-priority-'));fs.rmSync(resolved,{recursive:true,force:true});
 }

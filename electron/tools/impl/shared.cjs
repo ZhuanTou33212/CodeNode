@@ -20,17 +20,10 @@ const PREVIEW_MAX_LINES = 20;
 /** 解析项目内相对路径；越界返回 null。 */
 function resolveInRoot(root, relative) {
   const resolvedRoot = path.resolve(root);
-  const full = path.resolve(resolvedRoot, relative);
-  if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
-  /**
-   * 受保护路径（`.codenode/approvals.json` 这类**授权面**文件）：写工具一律拒绝。
-   * 否则提示注入可以让模型自己给自己写白名单 —— 那等于把「人批准」这道门拆掉（2026-09-21）。
-   * 判定放在这一个函数里，所有走 resolveInRoot 的写工具自动继承。
-   */
-  if (approvalRules.isProtectedWriteTarget(resolvedRoot, full)) return null;
+  const requested = path.resolve(resolvedRoot, relative);
   try {
     const realRoot = fs.realpathSync(resolvedRoot);
-    let existing = full;
+    let existing = requested;
     while (!fs.existsSync(existing)) {
       // Dangling links must not be treated as ordinary missing paths.
       try { if (fs.lstatSync(existing).isSymbolicLink()) return null; } catch {}
@@ -41,8 +34,24 @@ function resolveInRoot(root, relative) {
     const real = fs.realpathSync(existing);
     const inside = path.relative(realRoot, real);
     if (inside === '..' || inside.startsWith('..' + path.sep) || path.isAbsolute(inside)) return null;
+    // macOS exposes the same temporary directory through /var and /private/var.
+    // Rebuild the requested path from its real existing ancestor before the
+    // lexical boundary check, while retaining the symlink escape guard above.
+    const suffix = path.relative(existing, requested);
+    if (suffix === '..' || suffix.startsWith('..' + path.sep) || path.isAbsolute(suffix)) return null;
+    const full = path.resolve(real, suffix);
+    const fullInside = path.relative(realRoot, full);
+    if (fullInside === '..' || fullInside.startsWith('..' + path.sep) || path.isAbsolute(fullInside)) return null;
+    /**
+     * 受保护路径（`.codenode/approvals.json` 这类**授权面**文件）：写工具一律拒绝。
+     * 否则提示注入可以让模型自己给自己写白名单 —— 那等于把「人批准」这道门拆掉（2026-09-21）。
+     * 判定放在这一个函数里，所有走 resolveInRoot 的写工具自动继承。
+     */
+    if (approvalRules.isProtectedWriteTarget(realRoot, full)) return null;
+    // Preserve the caller's absolute spelling for compatibility with editors
+    // and audit paths; the canonical path above is used only for validation.
+    return requested;
   } catch { return null; }
-  return full;
 }
 
 /** 引号归一化：把中文全角引号 “ ” ‘ ’ 与 ASCII 引号视为等价（模型常把文件名里的全角引号写成半角导致路径找不到） */

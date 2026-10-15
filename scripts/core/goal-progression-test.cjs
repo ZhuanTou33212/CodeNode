@@ -59,4 +59,4 @@ try{
     assert.equal(store.advanceExecution(root,g.id).task.id,other.id,'a local '+hold+' hold does not block unrelated explicitly started work');store.stopExecution(root,g.id);
   }
   console.log('GOAL PROGRESSION: PASS (completion/admission budget boundary, unknown cost, unobserved waits, independent branches and dependency proof gates)');
-}finally{const resolved=path.resolve(root);assert.equal(path.dirname(resolved),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('codenode-goal-progression-'));fs.rmSync(resolved,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
+}finally{const resolved=path.resolve(root);assert.equal(fs.realpathSync(path.dirname(resolved)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('codenode-goal-progression-'));fs.rmSync(resolved,{recursive:true,force:true,maxRetries:10,retryDelay:100});}
